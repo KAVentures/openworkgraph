@@ -1,0 +1,50 @@
+{
+  "device_id": "my-laptop",
+  "backend_url": "http://127.0.0.1:8787",
+  "poll_seconds": 2,
+  "heartbeat_seconds": 5,
+  "change_detection": "application",
+  "screenshot_interval_seconds": 20,
+  "screenshots_enabled": false,
+  "upload_screenshots": false,
+  "excluded_apps": [
+    "1Password",
+    "Bitwarden",
+    "KeePass",
+    "Keychain Access"
+  ],
+  "excluded_title_patterns": [
+    "password",
+    "private",
+    "incognito",
+    "bank"
+  ],
+  "window_title_mode": "full",
+  "browser_app_patterns": [
+    "Google Chrome",
+    "Microsoft Edge",
+    "Firefox",
+    "Safari",
+    "Brave",
+    "Arc",
+    "Opera",
+    "Vivaldi",
+    "Chromium",
+    "Orion",
+    "DuckDuckGo",
+    "Mullvad Browser",
+    "Tor Browser",
+    "LibreWolf",
+    "Waterfox",
+    "Zen Browser"
+  ],
+  "screen_interactions_enabled": true,
+  "capture_clicks": true,
+  "capture_scrolls": true,
+  "scroll_min_interval_seconds": 1.25,
+  "interaction_screenshots_enabled": false,
+  "capture_ui_labels": true,
+  "keyboard_activity_enabled": true,
+  "activity_active_window_seconds": 5,
+  "engaged_grace_seconds": 60
+}
