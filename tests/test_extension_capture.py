@@ -45,4 +45,13 @@ def test_browser_delivery_is_durable_and_idempotent():
     assert "event_id: body.event_id || uuid()" in background
     assert "flushBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.6.0"
+    assert manifest["version"] == "1.6.1"
+
+
+def test_queued_browser_event_keeps_capture_time_work_identity():
+    background = (ROOT / "browser_extension" / "background.js").read_text()
+    server = (ROOT / "server" / "main.py").read_text()
+    assert 'getJson("/v1/browser-context")' in background
+    assert "work_session_id: body.work_session_id ?? work.work_session_id" in background
+    assert '@app.get("/v1/browser-context")' in server
+    assert "event.work_session_id or COLLECTOR_STATUS.get(\"session_id\")" in server
