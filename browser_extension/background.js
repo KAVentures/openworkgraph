@@ -5,8 +5,11 @@ const SENSOR_VERSION = manifest.version_name || manifest.version || "unknown";
 const BROWSER_RUNTIME_ID = globalThis.crypto?.randomUUID?.() || `runtime-${Date.now()}-${Math.random()}`;
 const IDENTITY_KEY = "openworkgraph_sensor_id";
 const QUEUE_KEY = "openworkgraph_pending_browser_events";
+const WORK_CONTEXT_KEY = "openworkgraph_work_context";
 const recentNav = new Map();
 let storageLock = Promise.resolve();
+let cachedWorkContext = null;
+let cachedWorkContextAt = 0;
 
 function uuid() {
   return globalThis.crypto?.randomUUID?.() || `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -48,6 +51,49 @@ async function postDirect(path, body) {
   }
 }
 
+async function getJson(path) {
+  try {
+    const response = await fetch(`${API}${path}`, {method: "GET", cache: "no-store"});
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+async function refreshWorkContext() {
+  const fresh = await getJson("/v1/browser-context");
+  if (!fresh) return null;
+  const context = {
+    organization_id: String(fresh.organization_id || ""),
+    actor_id: String(fresh.actor_id || ""),
+    device_id: String(fresh.device_id || ""),
+    work_session_id: String(fresh.work_session_id || "")
+  };
+  cachedWorkContext = context;
+  cachedWorkContextAt = Date.now();
+  try { await ext.storage.local.set({[WORK_CONTEXT_KEY]: context}); } catch (_) {}
+  return context;
+}
+
+async function captureWorkContext() {
+  // A 5-second refresh keeps browser evidence aligned when the desktop observer
+  // restarts, without issuing a GET for every click/scroll event.
+  if (cachedWorkContext && Date.now() - cachedWorkContextAt < 5000) return cachedWorkContext;
+  const fresh = await refreshWorkContext();
+  if (fresh) return fresh;
+  if (cachedWorkContext) return cachedWorkContext;
+  try {
+    const stored = await ext.storage.local.get(WORK_CONTEXT_KEY);
+    const value = stored?.[WORK_CONTEXT_KEY];
+    if (value && typeof value === "object") {
+      cachedWorkContext = value;
+      return value;
+    }
+  } catch (_) {}
+  return {organization_id: "", actor_id: "", device_id: "", work_session_id: ""};
+}
+
 function serializedStorage(fn) {
   const next = storageLock.then(fn, fn);
   storageLock = next.catch(() => {});
@@ -60,8 +106,6 @@ async function enqueueBrowserEvent(body) {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY] : [];
       if (!queue.some(x => x?.event_id === body.event_id)) queue.push(body);
-      // Bound local storage in pathological offline cases while preserving the
-      // newest evidence. 5000 semantic events is already many hours of activity.
       const bounded = queue.slice(-5000);
       await ext.storage.local.set({[QUEUE_KEY]: bounded});
     } catch (_) {}
@@ -90,15 +134,19 @@ async function flushBrowserQueue() {
 }
 
 async function sendBrowserEvent(body) {
+  const work = await captureWorkContext();
   const enriched = {
     ...body,
     event_id: body.event_id || uuid(),
     sensor_id: body.sensor_id || await sensorId(),
     sensor_version: SENSOR_VERSION,
     browser_session_id: body.browser_session_id || BROWSER_RUNTIME_ID,
+    organization_id: body.organization_id ?? work.organization_id ?? "",
+    actor_id: body.actor_id ?? work.actor_id ?? "",
+    device_id: body.device_id ?? work.device_id ?? "",
+    work_session_id: body.work_session_id ?? work.work_session_id ?? "",
   };
   if (await postDirect("/v1/browser-events", enriched)) {
-    // Opportunistically drain older events whenever the local API is healthy.
     flushBrowserQueue();
     return true;
   }
@@ -108,6 +156,7 @@ async function sendBrowserEvent(body) {
 
 async function heartbeat(status = "connected") {
   const id = await sensorId();
+  await refreshWorkContext();
   await postDirect("/v1/browser-heartbeat", {
     observed_at: new Date().toISOString(),
     status,
@@ -159,8 +208,6 @@ ext.tabs.onActivated.addListener(async ({tabId}) => {
   try { await emitTab(await ext.tabs.get(tabId), "tab_activated"); } catch (_) {}
 });
 
-// Address-bar navigation can surface as a URL change or only as a loading update
-// depending on browser/version. Capture both; webNavigation remains authoritative.
 ext.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const candidate = changeInfo.url || (changeInfo.status === "loading" ? tab?.url : null);
   if (!candidate || !safeUrl(candidate)) return;
@@ -198,8 +245,6 @@ if (ext.webNavigation?.onCommitted) {
   });
 }
 
-// Backup for browsers where the earlier navigation signal is missed or the
-// service worker was waking while navigation began.
 if (ext.webNavigation?.onCompleted) {
   ext.webNavigation.onCompleted.addListener(async (details) => {
     if (details.frameId !== 0 || !safeUrl(details.url)) return;
@@ -217,6 +262,7 @@ if (ext.webNavigation?.onHistoryStateUpdated) {
 }
 
 async function startup(status) {
+  await refreshWorkContext();
   await heartbeat(status);
   await flushBrowserQueue();
   try { ext.alarms.create("openworkgraph-flush", {periodInMinutes: 1}); } catch (_) {}
@@ -232,6 +278,4 @@ if (ext.alarms?.onAlarm) {
   });
 }
 
-// Service workers can start without onStartup (for example after an extension
-// reload). A one-shot bootstrap makes version/status visible immediately.
 startup("background_started");
