@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+import platform
 from typing import Any
 
 
-def _string_attr(element: Any, name: str) -> str | None:
+def _clean_text(value: Any, *, limit: int = 240) -> str | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    return text[:limit]
+
+
+def _mac_string_attr(element: Any, name: str) -> str | None:
     try:
         import ApplicationServices  # type: ignore
+
         err, value = ApplicationServices.AXUIElementCopyAttributeValue(element, name, None)
         if err != 0 or value is None:
             return None
-        # Never serialize arbitrary AX objects or arrays. Labels should be strings.
         if isinstance(value, str):
             return value.strip() or None
-        # Some bridged NSString values may not pass a plain str check.
         if value.__class__.__name__ in {"NSCFString", "__NSCFString", "NSString"}:
             text = str(value).strip()
             return text or None
@@ -21,12 +33,7 @@ def _string_attr(element: Any, name: str) -> str | None:
     return None
 
 
-def element_at_position(x: float, y: float) -> dict[str, Any]:
-    """Best-effort semantic description of the macOS UI element at a screen point.
-
-    We intentionally do NOT read AXValue or selected text, because those can contain
-    passwords, form contents, message text, or other sensitive user data.
-    """
+def _mac_element_at_position(x: float, y: float) -> dict[str, Any]:
     try:
         import ApplicationServices  # type: ignore
 
@@ -37,10 +44,8 @@ def element_at_position(x: float, y: float) -> dict[str, Any]:
         if err != 0 or element is None:
             return {}
 
-        role = _string_attr(element, "AXRole")
-        subrole = _string_attr(element, "AXSubrole")
-
-        # Secure fields are recognized but deliberately not described further.
+        role = _mac_string_attr(element, "AXRole")
+        subrole = _mac_string_attr(element, "AXSubrole")
         secure = role == "AXSecureTextField" or subrole == "AXSecureTextField"
         if secure:
             return {"role": role or subrole, "secure": True}
@@ -48,12 +53,80 @@ def element_at_position(x: float, y: float) -> dict[str, Any]:
         result = {
             "role": role,
             "subrole": subrole,
-            "title": _string_attr(element, "AXTitle"),
-            "description": _string_attr(element, "AXDescription"),
-            "identifier": _string_attr(element, "AXIdentifier"),
-            "help": _string_attr(element, "AXHelp"),
+            "title": _mac_string_attr(element, "AXTitle"),
+            "description": _mac_string_attr(element, "AXDescription"),
+            "identifier": _mac_string_attr(element, "AXIdentifier"),
+            "help": _mac_string_attr(element, "AXHelp"),
             "secure": False,
+            "provider": "macos_accessibility",
         }
         return {k: v for k, v in result.items() if v not in (None, "", False)}
     except Exception:
         return {}
+
+
+def _windows_property(control: Any, name: str) -> Any:
+    try:
+        return getattr(control, name)
+    except Exception:
+        return None
+
+
+def _windows_element_at_position(x: float, y: float) -> dict[str, Any]:
+    """Best-effort UI Automation metadata for the native control at a point.
+
+    Only control identity/label properties are read. We deliberately never request
+    ValuePattern, TextPattern, LegacyIAccessibleValue or other properties that can
+    expose what a user typed into a field.
+    """
+    try:
+        import uiautomation as auto  # type: ignore
+
+        # Interaction capture runs in its own worker thread. The package requires
+        # COM/UIAutomation initialization in each thread that reads controls.
+        with auto.UIAutomationInitializerInThread():
+            control = auto.ControlFromPoint(int(round(x)), int(round(y)))
+            if control is None:
+                return {}
+
+            secure = bool(_windows_property(control, "IsPassword"))
+            role = _clean_text(_windows_property(control, "ControlTypeName"))
+            localized_role = _clean_text(_windows_property(control, "LocalizedControlType"))
+            if secure:
+                return {
+                    "role": role or localized_role or "password",
+                    "secure": True,
+                    "provider": "windows_uiautomation",
+                }
+
+            result = {
+                "role": role,
+                "localized_role": localized_role,
+                "title": _clean_text(_windows_property(control, "Name")),
+                "identifier": _clean_text(_windows_property(control, "AutomationId")),
+                "class_name": _clean_text(_windows_property(control, "ClassName")),
+                "help": _clean_text(_windows_property(control, "HelpText")),
+                "framework": _clean_text(_windows_property(control, "FrameworkId")),
+                "secure": False,
+                "provider": "windows_uiautomation",
+            }
+            return {k: v for k, v in result.items() if v not in (None, "", False)}
+    except Exception:
+        # UIA support is intentionally best effort: applications running at a
+        # higher integrity level or apps without a UIA provider may return no label.
+        return {}
+
+
+def element_at_position(x: float, y: float) -> dict[str, Any]:
+    """Return privacy-conscious semantic metadata for the UI element at a point.
+
+    macOS uses Accessibility and Windows uses Microsoft UI Automation. Neither path
+    reads typed field values, selected text, clipboard contents or password values.
+    Unsupported platforms simply return no semantic target metadata.
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return _mac_element_at_position(x, y)
+    if system == "Windows":
+        return _windows_element_at_position(x, y)
+    return {}
