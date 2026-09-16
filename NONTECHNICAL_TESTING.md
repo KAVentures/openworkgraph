@@ -1,61 +1,79 @@
-# v31 testing
+# OpenWorkGraph v0.32 — nontechnical testing
 
-This build is a deliberate rollback to the v27 rich-evidence capture/data behavior. The dashboard should again show detailed Raw activity evidence. Session exports include raw local evidence by default; uncheck the export option only if you intentionally want the normalized-only export.
+The easiest test path on macOS is the standalone GitHub Release ZIP.
 
-After upgrading, reload the browser extension once. It should report version `1.5.0-v31-rich-rollback`.
+## Start OpenWorkGraph
 
-# OpenWorkGraph v27 test
+1. Download `OpenWorkGraph-macOS.zip` from the latest GitHub Release.
+2. Unzip it.
+3. Right-click `START_OPENWORKGRAPH.command` → **Open**.
+4. Confirm **Open** if macOS asks.
+5. Approve Accessibility/Input Monitoring if requested.
+6. The local dashboard should open automatically.
 
-1. Stop the previous observer with **Ctrl+C**.
-2. Unzip the v27 standalone build.
-3. Right-click `START_ON_MAC_STANDALONE.command` → **Open**.
-4. Run `OPEN_BROWSER_SENSOR_FOLDER.command` and reload the browser sensor extension once.
-5. Work normally.
+No manual Python installation or Terminal command setup is required.
 
-## The important v27 checks
+## Add the browser sensor
 
-### 1. Rich capture is back
+1. Double-click `ADD_BROWSER_SENSOR.command`.
+2. Finder opens the correct `browser_extension` folder.
+3. In Chrome/Edge, enable **Developer mode**.
+4. Click **Load unpacked** and select the opened `browser_extension` folder.
+5. The OpenWorkGraph dashboard should show the browser sensor as connected and should report the current extension version.
 
-The local dashboard's **Raw desktop interaction evidence** and browser evidence should behave like v23: it should be possible to understand what the observer actually saw, including useful browser/page context.
+The browser sensor is important: without it, OpenWorkGraph can see the browser application but cannot reliably distinguish Gmail, Google Docs, Salesforce and other individual browser tools.
 
-### 2. Work surfaces still separate correctly
+## Core checks
 
-Gmail, GitHub, ChatGPT, Lovable, Google Docs/Sheets, etc. should not collapse into Google Chrome in the work-surface views.
+### 1. Brief navigation must appear immediately
 
-### 3. Repeated email task test
+Open a new tab, type a URL, press Enter, stay on the page for only 1–2 seconds, and switch away **without scrolling or clicking**.
 
-Send two new emails back-to-back without deliberately waiting or switching away from Gmail.
+Expected: Raw activity evidence / browser semantic activity contains the visited site. The visit must not depend on a later scroll or click.
 
-Expected task layer:
+### 2. Browser work surfaces should stay separate
 
-- two separate `Compose and send email` executions
-- both with family `email.compose_send`
-- **Repeated task families** shows `Compose and send email` with count 2
+Use several browser tools such as Gmail, Google Docs, ChatGPT or another web app.
 
-This should work even before the current Chrome/Gmail focus span is finalized.
+Expected: work-surface views attribute effort to the logical browser surface rather than collapsing everything into `Google Chrome`.
 
-### 4. Normalized operational layer retains structure, not content
+### 3. Rich raw evidence remains understandable
 
-The raw local evidence may contain richer text. The task labels/family and MCP-facing layer should instead use safe structure such as `Gmail`, `Compose`, `Send`, `GitHub`, `Create repository`, timing and effort.
+Work normally for a few minutes.
 
-Typed text and key identities are never collected by the effort counter.
+Expected: Raw activity evidence should make it possible to reconstruct what the observer actually saw. The v0.32 context/operational layers must not destroy or replace the raw source evidence.
 
+### 4. Repeated completed tasks should not equal repeated navigation
 
-## Test the v27 export
+Bounce between two websites several times without completing a meaningful action.
 
-1. Capture a few minutes of work.
-2. Scroll to **Export captured session**.
-3. Download JSON and XLSX with raw evidence **unchecked** first.
-4. Upload the JSON/XLSX to your preferred AI and ask it to identify repeated work, bottlenecks, and automation candidates.
-5. Only tick **Include raw local evidence** if you deliberately want to export the richer local evidence; it may contain sensitive content.
+Expected: this may appear as a navigation fragment, but it must not become a repeated completed task merely because the same site sequence occurred more than once.
 
-## Test brief navigation capture
+Then perform a genuinely repeatable completed task twice, such as composing and sending two fresh emails.
 
-Visit a new website for only 1–2 seconds and immediately switch away. Do not scroll or click. After refreshing the dashboard, Browser semantic activity should still contain a navigation/page-view event for that visit.
+Expected: separate task executions should be inferred, and the repeated task family should count both executions.
 
-## v27 checks
+### 5. Delivery should survive temporary interruption
 
-1. Open a new tab, type a domain in the address bar, press Enter, wait only 1–2 seconds, then return to Workflow Observer. **Raw activity evidence** should show the visited domain even if you never scrolled or clicked.
-2. Bounce between two sites several times without completing an action. This may appear under **Navigation fragments (diagnostic only)** but must not create a **Repeated completed task**.
-3. Send two fresh emails. Each Send should anchor a separate inferred task, and **Repeated completed tasks** should show the email task with count 2.
+With OpenWorkGraph running, briefly interrupt the local API/observer process or otherwise create a short delivery failure, then restore it.
 
+Expected: queued desktop/browser observations should be delivered after recovery rather than silently disappearing. The dashboard should expose backlog/connection state rather than pretending capture was complete.
+
+### 6. Exports
+
+Capture a few minutes of work, then export the session as JSON and XLSX.
+
+Test both:
+
+- normalized/operational export without rich raw evidence
+- deliberate export with rich raw evidence included
+
+Expected: the normalized representation keeps task/process structure while dropping unnecessary content; the rich export preserves enough evidence for detailed reconstruction.
+
+## Useful AI test
+
+Give the exported session to ChatGPT, Claude or another model and ask:
+
+> What repeated work do you see? What appears inefficient? What internal tool or automation would help most? Show the observed evidence behind each suggestion.
+
+The goal is not that OpenWorkGraph itself must make every conclusion. The goal is to produce a sufficiently accurate, reconstructable work dataset that another AI can reason over it.
