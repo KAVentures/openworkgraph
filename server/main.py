@@ -102,6 +102,10 @@ class BrowserEvent(BaseModel):
     sensor_id: str = ""
     sensor_version: str = ""
     browser_session_id: str = ""
+    organization_id: str = ""
+    actor_id: str = ""
+    device_id: str = ""
+    work_session_id: str = ""
     action: str
     page: BrowserPage = Field(default_factory=BrowserPage)
     target: BrowserTarget = Field(default_factory=BrowserTarget)
@@ -143,23 +147,34 @@ def heartbeat(status: Heartbeat) -> dict[str, str]:
     return {"status": "ok"}
 
 
-def _browser_context(event: BrowserEvent) -> dict[str, str]:
-    """Bind browser evidence to this machine's active collector session.
+@app.get("/v1/browser-context")
+def browser_context() -> dict[str, str]:
+    """Return local capture identity so the browser can stamp events before queuing.
 
-    Browser events also carry their own stable sensor_id. The local API is one
-    per machine, so using the local collector session here is deterministic while
-    avoiding the old ambiguity where browser identity existed only implicitly in
-    one global status object.
+    This is intentionally loopback-only with the rest of the prototype API. It
+    prevents an event captured during one observer session from being attributed
+    to a later session when an offline browser queue is replayed.
     """
+    return {
+        "organization_id": str(COLLECTOR_STATUS.get("organization_id") or ""),
+        "actor_id": str(COLLECTOR_STATUS.get("actor_id") or ""),
+        "device_id": str(COLLECTOR_STATUS.get("device_id") or ""),
+        "work_session_id": str(COLLECTOR_STATUS.get("session_id") or ""),
+    }
+
+
+def _browser_context(event: BrowserEvent) -> dict[str, str]:
     app_name = str(COLLECTOR_STATUS.get("app") or "Browser")
     if not is_browser_app(app_name):
         app_name = "Browser"
     return {
         "app": app_name,
-        "device_id": str(COLLECTOR_STATUS.get("device_id") or "browser-local"),
-        "session_id": str(COLLECTOR_STATUS.get("session_id") or event.browser_session_id or "browser-session"),
-        "organization_id": str(COLLECTOR_STATUS.get("organization_id") or ""),
-        "actor_id": str(COLLECTOR_STATUS.get("actor_id") or ""),
+        # Prefer capture-time identity carried by the event. Current collector
+        # status is only a fallback for old extension versions.
+        "device_id": str(event.device_id or COLLECTOR_STATUS.get("device_id") or "browser-local"),
+        "session_id": str(event.work_session_id or COLLECTOR_STATUS.get("session_id") or event.browser_session_id or "browser-session"),
+        "organization_id": str(event.organization_id or COLLECTOR_STATUS.get("organization_id") or ""),
+        "actor_id": str(event.actor_id or COLLECTOR_STATUS.get("actor_id") or ""),
         "sensor_id": str(event.sensor_id or "browser:unknown"),
     }
 
@@ -175,6 +190,7 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "browser_sensor_id": ctx["sensor_id"],
         "browser_sensor_version": event.sensor_version,
         "browser_session_id": event.browser_session_id,
+        "capture_work_session_id": event.work_session_id,
         "action": event.action,
         "page": page,
         "target": target,
