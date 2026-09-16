@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Workflow Observer Browser Sensor",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Local-only semantic browser telemetry for Workflow Observer. Event-driven capture; typed field values are not collected.",
   "permissions": [
     "tabs",
@@ -37,5 +37,5 @@
   "action": {
     "default_title": "Workflow Observer Browser Sensor"
   },
-  "version_name": "1.6.1-v32-context-hardening"
+  "version_name": "1.7.0-v33-windows-parity"
 }
