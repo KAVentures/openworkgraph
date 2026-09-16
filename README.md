@@ -9,40 +9,58 @@ OpenWorkGraph observes desktop and browser work, preserves customer-owned work e
 
 > **Project status:** early public prototype. The current goal is accurate local capture, reconstructable work context and AI access — not employee-performance scoring or a production enterprise control plane.
 
-## Try OpenWorkGraph on macOS
+## Try it
 
-### Recommended: standalone tester ZIP
+### macOS
 
 **[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
-
-You do **not** need to install Python, clone the repository, or type Terminal commands.
 
 1. Download and unzip `OpenWorkGraph-macOS.zip`.
 2. Right-click **`START_OPENWORKGRAPH.command` → Open**.
 3. Confirm **Open** if macOS asks.
-4. On first launch, OpenWorkGraph downloads its own private runtime and installs itself under your user Library.
-5. Approve **Accessibility** and **Input Monitoring** permissions if macOS requests them.
+4. On first launch, OpenWorkGraph downloads its own private runtime. No system Python is required.
+5. Approve **Accessibility** and **Input Monitoring** if macOS requests them.
 6. The local dashboard opens automatically at `http://127.0.0.1:8787`.
 
-To stop the observer, press **Ctrl+C** in the Terminal window it opened.
+Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen instructions to load the browser sensor.
 
-### Add browser context — strongly recommended
+### Windows
 
-Without the browser sensor, macOS can tell OpenWorkGraph that you are in Chrome, but it cannot reliably distinguish Gmail, Google Docs, Salesforce, ChatGPT and other browser work.
+**[⬇ Download the latest Windows tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip)**
 
-After starting OpenWorkGraph once:
+1. Download and unzip `OpenWorkGraph-Windows.zip`.
+2. Double-click **`START_OPENWORKGRAPH.cmd`**.
+3. If Windows shows a security warning for this early unsigned prototype, review the source and proceed only if you trust this repository.
+4. On first launch, OpenWorkGraph downloads its own private runtime. **No Python installation is required.**
+5. The local dashboard opens automatically at `http://127.0.0.1:8787`.
 
-1. Double-click **`ADD_BROWSER_SENSOR.command`**.
-2. Finder opens the correct `browser_extension` folder and Chrome/Edge opens its Extensions page.
-3. Turn on **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the `browser_extension` folder that Finder opened.
+Then double-click **`ADD_BROWSER_SENSOR.cmd`** once and follow the on-screen instructions to load the browser sensor in Chrome or Edge.
 
-The dashboard reports the browser-sensor version and warns if an older unpacked extension needs to be reloaded after an upgrade.
+Windows now includes best-effort **Microsoft UI Automation** metadata for native controls such as buttons, menus and fields. OpenWorkGraph reads control identity/label metadata only; it deliberately does not request typed values, selected text or password values. Some elevated applications or applications without a UI Automation provider may expose less semantic detail.
 
-### Alternative: use GitHub's source ZIP
+### One command for Codex / Claude Code / terminal users
 
-`Code → Download ZIP` also works. Unzip the repository, right-click **`START_ON_MAC.command` → Open**, then run **`ADD_BROWSER_SENSOR.command`**. The Release ZIP above is simply cleaner for nontechnical testers.
+If an agent has shell access, you can give it one command instead of downloading the ZIP manually.
+
+**macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
+```
+
+**Windows PowerShell:**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
+```
+
+These commands download the **latest GitHub Release** and invoke the same standalone launcher used by ordinary testers. If you prefer not to execute a remote script directly, inspect `install.sh` / `install.ps1` in this repository first and use the Release ZIP instead.
+
+The browser extension still requires a one-time browser approval because ordinary local software should not silently install browser extensions.
+
+### Source ZIP also works
+
+`Code → Download ZIP` remains usable. On macOS run `START_ON_MAC.command`; on Windows run `START_ON_WINDOWS.bat`. The Release ZIPs are cleaner for nontechnical testers.
 
 ---
 
@@ -67,12 +85,12 @@ A captured trace might look conceptually like:
 
 That work history can then be queried by an AI through MCP/API for questions such as:
 
-- "What do we normally do in this situation?"
-- "Show me similar work from the past."
-- "Where are we spending the most manual effort?"
-- "Which repeated processes look suitable for automation?"
-- "What internal tool would eliminate the most recurring work?"
-- "Did the new tool actually reduce the time spent on this process?"
+- “What do we normally do in this situation?”
+- “Show me similar work from the past.”
+- “Where are we spending the most manual effort?”
+- “Which repeated processes look suitable for automation?”
+- “What internal tool would eliminate the most recurring work?”
+- “Did the new tool actually reduce the time spent on this process?”
 
 ## Architecture
 
@@ -99,7 +117,7 @@ That work history can then be queried by an AI through MCP/API for questions suc
        ChatGPT       Claude    internal agents
 ```
 
-The observer does not need to permanently decide what a workflow "means." It preserves reconstructable evidence so better models can reinterpret the same history later.
+The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable evidence so better models can reinterpret the same history later.
 
 ## Three local data layers
 
@@ -108,8 +126,6 @@ OpenWorkGraph deliberately separates capture fidelity from downstream privacy/an
 1. **Raw local evidence** — the richest customer-owned source of truth for reconstruction and verification.
 2. **Customer context** — searchable organizational memory containing useful observed resource/page/window/UI context, while never adding typed field values or clipboard contents.
 3. **Normalized operational events** — a content-minimized representation used for broad process/effort analytics and task inference.
-
-This lets an authorized assistant use richer context when necessary while ordinary workflow analytics can operate on the minimized operational layer.
 
 ## What the observer captures
 
@@ -121,7 +137,7 @@ Current capture includes:
 - foreground, engaged, probable-idle and active-input timing
 - aggregate keypress counts — **never key identities, key order or typed text**
 - global mouse clicks and throttled scrolls
-- best-effort native macOS Accessibility labels for clicked controls
+- native semantic control metadata on macOS Accessibility and Windows UI Automation, best effort
 - browser semantic events such as interactive clicks, editor/input focus, form submits and control changes
 - copy/paste **occurrence**, not clipboard contents
 - candidate task executions
@@ -208,7 +224,7 @@ Raw local evidence is not exposed through MCP by default.
 
 ## Browser navigation accuracy
 
-The browser sensor uses several independent browser-native signals so simply creating a tab, typing a URL and pressing Enter is captured without waiting for a later page interaction:
+The browser sensor uses several independent browser-native signals so creating a tab, typing a URL and pressing Enter is captured without waiting for a later page interaction:
 
 - `tabs.onUpdated`
 - `webNavigation.onBeforeNavigate`
@@ -218,6 +234,22 @@ The browser sensor uses several independent browser-native signals so simply cre
 - History API route changes for single-page applications
 
 Failed delivery is queued locally and retried.
+
+## Platform status
+
+| Capability | macOS | Windows |
+| --- | --- | --- |
+| Standalone no-Python tester ZIP | ✅ | ✅ |
+| Active app/window telemetry | ✅ | ✅ |
+| Key/click/scroll effort | ✅ | ✅ |
+| Browser navigation + semantic events | ✅ | ✅ |
+| Durable local delivery | ✅ | ✅ |
+| Raw/context/operational layers | ✅ | ✅ |
+| Exports / REST / MCP | ✅ | ✅ |
+| Native control semantics | Accessibility API | Microsoft UI Automation |
+| Automated CI | ✅ | ✅ |
+
+Native control semantics are best effort on both platforms. Windows cannot inspect controls from every application, especially when the target application runs at a higher integrity level than OpenWorkGraph or does not expose a UI Automation provider.
 
 ## Exports
 
@@ -229,22 +261,6 @@ The dashboard can export the captured session as:
 
 The normalized operational representation is available for lower-content analysis. A deliberate **Include rich raw session evidence** option includes the richer customer-owned evidence when full reconstruction is needed.
 
-## Windows
-
-Windows is supported for the core observer:
-
-- foreground application/title through Win32 APIs
-- process identity through `psutil`
-- aggregate keyboard activity through `pynput`
-- click/scroll capture through `pynput`
-- screenshots through `mss`
-- browser semantic capture through the WebExtension
-- local API, dashboard, exports and MCP
-
-Run **`START_ON_WINDOWS.bat`** from the source repository. Windows currently requires Python 3.11+ to be installed; a fully self-contained Windows tester package is still to come.
-
-Native non-browser UI-control labels currently use macOS Accessibility APIs, so arbitrary native Windows applications have less semantic control detail than macOS. Browser applications retain semantic evidence through the browser sensor.
-
 ## Data and privacy boundary
 
 The current prototype server binds to `127.0.0.1`. Captured data stays on the local computer unless the user deliberately exports it or later connects it to another system.
@@ -253,7 +269,9 @@ OpenWorkGraph's collection model intentionally avoids storing key identities/typ
 
 ## Development
 
-Python 3.11+ is supported. The test suite runs in GitHub Actions on macOS, Windows and Linux.
+Python 3.11+ is supported for source development. Standalone tester packages bring their own private Python runtime.
+
+The test suite runs in GitHub Actions on macOS, Windows and Linux.
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -262,6 +280,6 @@ python -m pytest -q
 
 ## Releases
 
-`VERSION` is the canonical project version. When a new version is pushed to `main`, GitHub Actions builds `OpenWorkGraph-macOS.zip`. If that version does not already have a GitHub Release, the workflow creates one and attaches the standalone tester ZIP plus its SHA-256 checksum.
+`VERSION` is the canonical project version. When a new version is pushed to `main`, GitHub Actions builds both `OpenWorkGraph-macOS.zip` and `OpenWorkGraph-Windows.zip`. If that version does not already have a GitHub Release, the workflow creates one and attaches both standalone tester ZIPs plus SHA-256 checksums.
 
 Existing releases are left immutable; bump `VERSION` to publish a new release.
