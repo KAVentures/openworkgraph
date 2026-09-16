@@ -45,7 +45,7 @@ def test_browser_delivery_is_durable_and_idempotent():
     assert "event_id: body.event_id || uuid()" in background
     assert "flushBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.6.1"
+    assert manifest["version"] == "1.7.0"
 
 
 def test_queued_browser_event_keeps_capture_time_work_identity():
