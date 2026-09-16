@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: ["hardening/context-layer-v32"]
+    branches: ["main", "hardening/context-layer-v32"]
   pull_request:
 
 jobs:
