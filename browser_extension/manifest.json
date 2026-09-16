@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Workflow Observer Browser Sensor",
+  "version": "0.4.0",
+  "description": "Local-only semantic browser telemetry for Workflow Observer. Event-driven capture; typed field values are not collected.",
+  "permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8787/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "action": {
+    "default_title": "Workflow Observer Browser Sensor"
+  },
+  "version_name": "0.4.0-v13"
+}
