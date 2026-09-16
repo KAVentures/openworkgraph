@@ -42,8 +42,6 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_time ON events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_events_app ON events(app);
-CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
-CREATE INDEX IF NOT EXISTS idx_events_sensor ON events(sensor_id, observed_at);
 
 CREATE TABLE IF NOT EXISTS normalized_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +60,6 @@ CREATE TABLE IF NOT EXISTS normalized_events (
 CREATE INDEX IF NOT EXISTS idx_norm_time ON normalized_events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_norm_session ON normalized_events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_norm_app ON normalized_events(app);
-CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
 
 CREATE TABLE IF NOT EXISTS context_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,25 +173,44 @@ def _insert_context(conn: sqlite3.Connection, c: dict[str, Any]) -> int:
 
 
 def _backfill_derived(conn: sqlite3.Connection) -> None:
-    raw_rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
-    for row in raw_rows:
+    missing_norm = conn.execute(
+        """
+        SELECT e.* FROM events e
+        LEFT JOIN normalized_events n ON n.event_id = e.event_id
+        WHERE n.event_id IS NULL
+        ORDER BY e.id ASC
+        """
+    ).fetchall()
+    for row in missing_norm:
         raw = _row_to_event(row)
         _insert_event(conn, "normalized_events", normalize_event(raw))
-        _insert_context(conn, contextualize_event(raw))
+
+    missing_context = conn.execute(
+        """
+        SELECT e.* FROM events e
+        LEFT JOIN context_events c ON c.event_id = e.event_id
+        WHERE c.event_id IS NULL
+        ORDER BY e.id ASC
+        """
+    ).fetchall()
+    for row in missing_context:
+        _insert_context(conn, contextualize_event(_row_to_event(row)))
 
 
 def init_db() -> None:
     with connect() as conn:
+        # Base indexes reference only legacy columns, so this succeeds for both a
+        # fresh database and an existing v31 database.
         conn.executescript(SCHEMA)
-        # v31 databases predate explicit identity columns. Add them in-place;
-        # existing evidence remains untouched.
         _ensure_identity_columns(conn, "events")
         _ensure_identity_columns(conn, "normalized_events")
+        # Identity-dependent indexes are created only after old tables migrate.
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_events_sensor ON events(sensor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_norm_sensor ON normalized_events(sensor_id, observed_at);
             """
         )
         _backfill_derived(conn)
@@ -207,8 +223,6 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
         for raw in events:
             e = dict(raw)
             inserted += _insert_event(conn, "events", e)
-            # INSERT OR IGNORE makes retries safe and also repairs missing derived
-            # rows after upgrades.
             _insert_event(conn, "normalized_events", normalize_event(e))
             _insert_context(conn, contextualize_event(e))
     return inserted
