@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Workflow Observer</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#151515;background:#f7f7f5}
+    *{box-sizing:border-box} body{margin:0} main{max-width:1240px;margin:0 auto;padding:36px 22px 60px}
+    .head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px} h1{font-size:32px;margin:0 0 8px;letter-spacing:-.03em}.sub{color:#666;margin-bottom:28px}
+    .mode{font-size:12px;font-weight:800;letter-spacing:.08em;border:1px solid #d7d7d0;border-radius:999px;padding:7px 10px;background:white;white-space:nowrap}.mode.live{background:#eef8ef}.mode.demo{background:#fff6dd}
+    .statusline{margin:-14px 0 12px;padding:11px 13px;background:white;border:1px solid #e4e4df;border-radius:10px;font-size:13px;color:#555}.sensorline{margin:0 0 22px;padding:10px 13px;background:#f0f4ff;border:1px solid #dfe7fb;border-radius:10px;font-size:13px;color:#455}
+    .grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:12px}.card{background:white;border:1px solid #e4e4df;border-radius:14px;padding:18px}
+    .metric{font-size:28px;font-weight:700}.label{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:#777;margin-top:5px}
+    section{margin-top:28px} h2{font-size:18px;margin:0 0 12px}.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    table{width:100%;border-collapse:collapse;font-size:14px} th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eee;vertical-align:top} th{color:#777;font-size:12px}
+    .pill{display:inline-block;background:#f0f0ec;border-radius:999px;padding:4px 8px;margin:2px;font-size:12px}
+    button{border:0;border-radius:9px;padding:9px 12px;background:#171717;color:#fff;cursor:pointer}.muted{color:#777;font-size:13px}.ok{font-weight:700;color:#27633b}.off{font-weight:700;color:#815d18}
+    @media(max-width:1000px){.grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:800px){.grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr}.head{align-items:center}}
+  </style>
+</head>
+<body><main>
+  <div class="head"><div><h1>Workflow Observer</h1><div class="sub">Local-first workflow observation → task evidence → MCP/API. Current view: this run.</div></div><div id="modeBadge" class="mode">CHECKING…</div></div>
+  <div id="statusline" class="statusline">Connecting to the local observer…</div>
+  <div id="sensorline" class="sensorline">Checking optional browser semantic sensor…</div>
+  <div class="grid">
+    <div class="card"><div class="metric" id="events">—</div><div class="label">Focus periods</div></div>
+    <div class="card"><div class="metric" id="engaged">—</div><div class="label">Engaged time</div></div>
+    <div class="card"><div class="metric" id="idle">—</div><div class="label">Idle / away</div></div>
+    <div class="card"><div class="metric" id="keys">—</div><div class="label">Key presses</div></div>
+    <div class="card"><div class="metric" id="interactions">—</div><div class="label">Screen interactions</div></div>
+    <div class="card"><div class="metric" id="browserActions">—</div><div class="label">Browser semantic events</div></div>
+    <div class="card"><div class="metric" id="taskCandidates">—</div><div class="label">Candidate tasks</div></div>
+    <div class="card"><div class="metric" id="apps">—</div><div class="label">Applications</div></div>
+  </div>
+  <section class="row">
+    <div class="card"><h2>Effort by work surface</h2><div class="muted">Browser work is attributed to the site/tool (for example Gmail or Lovable), not to Chrome itself.</div><table><thead><tr><th>Work surface</th><th>Browser / app</th><th>Foreground</th><th>Engaged</th><th>Idle</th><th>Keys</th></tr></thead><tbody id="appsTable"></tbody></table></div>
+    <div class="card"><h2>Common workflow transitions</h2><table><thead><tr><th>Transition</th><th>Count</th></tr></thead><tbody id="transitionsTable"></tbody></table></div>
+  </section>
+  <section class="row">
+    <div class="card"><h2>Candidate task executions</h2><div class="muted">Heuristic grouping of contiguous evidence. Labels quote observed surfaces/UI controls and are suggestions, not claims about intent or outcome.</div><table><thead><tr><th>Candidate task</th><th>Surfaces</th><th>Effort</th></tr></thead><tbody id="taskTable"></tbody></table></div>
+    <div class="card"><h2>Repeated task patterns</h2><div class="muted">Repeated signatures are especially useful automation signals because they combine frequency with observed engaged effort.</div><table><thead><tr><th>Pattern</th><th>Count</th><th>Total engaged</th></tr></thead><tbody id="patternTable"></tbody></table></div>
+  </section>
+  <section class="card"><h2>Browser semantic activity</h2><div class="muted">Optional WebExtension events: navigation, tab activation, interactive clicks, form submissions, control changes, copy/paste occurrence. Typed values and clipboard contents are not captured.</div><table><thead><tr><th>Time</th><th>Page</th><th>Semantic action</th></tr></thead><tbody id="browserTable"></tbody></table></section>
+  <section class="card"><h2>Repeated workflow fragments</h2><div class="muted">These are evidence fragments, not yet semantic workflow labels. Claude/ChatGPT can query the underlying evidence over MCP/API.</div><table><thead><tr><th>Observed path</th><th>Count</th></tr></thead><tbody id="seqTable"></tbody></table></section>
+  <section class="card"><h2>Recent desktop screen interactions</h2><div class="muted">Clicks and throttled scrolls are shown individually. Keyboard activity is stored only as aggregate counts/timing per focus step — never key identities, key order, or typed text. UI labels are best-effort from macOS Accessibility.</div><table><thead><tr><th>Time</th><th>App / page</th><th>Observed action</th></tr></thead><tbody id="interactionTable"></tbody></table></section>
+  <section><button onclick="load()">Refresh now</button> <span class="muted" id="updated"></span></section>
+</main>
+<script>
+const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+const fmtTime=s=>{s=Math.max(0,Number(s)||0); if(s<60)return `${Math.round(s)}s`; const m=Math.floor(s/60), r=Math.round(s%60); return `${m}m ${r}s`;};
+async function load(){
+  try{
+    const r=await fetch('/v1/summary?limit=25000&scope=current'); const d=await r.json();
+    const live=(d.mode||'observe')==='observe';
+    const badge=document.querySelector('#modeBadge'); badge.textContent=live?'LIVE DATA':'DEMO DATA'; badge.className=`mode ${live?'live':'demo'}`;
+    document.querySelector('#events').textContent=d.focus_events??0; document.querySelector('#engaged').textContent=fmtTime(d.total_engaged_seconds||0);
+    document.querySelector('#idle').textContent=fmtTime(d.total_idle_seconds||0); document.querySelector('#keys').textContent=d.keypress_count??0;
+    document.querySelector('#interactions').textContent=d.screen_interactions??0; document.querySelector('#browserActions').textContent=d.browser_semantic_events??0;
+    document.querySelector('#taskCandidates').textContent=d.candidate_task_count??(d.candidate_tasks||[]).length;
+    document.querySelector('#apps').textContent=(d.apps||[]).length;
+    document.querySelector('#appsTable').innerHTML=(d.surfaces||d.apps||[]).map(x=>`<tr><td>${esc(x.surface||x.app)}<div class="muted">${x.events} focus periods</div></td><td>${esc(x.container_app||x.app||'')}</td><td>${fmtTime(x.active_seconds||0)}</td><td>${fmtTime(x.engaged_seconds||0)}</td><td>${fmtTime(x.idle_seconds||0)}</td><td>${x.keypress_count||0}</td></tr>`).join('')||'<tr><td colspan="6">No completed focus periods yet</td></tr>';
+    document.querySelector('#transitionsTable').innerHTML=(d.transitions||[]).map(x=>`<tr><td>${esc(x.from)} → ${esc(x.to)}</td><td>${x.count}</td></tr>`).join('')||'<tr><td colspan="2">No transitions yet</td></tr>';
+    document.querySelector('#taskTable').innerHTML=(d.candidate_tasks||[]).slice(0,12).map(x=>`<tr><td><strong>${esc(x.suggested_label||'Candidate task')}</strong><div class="muted">${esc(x.confidence||'low')} confidence · ${x.semantic_action_count||0} semantic actions · ${fmtTime(x.elapsed_seconds||0)} elapsed</div></td><td>${(x.surfaces||[]).slice(0,5).map(a=>`<span class="pill">${esc(a)}</span>`).join('')}</td><td>${fmtTime(x.engaged_seconds||0)} engaged<div class="muted">${x.keypress_count||0} keys · ${x.click_count||0} clicks</div></td></tr>`).join('')||'<tr><td colspan="3">No candidate tasks yet. Use several controls or switch work surfaces to create enough evidence.</td></tr>';
+    document.querySelector('#patternTable').innerHTML=(d.repeated_task_patterns||[]).slice(0,12).map(x=>`<tr><td><strong>${esc(x.suggested_label||x.signature||'Repeated task')}</strong><div class="muted">${(x.surfaces||[]).slice(0,4).map(esc).join(' → ')}</div></td><td>${x.observed_count||0}</td><td>${fmtTime(x.total_engaged_seconds||0)}<div class="muted">median ${fmtTime(x.median_engaged_seconds||0)}</div></td></tr>`).join('')||'<tr><td colspan="3">No task pattern has repeated yet.</td></tr>';
+    document.querySelector('#seqTable').innerHTML=(d.frequent_sequences||[]).map(x=>`<tr><td>${x.sequence.map(a=>`<span class="pill">${esc(a)}</span>`).join(' → ')}</td><td>${x.count}</td></tr>`).join('')||'<tr><td colspan="2">Use the collector for a while to discover repeated sequences.</td></tr>';
+    document.querySelector('#interactionTable').innerHTML=(d.recent_interactions||[]).map(x=>`<tr><td>${x.observed_at?new Date(x.observed_at).toLocaleTimeString():''}</td><td>${esc(x.app||'')}<div class="muted">${esc(x.window_title||'')}</div></td><td>${esc(x.label||x.action||'')}</td></tr>`).join('')||'<tr><td colspan="3">No desktop screen interactions captured yet.</td></tr>';
+    document.querySelector('#browserTable').innerHTML=(d.recent_browser_actions||[]).map(x=>`<tr><td>${x.observed_at?new Date(x.observed_at).toLocaleTimeString():''}</td><td>${esc(x.hostname||x.app||'')}<div class="muted">${esc(x.pathname||x.window_title||'')}</div></td><td>${esc(x.label||x.action||'')}</td></tr>`).join('')||'<tr><td colspan="3">No browser semantic events yet. Desktop observation still works without the optional extension.</td></tr>';
+    const c=d.collector; const current=c?.app ? ` Currently focused: ${c.app}.` : '';
+    const ca=c?.activity||{}; const effort=c ? ` Current step: ${fmtTime(c.focus_elapsed_seconds||0)} foreground, ${fmtTime(ca.engaged_seconds||0)} engaged, ${ca.keypress_count||0} keys.` : '';
+    document.querySelector('#statusline').textContent=live ? (c ? `LIVE collector is connected.${current}${effort} This page shows this run only.` : 'LIVE server is running, waiting for the collector heartbeat. This run starts from zero.') : 'This is synthetic DEMO data. It is isolated from your real observations.';
+    const b=d.browser_sensor;
+    document.querySelector('#sensorline').innerHTML=b ? `<span class="ok">Browser semantic sensor connected.</span> Last action: ${esc(b.last_action||b.status||'connected')}${b.hostname?` on ${esc(b.hostname)}`:''}.` : `<span class="off">Browser semantic sensor not connected.</span> This is optional; app/tab + desktop interaction capture continues normally.`;
+    document.querySelector('#updated').textContent=d.generated_at?`Updated ${new Date(d.generated_at).toLocaleString()} · auto-refreshes every 5 seconds`:'';
+  }catch(e){document.querySelector('#statusline').textContent='Could not reach the local observer. Is the launcher still running?';}
+}
+load(); setInterval(load,5000);
+</script></body></html>
