@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from contextualizer import contextualize_event
 from normalizer import normalize_event
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,12 +15,21 @@ DATA_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "workflow_observer.db"
 
-SCHEMA = """
+IDENTITY_COLUMNS = """
+  schema_version TEXT NOT NULL DEFAULT '1.0',
+  organization_id TEXT NOT NULL DEFAULT '',
+  actor_id TEXT NOT NULL DEFAULT '',
+  sensor_id TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'desktop',
+"""
+
+SCHEMA = f"""
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
   observed_at TEXT NOT NULL,
+  {IDENTITY_COLUMNS}
   device_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   app TEXT,
@@ -27,19 +37,17 @@ CREATE TABLE IF NOT EXISTS events (
   event_type TEXT NOT NULL,
   duration_seconds REAL DEFAULT 0,
   screenshot_path TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{{}}'
 );
 CREATE INDEX IF NOT EXISTS idx_events_time ON events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_events_app ON events(app);
 
--- Privacy-safe operational layer derived from the rich local evidence above.
--- It intentionally mirrors the event shape so existing analytics can operate
--- on it without needing the raw content payload.
 CREATE TABLE IF NOT EXISTS normalized_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
   observed_at TEXT NOT NULL,
+  {IDENTITY_COLUMNS}
   device_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   app TEXT,
@@ -47,22 +55,61 @@ CREATE TABLE IF NOT EXISTS normalized_events (
   event_type TEXT NOT NULL,
   duration_seconds REAL DEFAULT 0,
   screenshot_path TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{{}}'
 );
 CREATE INDEX IF NOT EXISTS idx_norm_time ON normalized_events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_norm_session ON normalized_events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_norm_app ON normalized_events(app);
+
+CREATE TABLE IF NOT EXISTS context_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  observed_at TEXT NOT NULL,
+  schema_version TEXT NOT NULL DEFAULT '1.0',
+  organization_id TEXT NOT NULL DEFAULT '',
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  sensor_id TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'desktop',
+  surface TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  resource_title TEXT NOT NULL DEFAULT '',
+  resource_locator TEXT NOT NULL DEFAULT '',
+  target_label TEXT NOT NULL DEFAULT '',
+  context_text TEXT NOT NULL DEFAULT '',
+  metadata_json TEXT NOT NULL DEFAULT '{{}}'
+);
+CREATE INDEX IF NOT EXISTS idx_context_time ON context_events(observed_at);
+CREATE INDEX IF NOT EXISTS idx_context_session ON context_events(session_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_context_surface ON context_events(surface, observed_at);
+CREATE INDEX IF NOT EXISTS idx_context_actor ON context_events(actor_id, observed_at);
 """
+
 
 @contextmanager
 def connect():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_identity_columns(conn: sqlite3.Connection, table: str) -> None:
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    wanted = {
+        "schema_version": "TEXT NOT NULL DEFAULT '1.0'",
+        "organization_id": "TEXT NOT NULL DEFAULT ''",
+        "actor_id": "TEXT NOT NULL DEFAULT ''",
+        "sensor_id": "TEXT NOT NULL DEFAULT ''",
+        "source": "TEXT NOT NULL DEFAULT 'desktop'",
+    }
+    for name, definition in wanted.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def _row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -73,16 +120,29 @@ def _row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     return d
 
 
-def _insert_one(conn: sqlite3.Connection, table: str, e: dict[str, Any]) -> int:
+def _identity_value(e: dict[str, Any], key: str, default: str = "") -> str:
+    meta = e.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    if key == "source":
+        return str(e.get(key) or meta.get("source") or default or "desktop")
+    return str(e.get(key) or default)
+
+
+def _insert_event(conn: sqlite3.Connection, table: str, e: dict[str, Any]) -> int:
     cur = conn.execute(
         f"""
         INSERT OR IGNORE INTO {table}(
-          event_id, observed_at, device_id, session_id, app, window_title,
+          event_id, observed_at, schema_version, organization_id, actor_id,
+          sensor_id, source, device_id, session_id, app, window_title,
           event_type, duration_seconds, screenshot_path, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            e["event_id"], e["observed_at"], e["device_id"], e["session_id"],
+            e["event_id"], e["observed_at"], str(e.get("schema_version") or "1.0"),
+            _identity_value(e, "organization_id"), _identity_value(e, "actor_id"),
+            _identity_value(e, "sensor_id"), _identity_value(e, "source", "desktop"),
+            str(e.get("device_id") or ""), str(e.get("session_id") or ""),
             e.get("app"), e.get("window_title"), e["event_type"],
             float(e.get("duration_seconds", 0) or 0), e.get("screenshot_path"),
             json.dumps(e.get("metadata") or {}, ensure_ascii=False),
@@ -91,8 +151,29 @@ def _insert_one(conn: sqlite3.Connection, table: str, e: dict[str, Any]) -> int:
     return int(cur.rowcount)
 
 
-def _backfill_normalized(conn: sqlite3.Connection) -> int:
-    missing = conn.execute(
+def _insert_context(conn: sqlite3.Connection, c: dict[str, Any]) -> int:
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO context_events(
+          event_id, observed_at, schema_version, organization_id, actor_id,
+          device_id, sensor_id, session_id, source, surface, action,
+          resource_title, resource_locator, target_label, context_text, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            c["event_id"], c["observed_at"], c.get("schema_version", "1.0"),
+            c.get("organization_id", ""), c.get("actor_id", ""), c.get("device_id", ""),
+            c.get("sensor_id", ""), c.get("session_id", ""), c.get("source", "desktop"),
+            c.get("surface", ""), c.get("action", ""), c.get("resource_title", ""),
+            c.get("resource_locator", ""), c.get("target_label", ""), c.get("context_text", ""),
+            json.dumps(c.get("metadata") or {}, ensure_ascii=False),
+        ),
+    )
+    return int(cur.rowcount)
+
+
+def _backfill_derived(conn: sqlite3.Connection) -> None:
+    missing_norm = conn.execute(
         """
         SELECT e.* FROM events e
         LEFT JOIN normalized_events n ON n.event_id = e.event_id
@@ -100,35 +181,50 @@ def _backfill_normalized(conn: sqlite3.Connection) -> int:
         ORDER BY e.id ASC
         """
     ).fetchall()
-    inserted = 0
-    for row in missing:
+    for row in missing_norm:
         raw = _row_to_event(row)
-        inserted += _insert_one(conn, "normalized_events", normalize_event(raw))
-    return inserted
+        _insert_event(conn, "normalized_events", normalize_event(raw))
+
+    missing_context = conn.execute(
+        """
+        SELECT e.* FROM events e
+        LEFT JOIN context_events c ON c.event_id = e.event_id
+        WHERE c.event_id IS NULL
+        ORDER BY e.id ASC
+        """
+    ).fetchall()
+    for row in missing_context:
+        _insert_context(conn, contextualize_event(_row_to_event(row)))
 
 
 def init_db() -> None:
     with connect() as conn:
+        # Base indexes reference only legacy columns, so this succeeds for both a
+        # fresh database and an existing v31 database.
         conn.executescript(SCHEMA)
-        # Existing v23 local data remains untouched; derive the safe layer next to
-        # it once so a customer does not lose historical operational structure.
-        _backfill_normalized(conn)
+        _ensure_identity_columns(conn, "events")
+        _ensure_identity_columns(conn, "normalized_events")
+        # Identity-dependent indexes are created only after old tables migrate.
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_events_sensor ON events(sensor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_norm_sensor ON normalized_events(sensor_id, observed_at);
+            """
+        )
+        _backfill_derived(conn)
 
 
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
-    """Persist rich local evidence and derive a safe operational twin.
-
-    Return value remains the raw inserted count for backwards compatibility.
-    """
+    """Persist rich evidence plus operational and context derivatives atomically."""
     inserted = 0
     with connect() as conn:
         for raw in events:
             e = dict(raw)
-            raw_inserted = _insert_one(conn, "events", e)
-            inserted += raw_inserted
-            # Even when the raw row already existed, INSERT OR IGNORE ensures the
-            # operational twin is present (useful after upgrades/backfills).
-            _insert_one(conn, "normalized_events", normalize_event(e))
+            inserted += _insert_event(conn, "events", e)
+            _insert_event(conn, "normalized_events", normalize_event(e))
+            _insert_context(conn, contextualize_event(e))
     return inserted
 
 
@@ -144,11 +240,12 @@ def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 
 
 def normalized_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    """Run a SELECT written against normalized_events.
-
-    Kept separate from rows() to make raw-vs-operational intent explicit at call
-    sites and reduce accidental exposure through future MCP/API additions.
-    """
     if "normalized_events" not in query.lower():
         raise ValueError("normalized_rows queries must target normalized_events")
+    return rows(query, params)
+
+
+def context_rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    if "context_events" not in query.lower():
+        raise ValueError("context_rows queries must target context_events")
     return rows(query, params)

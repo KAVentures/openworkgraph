@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
 EXAMPLE = ROOT / "config.example.json"
 DASHBOARD = "http://127.0.0.1:8787"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
 def ensure_config() -> None:
@@ -45,9 +47,6 @@ def stop_process(p: subprocess.Popen | None) -> None:
 
 def mode_environment(mode: str) -> dict[str, str]:
     env = os.environ.copy()
-    # Demo and real observations MUST NEVER share a database. Keeping the
-    # stores separate also makes it obvious to a tester whether live capture
-    # is actually producing events.
     data_dir = ROOT / "data" / ("demo" if mode == "demo" else "live")
     data_dir.mkdir(parents=True, exist_ok=True)
     env["WORKFLOW_OBSERVER_DATA"] = str(data_dir)
@@ -62,14 +61,19 @@ def main() -> None:
     args = parser.parse_args()
     ensure_config()
     env = mode_environment(args.mode)
+    system = platform.system()
 
-    print("\nWorkflow Observer")
-    print("=================")
-    print("Your data stays on this computer in this prototype. v25 keeps rich local evidence plus a separate privacy-safe operational layer for tasks/MCP.")
+    print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
+    print("===========================================")
+    print("Your data stays on this computer in this prototype. Raw evidence is preserved, with separate searchable context and content-minimized operational layers for AI/MCP.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
-    print("Optional browser semantic sensor files are installed in browser_extension/ for deeper page actions.")
+    print("Optional browser semantic sensor files are installed in browser_extension/ for navigation and page-control context.")
+    if system == "Windows":
+        print("Windows: foreground app/title plus keyboard/click/scroll capture are supported. Native desktop UI-control labels are currently richer on macOS; browser semantics work on Windows through the extension.")
+    elif system == "Darwin":
+        print("macOS: approve Accessibility/Input Monitoring permission if requested for native desktop interaction capture.")
     if args.mode == "observe":
-        print("LIVE mode uses its own clean database; demo data is excluded.")
+        print("LIVE mode uses its own database; demo data is excluded.")
     else:
         print("DEMO mode uses a separate synthetic-data database.")
 
@@ -95,9 +99,9 @@ def main() -> None:
             webbrowser.open(DASHBOARD)
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
-            print("The counter increases only when focus materially changes; unchanged polling is not stored.")
-            print("On macOS, approve Accessibility/Input Monitoring permission if requested. Keyboard capture stores counts only, never key identities/text.")
-            print("Optional: install browser_extension/ to capture navigation, control clicks and form submissions without field values.")
+            print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
+            print("The durable local outbox retries capture events if the API is temporarily unavailable.")
+            print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
             collector = subprocess.Popen([
                 sys.executable, "-m", "collector.main", "--config", str(CONFIG)

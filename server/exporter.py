@@ -6,6 +6,7 @@ import json
 import os
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import xlsxwriter
@@ -16,6 +17,9 @@ from .analytics import (
     summary,
 )
 from .db import normalized_rows, rows
+
+ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
 def _since_for_scope(scope: str) -> str | None:
@@ -58,7 +62,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
     return {
         "export": {
             "product": "OpenWorkGraph / Workflow Observer",
-            "version": "v31",
+            "version": VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "scope": scope,
             "run_started_at": os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
@@ -98,8 +102,13 @@ def json_bytes(payload: dict[str, Any]) -> bytes:
 def _flatten_event(e: dict[str, Any]) -> dict[str, Any]:
     return {
         "observed_at": e.get("observed_at"),
-        "session_id": e.get("session_id"),
+        "schema_version": e.get("schema_version", "1.0"),
+        "organization_id": e.get("organization_id", ""),
+        "actor_id": e.get("actor_id", ""),
         "device_id": e.get("device_id"),
+        "sensor_id": e.get("sensor_id", ""),
+        "source": e.get("source", ""),
+        "session_id": e.get("session_id"),
         "app_or_surface": e.get("app"),
         "window_title": e.get("window_title"),
         "event_type": e.get("event_type"),
@@ -173,7 +182,6 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
         for filename, records in files.items():
             buf = io.StringIO(newline="")
             if records:
-                # Serialize nested values so the CSV stays structurally valid.
                 keys: list[str] = []
                 for r in records:
                     for k in r.keys():
@@ -223,6 +231,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
     overview.write("A1", "OpenWorkGraph session export", title_fmt)
     overview.write("A3", "Export", section_fmt)
     meta_rows = [
+        ("Version", payload["export"].get("version")),
         ("Generated at", payload["export"].get("generated_at")),
         ("Scope", payload["export"].get("scope")),
         ("Run started at", payload["export"].get("run_started_at")),
@@ -233,7 +242,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         overview.write(i - 1, 0, k, header_fmt if i == 4 else text_fmt)
         overview.write(i - 1, 1, _xlsx_value(v), wrap_fmt)
     op = payload.get("overview", {}).get("operational", {})
-    overview.write("A11", "Operational summary", section_fmt)
+    overview.write("A12", "Operational summary", section_fmt)
     kpis = [
         ("Focus periods", op.get("focus_events", 0)),
         ("Engaged seconds", op.get("total_engaged_seconds", 0)),
@@ -244,7 +253,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         ("Inferred tasks", len(payload.get("inferred_tasks") or [])),
         ("Repeated task families", len(payload.get("repeated_task_families") or [])),
     ]
-    for i, (k, v) in enumerate(kpis, start=12):
+    for i, (k, v) in enumerate(kpis, start=13):
         overview.write(i - 1, 0, k, text_fmt)
         overview.write(i - 1, 1, v, num_fmt if isinstance(v, float) else int_fmt)
 
@@ -285,10 +294,9 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
     if "raw_local_evidence" in payload:
         write_table("RAW local evidence", [_flatten_event(x) for x in payload.get("raw_local_evidence") or []], widths={"app_or_surface": 24, "window_title": 50, "event_type": 22, "metadata_json": 65})
 
-    # A small useful visual on Overview: engaged seconds by top surface.
     if effort:
         top = effort[:10]
-        start_row = 22
+        start_row = 23
         overview.write(start_row, 0, "Top work surfaces by engaged time", section_fmt)
         overview.write(start_row + 1, 0, "Surface", header_fmt)
         overview.write(start_row + 1, 1, "Engaged seconds", header_fmt)

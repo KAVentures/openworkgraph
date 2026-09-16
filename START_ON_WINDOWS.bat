@@ -16,7 +16,13 @@ if not exist .venv (
   echo First-time setup: installing Workflow Observer locally...
   %PY% -m venv .venv
   .venv\Scripts\python.exe -m pip install --upgrade pip
-  .venv\Scripts\python.exe -m pip install -e .
+)
+echo Checking OpenWorkGraph dependencies...
+.venv\Scripts\python.exe -m pip install -e . --disable-pip-version-check -q
+if not %errorlevel%==0 (
+  echo Dependency installation failed.
+  pause
+  exit /b 1
 )
 .venv\Scripts\python.exe start.py --mode observe
 pause

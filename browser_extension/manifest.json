@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Workflow Observer Browser Sensor",
-  "version": "1.5.0",
+  "version": "1.6.1",
   "description": "Local-only semantic browser telemetry for Workflow Observer. Event-driven capture; typed field values are not collected.",
   "permissions": [
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
@@ -35,5 +37,5 @@
   "action": {
     "default_title": "Workflow Observer Browser Sensor"
   },
-  "version_name": "1.5.0-v31-rich-rollback"
+  "version_name": "1.6.1-v32-context-hardening"
 }

@@ -2,12 +2,9 @@ from __future__ import annotations
 
 """Privacy-safe operational normalization.
 
-v25 deliberately keeps v23 raw capture untouched. Raw evidence is stored in the
-customer-local `events` table. This module derives a second, content-minimized
+Raw evidence remains untouched. This module derives a content-minimized
 representation for task inference, MCP/API, and long-lived operational analytics.
-
-The normalizer keeps structure (surface, action, role, timing/effort) and drops
-payload (subjects, names, document titles, typed values, record IDs, full paths).
+Identity fields are preserved so multi-device/actor data never collapses together.
 """
 
 import hashlib
@@ -26,13 +23,10 @@ def _pseudonym(value: str) -> str:
 
 
 def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title: str = "") -> str:
-    """Return a useful but content-minimized work-surface name."""
     host = _clean(hostname).lower().strip(".")
     path = _clean(pathname, 300).lower()
     low_title = _clean(title).lower()
 
-    # Explicit web identity wins. These labels are product/service identities,
-    # not customer content.
     if host in {"chatgpt.com", "chat.openai.com"} or "chatgpt" in low_title:
         return "ChatGPT"
     if host.endswith("lovable.dev") or "lovable" in low_title:
@@ -80,8 +74,6 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
     if host.endswith("hubspot.com") or "hubspot" in low_title:
         return "HubSpot"
 
-    # Title-only markers are useful when the browser extension is absent. We use
-    # the title ephemerally here, but never copy the title into normalized storage.
     markers = [
         ("google docs", "Google Docs"), ("google sheets", "Google Sheets"),
         ("google slides", "Google Slides"), ("google drive", "Google Drive"),
@@ -95,9 +87,6 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
         if marker in low_title:
             return label
 
-    # Native apps are useful non-content identities. Unknown/internal web domains
-    # are pseudonymized in the normalized layer; the raw local evidence still has
-    # the original hostname/title if the customer needs to inspect it.
     if app and not is_browser_app(app):
         return _clean(app, 120) or "Unknown"
     if host:
@@ -105,8 +94,6 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
     return "Browser" if is_browser_app(app) else (_clean(app, 120) or "Unknown")
 
 
-# Only generic workflow controls survive normalization. Arbitrary visible text is
-# not copied into the operational layer.
 _ACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^\s*create\s+(new\s+)?repository\b|^\s*create\s+repo\b", re.I), "Create repository"),
     (re.compile(r"^\s*new\s+repository\b|^\s*new\s+repo\b", re.I), "New repository"),
@@ -164,14 +151,12 @@ def _safe_target(target: dict[str, Any] | None) -> dict[str, Any]:
         out["contenteditable"] = True
     label = safe_action_label(target)
     if label:
-        # Existing analytics reads both browser label and accessibility title.
         out["label"] = label
         out["title"] = label
     return out
 
 
 def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Derive one privacy-safe event while leaving the raw event untouched."""
     e = dict(event)
     meta = dict(e.get("metadata") or {})
     page = dict(meta.get("page") or {}) if isinstance(meta.get("page"), dict) else {}
@@ -185,7 +170,7 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     )
 
     normalized_meta: dict[str, Any] = {
-        "source": meta.get("source") or "desktop",
+        "source": e.get("source") or meta.get("source") or "desktop",
         "container_app": raw_app,
         "normalized": True,
         "privacy": {
@@ -195,13 +180,11 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
             "full_url_paths": False,
         },
     }
-    # Counts/timing contain no key identity or typed content.
     if isinstance(meta.get("activity"), dict):
-        allowed = {
+        normalized_meta["activity"] = {
             k: v for k, v in meta["activity"].items()
             if k in {"foreground_seconds", "engaged_seconds", "idle_seconds", "active_input_seconds", "keypress_count", "click_count", "scroll_count", "input_events"}
         }
-        normalized_meta["activity"] = allowed
 
     action = _clean(meta.get("action"), 80)
     if action:
@@ -214,18 +197,19 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     if target:
         normalized_meta["target"] = target
 
-    # Keep only the safe surface marker in page context. No hostname, title,
-    # origin, path, IDs, query, fragment, or arbitrary page text is retained.
     if page or str(e.get("event_type") or "").startswith("browser_"):
         normalized_meta["page"] = {"title": surface, "surface": surface}
 
     return {
         "event_id": str(e.get("event_id") or ""),
         "observed_at": str(e.get("observed_at") or ""),
+        "schema_version": str(e.get("schema_version") or "1.0"),
+        "organization_id": str(e.get("organization_id") or ""),
+        "actor_id": str(e.get("actor_id") or ""),
         "device_id": str(e.get("device_id") or ""),
+        "sensor_id": str(e.get("sensor_id") or ""),
+        "source": str(e.get("source") or meta.get("source") or "desktop"),
         "session_id": str(e.get("session_id") or ""),
-        # In the operational layer, app means the work surface. The original
-        # container app remains available in metadata.container_app.
         "app": surface,
         "window_title": surface,
         "event_type": str(e.get("event_type") or "unknown"),

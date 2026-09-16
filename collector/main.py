@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import signal
-import socket
 import time
 import uuid
 import queue
@@ -18,6 +17,8 @@ from .platform import active_window
 from .accessibility import element_at_position
 from .interactions import InteractionSensor, KeyboardActivitySensor, ActivityTracker, RawInteraction
 from .privacy import should_exclude, title_for_mode
+from .identity import load_or_create_identity
+from .outbox import EventOutbox
 from browser_utils import is_browser_app, normalized_browser_title
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +35,9 @@ def utcnow() -> str:
 
 def load_config(path: Path) -> dict:
     cfg = {
-        "device_id": socket.gethostname(),
+        "device_id": "",
+        "organization_id": "",
+        "actor_id": "",
         "backend_url": "http://127.0.0.1:8787",
         "poll_seconds": 2,
         "heartbeat_seconds": 5,
@@ -81,20 +84,42 @@ def append_local(event: dict) -> None:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
-def post_event(event: dict, backend_url: str) -> None:
+def persist_event(event: dict, outbox: EventOutbox) -> None:
+    """Write capture evidence locally before attempting any HTTP delivery."""
+    append_local(event)
+    outbox.enqueue(event)
+
+
+def deliver_outbox_once(outbox: EventOutbox, backend_url: str, *, limit: int = 100) -> int:
+    batch = outbox.pending(limit)
+    if not batch:
+        return 0
+    ids = [str(e.get("event_id") or "") for e in batch]
     try:
         httpx.post(
             f"{backend_url.rstrip('/')}/v1/events",
-            json={"events": [event]},
-            timeout=3,
+            json={"events": batch},
+            timeout=5,
         ).raise_for_status()
-    except Exception:
-        # Local JSONL remains the durable fallback for the prototype.
-        pass
+        outbox.acknowledge(ids)
+        return len(batch)
+    except Exception as exc:
+        outbox.mark_failed(ids, str(exc))
+        return 0
+
+
+def _delivery_worker(outbox: EventOutbox, backend_url: str, stop: threading.Event) -> None:
+    delay = 0.25
+    while not stop.is_set():
+        delivered = deliver_outbox_once(outbox, backend_url)
+        if delivered:
+            delay = 0.1
+            continue
+        stop.wait(delay)
+        delay = min(3.0, delay * 1.5)
 
 
 def post_heartbeat(status: dict, backend_url: str) -> None:
-    """Tell the UI the collector is alive without writing a telemetry row."""
     try:
         httpx.post(
             f"{backend_url.rstrip('/')}/v1/heartbeat",
@@ -108,6 +133,17 @@ def post_heartbeat(status: dict, backend_url: str) -> None:
 def _stop(*_args):
     global STOP
     STOP = True
+
+
+def _identity_fields(cfg: dict, *, source: str = "desktop") -> dict:
+    return {
+        "schema_version": "1.0",
+        "organization_id": str(cfg.get("organization_id") or ""),
+        "actor_id": str(cfg.get("actor_id") or ""),
+        "device_id": str(cfg.get("device_id") or ""),
+        "sensor_id": str(cfg.get("sensor_id") or ""),
+        "source": source,
+    }
 
 
 def _public_window(w, cfg: dict) -> dict:
@@ -126,12 +162,7 @@ def _public_window(w, cfg: dict) -> dict:
     }
 
 
-
 def _change_key(state: dict, cfg: dict):
-    # Application changes are always meaningful. For any recognized browser,
-    # the active window title generally tracks the active tab/page on desktop,
-    # so a title change is treated as a browser navigation/tab change. Browser
-    # recognition is vendor-agnostic and can be extended by enterprise config.
     app = state["app"]
     if is_browser_app(app, cfg.get("browser_app_patterns")):
         return (app, normalized_browser_title(state["window_title"]))
@@ -154,7 +185,7 @@ def _focus_span_event(
     return {
         "event_id": str(uuid.uuid4()),
         "observed_at": started_at,
-        "device_id": cfg["device_id"],
+        **_identity_fields(cfg),
         "session_id": session_id,
         "app": state["app"],
         "window_title": state["window_title"],
@@ -162,6 +193,7 @@ def _focus_span_event(
         "duration_seconds": max(0.0, float(duration_seconds)),
         "screenshot_path": screenshot_path if screenshot_path and not cfg.get("upload_screenshots") else None,
         "metadata": {
+            "source": "desktop",
             "excluded": state["excluded"],
             "screenshot_captured_locally": bool(screenshot_path),
             "change_detection": cfg.get("change_detection", "application"),
@@ -169,7 +201,6 @@ def _focus_span_event(
             "privacy": {"key_identities": False, "typed_values": False},
         },
     }
-
 
 
 def _interaction_event(
@@ -181,6 +212,7 @@ def _interaction_event(
     w = active_window()
     state = _public_window(w, cfg)
     metadata: dict = {
+        "source": "desktop",
         "action": raw.kind,
         "x": round(raw.x, 1),
         "y": round(raw.y, 1),
@@ -199,16 +231,13 @@ def _interaction_event(
 
     event_id = str(uuid.uuid4())
     shot = None
-    if (
-        cfg.get("interaction_screenshots_enabled")
-        and not state["excluded"]
-    ):
+    if cfg.get("interaction_screenshots_enabled") and not state["excluded"]:
         shot = screenshot(event_id)
 
     return {
         "event_id": event_id,
         "observed_at": utcnow(),
-        "device_id": cfg["device_id"],
+        **_identity_fields(cfg),
         "session_id": session_id,
         "app": state["app"],
         "window_title": state["window_title"],
@@ -226,26 +255,30 @@ def _interaction_worker(
     q: "queue.Queue[RawInteraction | None]",
     cfg: dict,
     session_id: str,
+    outbox: EventOutbox,
 ) -> None:
     while True:
         raw = q.get()
-        if raw is None:
-            return
         try:
+            if raw is None:
+                return
             event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
-            append_local(event)
-            post_event(event, cfg["backend_url"])
+            persist_event(event, outbox)
         except Exception:
             pass
         finally:
             q.task_done()
 
+
 def run(config_path: Path) -> None:
     global STOP
     STOP = False
     cfg = load_config(config_path)
+    identity = load_or_create_identity(LOCAL_DIR, cfg)
+    cfg.update(identity)
     session_id = str(uuid.uuid4())
     activity_tracker = ActivityTracker()
+    outbox = EventOutbox(LOCAL_DIR / "collector_outbox.db")
 
     current_state: dict | None = None
     current_key = None
@@ -257,16 +290,24 @@ def run(config_path: Path) -> None:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
-    interaction_q: "queue.Queue[RawInteraction | None]" = queue.Queue(maxsize=500)
+    delivery_stop = threading.Event()
+    delivery = threading.Thread(
+        target=_delivery_worker,
+        args=(outbox, cfg["backend_url"], delivery_stop),
+        daemon=True,
+    )
+    delivery.start()
+
+    interaction_q: "queue.Queue[RawInteraction | None]" = queue.Queue(maxsize=5000)
     worker = threading.Thread(
-        target=_interaction_worker, args=(interaction_q, cfg, session_id), daemon=True
+        target=_interaction_worker, args=(interaction_q, cfg, session_id, outbox), daemon=True
     )
     worker.start()
 
     def enqueue_interaction(raw: RawInteraction) -> None:
         activity_tracker.record(raw.kind, raw.occurred_mono)
         try:
-            interaction_q.put_nowait(raw)
+            interaction_q.put(raw, timeout=0.05)
         except queue.Full:
             pass
 
@@ -288,11 +329,10 @@ def run(config_path: Path) -> None:
         keyboard_started = keyboard_sensor.start()
 
     print(f"Workflow Observer collector started. session={session_id}")
+    print(f"device={cfg['device_id']} sensor={cfg['sensor_id']}")
+    print(f"Durable delivery queue: {outbox.count()} pending event(s) at startup.")
     print("Polling detects focus/tab changes; unchanged polls are NOT stored as events.")
-    print(
-        "Screen interaction capture: "
-        + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable")
-    )
+    print("Screen interaction capture: " + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable"))
     print("Keyboard activity: " + ("ON (counts only; key identities/text are discarded)" if keyboard_started else "OFF / permission unavailable"))
     print("Typed text, key identities, and clipboard contents are never stored. Ctrl+C stops collection.")
 
@@ -326,8 +366,7 @@ def run(config_path: Path) -> None:
                 screenshot_path=current_screenshot,
                 activity=activity,
             )
-            append_local(event)
-            post_event(event, cfg["backend_url"])
+            persist_event(event, outbox)
 
             current_state = state
             current_key = key
@@ -337,12 +376,13 @@ def run(config_path: Path) -> None:
             if cfg.get("screenshots_enabled") and not state["excluded"]:
                 current_screenshot = screenshot(str(uuid.uuid4()))
 
-        # Heartbeats update only volatile collector status. They are deliberately
-        # not stored in SQLite/JSONL and therefore never inflate workflow counts.
         if now_mono - last_heartbeat >= float(cfg.get("heartbeat_seconds", 5)):
             post_heartbeat(
                 {
                     "device_id": cfg["device_id"],
+                    "sensor_id": cfg["sensor_id"],
+                    "organization_id": cfg.get("organization_id", ""),
+                    "actor_id": cfg.get("actor_id", ""),
                     "session_id": session_id,
                     "observed_at": now_wall,
                     "app": state["app"],
@@ -354,6 +394,7 @@ def run(config_path: Path) -> None:
                         engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
                     ) if current_state is not None else {},
                     "keyboard_sensor": keyboard_started,
+                    "outbox_pending": outbox.count(),
                 },
                 cfg["backend_url"],
             )
@@ -366,11 +407,11 @@ def run(config_path: Path) -> None:
     if keyboard_sensor is not None:
         keyboard_sensor.stop()
     try:
-        interaction_q.put_nowait(None)
-    except queue.Full:
+        interaction_q.put(None, timeout=0.5)
+        interaction_q.join()
+    except Exception:
         pass
 
-    # Preserve the final focus period once the user explicitly stops recording.
     if current_state is not None:
         end_mono = time.monotonic()
         activity = activity_tracker.summarize(
@@ -387,10 +428,16 @@ def run(config_path: Path) -> None:
             screenshot_path=current_screenshot,
             activity=activity,
         )
-        append_local(event)
-        post_event(event, cfg["backend_url"])
+        persist_event(event, outbox)
 
-    print("Collector stopped.")
+    for _ in range(5):
+        if outbox.count() == 0:
+            break
+        if not deliver_outbox_once(outbox, cfg["backend_url"], limit=200):
+            break
+    delivery_stop.set()
+    delivery.join(timeout=1)
+    print(f"Collector stopped. {outbox.count()} event(s) remain queued for next launch.")
 
 
 def main() -> None:

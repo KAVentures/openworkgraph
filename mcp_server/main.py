@@ -7,7 +7,7 @@ import httpx
 from mcp.server import MCPServer
 
 API_URL = os.getenv("WORKFLOW_OBSERVER_API", "http://127.0.0.1:8787").rstrip("/")
-mcp = MCPServer("Workflow Observer")
+mcp = MCPServer("OpenWorkGraph")
 
 
 def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -18,14 +18,56 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_current_work_context(limit: int = 50) -> dict[str, Any]:
+    """Return recent customer-owned work context for the current machine/session.
+
+    Context may include page/window titles, sanitized URL paths and UI labels that
+    were visibly observed. Typed field values and clipboard contents are never
+    captured. Use this when helping with the work the user is doing now.
+    """
+    return _get("/v1/context-events", {"limit": limit})
+
+
+@mcp.tool()
+def search_work_history(query: str, limit: int = 100) -> dict[str, Any]:
+    """Search prior work context by customer/project/resource/action wording."""
+    return _get("/v1/context-events", {"query": query, "limit": limit})
+
+
+@mcp.tool()
+def find_similar_work(description: str, limit: int = 50) -> dict[str, Any]:
+    """Find previously observed work related to a natural-language description."""
+    return _get("/v1/context-events", {"query": description, "limit": limit})
+
+
+@mcp.tool()
+def get_context_session(session_id: str, limit: int = 1000) -> dict[str, Any]:
+    """Return chronological customer-owned context for one observed work session."""
+    return _get(f"/v1/context-sessions/{session_id}", {"limit": limit})
+
+
+@mcp.tool()
+def find_process_examples(task_family: str, max_events: int = 100000, limit: int = 20) -> dict[str, Any]:
+    """Return observed task executions belonging to a stable task family."""
+    data = _get("/v1/tasks", {"limit": max_events, "scope": "all"})
+    family = task_family.strip().lower()
+    matches = [
+        task for task in data.get("tasks", [])
+        if str(task.get("task_family") or "").lower() == family
+        or family in str(task.get("suggested_label") or "").lower()
+    ]
+    return {"task_family": task_family, "examples": matches[:max(1, min(limit, 100))]}
+
+
+@mcp.tool()
 def company_workflow_summary(max_events: int = 10000) -> dict[str, Any]:
-    """Return an evidence-based summary of observed work: work surfaces, effort, transitions, semantic events, candidate tasks and repeated task patterns."""
+    """Return a content-minimized summary of work surfaces, effort, transitions and repeated tasks."""
     return _get("/v1/operational-summary", {"limit": max_events, "scope": "current"})
 
 
 @mcp.tool()
 def search_work_observations(query: str = "", app_name: str | None = None, limit: int = 100) -> dict[str, Any]:
-    """Search privacy-safe normalized work events by surface/action. Raw titles and content are not exposed through MCP."""
+    """Search normalized operational events by surface/action; raw content is not exposed."""
     params: dict[str, Any] = {"query": query, "limit": limit}
     if app_name:
         params["surface"] = app_name
@@ -34,30 +76,31 @@ def search_work_observations(query: str = "", app_name: str | None = None, limit
 
 @mcp.tool()
 def recent_semantic_activity(limit: int = 200) -> dict[str, Any]:
-    """Return recent semantic work actions from browser instrumentation and desktop accessibility, without typed field values."""
+    """Return recent normalized semantic browser/desktop actions without typed values."""
     return _get("/v1/operational-semantic-activity", {"limit": limit, "scope": "current"})
 
 
 @mcp.tool()
 def candidate_task_executions(max_events: int = 25000) -> dict[str, Any]:
-    """Return candidate task executions with duration, overlap-aware effort, work surfaces, semantic evidence and explicit boundary reasons. Labels are suggestions and require review."""
+    """Return candidate task executions with duration, effort, surfaces and boundary evidence."""
     return _get("/v1/tasks", {"limit": max_events, "scope": "current"})
 
 
 @mcp.tool()
 def get_work_session(session_id: str, limit: int = 1000) -> dict[str, Any]:
-    """Return the chronological privacy-safe operational trace for one observed work session."""
+    """Return the chronological privacy-minimized operational trace for one session."""
     return _get(f"/v1/operational-sessions/{session_id}", {"limit": limit})
 
 
 @mcp.tool()
 def automation_candidates(max_events: int = 25000) -> dict[str, Any]:
-    """Return repeated candidate tasks and workflow fragments for automation analysis. These are evidence signals, not a claim that automation is safe or appropriate."""
+    """Return repeated observed tasks/fragments as evidence for automation analysis."""
     data = _get("/v1/operational-summary", {"limit": max_events, "scope": "current"})
     candidates = []
     for item in data.get("repeated_task_patterns", []):
         candidates.append({
             "candidate_task": item.get("suggested_label"),
+            "task_family": item.get("task_family") or item.get("signature"),
             "observed_count": item.get("observed_count", 0),
             "surfaces": item.get("surfaces", []),
             "total_engaged_seconds": item.get("total_engaged_seconds", 0),
@@ -68,27 +111,25 @@ def automation_candidates(max_events: int = 25000) -> dict[str, Any]:
             "keypress_count": item.get("keypress_count", 0),
             "click_count": item.get("click_count", 0),
             "confidence": item.get("confidence", "low"),
-            "reason": "Repeated heuristic task signature with observed manual effort",
+            "reason": "Repeated observed task family with manual effort",
             "needs_human_review": True,
         })
     if not candidates:
         for item in data.get("frequent_sequences", []):
-            sequence = item.get("sequence", [])
             count = int(item.get("count", 0))
             if count >= 2:
                 candidates.append({
-                    "sequence": sequence,
+                    "sequence": item.get("sequence", []),
                     "observed_count": count,
-                    "reason": "Repeated cross-surface sequence observed multiple times",
+                    "reason": "Repeated navigation/work-surface fragment; diagnostic only",
                     "needs_human_review": True,
                 })
     return {"candidates": candidates[:30], "source_events": data.get("events", 0)}
 
 
-@mcp.resource("workflow-observer://data-model")
+@mcp.resource("openworkgraph://data-model")
 def data_model() -> str:
-    """Explain what the Workflow Observer dataset contains and what it deliberately does not capture."""
-    return """OpenWorkGraph v25 uses two local data layers. The raw evidence layer preserves rich customer-owned context for local verification and debugging. A separate normalized operational layer derives work-surface identity, generic actions, timing/effort and task structure while omitting arbitrary visible text, typed values, full URL paths, subjects, names, document titles and record identifiers. MCP tools use the normalized operational layer by default. Keyboard telemetry is aggregate counts/timing only: key identities, key order and typed text are never stored. Candidate task executions and repeated task patterns are heuristic observational evidence with suggested labels and explicit boundary reasons; they require contextual review before automation decisions."""
+    return """OpenWorkGraph v0.32 has three local data layers. Raw evidence is the rich customer-owned source of truth. Customer context is a searchable middle layer that preserves useful visible resource titles, sanitized host/path context and UI labels while never adding typed field values or clipboard contents. Operational telemetry is a content-minimized layer for broad process/effort analytics. MCP exposes explicit context-retrieval tools and normalized process-analysis tools; raw evidence is not exposed through MCP by default. Events carry versioned device/sensor/session identity, and the desktop/browser collectors use durable local delivery queues so temporary API outages do not silently erase observations."""
 
 
 if __name__ == "__main__":
