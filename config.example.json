@@ -1,5 +1,7 @@
 {
-  "device_id": "my-laptop",
+  "device_id": "",
+  "organization_id": "",
+  "actor_id": "",
   "backend_url": "http://127.0.0.1:8787",
   "poll_seconds": 2,
   "heartbeat_seconds": 5,
