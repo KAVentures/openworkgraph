@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+import csv
+import io
+import json
+import os
+import zipfile
+from datetime import datetime, timezone
+from typing import Any
+
+import xlsxwriter
+
+from .analytics import (
+    candidate_tasks,
+    semantic_activity,
+    summary,
+)
+from .db import normalized_rows, rows
+
+
+def _since_for_scope(scope: str) -> str | None:
+    return os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
+
+
+def _query_table(table: str, *, since: str | None, limit: int = 100000) -> list[dict[str, Any]]:
+    if table == "events":
+        loader = rows
+    elif table == "normalized_events":
+        loader = normalized_rows
+    else:
+        raise ValueError("unsupported table")
+    if since:
+        return loader(
+            f"SELECT * FROM {table} WHERE observed_at >= ? ORDER BY observed_at ASC LIMIT ?",
+            (since, limit),
+        )
+    return loader(f"SELECT * FROM {table} ORDER BY observed_at ASC LIMIT ?", (limit,))
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def build_export_payload(*, scope: str = "current", include_raw: bool = False) -> dict[str, Any]:
+    since = _since_for_scope(scope)
+    operational_summary = summary(100000, since=since, operational=True)
+    raw_summary = summary(100000, since=since, operational=False)
+    task_data = candidate_tasks(limit=100000, since=since)
+    operational_events = _query_table("normalized_events", since=since)
+    raw_events = _query_table("events", since=since) if include_raw else []
+
+    return {
+        "export": {
+            "product": "OpenWorkGraph / Workflow Observer",
+            "version": "v31",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scope": scope,
+            "run_started_at": os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
+            "include_raw_local_evidence": bool(include_raw),
+            "privacy_note": (
+                "Raw local evidence may contain names, subjects, document titles, URLs, and other sensitive content."
+                if include_raw
+                else "This export contains the privacy-normalized operational layer; raw local evidence is excluded."
+            ),
+        },
+        "overview": {
+            "operational": operational_summary,
+            "raw_capture_counts": {
+                "events": raw_summary.get("events", 0),
+                "focus_events": raw_summary.get("focus_events", 0),
+                "screen_interactions": raw_summary.get("screen_interactions", 0),
+                "browser_semantic_events": raw_summary.get("browser_semantic_events", 0),
+            },
+        },
+        "effort_by_surface": operational_summary.get("surfaces", []),
+        "transitions": operational_summary.get("transitions", []),
+        "repeated_workflow_fragments": operational_summary.get("frequent_sequences", []),
+        "semantic_action_counts": operational_summary.get("semantic_action_counts", []),
+        "inferred_tasks": task_data.get("tasks", []),
+        "repeated_task_families": task_data.get("patterns", []),
+        "task_inference": task_data.get("inference", {}),
+        "operational_events": operational_events,
+        "operational_semantic_activity": semantic_activity(limit=100000, since=since, operational=True),
+        **({"raw_local_evidence": raw_events} if include_raw else {}),
+    }
+
+
+def json_bytes(payload: dict[str, Any]) -> bytes:
+    return json.dumps(_jsonable(payload), ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _flatten_event(e: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "observed_at": e.get("observed_at"),
+        "session_id": e.get("session_id"),
+        "device_id": e.get("device_id"),
+        "app_or_surface": e.get("app"),
+        "window_title": e.get("window_title"),
+        "event_type": e.get("event_type"),
+        "duration_seconds": e.get("duration_seconds", 0),
+        "metadata_json": json.dumps(e.get("metadata") or {}, ensure_ascii=False, separators=(",", ":")),
+    }
+
+
+def _task_row(t: dict[str, Any]) -> dict[str, Any]:
+    b = t.get("boundary") or {}
+    return {
+        "started_at": t.get("started_at"),
+        "ended_at": t.get("ended_at"),
+        "task_label": t.get("suggested_label"),
+        "task_family": t.get("task_family"),
+        "confidence": t.get("confidence"),
+        "primary_surface": t.get("primary_surface"),
+        "surfaces": " → ".join(str(x) for x in (t.get("surfaces") or [])),
+        "elapsed_seconds": t.get("elapsed_seconds", 0),
+        "foreground_seconds": t.get("foreground_seconds", 0),
+        "engaged_seconds": t.get("engaged_seconds", 0),
+        "idle_seconds": t.get("idle_seconds", 0),
+        "active_input_seconds": t.get("active_input_seconds", 0),
+        "keypress_count": t.get("keypress_count", 0),
+        "click_count": t.get("click_count", 0),
+        "scroll_count": t.get("scroll_count", 0),
+        "boundary_reason": b.get("end_reason"),
+        "boundary_confidence": b.get("confidence"),
+        "effort_estimated": t.get("effort_estimated", False),
+        "semantic_actions": " | ".join(str(x) for x in (t.get("semantic_actions") or [])),
+    }
+
+
+def _family_row(p: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_label": p.get("suggested_label"),
+        "task_family": p.get("task_family") or p.get("signature"),
+        "observed_count": p.get("observed_count", 0),
+        "surfaces": " → ".join(str(x) for x in (p.get("surfaces") or [])),
+        "surface_variant_count": p.get("surface_variant_count", 0),
+        "total_engaged_seconds": p.get("total_engaged_seconds", 0),
+        "median_engaged_seconds": p.get("median_engaged_seconds", 0),
+        "p90_engaged_seconds": p.get("p90_engaged_seconds", 0),
+        "median_elapsed_seconds": p.get("median_elapsed_seconds", 0),
+        "keypress_count": p.get("keypress_count", 0),
+        "click_count": p.get("click_count", 0),
+        "completion_boundary_count": p.get("completion_boundary_count", 0),
+        "confidence": p.get("confidence"),
+    }
+
+
+def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
+    files: dict[str, list[dict[str, Any]]] = {
+        "effort_by_surface.csv": list(payload.get("effort_by_surface") or []),
+        "transitions.csv": list(payload.get("transitions") or []),
+        "inferred_tasks.csv": [_task_row(x) for x in (payload.get("inferred_tasks") or [])],
+        "repeated_task_families.csv": [_family_row(x) for x in (payload.get("repeated_task_families") or [])],
+        "operational_events.csv": [_flatten_event(x) for x in (payload.get("operational_events") or [])],
+        "semantic_activity.csv": list(payload.get("operational_semantic_activity") or []),
+    }
+    if "raw_local_evidence" in payload:
+        files["raw_local_evidence.csv"] = [_flatten_event(x) for x in payload.get("raw_local_evidence") or []]
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README.txt", (
+            "OpenWorkGraph session export\n\n"
+            + payload["export"]["privacy_note"]
+            + "\nEach CSV represents one table from the captured session.\n"
+        ))
+        for filename, records in files.items():
+            buf = io.StringIO(newline="")
+            if records:
+                # Serialize nested values so the CSV stays structurally valid.
+                keys: list[str] = []
+                for r in records:
+                    for k in r.keys():
+                        if k not in keys:
+                            keys.append(k)
+                writer = csv.DictWriter(buf, fieldnames=keys)
+                writer.writeheader()
+                for r in records:
+                    cooked = {}
+                    for k in keys:
+                        v = r.get(k)
+                        cooked[k] = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+                    writer.writerow(cooked)
+            zf.writestr(filename, buf.getvalue().encode("utf-8-sig"))
+    return out.getvalue()
+
+
+def _xlsx_value(v: Any) -> Any:
+    if isinstance(v, (dict, list, tuple)):
+        return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+    if v is None:
+        return ""
+    return v
+
+
+def xlsx_bytes(payload: dict[str, Any]) -> bytes:
+    out = io.BytesIO()
+    wb = xlsxwriter.Workbook(out, {"in_memory": True})
+    wb.set_properties({
+        "title": "OpenWorkGraph session export",
+        "subject": "Captured workflow data",
+        "comments": payload["export"]["privacy_note"],
+    })
+
+    title_fmt = wb.add_format({"bold": True, "font_size": 18})
+    section_fmt = wb.add_format({"bold": True, "font_size": 12, "bg_color": "#E2E8F0"})
+    header_fmt = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#334155", "border": 1})
+    text_fmt = wb.add_format({"valign": "top"})
+    wrap_fmt = wb.add_format({"valign": "top", "text_wrap": True})
+    num_fmt = wb.add_format({"num_format": "0.0", "valign": "top"})
+    int_fmt = wb.add_format({"num_format": "0", "valign": "top"})
+
+    overview = wb.add_worksheet("Overview")
+    overview.hide_gridlines(2)
+    overview.set_column("A:A", 30)
+    overview.set_column("B:B", 28)
+    overview.write("A1", "OpenWorkGraph session export", title_fmt)
+    overview.write("A3", "Export", section_fmt)
+    meta_rows = [
+        ("Generated at", payload["export"].get("generated_at")),
+        ("Scope", payload["export"].get("scope")),
+        ("Run started at", payload["export"].get("run_started_at")),
+        ("Raw local evidence included", str(payload["export"].get("include_raw_local_evidence"))),
+        ("Privacy note", payload["export"].get("privacy_note")),
+    ]
+    for i, (k, v) in enumerate(meta_rows, start=4):
+        overview.write(i - 1, 0, k, header_fmt if i == 4 else text_fmt)
+        overview.write(i - 1, 1, _xlsx_value(v), wrap_fmt)
+    op = payload.get("overview", {}).get("operational", {})
+    overview.write("A11", "Operational summary", section_fmt)
+    kpis = [
+        ("Focus periods", op.get("focus_events", 0)),
+        ("Engaged seconds", op.get("total_engaged_seconds", 0)),
+        ("Idle seconds", op.get("total_idle_seconds", 0)),
+        ("Key presses", op.get("keypress_count", 0)),
+        ("Clicks", op.get("click_count", 0)),
+        ("Browser semantic events", op.get("browser_semantic_events", 0)),
+        ("Inferred tasks", len(payload.get("inferred_tasks") or [])),
+        ("Repeated task families", len(payload.get("repeated_task_families") or [])),
+    ]
+    for i, (k, v) in enumerate(kpis, start=12):
+        overview.write(i - 1, 0, k, text_fmt)
+        overview.write(i - 1, 1, v, num_fmt if isinstance(v, float) else int_fmt)
+
+    def write_table(sheet_name: str, records: list[dict[str, Any]], *, widths: dict[str, int] | None = None) -> None:
+        ws = wb.add_worksheet(sheet_name[:31])
+        ws.freeze_panes(1, 0)
+        ws.hide_gridlines(2)
+        if not records:
+            ws.write(0, 0, "No data captured for this table.")
+            return
+        keys: list[str] = []
+        for r in records:
+            for k in r.keys():
+                if k not in keys:
+                    keys.append(k)
+        for col, key in enumerate(keys):
+            ws.write(0, col, key, header_fmt)
+            width = (widths or {}).get(key, min(40, max(12, len(key) + 2)))
+            ws.set_column(col, col, width)
+        for row_idx, record in enumerate(records, start=1):
+            for col, key in enumerate(keys):
+                v = _xlsx_value(record.get(key))
+                if isinstance(v, bool):
+                    ws.write_boolean(row_idx, col, v, text_fmt)
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    ws.write_number(row_idx, col, float(v), num_fmt if isinstance(v, float) else int_fmt)
+                else:
+                    ws.write(row_idx, col, v, wrap_fmt if isinstance(v, str) and len(v) > 60 else text_fmt)
+        ws.autofilter(0, 0, len(records), len(keys) - 1)
+
+    effort = list(payload.get("effort_by_surface") or [])
+    write_table("Effort by surface", effort, widths={"surface": 24, "container_app": 22})
+    write_table("Inferred tasks", [_task_row(x) for x in payload.get("inferred_tasks") or []], widths={"task_label": 28, "task_family": 28, "surfaces": 38, "semantic_actions": 45})
+    write_table("Repeated families", [_family_row(x) for x in payload.get("repeated_task_families") or []], widths={"task_label": 28, "task_family": 30, "surfaces": 38})
+    write_table("Transitions", list(payload.get("transitions") or []), widths={"from": 30, "to": 30})
+    write_table("Operational events", [_flatten_event(x) for x in payload.get("operational_events") or []], widths={"app_or_surface": 24, "window_title": 28, "event_type": 22, "metadata_json": 55})
+    write_table("Semantic activity", list(payload.get("operational_semantic_activity") or []), widths={"app": 24, "label": 40, "event_type": 24})
+    if "raw_local_evidence" in payload:
+        write_table("RAW local evidence", [_flatten_event(x) for x in payload.get("raw_local_evidence") or []], widths={"app_or_surface": 24, "window_title": 50, "event_type": 22, "metadata_json": 65})
+
+    # A small useful visual on Overview: engaged seconds by top surface.
+    if effort:
+        top = effort[:10]
+        start_row = 22
+        overview.write(start_row, 0, "Top work surfaces by engaged time", section_fmt)
+        overview.write(start_row + 1, 0, "Surface", header_fmt)
+        overview.write(start_row + 1, 1, "Engaged seconds", header_fmt)
+        for i, item in enumerate(top, start=start_row + 2):
+            overview.write(i, 0, item.get("surface", ""), text_fmt)
+            overview.write_number(i, 1, float(item.get("engaged_seconds") or 0), num_fmt)
+        chart = wb.add_chart({"type": "bar"})
+        chart.add_series({
+            "name": "Engaged seconds",
+            "categories": ["Overview", start_row + 2, 0, start_row + 1 + len(top), 0],
+            "values": ["Overview", start_row + 2, 1, start_row + 1 + len(top), 1],
+        })
+        chart.set_title({"name": "Engaged time by work surface"})
+        chart.set_legend({"none": True})
+        chart.set_x_axis({"name": "Seconds"})
+        chart.set_size({"width": 720, "height": 360})
+        overview.insert_chart(start_row, 3, chart)
+
+    wb.close()
+    return out.getvalue()
+
+
+def export_filename(fmt: str, *, include_raw: bool) -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = "-rich" if include_raw else "-normalized-only"
+    ext = {"json": "json", "xlsx": "xlsx", "csvzip": "zip"}[fmt]
+    return f"openworkgraph-session-{stamp}{suffix}.{ext}"

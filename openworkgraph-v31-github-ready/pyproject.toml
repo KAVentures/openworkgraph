@@ -1,0 +1,33 @@
+[project]
+name = "workflow-observer"
+version = "0.2.0"
+description = "Local-first workflow observation, mining, REST API, and MCP access."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "httpx>=0.28,<1",
+  "xlsxwriter>=3.2,<4",
+  "mss>=10,<11",
+  "pillow>=11,<12",
+  "psutil>=6,<8",
+  "mcp[cli]>=2,<3",
+  "pynput>=1.8,<2; platform_system == 'Darwin'",
+  "pyobjc-framework-ApplicationServices>=11,<13; platform_system == 'Darwin'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["collector*", "server*", "mcp_server*"]
+exclude = ["tests*", "dashboard*", "data*"]

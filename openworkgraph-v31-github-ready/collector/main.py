@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import time
+import uuid
+import queue
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+
+from .platform import active_window
+from .accessibility import element_at_position
+from .interactions import InteractionSensor, KeyboardActivitySensor, ActivityTracker, RawInteraction
+from .privacy import should_exclude, title_for_mode
+from browser_utils import is_browser_app, normalized_browser_title
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
+LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+S_SCREEN = LOCAL_DIR / "screenshots"
+S_SCREEN.mkdir(parents=True, exist_ok=True)
+STOP = False
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_config(path: Path) -> dict:
+    cfg = {
+        "device_id": socket.gethostname(),
+        "backend_url": "http://127.0.0.1:8787",
+        "poll_seconds": 2,
+        "heartbeat_seconds": 5,
+        "change_detection": "application",
+        "screenshot_interval_seconds": 20,
+        "screenshots_enabled": False,
+        "upload_screenshots": False,
+        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+        "excluded_title_patterns": ["password", "private", "incognito", "bank"],
+        "window_title_mode": "full",
+        "screen_interactions_enabled": True,
+        "capture_clicks": True,
+        "capture_scrolls": True,
+        "scroll_min_interval_seconds": 1.25,
+        "interaction_screenshots_enabled": False,
+        "capture_ui_labels": True,
+        "keyboard_activity_enabled": True,
+        "activity_active_window_seconds": 5,
+        "engaged_grace_seconds": 60,
+    }
+    if path.exists():
+        cfg.update(json.loads(path.read_text(encoding="utf-8")))
+    return cfg
+
+
+def screenshot(event_id: str) -> str | None:
+    try:
+        import mss
+        from PIL import Image
+        with mss.mss() as sct:
+            monitor = sct.monitors[1]
+            shot = sct.grab(monitor)
+            image = Image.frombytes("RGB", shot.size, shot.rgb)
+            path = S_SCREEN / f"{event_id}.jpg"
+            image.thumbnail((1600, 1000))
+            image.save(path, format="JPEG", quality=70, optimize=True)
+            return str(path)
+    except Exception:
+        return None
+
+
+def append_local(event: dict) -> None:
+    with (LOCAL_DIR / "events.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def post_event(event: dict, backend_url: str) -> None:
+    try:
+        httpx.post(
+            f"{backend_url.rstrip('/')}/v1/events",
+            json={"events": [event]},
+            timeout=3,
+        ).raise_for_status()
+    except Exception:
+        # Local JSONL remains the durable fallback for the prototype.
+        pass
+
+
+def post_heartbeat(status: dict, backend_url: str) -> None:
+    """Tell the UI the collector is alive without writing a telemetry row."""
+    try:
+        httpx.post(
+            f"{backend_url.rstrip('/')}/v1/heartbeat",
+            json=status,
+            timeout=2,
+        ).raise_for_status()
+    except Exception:
+        pass
+
+
+def _stop(*_args):
+    global STOP
+    STOP = True
+
+
+def _public_window(w, cfg: dict) -> dict:
+    excluded = should_exclude(
+        w.app,
+        w.title,
+        cfg["excluded_apps"],
+        cfg["excluded_title_patterns"],
+    )
+    return {
+        "app": "Excluded" if excluded else (w.app or "Unknown"),
+        "window_title": "" if excluded else title_for_mode(
+            w.title, cfg.get("window_title_mode", "full")
+        ),
+        "excluded": excluded,
+    }
+
+
+
+def _change_key(state: dict, cfg: dict):
+    # Application changes are always meaningful. For any recognized browser,
+    # the active window title generally tracks the active tab/page on desktop,
+    # so a title change is treated as a browser navigation/tab change. Browser
+    # recognition is vendor-agnostic and can be extended by enterprise config.
+    app = state["app"]
+    if is_browser_app(app, cfg.get("browser_app_patterns")):
+        return (app, normalized_browser_title(state["window_title"]))
+    if cfg.get("change_detection") == "application_and_title":
+        return (app, state["window_title"])
+    return (app,)
+
+
+def _focus_span_event(
+    *,
+    state: dict,
+    started_at: str,
+    duration_seconds: float,
+    cfg: dict,
+    session_id: str,
+    screenshot_path: str | None = None,
+    activity: dict | None = None,
+) -> dict:
+    activity = dict(activity or {})
+    return {
+        "event_id": str(uuid.uuid4()),
+        "observed_at": started_at,
+        "device_id": cfg["device_id"],
+        "session_id": session_id,
+        "app": state["app"],
+        "window_title": state["window_title"],
+        "event_type": "focus_span",
+        "duration_seconds": max(0.0, float(duration_seconds)),
+        "screenshot_path": screenshot_path if screenshot_path and not cfg.get("upload_screenshots") else None,
+        "metadata": {
+            "excluded": state["excluded"],
+            "screenshot_captured_locally": bool(screenshot_path),
+            "change_detection": cfg.get("change_detection", "application"),
+            "activity": activity,
+            "privacy": {"key_identities": False, "typed_values": False},
+        },
+    }
+
+
+
+def _interaction_event(
+    *,
+    raw: RawInteraction,
+    cfg: dict,
+    session_id: str,
+) -> dict:
+    w = active_window()
+    state = _public_window(w, cfg)
+    metadata: dict = {
+        "action": raw.kind,
+        "x": round(raw.x, 1),
+        "y": round(raw.y, 1),
+    }
+    if raw.button:
+        metadata["button"] = raw.button
+    if raw.dx is not None:
+        metadata["dx"] = raw.dx
+    if raw.dy is not None:
+        metadata["dy"] = raw.dy
+
+    if not state["excluded"] and cfg.get("capture_ui_labels", True):
+        target = element_at_position(raw.x, raw.y)
+        if target:
+            metadata["target"] = target
+
+    event_id = str(uuid.uuid4())
+    shot = None
+    if (
+        cfg.get("interaction_screenshots_enabled")
+        and not state["excluded"]
+    ):
+        shot = screenshot(event_id)
+
+    return {
+        "event_id": event_id,
+        "observed_at": utcnow(),
+        "device_id": cfg["device_id"],
+        "session_id": session_id,
+        "app": state["app"],
+        "window_title": state["window_title"],
+        "event_type": f"screen_{raw.kind}",
+        "duration_seconds": 0.0,
+        "screenshot_path": shot if shot and not cfg.get("upload_screenshots") else None,
+        "metadata": metadata | {
+            "excluded": state["excluded"],
+            "screenshot_captured_locally": bool(shot),
+        },
+    }
+
+
+def _interaction_worker(
+    q: "queue.Queue[RawInteraction | None]",
+    cfg: dict,
+    session_id: str,
+) -> None:
+    while True:
+        raw = q.get()
+        if raw is None:
+            return
+        try:
+            event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
+            append_local(event)
+            post_event(event, cfg["backend_url"])
+        except Exception:
+            pass
+        finally:
+            q.task_done()
+
+def run(config_path: Path) -> None:
+    global STOP
+    STOP = False
+    cfg = load_config(config_path)
+    session_id = str(uuid.uuid4())
+    activity_tracker = ActivityTracker()
+
+    current_state: dict | None = None
+    current_key = None
+    current_started_wall = ""
+    current_started_mono = 0.0
+    current_screenshot: str | None = None
+    last_heartbeat = 0.0
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    interaction_q: "queue.Queue[RawInteraction | None]" = queue.Queue(maxsize=500)
+    worker = threading.Thread(
+        target=_interaction_worker, args=(interaction_q, cfg, session_id), daemon=True
+    )
+    worker.start()
+
+    def enqueue_interaction(raw: RawInteraction) -> None:
+        activity_tracker.record(raw.kind, raw.occurred_mono)
+        try:
+            interaction_q.put_nowait(raw)
+        except queue.Full:
+            pass
+
+    sensor = None
+    sensor_started = False
+    keyboard_sensor = None
+    keyboard_started = False
+    if cfg.get("screen_interactions_enabled", True):
+        sensor = InteractionSensor(
+            enqueue_interaction,
+            capture_clicks=cfg.get("capture_clicks", True),
+            capture_scrolls=cfg.get("capture_scrolls", True),
+            scroll_min_interval_seconds=cfg.get("scroll_min_interval_seconds", 1.25),
+        )
+        sensor_started = sensor.start()
+
+    if cfg.get("keyboard_activity_enabled", True):
+        keyboard_sensor = KeyboardActivitySensor(lambda t: activity_tracker.record("key", t))
+        keyboard_started = keyboard_sensor.start()
+
+    print(f"Workflow Observer collector started. session={session_id}")
+    print("Polling detects focus/tab changes; unchanged polls are NOT stored as events.")
+    print(
+        "Screen interaction capture: "
+        + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable")
+    )
+    print("Keyboard activity: " + ("ON (counts only; key identities/text are discarded)" if keyboard_started else "OFF / permission unavailable"))
+    print("Typed text, key identities, and clipboard contents are never stored. Ctrl+C stops collection.")
+
+    while not STOP:
+        w = active_window()
+        state = _public_window(w, cfg)
+        key = _change_key(state, cfg)
+        now_mono = time.monotonic()
+        now_wall = utcnow()
+
+        if current_state is None:
+            current_state = state
+            current_key = key
+            current_started_wall = now_wall
+            current_started_mono = now_mono
+            if cfg.get("screenshots_enabled") and not state["excluded"]:
+                current_screenshot = screenshot(str(uuid.uuid4()))
+
+        elif key != current_key:
+            activity = activity_tracker.summarize(
+                current_started_mono, now_mono,
+                active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+                engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+            )
+            event = _focus_span_event(
+                state=current_state,
+                started_at=current_started_wall,
+                duration_seconds=now_mono - current_started_mono,
+                cfg=cfg,
+                session_id=session_id,
+                screenshot_path=current_screenshot,
+                activity=activity,
+            )
+            append_local(event)
+            post_event(event, cfg["backend_url"])
+
+            current_state = state
+            current_key = key
+            current_started_wall = now_wall
+            current_started_mono = now_mono
+            current_screenshot = None
+            if cfg.get("screenshots_enabled") and not state["excluded"]:
+                current_screenshot = screenshot(str(uuid.uuid4()))
+
+        # Heartbeats update only volatile collector status. They are deliberately
+        # not stored in SQLite/JSONL and therefore never inflate workflow counts.
+        if now_mono - last_heartbeat >= float(cfg.get("heartbeat_seconds", 5)):
+            post_heartbeat(
+                {
+                    "device_id": cfg["device_id"],
+                    "session_id": session_id,
+                    "observed_at": now_wall,
+                    "app": state["app"],
+                    "window_title": state["window_title"],
+                    "focus_elapsed_seconds": round(max(0.0, now_mono - current_started_mono), 3),
+                    "activity": activity_tracker.summarize(
+                        current_started_mono, now_mono,
+                        active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+                        engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+                    ) if current_state is not None else {},
+                    "keyboard_sensor": keyboard_started,
+                },
+                cfg["backend_url"],
+            )
+            last_heartbeat = now_mono
+
+        time.sleep(max(0.5, float(cfg["poll_seconds"])))
+
+    if sensor is not None:
+        sensor.stop()
+    if keyboard_sensor is not None:
+        keyboard_sensor.stop()
+    try:
+        interaction_q.put_nowait(None)
+    except queue.Full:
+        pass
+
+    # Preserve the final focus period once the user explicitly stops recording.
+    if current_state is not None:
+        end_mono = time.monotonic()
+        activity = activity_tracker.summarize(
+            current_started_mono, end_mono,
+            active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+            engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+        )
+        event = _focus_span_event(
+            state=current_state,
+            started_at=current_started_wall,
+            duration_seconds=end_mono - current_started_mono,
+            cfg=cfg,
+            session_id=session_id,
+            screenshot_path=current_screenshot,
+            activity=activity,
+        )
+        append_local(event)
+        post_event(event, cfg["backend_url"])
+
+    print("Collector stopped.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Local-first workflow observation collector")
+    parser.add_argument("--config", default=str(ROOT / "config.json"))
+    args = parser.parse_args()
+    run(Path(args.config))
+
+
+if __name__ == "__main__":
+    main()
