@@ -6,12 +6,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+LEGACY_PLACEHOLDER_DEVICE_IDS = {"my-laptop", "my-computer", "device"}
+
 
 def load_or_create_identity(data_dir: Path, config: dict[str, Any]) -> dict[str, str]:
     """Return stable local identity without requiring an account.
 
     organization_id and actor_id are optional deployment policy values. Device
     and installation IDs persist locally so restarts do not create a new machine.
+    Legacy example device IDs are treated as unset so two copied installs do not
+    accidentally share the same identity.
     """
     path = Path(data_dir) / "identity.json"
     stored: dict[str, Any] = {}
@@ -23,7 +27,13 @@ def load_or_create_identity(data_dir: Path, config: dict[str, Any]) -> dict[str,
 
     installation_id = str(stored.get("installation_id") or uuid.uuid4())
     configured_device = str(config.get("device_id") or "").strip()
-    device_id = configured_device or str(stored.get("device_id") or f"{socket.gethostname()}-{installation_id[:8]}")
+    if configured_device.lower() in LEGACY_PLACEHOLDER_DEVICE_IDS:
+        configured_device = ""
+    stored_device = str(stored.get("device_id") or "").strip()
+    if stored_device.lower() in LEGACY_PLACEHOLDER_DEVICE_IDS:
+        stored_device = ""
+    device_id = configured_device or stored_device or f"{socket.gethostname()}-{installation_id[:8]}"
+
     identity = {
         "installation_id": installation_id,
         "device_id": device_id,
