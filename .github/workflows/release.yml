@@ -1,0 +1,62 @@
+name: tester-release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build standalone macOS tester ZIP
+        run: bash scripts/build_macos_release.sh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorkGraph-macOS
+          path: |
+            dist/OpenWorkGraph-macOS.zip
+            dist/OpenWorkGraph-macOS.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release when VERSION is new
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="v${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it immutable."
+            echo "Bump VERSION to publish a new GitHub Release."
+            exit 0
+          fi
+
+          cat > /tmp/openworkgraph-release-notes.md <<EOF
+          ## OpenWorkGraph ${TAG}
+
+          OpenWorkGraph is a local-first work-telemetry and organizational-context layer for AI.
+
+          ### macOS tester
+          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The launcher installs its own private runtime; no manual Python setup is required.
+
+          For detailed browser/tab context, run **ADD_BROWSER_SENSOR.command** once and load the opened `browser_extension` folder as an unpacked extension.
+
+          Captured data stays local in this prototype unless the user explicitly exports it.
+          EOF
+
+          gh release create "$TAG" \
+            dist/OpenWorkGraph-macOS.zip \
+            dist/OpenWorkGraph-macOS.zip.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "OpenWorkGraph ${TAG}" \
+            --notes-file /tmp/openworkgraph-release-notes.md
