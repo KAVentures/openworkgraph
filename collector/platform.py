@@ -44,7 +44,7 @@ def _windows_active_window() -> ActiveWindow:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         app = f"pid:{pid.value}"
         try:
-            import psutil
+            import psutil  # optional
             app = psutil.Process(pid.value).name()
         except Exception:
             pass

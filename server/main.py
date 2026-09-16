@@ -8,17 +8,18 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from browser_utils import is_browser_app
-from .analytics import search_events, summary, timeline, semantic_activity, candidate_tasks
+from .analytics import (search_events, search_operational_events, summary, timeline, operational_timeline, semantic_activity, candidate_tasks)
 from .db import init_db, insert_events
+from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "dashboard" / "index.html"
 
-app = FastAPI(title="Workflow Observer API", version="0.4.0")
+app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version="0.8.0-v27")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8787", "http://localhost:8787"],
@@ -184,9 +185,27 @@ def get_summary(limit: int = 10000, scope: str = "all"):
     return result
 
 
+@app.get("/v1/operational-summary")
+def get_operational_summary(limit: int = 10000, scope: str = "all"):
+    """Privacy-safe summary intended for MCP/AI and long-lived analytics."""
+    since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
+    result = summary(limit, since=since, operational=True)
+    result["mode"] = os.getenv("WORKFLOW_OBSERVER_MODE", "observe")
+    result["scope"] = scope
+    result["run_started_at"] = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT")
+    return result
+
+
 @app.get("/v1/events")
 def get_events(query: str = "", app_name: str | None = None, limit: int = 100):
-    return {"events": search_events(query=query, app=app_name, limit=limit)}
+    """Rich local evidence. Do not expose this endpoint to external AI by default."""
+    return {"events": search_events(query=query, app=app_name, limit=limit), "data_layer": "raw_local_evidence"}
+
+
+@app.get("/v1/operational-events")
+def get_operational_events(query: str = "", surface: str | None = None, limit: int = 100):
+    """Content-minimized operational events safe for normal MCP/AI use."""
+    return {"events": search_operational_events(query=query, surface=surface, limit=limit), "data_layer": "operational_normalized"}
 
 
 @app.get("/v1/semantic-activity")
@@ -195,10 +214,24 @@ def get_semantic_activity(limit: int = 200, scope: str = "current"):
     return {"events": semantic_activity(limit=limit, since=since)}
 
 
+@app.get("/v1/operational-semantic-activity")
+def get_operational_semantic_activity(limit: int = 200, scope: str = "current"):
+    since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
+    return {"events": semantic_activity(limit=limit, since=since, operational=True), "data_layer": "operational_normalized"}
+
+
 @app.get("/v1/tasks")
 def get_candidate_tasks(limit: int = 25000, scope: str = "current"):
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
     return candidate_tasks(limit=limit, since=since)
+
+
+@app.get("/v1/operational-sessions/{session_id}")
+def get_operational_session(session_id: str, limit: int = 1000):
+    events = operational_timeline(session_id, limit)
+    if not events:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session_id": session_id, "events": events, "data_layer": "operational_normalized"}
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -208,6 +241,36 @@ def get_session(session_id: str, limit: int = 1000):
         raise HTTPException(status_code=404, detail="session not found")
     return {"session_id": session_id, "events": events}
 
+
+
+@app.get("/v1/export/{fmt}")
+def export_session(fmt: str, scope: str = "current", include_raw: bool = False):
+    """Download the captured session as JSON, XLSX, or a ZIP of CSV tables.
+
+    AI-safe normalized data is the default. Raw local evidence is included only
+    when the user explicitly asks for it.
+    """
+    fmt = fmt.lower().strip()
+    if fmt not in {"json", "xlsx", "csvzip"}:
+        raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
+    if scope not in {"current", "all"}:
+        raise HTTPException(status_code=400, detail="scope must be current or all")
+    payload = build_export_payload(scope=scope, include_raw=include_raw)
+    if fmt == "json":
+        body = json_bytes(payload)
+        media = "application/json"
+    elif fmt == "xlsx":
+        body = xlsx_bytes(payload)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        body = csv_zip_bytes(payload)
+        media = "application/zip"
+    filename = export_filename(fmt, include_raw=include_raw)
+    return Response(
+        content=body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():

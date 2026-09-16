@@ -9,8 +9,10 @@ def _string_attr(element: Any, name: str) -> str | None:
         err, value = ApplicationServices.AXUIElementCopyAttributeValue(element, name, None)
         if err != 0 or value is None:
             return None
+        # Never serialize arbitrary AX objects or arrays. Labels should be strings.
         if isinstance(value, str):
             return value.strip() or None
+        # Some bridged NSString values may not pass a plain str check.
         if value.__class__.__name__ in {"NSCFString", "__NSCFString", "NSString"}:
             text = str(value).strip()
             return text or None
@@ -37,6 +39,8 @@ def element_at_position(x: float, y: float) -> dict[str, Any]:
 
         role = _string_attr(element, "AXRole")
         subrole = _string_attr(element, "AXSubrole")
+
+        # Secure fields are recognized but deliberately not described further.
         secure = role == "AXSecureTextField" or subrole == "AXSecureTextField"
         if secure:
             return {"role": role or subrole, "secure": True}

@@ -106,6 +106,11 @@ function sendNavigation(reason) {
   send("page_view", {}, {reason});
 }
 
+// At document_start, register the visit immediately. This does not wait for
+// DOMContentLoaded, scrolling, clicking, or a dwell threshold. The URL itself is
+// enough for the background/server to classify the work surface.
+sendNavigation("document_start");
+
 // Capture before a click can trigger navigation/unmount. This removes dwell-time dependence.
 addEventListener("pointerdown", (e) => {
   if (e.button !== undefined && e.button > 2) return;

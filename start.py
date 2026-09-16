@@ -45,6 +45,9 @@ def stop_process(p: subprocess.Popen | None) -> None:
 
 def mode_environment(mode: str) -> dict[str, str]:
     env = os.environ.copy()
+    # Demo and real observations MUST NEVER share a database. Keeping the
+    # stores separate also makes it obvious to a tester whether live capture
+    # is actually producing events.
     data_dir = ROOT / "data" / ("demo" if mode == "demo" else "live")
     data_dir.mkdir(parents=True, exist_ok=True)
     env["WORKFLOW_OBSERVER_DATA"] = str(data_dir)
@@ -62,7 +65,7 @@ def main() -> None:
 
     print("\nWorkflow Observer")
     print("=================")
-    print("Your data stays on this computer in this prototype.")
+    print("Your data stays on this computer in this prototype. v25 keeps rich local evidence plus a separate privacy-safe operational layer for tasks/MCP.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
     print("Optional browser semantic sensor files are installed in browser_extension/ for deeper page actions.")
     if args.mode == "observe":

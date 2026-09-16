@@ -30,3 +30,20 @@ def test_semantic_activity_merges_browser_and_desktop(monkeypatch):
     out = analytics.semantic_activity()
     assert len(out) == 2
     assert {x["source"] for x in out} == {"browser_extension", "desktop_accessibility"}
+
+
+def test_navigation_appears_in_unified_raw_evidence_without_scroll(monkeypatch):
+    sample = [
+        {
+            "session_id":"s1", "observed_at":"2026-01-01T00:00:01Z", "app":"Google Chrome",
+            "window_title":"Example", "event_type":"browser_navigation_requested", "duration_seconds":0,
+            "metadata":{"action":"navigation_requested","page":{"hostname":"example.com","pathname":"/brief"},"target":{}},
+        }
+    ]
+    monkeypatch.setattr(analytics, "_event_rows", lambda limit=10000, since=None: sample)
+    out = analytics.summary()
+    assert len(out["recent_evidence"]) == 1
+    row = out["recent_evidence"][0]
+    assert row["source"] == "browser"
+    assert row["hostname"] == "example.com"
+    assert row["action"] == "navigation_requested"

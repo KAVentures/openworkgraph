@@ -89,10 +89,12 @@ def post_event(event: dict, backend_url: str) -> None:
             timeout=3,
         ).raise_for_status()
     except Exception:
+        # Local JSONL remains the durable fallback for the prototype.
         pass
 
 
 def post_heartbeat(status: dict, backend_url: str) -> None:
+    """Tell the UI the collector is alive without writing a telemetry row."""
     try:
         httpx.post(
             f"{backend_url.rstrip('/')}/v1/heartbeat",
@@ -124,7 +126,12 @@ def _public_window(w, cfg: dict) -> dict:
     }
 
 
+
 def _change_key(state: dict, cfg: dict):
+    # Application changes are always meaningful. For any recognized browser,
+    # the active window title generally tracks the active tab/page on desktop,
+    # so a title change is treated as a browser navigation/tab change. Browser
+    # recognition is vendor-agnostic and can be extended by enterprise config.
     app = state["app"]
     if is_browser_app(app, cfg.get("browser_app_patterns")):
         return (app, normalized_browser_title(state["window_title"]))
@@ -162,6 +169,7 @@ def _focus_span_event(
             "privacy": {"key_identities": False, "typed_values": False},
         },
     }
+
 
 
 def _interaction_event(
@@ -231,7 +239,6 @@ def _interaction_worker(
             pass
         finally:
             q.task_done()
-
 
 def run(config_path: Path) -> None:
     global STOP
@@ -330,6 +337,8 @@ def run(config_path: Path) -> None:
             if cfg.get("screenshots_enabled") and not state["excluded"]:
                 current_screenshot = screenshot(str(uuid.uuid4()))
 
+        # Heartbeats update only volatile collector status. They are deliberately
+        # not stored in SQLite/JSONL and therefore never inflate workflow counts.
         if now_mono - last_heartbeat >= float(cfg.get("heartbeat_seconds", 5)):
             post_heartbeat(
                 {
@@ -361,6 +370,7 @@ def run(config_path: Path) -> None:
     except queue.Full:
         pass
 
+    # Preserve the final focus period once the user explicitly stops recording.
     if current_state is not None:
         end_mono = time.monotonic()
         activity = activity_tracker.summarize(
