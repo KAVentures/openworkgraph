@@ -1,0 +1,20 @@
+# Python/runtime
+.venv/
+__pycache__/
+*.pyc
+
+# Local operational data — never commit captured company/user telemetry
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local configuration / secrets
+.env
+config.json
+
+# OS / logs
+.DS_Store
+*.log
