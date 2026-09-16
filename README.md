@@ -7,6 +7,8 @@ OpenWorkGraph observes desktop and browser work, preserves customer-owned work e
 [![Tests](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml/badge.svg)](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml)
 [![Latest release](https://img.shields.io/github/v/release/KAVentures/openworkgraph)](https://github.com/KAVentures/openworkgraph/releases/latest)
 
+> **Project status:** early public prototype. The current goal is accurate local capture, reconstructable work context and AI access — not employee-performance scoring or a production enterprise control plane.
+
 ## Try OpenWorkGraph on macOS
 
 ### Recommended: standalone tester ZIP
