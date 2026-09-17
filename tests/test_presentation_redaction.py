@@ -7,6 +7,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _set_owner(monkeypatch, presentation):
+    monkeypatch.setattr(
+        presentation,
+        "_load_config",
+        lambda: {
+            "owner_aliases": ["Koyar Afrasyab", "Koyar"],
+            "owner_emails": ["koyar@example.com"],
+            "owner_phones": ["+46 70 111 22 33"],
+        },
+    )
+    monkeypatch.setattr(presentation, "_windows_display_name", lambda: "")
+    monkeypatch.setattr(presentation, "_posix_display_name", lambda: "")
+    monkeypatch.setattr(presentation.getpass, "getuser", lambda: "")
+    presentation._OWNER_CACHE.clear()
+
+
 def test_redaction_masks_identifiers_without_losing_workflow_words(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
@@ -68,6 +84,97 @@ def test_email_title_name_is_masked_even_without_email_address(monkeypatch, tmp_
     assert "Gmail" in safe["window_title"]
 
 
+def test_owner_name_is_owner_everywhere_without_changing_structure(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+    _set_owner(monkeypatch, presentation)
+
+    payload = {
+        "app": "Google Chrome",
+        "window_title": "Koyar Afrasyab - Google Chrome",
+        "metadata": {
+            "target": {"role": "button", "label": "Koyar"},
+            "action": "click",
+        },
+        "event_id": "owner-1",
+        "duration_seconds": 3.0,
+    }
+    before = json.loads(json.dumps(payload))
+    safe = presentation.redact_for_display(payload)
+
+    assert payload == before
+    assert "Koyar" not in json.dumps(safe)
+    assert "OWNER" in safe["window_title"]
+    assert safe["metadata"]["target"]["label"] == "OWNER"
+    assert safe["event_id"] == "owner-1"
+    assert safe["duration_seconds"] == 3.0
+
+
+def test_owner_contact_details_use_owner_tokens(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+    _set_owner(monkeypatch, presentation)
+
+    safe = presentation.redact_for_display({
+        "surface": "Gmail",
+        "label": "Koyar Afrasyab <koyar@example.com> call +46 70 111 22 33",
+    })["label"]
+    assert "Koyar" not in safe
+    assert "koyar@example.com" not in safe
+    assert "+46 70 111 22 33" not in safe
+    assert "OWNER" in safe
+    assert "OWNER_EMAIL" in safe
+    assert "OWNER_PHONE" in safe
+
+
+def test_gmail_checkbox_masks_sender_but_keeps_subject(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+    _set_owner(monkeypatch, presentation)
+
+    payload = {
+        "surface": "Gmail",
+        "page": {"hostname": "mail.google.com", "title": "Inbox - Gmail"},
+        "metadata": {
+            "action": "click",
+            "target": {
+                "role": "checkbox",
+                "label": "Select Anna Svensson, Contract renewal with Koyar Afrasyab",
+            },
+        },
+    }
+    safe = presentation.redact_for_display(payload)
+    label = safe["metadata"]["target"]["label"]
+    assert "Anna Svensson" not in label
+    assert "Koyar" not in label
+    assert label.startswith("Select PERSON_")
+    assert "Contract renewal with OWNER" in label
+
+
+def test_learned_person_is_masked_in_later_subject_without_storing_literal_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+
+    presentation.redact_for_display({"surface": "Gmail", "label": "Reply to Sarah Johnson"})
+    registry_path = tmp_path / ".presentation_people.json"
+    assert registry_path.exists()
+    assert "Sarah" not in registry_path.read_text(encoding="utf-8")
+
+    importlib.reload(presentation)
+    later = presentation.redact_for_display({
+        "surface": "Gmail",
+        "label": "Select Bob Smith, Update from Sarah Johnson",
+    })["label"]
+    assert "Bob Smith" not in later
+    assert "Sarah Johnson" not in later
+    assert "Update from" in later
+    assert later.count("PERSON_") >= 2
+
+
 def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
@@ -102,7 +209,7 @@ def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
     before = json.loads(json.dumps(raw))
     safe = presentation.redact_for_display(raw)
 
-    assert raw == before  # presentation redaction must not mutate inference input
+    assert raw == before
     assert len(safe["events"]) == len(raw["events"])
     for original, shown in zip(raw["events"], safe["events"]):
         for key in ("event_id", "observed_at", "session_id", "device_id", "event_type", "duration_seconds"):
@@ -154,8 +261,6 @@ def test_same_identifier_gets_stable_pseudonym_across_reload(monkeypatch, tmp_pa
     first = presentation.redact_for_display({"label": "Send to anna.svensson@acme.com"})["label"]
     first_token = next(part for part in first.split() if part.startswith("EMAIL_"))
 
-    # Simulate a process/module restart. The persisted installation-local key must
-    # reproduce the same visual pseudonym.
     importlib.reload(presentation)
     second = presentation.redact_for_display({"label": "Reply to anna.svensson@acme.com"})["label"]
     second_token = next(part for part in second.split() if part.startswith("EMAIL_"))
@@ -177,8 +282,6 @@ def test_dates_and_workflow_metrics_are_not_mistaken_for_phone_numbers(monkeypat
 
 
 def test_presentation_layer_cannot_enter_capture_or_inference_path():
-    # Architectural regression guard: these modules must continue to see the
-    # original rich event stream. Redaction belongs only in server/main outputs.
     protected = [
         "collector/main.py",
         "collector/interactions.py",
@@ -199,3 +302,10 @@ def test_api_and_export_routes_apply_redaction_after_computation():
     assert 'redact_for_display({"events": search_events' in source
     assert "return redact_for_display(candidate_tasks" in source
     assert "payload = redact_for_display(build_export_payload" in source
+
+
+def test_macos_release_uses_single_embedded_launcher_and_ditto():
+    source = (ROOT / "scripts" / "build_macos_release.sh").read_text(encoding="utf-8")
+    assert "__OPENWORKGRAPH_PAYLOAD_BELOW__" in source
+    assert "/usr/bin/ditto -c -k --keepParent" in source
+    assert '.openworkgraph-src/START_ON_MAC.command' not in source
