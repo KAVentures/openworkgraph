@@ -27,6 +27,7 @@ _INVISIBLE_CONTROLS = {
 # forged model/tool role, not merely security vocabulary.
 _INSTRUCTION_PATTERNS = [
     re.compile(r"\b(?:ignore|disregard|forget|override|bypass)\b.{0,80}\b(?:previous|prior|above|system|developer|user|instructions?|prompts?|rules?|policy)\b", re.I | re.S),
+    re.compile(r"\b(?:ignore|disregard|forget|override|bypass)\b.{0,50}\b(?:all|any|the)\s+(?:instructions?|prompts?|rules?|safety|policy)\b", re.I | re.S),
     re.compile(r"\b(?:do\s+not|don't)\s+(?:follow|obey|listen\s+to|respect)\b.{0,80}\b(?:previous|prior|system|developer|user|instructions?|prompts?|rules?)\b", re.I | re.S),
     re.compile(r"\b(?:follow|obey|execute)\s+(?:these|the\s+following|my|new)\s+(?:instructions?|commands?|steps?)\b", re.I),
     re.compile(r"\b(?:new|updated|replacement|important)\s+(?:system\s+)?instructions?\s*:", re.I),
