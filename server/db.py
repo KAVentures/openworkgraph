@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -85,6 +86,11 @@ CREATE INDEX IF NOT EXISTS idx_context_time ON context_events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_session ON context_events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_surface ON context_events(surface, observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_actor ON context_events(actor_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS privacy_migrations (
+  migration_key TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -214,15 +220,25 @@ def init_db() -> None:
         _backfill_derived(conn)
 
 
-def harden_existing_browser_events(config: dict[str, Any]) -> int:
-    """Sanitize previously stored browser rows and rebuild their derived twins.
+def _browser_privacy_migration_key(config: dict[str, Any]) -> str:
+    relevant = {
+        "excluded_apps": config.get("excluded_apps") or [],
+        "excluded_title_patterns": config.get("excluded_title_patterns") or [],
+        "excluded_browser_host_patterns": config.get("excluded_browser_host_patterns") or [],
+    }
+    digest = hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    return f"browser_privacy_v39:{digest}"
 
-    This migration is idempotent and intentionally runs locally at startup. It
-    removes legacy query/fragment data such as metadata.frame_url and applies the
-    current browser exclusion policy to rows captured by older sensor versions.
-    """
+
+def harden_existing_browser_events(config: dict[str, Any]) -> int:
+    """Sanitize legacy browser rows once for each effective privacy config."""
     changed = 0
+    migration_key = _browser_privacy_migration_key(config)
     with connect() as conn:
+        if conn.execute(
+            "SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (migration_key,)
+        ).fetchone():
+            return 0
         existing = conn.execute(
             "SELECT * FROM events WHERE event_type LIKE 'browser_%' ORDER BY id ASC"
         ).fetchall()
@@ -247,6 +263,9 @@ def harden_existing_browser_events(config: dict[str, Any]) -> int:
             _insert_event(conn, "normalized_events", normalize_event(safe))
             _insert_context(conn, contextualize_event(safe))
             changed += 1
+        conn.execute(
+            "INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)", (migration_key,)
+        )
     return changed
 
 
