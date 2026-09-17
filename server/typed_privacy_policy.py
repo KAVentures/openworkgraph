@@ -4,12 +4,11 @@ from __future__ import annotations
 
 The older presentation layer used application-name context plus title casing as a
 proxy for personhood. That was too broad for enterprise/EHR data. This policy
-keeps deterministic first-name/mail behavior where structure is strong, removes
-generic title-case guessing, handles typed identifiers, and treats URL fields as
-structured data rather than prose.
+keeps deterministic structured mail behavior, removes generic title-case guessing,
+handles typed identifiers, and treats URL fields as structured data rather than
+prose.
 """
 
-import json
 import re
 from typing import Any
 
@@ -37,11 +36,6 @@ _NAME_BEFORE_TOKEN_RE = re.compile(
 _NAME_DIRECT_TOKEN_RE = re.compile(
     rf"(?P<name>{_WORD}(?:\s+{_WORD}){{1,3}})\s+(?P<token>PERSONNUMMER_[0-9A-F]{{6}})"
 )
-_SINGLE_EMAIL_SELECT_RE = re.compile(
-    r"\b(?:select|deselect)(?:\s+(?:email|message))?(?:\s+from)?\s+"
-    r"(?P<name>[^\s,;<>|]{1,100})(?=\s*[,;]|$)",
-    re.IGNORECASE,
-)
 _PATIENT_CUE_RE = re.compile(
     r"\b(?:patient|patientnamn|patient\s+name|patientens\s+namn)\s*[:\-]?\s+",
     re.IGNORECASE,
@@ -63,10 +57,11 @@ def _redact_evidence_bound_names(text: str, presentation: Any) -> str:
     def patient_repl(match: re.Match[str]) -> str:
         name = match.group("name")
         owner_aliases, _emails, _phones = presentation._owner_identity()
-        if name.casefold() in owner_aliases:
-            replacement = "OWNER"
-        else:
-            replacement = presentation._token("PERSON", name)
+        replacement = (
+            "OWNER"
+            if name.casefold() in owner_aliases
+            else presentation._token("PERSON", name)
+        )
         return match.group("prefix") + replacement
 
     out = _PATIENT_LABEL_RE.sub(patient_repl, out)
@@ -90,63 +85,27 @@ def _redact_evidence_bound_names(text: str, presentation: Any) -> str:
     return out
 
 
-def _registry_replacement_for_full_name(presentation: Any, value: str) -> str | None:
-    try:
-        data = json.loads(presentation._people_registry_path().read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    raw = data.get(presentation._alias_hash(value)) if isinstance(data, dict) else None
-    if isinstance(raw, str) and raw:
-        return raw
-    if isinstance(raw, list):
-        tokens = {str(v) for v in raw if isinstance(v, str) and v}
-        if len(tokens) == 1:
-            return next(iter(tokens))
-        if tokens:
-            return "PERSON"
-    return None
-
-
 def install(presentation: Any) -> None:
     """Install after first-name and mail-row policies."""
     previous = presentation.redact_for_display
     if getattr(previous, "_openworkgraph_typed_privacy_policy", False):
         return
 
-    # Stop using SaaS names or arbitrary capitalization as evidence of a person.
+    # App/vendor names and capitalization are no longer evidence of personhood.
+    # Structured mail-row/select parsing remains active because that is a real UI
+    # role signal rather than a generic title-case guess.
     presentation._contains_name_sensitive_context = lambda _value: False
     presentation._embedded_name_spans = lambda _text: []
     presentation._redact_email_title_segments = lambda text, *, owner_aliases: text
     presentation.CUE_RE = _PATIENT_CUE_RE
-    presentation.EMAIL_SELECT_RE = _SINGLE_EMAIL_SELECT_RE
 
-    # The first-name policy checks this module-level set dynamically.
+    # Generic sender/contact/display-name fields can denote organizations. Only
+    # explicitly person/patient fields are treated as inherently person-valued.
     from . import first_name_policy
     first_name_policy.PERSON_FIELDS = {
         "person", "patient", "patient_name", "patientname", "patientnamn",
         "patient_display_name",
     }
-
-    # Multi-word mail senders are ambiguous (a person, company, hospital, product,
-    # etc.). Only redact them when a prior high-confidence identity exists. Keep
-    # the strong single-name sender behavior that fixed localized Gmail rows.
-    from . import mail_row_policy
-    original_sender_replacement = mail_row_policy._sender_replacement
-
-    def sender_replacement(value: str, _presentation: Any) -> str | None:
-        cleaned = _presentation._clean_name_candidate(value)
-        if not cleaned:
-            return None
-        owner_aliases, _emails, _phones = _presentation._owner_identity()
-        if cleaned.casefold() in owner_aliases:
-            return "OWNER"
-        words = _presentation._name_words(cleaned)
-        if len(words) <= 1:
-            return original_sender_replacement(value, _presentation)
-        known = _registry_replacement_for_full_name(_presentation, cleaned)
-        return known
-
-    mail_row_policy._sender_replacement = sender_replacement
 
     def preprocess(item: Any, *, field_name: str = "") -> Any:
         if isinstance(item, dict):
