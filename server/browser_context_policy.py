@@ -8,18 +8,18 @@ hostname. This policy joins those summary representations so a desktop interacti
 on ``chatgpt.com`` is shown as ChatGPT even when the page title itself does not
 contain the product name.
 
-v0.42 treats browser identity as short-lived *session state* rather than requiring
-another semantic browser event every few seconds. This is display/summary-only:
-raw events, task inference, timing, and stored evidence are not rewritten.
+v0.42 treats browser identity as short-lived *active context* rather than requiring
+another semantic browser event every few seconds. Long-lived carry-forward is only
+used inside the current observer run (or when explicit session identity is present)
+and, for legacy summary rows without session IDs, only while the desktop page title
+still matches the browser page title. This is display/summary-only: raw events,
+task inference, timing, and stored evidence are not rewritten.
 """
 
 import re
 from typing import Any
 
 
-# A browser tab can legitimately remain active without emitting semantic browser
-# actions for many minutes (reading/thinking/typing captured by the desktop sensor).
-# Keep same-session state long enough for that normal dwell, but never indefinitely.
 ACTIVE_CONTEXT_MAX_AGE_SECONDS = 30 * 60
 LEGACY_CONTEXT_MAX_AGE_SECONDS = 8.0
 FUTURE_JITTER_SECONDS = 1.0
@@ -39,6 +39,19 @@ def _clean_page_title(value: str) -> str:
         flags=re.IGNORECASE,
     ).strip()
     return title
+
+
+def _titles_match(desktop_title: str, browser_title: str) -> bool:
+    desktop = re.sub(r"\s+", " ", _clean_page_title(desktop_title)).strip().casefold()
+    browser = re.sub(r"\s+", " ", _clean_page_title(browser_title)).strip().casefold()
+    if not desktop or not browser:
+        return False
+    if desktop == browser:
+        return True
+    # Accessibility APIs occasionally append profile/tenant text. Require a
+    # substantial shared title rather than accepting arbitrary short substrings.
+    shorter, longer = sorted((desktop, browser), key=len)
+    return len(shorter) >= 12 and shorter in longer
 
 
 def install(analytics: Any) -> None:
@@ -101,9 +114,6 @@ def install(analytics: Any) -> None:
             action = _action_key(item.get("action"))
             session_id = str(item.get("session_id") or "")
 
-            # Prefer candidates from the same work session. Old summary rows from
-            # before v0.42 do not have session_id, so they fall back to the legacy
-            # narrow time window instead of receiving long-lived attribution.
             if session_id:
                 pool = [candidate for candidate in candidates if candidate["session_id"] == session_id]
             else:
@@ -124,9 +134,16 @@ def install(analytics: Any) -> None:
             if prior:
                 candidate = max(prior, key=lambda candidate: candidate["ts"])
                 age = ts - candidate["ts"]
-                max_age = ACTIVE_CONTEXT_MAX_AGE_SECONDS if session_id and candidate["session_id"] else LEGACY_CONTEXT_MAX_AGE_SECONDS
-                if age <= max_age:
-                    return candidate, age, "active_session" if max_age == ACTIVE_CONTEXT_MAX_AGE_SECONDS else "legacy_recent"
+                explicit_same_session = bool(session_id and candidate["session_id"] == session_id)
+                current_run_title_match = bool(
+                    since is not None
+                    and _titles_match(str(item.get("window_title") or ""), candidate["window_title"])
+                )
+                if (explicit_same_session or current_run_title_match) and age <= ACTIVE_CONTEXT_MAX_AGE_SECONDS:
+                    reason = "active_session" if explicit_same_session else "active_run_title_match"
+                    return candidate, age, reason
+                if age <= LEGACY_CONTEXT_MAX_AGE_SECONDS:
+                    return candidate, age, "legacy_recent"
 
             future = [
                 candidate for candidate in pool
@@ -154,9 +171,6 @@ def install(analytics: Any) -> None:
             if not surface or surface == "Browser":
                 continue
 
-            # Explicit semantic fields are useful to API/export consumers and let
-            # the dashboard distinguish work surface, page, browser container and
-            # sensor provenance without conflating them.
             item["work_surface"] = surface
             item["container_app"] = container_app
             item["browser_hostname"] = hostname
@@ -166,7 +180,9 @@ def install(analytics: Any) -> None:
             if context_age is not None:
                 item["browser_context_age_seconds"] = round(float(context_age), 3)
 
-            # Backward-compatible fields for existing dashboard/API consumers.
+            # Backward-compatible dashboard fields. `source` deliberately remains
+            # desktop because that describes the sensor that observed the action;
+            # `app`/work_surface describe what the user was actually working in.
             item["app"] = surface
             item["hostname"] = ""
             item["pathname"] = ""
