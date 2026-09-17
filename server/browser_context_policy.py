@@ -9,13 +9,12 @@ on ``chatgpt.com`` can be labeled with the ChatGPT work surface even when the pa
 title itself does not contain the product name.
 
 v0.42 treats browser identity as short-lived *active context* rather than requiring
-another semantic browser event every few seconds. Long-lived carry-forward is only
-used inside the current observer run (or when explicit session identity is present)
-and, for legacy summary rows without session IDs, only while the desktop page title
-still matches the browser page title. v0.42.1 keeps the container app (for example
-Google Chrome) as the app and exposes the resolved site/tool separately through
-``work_surface`` for display. This is display/summary-only: raw events, task
-inference, timing, and stored evidence are not rewritten.
+another semantic browser event every few seconds. v0.42.2 fixes a live-summary gap:
+base summary rows do not currently retain session ids, so long-lived attribution
+must also be able to use the latest browser semantic event in the current run. A
+known conflicting site/tool title still blocks carry-forward. This is display/
+summary-only: raw events, task inference, timing, and stored evidence are not
+rewritten.
 """
 
 import re
@@ -26,6 +25,29 @@ ACTIVE_CONTEXT_MAX_AGE_SECONDS = 30 * 60
 LEGACY_CONTEXT_MAX_AGE_SECONDS = 8.0
 FUTURE_JITTER_SECONDS = 1.0
 SAME_ACTION_WINDOW_SECONDS = 2.5
+
+# These are only conflict guards for stale browser context. They are not used to
+# infer browser identity when a hostname is available.
+_TITLE_SURFACE_HINTS = (
+    ("chatgpt", "ChatGPT"),
+    ("supabase", "Supabase"),
+    ("gmail", "Gmail"),
+    ("google docs", "Google Docs"),
+    ("google sheets", "Google Sheets"),
+    ("google slides", "Google Slides"),
+    ("google drive", "Google Drive"),
+    ("github", "GitHub"),
+    ("notion", "Notion"),
+    ("salesforce", "Salesforce"),
+    ("hubspot", "HubSpot"),
+    ("figma", "Figma"),
+    ("slack", "Slack"),
+    ("microsoft teams", "Microsoft Teams"),
+    ("outlook", "Outlook"),
+    ("sharepoint", "SharePoint"),
+    ("lovable", "Lovable"),
+    ("vercel", "Vercel"),
+)
 
 
 def _action_key(value: Any) -> str:
@@ -54,6 +76,20 @@ def _titles_match(desktop_title: str, browser_title: str) -> bool:
     # substantial shared title rather than accepting arbitrary short substrings.
     shorter, longer = sorted((desktop, browser), key=len)
     return len(shorter) >= 12 and shorter in longer
+
+
+def _known_title_surface(title: str) -> str:
+    low = _clean_page_title(title).casefold()
+    for marker, surface in _TITLE_SURFACE_HINTS:
+        if marker in low:
+            return surface
+    return ""
+
+
+def _title_conflicts_with_candidate(desktop_title: str, candidate_surface: str) -> bool:
+    """Whether the desktop title positively identifies a different known tool."""
+    hinted = _known_title_surface(desktop_title)
+    return bool(hinted and hinted.casefold() != candidate_surface.casefold())
 
 
 def install(analytics: Any) -> None:
@@ -117,7 +153,8 @@ def install(analytics: Any) -> None:
             session_id = str(item.get("session_id") or "")
 
             if session_id:
-                pool = [candidate for candidate in candidates if candidate["session_id"] == session_id]
+                same_session = [candidate for candidate in candidates if candidate["session_id"] == session_id]
+                pool = same_session or candidates
             else:
                 pool = candidates
             if not pool:
@@ -136,14 +173,46 @@ def install(analytics: Any) -> None:
             if prior:
                 candidate = max(prior, key=lambda candidate: candidate["ts"])
                 age = ts - candidate["ts"]
-                explicit_same_session = bool(session_id and candidate["session_id"] == session_id)
-                current_run_title_match = bool(
-                    since is not None
-                    and _titles_match(str(item.get("window_title") or ""), candidate["window_title"])
+                explicit_same_session = bool(
+                    session_id
+                    and candidate["session_id"]
+                    and candidate["session_id"] == session_id
                 )
-                if (explicit_same_session or current_run_title_match) and age <= ACTIVE_CONTEXT_MAX_AGE_SECONDS:
-                    reason = "active_session" if explicit_same_session else "active_run_title_match"
-                    return candidate, age, reason
+                title_match = _titles_match(
+                    str(item.get("window_title") or ""),
+                    candidate["window_title"],
+                )
+                candidate_surface = analytics._friendly_browser_surface(
+                    candidate["hostname"], candidate["pathname"], candidate["window_title"]
+                )
+                title_conflict = _title_conflicts_with_candidate(
+                    str(item.get("window_title") or ""), candidate_surface
+                )
+
+                # Current-run summaries are the live dashboard. The latest browser
+                # semantic event is the active browser state until the extension
+                # reports a new tab/navigation. This fixes long dwell on ChatGPT
+                # where the desktop title never says "ChatGPT". A desktop title
+                # that positively names another known tool blocks stale carry.
+                if (
+                    since is not None
+                    and age <= ACTIVE_CONTEXT_MAX_AGE_SECONDS
+                    and not title_conflict
+                ):
+                    if explicit_same_session:
+                        return candidate, age, "active_session"
+                    if title_match:
+                        return candidate, age, "active_run_title_match"
+                    return candidate, age, "active_run_latest_browser"
+
+                # Outside the current live run, only carry browser identity when
+                # there is explicit session evidence or the event is very recent.
+                if (
+                    explicit_same_session
+                    and age <= ACTIVE_CONTEXT_MAX_AGE_SECONDS
+                    and not title_conflict
+                ):
+                    return candidate, age, "active_session"
                 if age <= LEGACY_CONTEXT_MAX_AGE_SECONDS:
                     return candidate, age, "legacy_recent"
 
