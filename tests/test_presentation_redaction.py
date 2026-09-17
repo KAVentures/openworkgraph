@@ -159,7 +159,8 @@ def test_learned_person_is_masked_in_later_subject_without_storing_literal_name(
     import server.presentation as presentation
     importlib.reload(presentation)
 
-    presentation.redact_for_display({"surface": "Gmail", "label": "Reply to Sarah Johnson"})
+    from server.privacy_pipeline import learn_persistent_identities
+    learn_persistent_identities({"surface": "Gmail", "label": "Reply to Sarah Johnson"})
     registry_path = tmp_path / ".presentation_people.json"
     assert registry_path.exists()
     assert "Sarah" not in registry_path.read_text(encoding="utf-8")
