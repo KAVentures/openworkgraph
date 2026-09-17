@@ -24,6 +24,7 @@
     "incognito",
     "bank"
   ],
+  "excluded_browser_host_patterns": [],
   "window_title_mode": "full",
   "browser_app_patterns": [
     "Google Chrome",
