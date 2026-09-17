@@ -4,9 +4,9 @@ from __future__ import annotations
 
 The older presentation layer used application-name context plus title casing as a
 proxy for personhood. That was too broad for enterprise/EHR data. This policy
-keeps deterministic structured mail behavior, removes generic title-case guessing,
-handles typed identifiers, and treats URL fields as structured data rather than
-prose.
+keeps deterministic structured mail/person-field behavior, removes generic
+title-case guessing, handles typed identifiers, and treats URL fields as
+structured data rather than prose.
 """
 
 import re
@@ -30,9 +30,6 @@ PROTECTED_FIELDS = {
 }
 PATIENT_NAME_FIELDS = {
     "patient", "patient_name", "patientname", "patientnamn", "patient_display_name",
-}
-SINGLE_PERSON_ROLE_FIELDS = {
-    "sender", "recipient", "contact", "participant", "attendee", "assignee", "assigned_to",
 }
 
 _WORD = r"[A-ZÅÄÖÉÜ][A-Za-zÅÄÖåäöÉéÜüÀ-ÖØ-öø-ÿ'’.-]*"
@@ -104,18 +101,12 @@ def install(presentation: Any) -> None:
         return
 
     # App/vendor names and capitalization are no longer evidence of personhood.
-    # Structured mail-row/select parsing remains active because that is a real UI
-    # role signal rather than a generic title-case guess.
+    # Existing structured sender/recipient/person fields remain intact because
+    # those are genuine UI/data roles rather than inferred context.
     presentation._contains_name_sensitive_context = lambda _value: False
     presentation._embedded_name_spans = lambda _text: []
     presentation._redact_email_title_segments = lambda text, *, owner_aliases: text
     presentation.CUE_RE = _PATIENT_CUE_RE
-
-    from . import first_name_policy, mail_row_policy
-    first_name_policy.PERSON_FIELDS = {
-        "person", "patient", "patient_name", "patientname", "patientnamn",
-        "patient_display_name",
-    }
 
     def preprocess(item: Any, *, field_name: str = "") -> Any:
         if isinstance(item, dict):
@@ -141,20 +132,6 @@ def install(presentation: Any) -> None:
             if out.casefold() in owner_aliases:
                 return "OWNER"
             return presentation._token("PERSON", out)
-
-        # A one-word value in a strongly person-oriented role is enough to hide
-        # the literal name, but not enough to claim a stable identity. Multi-word
-        # values remain available unless stronger evidence identifies them.
-        if low in SINGLE_PERSON_ROLE_FIELDS:
-            cleaned = presentation._clean_name_candidate(out)
-            words = presentation._name_words(cleaned)
-            if (
-                len(words) == 1
-                and presentation._looks_like_person_name(cleaned, allow_single=True)
-                and not mail_row_policy._looks_organization_like(cleaned, presentation)
-            ):
-                owner_aliases, _emails, _phones = presentation._owner_identity()
-                return "OWNER" if cleaned.casefold() in owner_aliases else "PERSON"
         return out
 
     def redact_for_display(value: Any) -> Any:
