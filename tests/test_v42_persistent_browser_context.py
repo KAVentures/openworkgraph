@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 
+def _analytics():
+    from server import analytics
+    from server.browser_context_policy import install
+
+    # Some earlier tests reload server.analytics for isolation, which removes the
+    # package-level wrapper. Production startup always installs this policy, so
+    # install it explicitly here to make these regression tests order-independent.
+    install(analytics)
+    return analytics
+
+
 def _chatgpt_browser(at: str, title: str = "Enterprise Task Mining Software") -> dict:
     return {
         "session_id": "s1",
@@ -34,8 +45,7 @@ def _desktop(at: str, title: str) -> dict:
 
 
 def test_chatgpt_context_persists_during_long_current_run_dwell(monkeypatch):
-    from server import analytics
-
+    analytics = _analytics()
     sample = [
         _chatgpt_browser("2026-09-17T19:00:00.000Z"),
         _desktop(
@@ -57,8 +67,7 @@ def test_chatgpt_context_persists_during_long_current_run_dwell(monkeypatch):
 
 
 def test_long_lived_context_does_not_relabel_different_chrome_tab(monkeypatch):
-    from server import analytics
-
+    analytics = _analytics()
     sample = [
         _chatgpt_browser("2026-09-17T19:00:00.000Z"),
         _desktop("2026-09-17T19:05:00.000Z", "Supabase | companion-health - Google Chrome"),
@@ -73,8 +82,7 @@ def test_long_lived_context_does_not_relabel_different_chrome_tab(monkeypatch):
 
 
 def test_active_browser_context_expires_after_thirty_minutes(monkeypatch):
-    from server import analytics
-
+    analytics = _analytics()
     sample = [
         _chatgpt_browser("2026-09-17T19:00:00.000Z"),
         _desktop(
@@ -92,8 +100,7 @@ def test_active_browser_context_expires_after_thirty_minutes(monkeypatch):
 
 
 def test_all_history_summary_keeps_legacy_short_window(monkeypatch):
-    from server import analytics
-
+    analytics = _analytics()
     sample = [
         _chatgpt_browser("2026-09-17T19:00:00.000Z"),
         _desktop(
