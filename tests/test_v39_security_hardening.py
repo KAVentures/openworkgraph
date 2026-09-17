@@ -128,7 +128,7 @@ def test_browser_ingest_defense_in_depth_sanitizes_old_sensor_payload(monkeypatc
     assert captured[0]["metadata"]["page"]["pathname"] == "/reset/:token"
 
 
-def test_existing_db_browser_rows_are_migrated(monkeypatch, tmp_path):
+def test_existing_db_browser_rows_are_migrated_once_per_privacy_config(monkeypatch, tmp_path):
     from server import db
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "workflow_observer.db")
@@ -138,10 +138,11 @@ def test_existing_db_browser_rows_are_migrated(monkeypatch, tmp_path):
     before = db.rows("SELECT * FROM events WHERE event_id = ?", (raw["event_id"],))[0]
     assert "SECRET123" in json.dumps(before)
 
-    changed = db.harden_existing_browser_events({
-        "excluded_apps": [], "excluded_title_patterns": [], "excluded_browser_host_patterns": []
-    })
+    config = {"excluded_apps": [], "excluded_title_patterns": [], "excluded_browser_host_patterns": []}
+    changed = db.harden_existing_browser_events(config)
     assert changed == 1
+    assert db.harden_existing_browser_events(config) == 0
+
     after = db.rows("SELECT * FROM events WHERE event_id = ?", (raw["event_id"],))[0]
     serialized = json.dumps(after)
     assert "SECRET123" not in serialized
