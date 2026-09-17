@@ -14,6 +14,7 @@ def test_browser_sensor_is_event_driven_and_frame_aware():
     assert 'addEventListener("focusin"' in content
     assert "composedPath" in content
     assert "target.value" not in content
+    assert "if (!isTopFrame()) return;" in content
 
 
 def test_browser_sensor_registers_navigation_without_user_interaction():
@@ -36,7 +37,7 @@ def test_navigation_uses_destination_url_directly_for_brief_address_bar_visits()
     assert '"navigation_completed"' in background
 
 
-def test_browser_delivery_is_durable_and_idempotent():
+def test_browser_delivery_is_durable_idempotent_and_sanitized():
     manifest = json.loads((ROOT / "browser_extension" / "manifest.json").read_text())
     assert "storage" in manifest["permissions"]
     assert "alarms" in manifest["permissions"]
@@ -44,8 +45,9 @@ def test_browser_delivery_is_durable_and_idempotent():
     assert "openworkgraph_pending_browser_events" in background
     assert "event_id: body.event_id || uuid()" in background
     assert "flushBrowserQueue" in background
+    assert "sanitizePendingBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.7.0"
+    assert manifest["version"] == "1.8.0"
 
 
 def test_queued_browser_event_keeps_capture_time_work_identity():
