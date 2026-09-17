@@ -1306,10 +1306,12 @@ def summary(limit: int = 10000, since: str | None = None, *, operational: bool =
     bounded = max(1, min(int(limit), 100000))
     revision = table_revision(operational=operational)
     key = (bounded, since or "", bool(operational))
-    with _SUMMARY_CACHE_LOCK:
-        cached = _SUMMARY_CACHE.get(key)
-        if cached and cached[0] == revision:
-            return copy.deepcopy(cached[1])
+    cacheable = revision[0] >= 0
+    if cacheable:
+        with _SUMMARY_CACHE_LOCK:
+            cached = _SUMMARY_CACHE.get(key)
+            if cached and cached[0] == revision:
+                return copy.deepcopy(cached[1])
 
     result = _summary_uncached(bounded, since=since, operational=operational)
 
@@ -1321,11 +1323,12 @@ def summary(limit: int = 10000, since: str | None = None, *, operational: bool =
         since=since,
     )
 
-    with _SUMMARY_CACHE_LOCK:
-        _SUMMARY_CACHE[key] = (revision, copy.deepcopy(result))
-        # Keep only a handful of active scope/limit combinations.
-        if len(_SUMMARY_CACHE) > 8:
-            oldest = next(iter(_SUMMARY_CACHE))
-            if oldest != key:
-                _SUMMARY_CACHE.pop(oldest, None)
+    if cacheable:
+        with _SUMMARY_CACHE_LOCK:
+            _SUMMARY_CACHE[key] = (revision, copy.deepcopy(result))
+            # Keep only a handful of active scope/limit combinations.
+            if len(_SUMMARY_CACHE) > 8:
+                oldest = next(iter(_SUMMARY_CACHE))
+                if oldest != key:
+                    _SUMMARY_CACHE.pop(oldest, None)
     return copy.deepcopy(result)
