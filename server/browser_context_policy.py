@@ -5,15 +5,17 @@ from __future__ import annotations
 The desktop accessibility sensor knows that Chrome/Edge/etc. is focused and often
 has only a page title. The browser semantic sensor independently knows the real
 hostname. This policy joins those summary representations so a desktop interaction
-on ``chatgpt.com`` is shown as ChatGPT even when the page title itself does not
-contain the product name.
+on ``chatgpt.com`` can be labeled with the ChatGPT work surface even when the page
+title itself does not contain the product name.
 
 v0.42 treats browser identity as short-lived *active context* rather than requiring
 another semantic browser event every few seconds. Long-lived carry-forward is only
 used inside the current observer run (or when explicit session identity is present)
 and, for legacy summary rows without session IDs, only while the desktop page title
-still matches the browser page title. This is display/summary-only: raw events,
-task inference, timing, and stored evidence are not rewritten.
+still matches the browser page title. v0.42.1 keeps the container app (for example
+Google Chrome) as the app and exposes the resolved site/tool separately through
+``work_surface`` for display. This is display/summary-only: raw events, task
+inference, timing, and stored evidence are not rewritten.
 """
 
 import re
@@ -180,10 +182,10 @@ def install(analytics: Any) -> None:
             if context_age is not None:
                 item["browser_context_age_seconds"] = round(float(context_age), 3)
 
-            # Backward-compatible dashboard fields. `source` deliberately remains
-            # desktop because that describes the sensor that observed the action;
-            # `app`/work_surface describe what the user was actually working in.
-            item["app"] = surface
+            # Keep the actual container app visible. The dashboard uses
+            # `work_surface` as the small suffix label (for example · ChatGPT),
+            # while `source` continues to describe the observing sensor.
+            item["app"] = container_app
             item["hostname"] = ""
             item["pathname"] = ""
             detail_parts: list[str] = []

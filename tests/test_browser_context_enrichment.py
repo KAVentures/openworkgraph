@@ -41,14 +41,14 @@ def test_desktop_chrome_evidence_uses_nearby_browser_hostname(monkeypatch):
     desktop = next(item for item in out["recent_evidence"] if item["source"] == "desktop")
 
     assert sample == before
-    assert desktop["app"] == "ChatGPT"
+    assert desktop["app"] == "Google Chrome"
     assert desktop["work_surface"] == "ChatGPT"
     assert desktop["container_app"] == "Google Chrome"
     assert desktop["browser_hostname"] == "chatgpt.com"
     assert desktop["browser_pathname"] == "/c/example"
     assert desktop["page_title"] == "Enterprise Task Mining Software"
-    # Dashboard compatibility: hostname is blank so it displays app/work surface
-    # as the primary line, and the smaller line carries page + host + container.
+    # Dashboard keeps the real app as the primary line and uses work_surface as
+    # the small suffix label (for example `· ChatGPT`).
     assert desktop["hostname"] == ""
     assert "Enterprise Task Mining Software" in desktop["window_title"]
     assert "chatgpt.com" in desktop["window_title"]
