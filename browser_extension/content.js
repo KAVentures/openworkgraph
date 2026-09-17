@@ -8,6 +8,36 @@ function cleanText(value, max = 160) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function isTopFrame() {
+  try { return window.top === window; } catch (_) { return false; }
+}
+
+function sanitizePathname(pathname) {
+  const sensitive = new Set(["auth","authenticate","callback","confirm","invite","invitation","login","magic","oauth","recover","recovery","reset","signin","token","verify","verification"]);
+  const parts = String(pathname || "/").split("/");
+  let previous = "";
+  return parts.map((part, index) => {
+    if (!part) return part;
+    let replacement = part;
+    if (sensitive.has(String(previous).toLowerCase()) && part.length >= 6) replacement = ":token";
+    else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(part)) replacement = ":id";
+    else if (/^\d{7,}$/.test(part)) replacement = ":id";
+    else if (/^[0-9a-f]{20,}$/i.test(part) || /^[A-Za-z0-9_-]{24,}$/.test(part)) replacement = ":token";
+    previous = part;
+    return replacement;
+  }).join("/") || "/";
+}
+
+function safePageUrl(raw) {
+  try {
+    const u = new URL(raw || "");
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return `${u.origin}${sanitizePathname(u.pathname || "/")}`;
+  } catch (_) {
+    return "";
+  }
+}
+
 function isSensitiveControl(el) {
   if (!(el instanceof Element)) return false;
   const type = cleanText(el.getAttribute?.("type"), 80).toLowerCase();
@@ -86,19 +116,24 @@ function targetKey(target) {
 
 function send(action, target = {}, metadata = {}) {
   try {
+    const topFrame = isTopFrame();
     const maybePromise = ext.runtime.sendMessage({
       type: "workflow_observer_event",
       observed_at: new Date().toISOString(),
       action,
-      page: {url: location.href, title: document.title},
+      page: {url: safePageUrl(location.href), title: document.title},
       target,
-      metadata: {...metadata, frame_url: location.href, top_frame: window.top === window}
+      metadata: {...metadata, top_frame: topFrame, frame_kind: topFrame ? "top" : "subframe"}
     });
     if (maybePromise?.catch) maybePromise.catch(() => {});
   } catch (_) {}
 }
 
 function sendNavigation(reason) {
+  // Automatic subframe navigation is mostly ad/SSO/login noise and can expose
+  // unrelated embedded origins. User interactions inside subframes are still
+  // captured and attributed to the top-level tab by background.js.
+  if (!isTopFrame()) return;
   const now = Date.now();
   if (location.href === lastHref && now - lastNavAt < 300) return;
   lastHref = location.href;
@@ -106,12 +141,8 @@ function sendNavigation(reason) {
   send("page_view", {}, {reason});
 }
 
-// At document_start, register the visit immediately. This does not wait for
-// DOMContentLoaded, scrolling, clicking, or a dwell threshold. The URL itself is
-// enough for the background/server to classify the work surface.
 sendNavigation("document_start");
 
-// Capture before a click can trigger navigation/unmount. This removes dwell-time dependence.
 addEventListener("pointerdown", (e) => {
   if (e.button !== undefined && e.button > 2) return;
   const target = semanticTarget(e);
@@ -120,7 +151,6 @@ addEventListener("pointerdown", (e) => {
   send(e.button === 2 ? "right_click" : "click", target, {phase: "pointerdown"});
 }, true);
 
-// Keyboard-activated controls (Enter/Space) may fire click without pointerdown.
 addEventListener("click", (e) => {
   const target = semanticTarget(e);
   const key = targetKey(target);
@@ -128,7 +158,6 @@ addEventListener("click", (e) => {
   send("click", target, {phase: "click"});
 }, true);
 
-// Focusing an editor/input is useful workflow evidence, but values are never captured.
 addEventListener("focusin", (e) => {
   const target = semanticTarget(e);
   const role = String(target.role || "");
@@ -159,7 +188,6 @@ for (const method of ["pushState", "replaceState"]) {
   };
 }
 
-// Fallback only; semantic actions above do not depend on this timer.
 setInterval(() => {
-  if (location.href !== lastHref) sendNavigation("url_poll");
+  if (isTopFrame() && location.href !== lastHref) sendNavigation("url_poll");
 }, 1000);
