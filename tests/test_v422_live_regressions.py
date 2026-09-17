@@ -7,15 +7,7 @@ def _fresh_presentation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
     importlib.reload(presentation)
-    from server.first_name_policy import install as install_first_name
-    from server.mail_row_policy import install as install_mail_row
-    from server.typed_privacy_policy import install as install_typed_privacy
-    from server.mail_subject_policy import install as install_mail_subject
 
-    install_first_name(presentation)
-    install_mail_row(presentation)
-    install_typed_privacy(presentation)
-    install_mail_subject(presentation)
     monkeypatch.setattr(
         presentation,
         "_owner_identity",
@@ -60,9 +52,7 @@ def test_linkedin_subject_redacts_two_first_names_without_linking_identity(monke
 
 def test_live_chrome_row_uses_latest_browser_surface_when_page_title_differs(monkeypatch):
     from server import analytics
-    from server.browser_context_policy import install
-
-    install(analytics)
+    analytics.clear_summary_cache()
     sample = [
         {
             "session_id": "s1",
@@ -105,9 +95,7 @@ def test_live_chrome_row_uses_latest_browser_surface_when_page_title_differs(mon
 
 def test_live_context_does_not_override_known_different_site_title(monkeypatch):
     from server import analytics
-    from server.browser_context_policy import install
-
-    install(analytics)
+    analytics.clear_summary_cache()
     sample = [
         {
             "session_id": "s1",
