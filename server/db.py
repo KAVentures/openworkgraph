@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -7,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from browser_privacy import harden_browser_event
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 
@@ -84,6 +86,11 @@ CREATE INDEX IF NOT EXISTS idx_context_time ON context_events(observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_session ON context_events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_surface ON context_events(surface, observed_at);
 CREATE INDEX IF NOT EXISTS idx_context_actor ON context_events(actor_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS privacy_migrations (
+  migration_key TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -199,12 +206,9 @@ def _backfill_derived(conn: sqlite3.Connection) -> None:
 
 def init_db() -> None:
     with connect() as conn:
-        # Base indexes reference only legacy columns, so this succeeds for both a
-        # fresh database and an existing v31 database.
         conn.executescript(SCHEMA)
         _ensure_identity_columns(conn, "events")
         _ensure_identity_columns(conn, "normalized_events")
-        # Identity-dependent indexes are created only after old tables migrate.
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
@@ -214,6 +218,55 @@ def init_db() -> None:
             """
         )
         _backfill_derived(conn)
+
+
+def _browser_privacy_migration_key(config: dict[str, Any]) -> str:
+    relevant = {
+        "excluded_apps": config.get("excluded_apps") or [],
+        "excluded_title_patterns": config.get("excluded_title_patterns") or [],
+        "excluded_browser_host_patterns": config.get("excluded_browser_host_patterns") or [],
+    }
+    digest = hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    return f"browser_privacy_v39:{digest}"
+
+
+def harden_existing_browser_events(config: dict[str, Any]) -> int:
+    """Sanitize legacy browser rows once for each effective privacy config."""
+    changed = 0
+    migration_key = _browser_privacy_migration_key(config)
+    with connect() as conn:
+        if conn.execute(
+            "SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (migration_key,)
+        ).fetchone():
+            return 0
+        existing = conn.execute(
+            "SELECT * FROM events WHERE event_type LIKE 'browser_%' ORDER BY id ASC"
+        ).fetchall()
+        for row in existing:
+            raw = _row_to_event(row)
+            safe = harden_browser_event(raw, config)
+            if safe == raw:
+                continue
+            conn.execute(
+                """
+                UPDATE events SET app = ?, window_title = ?, screenshot_path = ?, metadata_json = ?
+                WHERE event_id = ?
+                """,
+                (
+                    safe.get("app"), safe.get("window_title"), safe.get("screenshot_path"),
+                    json.dumps(safe.get("metadata") or {}, ensure_ascii=False),
+                    safe.get("event_id"),
+                ),
+            )
+            conn.execute("DELETE FROM normalized_events WHERE event_id = ?", (safe.get("event_id"),))
+            conn.execute("DELETE FROM context_events WHERE event_id = ?", (safe.get("event_id"),))
+            _insert_event(conn, "normalized_events", normalize_event(safe))
+            _insert_context(conn, contextualize_event(safe))
+            changed += 1
+        conn.execute(
+            "INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)", (migration_key,)
+        )
+    return changed
 
 
 def insert_events(events: Iterable[dict[str, Any]]) -> int:

@@ -9,7 +9,7 @@ import sys
 import time
 import urllib.request
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -51,8 +51,26 @@ def mode_environment(mode: str) -> dict[str, str]:
     data_dir.mkdir(parents=True, exist_ok=True)
     env["WORKFLOW_OBSERVER_DATA"] = str(data_dir)
     env["WORKFLOW_OBSERVER_MODE"] = mode
-    env["WORKFLOW_OBSERVER_RUN_STARTED_AT"] = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    # Demo rows intentionally describe a recent synthetic work period. Starting
+    # the demo run two hours earlier keeps those rows inside scope=current.
+    run_start = now - timedelta(hours=2) if mode == "demo" else now
+    env["WORKFLOW_OBSERVER_RUN_STARTED_AT"] = run_start.isoformat()
     return env
+
+
+def reset_demo_data(env: dict[str, str]) -> None:
+    """Make every demo launch deterministic without touching live observations."""
+    data_dir = Path(env["WORKFLOW_OBSERVER_DATA"])
+    for name in (
+        "workflow_observer.db", "workflow_observer.db-wal", "workflow_observer.db-shm",
+        "outbox.db", "outbox.db-wal", "outbox.db-shm", "events.jsonl",
+        ".presentation_people.json", ".display_redaction_key",
+    ):
+        try:
+            (data_dir / name).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def main() -> None:
@@ -61,6 +79,8 @@ def main() -> None:
     args = parser.parse_args()
     ensure_config()
     env = mode_environment(args.mode)
+    if args.mode == "demo":
+        reset_demo_data(env)
     system = platform.system()
 
     print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
@@ -75,7 +95,7 @@ def main() -> None:
     if args.mode == "observe":
         print("LIVE mode uses its own database; demo data is excluded.")
     else:
-        print("DEMO mode uses a separate synthetic-data database.")
+        print("DEMO mode uses a separate synthetic-data database and resets on each demo launch.")
 
     api = subprocess.Popen([
         sys.executable, "-m", "uvicorn", "server.main:app",

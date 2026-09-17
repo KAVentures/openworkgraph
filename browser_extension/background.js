@@ -15,14 +15,62 @@ function uuid() {
   return globalThis.crypto?.randomUUID?.() || `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function sanitizePathname(pathname) {
+  const sensitive = new Set(["auth","authenticate","callback","confirm","invite","invitation","login","magic","oauth","recover","recovery","reset","signin","token","verify","verification"]);
+  const parts = String(pathname || "/").split("/");
+  let previous = "";
+  return parts.map(part => {
+    if (!part) return part;
+    let replacement = part;
+    if (sensitive.has(String(previous).toLowerCase()) && part.length >= 6) replacement = ":token";
+    else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(part)) replacement = ":id";
+    else if (/^\d{7,}$/.test(part)) replacement = ":id";
+    else if (/^[0-9a-f]{20,}$/i.test(part) || /^[A-Za-z0-9_-]{24,}$/.test(part)) replacement = ":token";
+    previous = part;
+    return replacement;
+  }).join("/") || "/";
+}
+
 function safeUrl(raw) {
   try {
     const u = new URL(raw || "");
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return {origin: u.origin, hostname: u.hostname, pathname: u.pathname || "/"};
+    return {origin: u.origin, hostname: u.hostname, pathname: sanitizePathname(u.pathname || "/")};
   } catch (_) {
     return null;
   }
+}
+
+function sanitizeUrlString(value) {
+  const safe = safeUrl(value);
+  if (!safe) return String(value || "");
+  return `${safe.origin}${safe.pathname}`;
+}
+
+function sanitizeMetadata(value, key = "") {
+  if (Array.isArray(value)) return value.map(v => sanitizeMetadata(v, key));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const low = String(k).toLowerCase();
+      if (low === "pathname" && typeof v === "string") out[k] = sanitizePathname(v);
+      else if (typeof v === "string" && (low.includes("url") || ["href","uri","origin","frame_url"].includes(low))) out[k] = sanitizeUrlString(v);
+      else out[k] = sanitizeMetadata(v, k);
+    }
+    return out;
+  }
+  if (typeof value === "string" && /^https?:\/\//i.test(value)) return sanitizeUrlString(value);
+  return value;
+}
+
+function sanitizeBrowserEvent(body) {
+  const out = {...(body || {})};
+  const page = out.page || {};
+  const rawPage = page.origin ? `${page.origin}${page.pathname || "/"}` : "";
+  const safePage = safeUrl(rawPage) || (page.hostname ? {origin: page.origin || "", hostname: String(page.hostname), pathname: sanitizePathname(page.pathname || "/")} : null);
+  out.page = safePage ? {...safePage, title: String(page.title || "").slice(0, 240)} : {};
+  out.metadata = sanitizeMetadata(out.metadata || {});
+  return out;
 }
 
 async function sensorId() {
@@ -77,8 +125,6 @@ async function refreshWorkContext() {
 }
 
 async function captureWorkContext() {
-  // A 5-second refresh keeps browser evidence aligned when the desktop observer
-  // restarts, without issuing a GET for every click/scroll event.
   if (cachedWorkContext && Date.now() - cachedWorkContextAt < 5000) return cachedWorkContext;
   const fresh = await refreshWorkContext();
   if (fresh) return fresh;
@@ -100,12 +146,27 @@ function serializedStorage(fn) {
   return next;
 }
 
-async function enqueueBrowserEvent(body) {
+async function sanitizePendingBrowserQueue() {
   return serializedStorage(async () => {
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY] : [];
-      if (!queue.some(x => x?.event_id === body.event_id)) queue.push(body);
+      const sanitized = queue.map(sanitizeBrowserEvent).slice(-5000);
+      await ext.storage.local.set({[QUEUE_KEY]: sanitized});
+      return sanitized.length;
+    } catch (_) {
+      return 0;
+    }
+  });
+}
+
+async function enqueueBrowserEvent(body) {
+  return serializedStorage(async () => {
+    try {
+      const stored = await ext.storage.local.get(QUEUE_KEY);
+      const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
+      const safeBody = sanitizeBrowserEvent(body);
+      if (!queue.some(x => x?.event_id === safeBody.event_id)) queue.push(safeBody);
       const bounded = queue.slice(-5000);
       await ext.storage.local.set({[QUEUE_KEY]: bounded});
     } catch (_) {}
@@ -116,7 +177,7 @@ async function flushBrowserQueue() {
   return serializedStorage(async () => {
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
-      const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY] : [];
+      const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
       if (!queue.length) return 0;
       const remaining = [];
       let delivered = 0;
@@ -125,7 +186,7 @@ async function flushBrowserQueue() {
         else remaining.push(item);
       }
       remaining.push(...queue.slice(200));
-      await ext.storage.local.set({[QUEUE_KEY]: remaining});
+      await ext.storage.local.set({[QUEUE_KEY]: remaining.map(sanitizeBrowserEvent)});
       return delivered;
     } catch (_) {
       return 0;
@@ -135,7 +196,7 @@ async function flushBrowserQueue() {
 
 async function sendBrowserEvent(body) {
   const work = await captureWorkContext();
-  const enriched = {
+  const enriched = sanitizeBrowserEvent({
     ...body,
     event_id: body.event_id || uuid(),
     sensor_id: body.sensor_id || await sensorId(),
@@ -145,7 +206,7 @@ async function sendBrowserEvent(body) {
     actor_id: body.actor_id ?? work.actor_id ?? "",
     device_id: body.device_id ?? work.device_id ?? "",
     work_session_id: body.work_session_id ?? work.work_session_id ?? "",
-  };
+  });
   if (await postDirect("/v1/browser-events", enriched)) {
     flushBrowserQueue();
     return true;
@@ -180,7 +241,8 @@ async function emitTab(tab, action, extra = {}, urlOverride = null) {
 }
 
 function shouldEmitNav(tabId, url, kind) {
-  const key = `${kind}:${tabId}:${String(url || "")}`;
+  const safe = sanitizeUrlString(url);
+  const key = `${kind}:${tabId}:${safe}`;
   const now = Date.now();
   const prev = recentNav.get(key) || 0;
   if (now - prev < 800) return false;
@@ -193,14 +255,20 @@ function shouldEmitNav(tabId, url, kind) {
 
 ext.runtime.onMessage.addListener((message, sender) => {
   if (!message || message.type !== "workflow_observer_event") return;
-  const page = safeUrl(message.page?.url || sender.tab?.url || "");
+  const topFrame = message.metadata?.top_frame !== false;
+  const pageSource = topFrame ? (message.page?.url || sender.tab?.url || "") : (sender.tab?.url || "");
+  const page = safeUrl(pageSource);
   if (!page) return;
+  const metadata = {...(message.metadata || {})};
+  delete metadata.frame_url;
+  metadata.top_frame = topFrame;
+  metadata.frame_kind = topFrame ? "top" : "subframe";
   sendBrowserEvent({
     observed_at: message.observed_at || new Date().toISOString(),
     action: String(message.action || "browser_event"),
-    page: {...page, title: String(message.page?.title || sender.tab?.title || "").slice(0, 240)},
+    page: {...page, title: String(topFrame ? (message.page?.title || sender.tab?.title || "") : (sender.tab?.title || "")).slice(0, 240)},
     target: message.target || {},
-    metadata: {...(message.metadata || {}), tab_id: sender.tab?.id ?? null, window_id: sender.tab?.windowId ?? null}
+    metadata: {...metadata, tab_id: sender.tab?.id ?? null, window_id: sender.tab?.windowId ?? null}
   });
 });
 
@@ -262,6 +330,7 @@ if (ext.webNavigation?.onHistoryStateUpdated) {
 }
 
 async function startup(status) {
+  await sanitizePendingBrowserQueue();
   await refreshWorkContext();
   await heartbeat(status);
   await flushBrowserQueue();
