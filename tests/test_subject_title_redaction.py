@@ -8,8 +8,12 @@ def _presentation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
     importlib.reload(presentation)
-    # Make owner behavior deterministic for these tests rather than depending on
-    # the CI runner's OS account name.
+    from server.first_name_policy import install as install_first_name
+    from server.mail_row_policy import install as install_mail_row
+    from server.typed_privacy_policy import install as install_typed_privacy
+    install_first_name(presentation)
+    install_mail_row(presentation)
+    install_typed_privacy(presentation)
     monkeypatch.setattr(
         presentation,
         "_owner_identity",
@@ -18,7 +22,7 @@ def _presentation(monkeypatch, tmp_path):
     return presentation
 
 
-def test_gmail_observed_action_redacts_names_inside_subject(monkeypatch, tmp_path):
+def test_gmail_sender_is_masked_but_unknown_subject_name_is_not_guessed(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
     raw = {
         "surface": "Gmail",
@@ -31,10 +35,12 @@ def test_gmail_observed_action_redacts_names_inside_subject(monkeypatch, tmp_pat
     safe = presentation.redact_for_display(raw)
 
     assert raw == before
+    # The structured Select/sender slot remains strong enough evidence.
     assert "Anna Svensson" not in safe["label"]
-    assert "Erik Nilsson" not in safe["label"]
+    # v0.40 deliberately stops guessing that every title-case subject phrase is
+    # a person. Erik is masked once learned from stronger identity evidence.
+    assert "Erik Nilsson" in safe["label"]
     assert "Contract renewal with" in safe["label"]
-    assert safe["label"].count("PERSON_") == 2
     assert safe["event_id"] == "evt-1"
     assert safe["duration_seconds"] == 0.0
 
@@ -65,7 +71,7 @@ def test_workflow_title_words_are_not_destroyed(monkeypatch, tmp_path):
     assert "Quarterly Pricing Review" in safe["label"]
 
 
-def test_document_and_meeting_titles_mask_embedded_people(monkeypatch, tmp_path):
+def test_unknown_document_and_meeting_title_entities_are_not_guessed(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
 
     doc = presentation.redact_for_display({
@@ -78,11 +84,22 @@ def test_document_and_meeting_titles_mask_embedded_people(monkeypatch, tmp_path)
         "label": "Meeting with Erik Nilsson about Pricing Review",
     })
 
-    assert "Anna Svensson" not in doc["resource_title"]
-    assert "contract renewal" in doc["resource_title"]
-    assert "Erik Nilsson" not in meeting["label"]
-    assert "Meeting with" in meeting["label"]
-    assert "Pricing Review" in meeting["label"]
+    assert doc["resource_title"] == "Anna Svensson contract renewal"
+    assert meeting["label"] == "Meeting with Erik Nilsson about Pricing Review"
+
+
+def test_known_identity_is_redacted_in_later_title_without_app_allowlist(monkeypatch, tmp_path):
+    presentation = _presentation(monkeypatch, tmp_path)
+
+    safe = presentation.redact_for_display({
+        "identity_evidence": "Erik Nilsson <erik.nilsson@example.com>",
+        "surface": "Unknown Internal System",
+        "resource_title": "Notes for Erik Nilsson",
+    })
+
+    assert "Erik Nilsson" not in safe["identity_evidence"]
+    assert "Erik Nilsson" not in safe["resource_title"]
+    assert "Notes for PERSON_" in safe["resource_title"]
 
 
 def test_generic_unscoped_free_text_is_not_aggressively_name_redacted(monkeypatch, tmp_path):
@@ -90,6 +107,4 @@ def test_generic_unscoped_free_text_is_not_aggressively_name_redacted(monkeypatc
     raw = {"note": "Erik Nilsson discussed Project Phoenix"}
     safe = presentation.redact_for_display(raw)
 
-    # The new heuristic is intentionally contextual. Arbitrary prose remains
-    # conservative unless the person was learned through structured evidence.
     assert safe == raw

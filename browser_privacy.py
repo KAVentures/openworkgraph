@@ -74,7 +74,12 @@ def sanitize_pathname(pathname: str) -> str:
 
 
 def sanitize_url_value(value: str) -> str:
-    """Return a URL-like value without query/fragment or secret-like path data."""
+    """Return a URL-like value without query/fragment or secret-like path data.
+
+    Besides ordinary absolute URLs, presentation/export layers sometimes carry a
+    schemeless locator such as ``ehr.example/patient/123?token=...``. Treat those
+    as structured locators too instead of sending them through prose redaction.
+    """
     raw = str(value or "")
     try:
         parsed = urlsplit(raw)
@@ -84,7 +89,13 @@ def sanitize_url_value(value: str) -> str:
         return urlunsplit((parsed.scheme, parsed.netloc, sanitize_pathname(parsed.path or "/"), "", ""))
     if raw.startswith("/"):
         return sanitize_pathname(raw)
-    return raw
+
+    clean = raw.split("#", 1)[0].split("?", 1)[0]
+    if "/" in clean:
+        head, tail = clean.split("/", 1)
+        if "." in head and not any(ch.isspace() for ch in head):
+            return head + sanitize_pathname("/" + tail)
+    return clean
 
 
 def sanitize_browser_metadata(value: Any, *, key: str = "") -> Any:
