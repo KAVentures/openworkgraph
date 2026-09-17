@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Structured email-row subject/header privacy policy (v0.41).
+"""Structured email-row subject/header privacy policy.
 
 v0.40 intentionally stopped treating arbitrary title-cased text as a person. That
 fixed organization/product false positives, but it also removed too much privacy
-inside Gmail/Outlook accessibility rows: sender names in row variants without a
-leading unread-state and people mentioned inside the subject could remain visible.
-
-This policy restores the stronger behavior *only after a row is structurally
-identified as mail*. Ordinary window/document titles remain conservative.
+inside Gmail/Outlook accessibility rows. This policy restores stronger masking only
+after a row is structurally identified as mail. v0.42.2 also handles coordinated
+person subjects such as ``Julia Brännström and Joel Berbres are hiring`` without
+bringing back capitalization-based masking in ordinary document/window titles.
 """
 
 import re
@@ -39,6 +38,19 @@ _LEADING_PERSON_ACTION_RE = re.compile(
     rf"(?=\s+(?i:accepted|added|applied|commented|connected|endorsed|followed|"
     rf"invited|joined|liked|mentioned|messaged|posted|reacted|replied|requested|"
     rf"sent|shared|viewed|wants)\b)"
+)
+
+# LinkedIn and similar notifications often coordinate two people before an action:
+# "Julia Brännström and Joel Berbres are hiring". Each side is classified
+# independently so organization/product-shaped phrases such as "Volvo Cars" still
+# survive even inside a confirmed mail row.
+_COORDINATED_PERSON_ACTION_RE = re.compile(
+    rf"^(?P<lead>\s*)"
+    rf"(?P<name1>{_WORD}(?:\s+{_WORD}){{0,3}})"
+    rf"(?P<join>\s+(?i:and|&|och)\s+)"
+    rf"(?P<name2>{_WORD}(?:\s+{_WORD}){{0,3}})"
+    rf"(?=\s+(?i:are|is|have|has)\s+"
+    rf"(?i:hiring|recruiting|looking|joining|starting|celebrating|attending|speaking|posting|sharing|seeking)\b)"
 )
 
 # Subject headings such as "Anna Svensson - Consultant" are also strongly
@@ -94,6 +106,25 @@ def _replace_match_name(match: re.Match[str], presentation: Any) -> str:
     return whole[:rel_start] + replacement + whole[rel_end:]
 
 
+def _replace_coordinated_names(match: re.Match[str], presentation: Any) -> str:
+    whole = match.group(0)
+    replacements: list[tuple[int, int, str]] = []
+    for group in ("name1", "name2"):
+        value = match.group(group)
+        replacement = _person_replacement(value, presentation)
+        if replacement is None:
+            continue
+        start = match.start(group) - match.start(0)
+        end = match.end(group) - match.start(0)
+        replacements.append((start, end, replacement))
+    if not replacements:
+        return whole
+    # Apply from right to left so the offsets of earlier groups do not move.
+    for start, end, replacement in sorted(replacements, reverse=True):
+        whole = whole[:start] + replacement + whole[end:]
+    return whole
+
+
 def _redact_subject_segment(text: str, presentation: Any) -> str:
     out = str(text or "")
     if not out.strip() or _TIME_RE.fullmatch(out.strip()):
@@ -104,6 +135,7 @@ def _redact_subject_segment(text: str, presentation: Any) -> str:
     # names that can be inferred from the mail-row grammar itself. Accessibility
     # trailers may share this same string, so they must not suppress redaction.
     out = _PERSON_CUE_RE.sub(lambda m: _replace_match_name(m, presentation), out)
+    out = _COORDINATED_PERSON_ACTION_RE.sub(lambda m: _replace_coordinated_names(m, presentation), out)
     out = _LEADING_PERSON_ACTION_RE.sub(lambda m: _replace_match_name(m, presentation), out)
     out = _LEADING_NAME_DELIM_RE.sub(lambda m: _replace_match_name(m, presentation), out)
     return out
