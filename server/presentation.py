@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,7 @@ NAME_CONTEXT_MARKERS = (
 _TOKEN_CACHE: dict[tuple[str, str], str] = {}
 _KEY_CACHE: dict[str, bytes] = {}
 _OWNER_CACHE: dict[str, tuple[dict[str, str], set[str], set[str]]] = {}
+_REGISTRY_LOCK = threading.RLock()
 
 
 def _data_dir() -> Path:
@@ -152,6 +154,17 @@ def _alias_hash(alias: str) -> str:
 
 def _people_registry_path() -> Path:
     return _data_dir() / ".presentation_people.json"
+
+
+def _save_people_registry_data(data: dict[str, Any]) -> None:
+    """Atomically persist hashed alias metadata; callers must be on a write path."""
+    path = _people_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    payload = json.dumps(data, sort_keys=True)
+    with _REGISTRY_LOCK:
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
 
 
 def _load_people_registry() -> dict[str, str]:
@@ -274,27 +287,43 @@ def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
         return _OWNER_CACHE[cache_key]
 
     cfg = _load_config()
-    raw_aliases: list[str] = []
+    aliases: dict[str, str] = {}
+
+    # Explicit configuration is authoritative, including an explicitly supplied
+    # single first name.  Automatically discovered OS identity is deliberately
+    # stricter so another person who merely shares the owner's first name is not
+    # silently relabeled OWNER.
     configured = cfg.get("owner_aliases", [])
     if isinstance(configured, str):
         configured = [configured]
     if isinstance(configured, list):
-        raw_aliases.extend(str(v).strip() for v in configured if str(v).strip())
+        for value in configured:
+            cleaned = _clean_name_candidate(str(value))
+            if cleaned:
+                aliases[cleaned.casefold()] = "OWNER"
 
-    for candidate in (_windows_display_name(), _posix_display_name(), getpass.getuser()):
-        candidate = str(candidate or "").strip()
-        if candidate:
-            raw_aliases.append(candidate)
-
-    aliases: dict[str, str] = {}
-    for raw in raw_aliases:
-        cleaned = _clean_name_candidate(raw)
+    display_names: list[str] = []
+    for candidate in (_windows_display_name(), _posix_display_name()):
+        cleaned = _clean_name_candidate(str(candidate or ""))
         if not cleaned:
             continue
-        aliases[cleaned.casefold()] = "OWNER"
-        words = _name_words(cleaned)
-        if len(words) > 1 and len(words[0]) >= 3 and words[0].casefold() not in NON_NAME_WORDS:
-            aliases.setdefault(words[0].casefold(), "OWNER")
+        # A full display name is strong evidence. A one-word OS display name is
+        # too ambiguous to use globally.
+        if len(_name_words(cleaned)) >= 2:
+            aliases[cleaned.casefold()] = "OWNER"
+            display_names.append(cleaned)
+
+    username = _clean_name_candidate(getpass.getuser())
+    if username:
+        username_folded = re.sub(r"[^a-z0-9]", "", username.casefold())
+        display_compacts = {
+            re.sub(r"[^a-z0-9]", "", name.casefold())
+            for name in display_names
+        }
+        # Keep a concatenated/full account identifier (e.g. koyarafrasyab), but
+        # do not auto-promote a bare first-name username such as "koyar".
+        if len(_name_words(username)) >= 2 or username_folded in display_compacts:
+            aliases[username.casefold()] = "OWNER"
 
     emails_cfg = cfg.get("owner_emails", [])
     if isinstance(emails_cfg, str):
@@ -314,7 +343,6 @@ def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
     result = (aliases, emails, phones)
     _OWNER_CACHE[cache_key] = result
     return result
-
 
 def _contains_email_context(value: Any) -> bool:
     if isinstance(value, dict):
@@ -516,6 +544,7 @@ def _redact_email_title_segments(text: str, *, owner_aliases: dict[str, str]) ->
     return "".join(parts)
 
 
+
 def redact_text(
     text: str,
     *,
@@ -528,124 +557,12 @@ def redact_text(
     name_sensitive_context: bool = False,
     field_name: str = "",
 ) -> str:
-    if not text:
-        return text
-    if re.fullmatch(r"(?:OWNER|OWNER_EMAIL|OWNER_PHONE|PERSON_[0-9A-F]{6}|EMAIL_[0-9A-F]{6}|PHONE_[0-9A-F]{6})", text):
-        return text
-
-    aliases = aliases or {}
-    owner_aliases = owner_aliases or {}
-    owner_emails = owner_emails or set()
-    owner_phones = owner_phones or set()
-    known_people = known_people or {}
-    out = text
-
-    out = DISPLAY_EMAIL_RE.sub(
-        lambda m: _redact_display_email(m, owner_aliases=owner_aliases, owner_emails=owner_emails),
-        out,
-    )
-    out = EMAIL_RE.sub(
-        lambda m: "OWNER_EMAIL" if m.group(1).casefold() in owner_emails else _token("EMAIL", m.group(1).casefold()),
-        out,
-    )
-
-    def phone_replacement(match: re.Match[str]) -> str:
-        value = match.group(0)
-        digits = re.sub(r"\D", "", value)
-        if not 7 <= len(digits) <= 15:
-            return value
-        if re.fullmatch(r"20\d{2}[ -]\d{1,2}[ -]\d{1,2}", value.strip()):
-            return value
-        return "OWNER_PHONE" if digits in owner_phones else _token("PHONE", digits)
-
-    out = PHONE_CANDIDATE_RE.sub(phone_replacement, out)
-    out = _replace_aliases(out, owner_aliases)
-    out = _replace_aliases(out, aliases)
-    out = _replace_known_people(out, known_people)
-
-    if field_name.casefold() in {"sender", "recipient", "contact", "owner", "person", "display_name"} and _looks_like_person_name(out, allow_single=True):
-        out = "OWNER" if out.casefold() in owner_aliases else _token("PERSON", out)
-
-    if email_context:
-        out = _redact_email_title_segments(out, owner_aliases=owner_aliases)
-
-    # v0.36: names embedded *inside* subjects/titles/observed-action labels were
-    # previously missed because the whole string was treated as free text. In a
-    # name-sensitive context, redact only conservative title-case person spans.
-    if (email_context or name_sensitive_context) and field_name.casefold() in TITLEISH_FIELDS:
-        out = _redact_embedded_names(out, owner_aliases=owner_aliases, registry=known_people)
-
-    return out
-
+    """Compatibility helper; production redaction is assembled in privacy_pipeline."""
+    from .privacy_pipeline import redact_for_display as _redact
+    key = field_name or "text"
+    return str(_redact({key: text})[key])
 
 def redact_for_display(value: Any) -> Any:
-    """Deep-copy/redact a payload for UI, API, MCP or export presentation.
-
-    This function never mutates ``value`` and never writes to event/context tables.
-    Structural values (event IDs, timestamps, counts, durations, booleans) are
-    preserved exactly. Only human-readable string values can be pseudonymized.
-    """
-    owner_aliases, owner_emails, owner_phones = _owner_identity()
-    aliases = _discover_aliases(value)
-    known_people = _load_people_registry()
-
-    def transform(
-        item: Any,
-        *,
-        inherited_email_context: bool = False,
-        inherited_name_sensitive_context: bool = False,
-        field_name: str = "",
-    ) -> Any:
-        if isinstance(item, dict):
-            email_context = inherited_email_context or _contains_email_context(item)
-            name_sensitive_context = inherited_name_sensitive_context or _contains_name_sensitive_context(item)
-            return {
-                key: transform(
-                    val,
-                    inherited_email_context=email_context,
-                    inherited_name_sensitive_context=name_sensitive_context,
-                    field_name=str(key),
-                )
-                for key, val in item.items()
-            }
-        if isinstance(item, list):
-            return [
-                transform(
-                    v,
-                    inherited_email_context=inherited_email_context,
-                    inherited_name_sensitive_context=inherited_name_sensitive_context,
-                    field_name=field_name,
-                )
-                for v in item
-            ]
-        if isinstance(item, tuple):
-            return tuple(
-                transform(
-                    v,
-                    inherited_email_context=inherited_email_context,
-                    inherited_name_sensitive_context=inherited_name_sensitive_context,
-                    field_name=field_name,
-                )
-                for v in item
-            )
-        if isinstance(item, str):
-            if field_name in {
-                "event_id", "session_id", "device_id", "sensor_id", "organization_id",
-                "actor_id", "schema_version", "browser_session_id", "work_session_id",
-                "observed_at", "generated_at", "run_started_at",
-            }:
-                return item
-            return redact_text(
-                item,
-                aliases=aliases,
-                owner_aliases=owner_aliases,
-                owner_emails=owner_emails,
-                owner_phones=owner_phones,
-                known_people=known_people,
-                email_context=inherited_email_context,
-                name_sensitive_context=inherited_name_sensitive_context,
-                field_name=field_name,
-            )
-        return item
-
-    return transform(value)
+    """Compatibility entry point; delegates to the explicit privacy pipeline."""
+    from .privacy_pipeline import redact_for_display as _redact
+    return _redact(value)
