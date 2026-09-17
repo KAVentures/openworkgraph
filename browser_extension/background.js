@@ -217,13 +217,22 @@ async function sendBrowserEvent(body) {
 
 async function heartbeat(status = "connected") {
   const id = await sensorId();
-  await refreshWorkContext();
+  const work = await refreshWorkContext();
+  let page = {};
+  try {
+    const tabs = await ext.tabs.query({active: true, lastFocusedWindow: true});
+    const tab = Array.isArray(tabs) ? tabs[0] : null;
+    const safe = safeUrl(tab?.url || "");
+    if (safe) page = {...safe, title: String(tab?.title || "").slice(0, 240)};
+  } catch (_) {}
   await postDirect("/v1/browser-heartbeat", {
     observed_at: new Date().toISOString(),
     status,
     sensor_id: id,
     sensor_version: SENSOR_VERSION,
     browser_session_id: BROWSER_RUNTIME_ID,
+    work_session_id: String(work?.work_session_id || cachedWorkContext?.work_session_id || ""),
+    page,
   });
 }
 
