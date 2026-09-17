@@ -96,12 +96,13 @@ def _replace_match_name(match: re.Match[str], presentation: Any) -> str:
 
 def _redact_subject_segment(text: str, presentation: Any) -> str:
     out = str(text or "")
-    if not out.strip() or _TIME_RE.fullmatch(out.strip()) or _ROW_TRAILER_RE.search(out):
+    if not out.strip() or _TIME_RE.fullmatch(out.strip()):
         return out
 
     # OWNER and identities learned from stronger evidence have already been
     # handled by earlier presentation layers. These rules cover the remaining
-    # names that can be inferred from the mail-row grammar itself.
+    # names that can be inferred from the mail-row grammar itself. Accessibility
+    # trailers may share this same string, so they must not suppress redaction.
     out = _PERSON_CUE_RE.sub(lambda m: _replace_match_name(m, presentation), out)
     out = _LEADING_PERSON_ACTION_RE.sub(lambda m: _replace_match_name(m, presentation), out)
     out = _LEADING_NAME_DELIM_RE.sub(lambda m: _replace_match_name(m, presentation), out)
@@ -161,7 +162,8 @@ def _redact_confirmed_mail_row(text: str, presentation: Any) -> str:
             mail_row_policy._set_segment(parts, sender_index, replacement)
 
     # A subject may itself contain commas, so everything after the sender is
-    # treated as subject/header material except timestamp/accessibility trailers.
+    # treated as subject/header material. Timestamps naturally no-op above and
+    # accessibility trailer strings are preserved while nearby names are masked.
     for index in range(sender_index + 1, count):
         original = mail_row_policy._get_segment(parts, index)
         redacted = _redact_subject_segment(original, presentation)
