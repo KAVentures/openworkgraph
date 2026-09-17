@@ -20,10 +20,11 @@ from .analytics import (
 from .context import search_context, recent_context, context_timeline
 from .db import init_db, insert_events
 from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
+from .presentation import redact_for_display
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "dashboard" / "index.html"
-VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "0.32.0"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "0.34.0"
 try:
     _manifest = json.loads((ROOT / "browser_extension" / "manifest.json").read_text(encoding="utf-8"))
     EXPECTED_BROWSER_SENSOR_VERSION = str(_manifest.get("version_name") or _manifest.get("version") or "")
@@ -257,7 +258,7 @@ def get_summary(limit: int = 10000, scope: str = "all"):
     result["collector"] = dict(COLLECTOR_STATUS) if COLLECTOR_STATUS else None
     result["browser_sensor"] = dict(BROWSER_STATUS) if BROWSER_STATUS else None
     result["expected_browser_sensor_version"] = EXPECTED_BROWSER_SENSOR_VERSION
-    return result
+    return redact_for_display(result)
 
 
 @app.get("/v1/operational-summary")
@@ -268,45 +269,45 @@ def get_operational_summary(limit: int = 10000, scope: str = "all"):
     result["scope"] = scope
     result["run_started_at"] = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT")
     result["version"] = VERSION
-    return result
+    return redact_for_display(result)
 
 
 @app.get("/v1/events")
 def get_events(query: str = "", app_name: str | None = None, limit: int = 100):
-    return {"events": search_events(query=query, app=app_name, limit=limit), "data_layer": "raw_local_evidence"}
+    return redact_for_display({"events": search_events(query=query, app=app_name, limit=limit), "data_layer": "raw_local_evidence"})
 
 
 @app.get("/v1/context-events")
 def get_context_events(query: str = "", surface: str | None = None, actor_id: str | None = None, limit: int = 100):
     events = search_context(query, surface=surface, actor_id=actor_id, limit=limit) if (query or surface or actor_id) else recent_context(limit)
-    return {
+    return redact_for_display({
         "events": events,
         "data_layer": "customer_context",
-        "notice": "Customer-controlled context may contain resource titles, names, and sanitized paths. Typed values and clipboard contents are not captured.",
-    }
+        "notice": "Customer-controlled context is presentation-redacted for email addresses, phone numbers and best-effort person names. Typed values and clipboard contents are not captured; rich local evidence used for inference is not destructively rewritten.",
+    })
 
 
 @app.get("/v1/operational-events")
 def get_operational_events(query: str = "", surface: str | None = None, limit: int = 100):
-    return {"events": search_operational_events(query=query, surface=surface, limit=limit), "data_layer": "operational_normalized"}
+    return redact_for_display({"events": search_operational_events(query=query, surface=surface, limit=limit), "data_layer": "operational_normalized"})
 
 
 @app.get("/v1/semantic-activity")
 def get_semantic_activity(limit: int = 200, scope: str = "current"):
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
-    return {"events": semantic_activity(limit=limit, since=since)}
+    return redact_for_display({"events": semantic_activity(limit=limit, since=since)})
 
 
 @app.get("/v1/operational-semantic-activity")
 def get_operational_semantic_activity(limit: int = 200, scope: str = "current"):
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
-    return {"events": semantic_activity(limit=limit, since=since, operational=True), "data_layer": "operational_normalized"}
+    return redact_for_display({"events": semantic_activity(limit=limit, since=since, operational=True), "data_layer": "operational_normalized"})
 
 
 @app.get("/v1/tasks")
 def get_candidate_tasks(limit: int = 25000, scope: str = "current"):
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
-    return candidate_tasks(limit=limit, since=since)
+    return redact_for_display(candidate_tasks(limit=limit, since=since))
 
 
 @app.get("/v1/operational-sessions/{session_id}")
@@ -314,7 +315,7 @@ def get_operational_session(session_id: str, limit: int = 1000):
     events = operational_timeline(session_id, limit)
     if not events:
         raise HTTPException(status_code=404, detail="session not found")
-    return {"session_id": session_id, "events": events, "data_layer": "operational_normalized"}
+    return redact_for_display({"session_id": session_id, "events": events, "data_layer": "operational_normalized"})
 
 
 @app.get("/v1/context-sessions/{session_id}")
@@ -322,7 +323,7 @@ def get_context_session(session_id: str, limit: int = 1000):
     events = context_timeline(session_id, limit)
     if not events:
         raise HTTPException(status_code=404, detail="session not found")
-    return {"session_id": session_id, "events": events, "data_layer": "customer_context"}
+    return redact_for_display({"session_id": session_id, "events": events, "data_layer": "customer_context"})
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -330,18 +331,23 @@ def get_session(session_id: str, limit: int = 1000):
     events = timeline(session_id, limit)
     if not events:
         raise HTTPException(status_code=404, detail="session not found")
-    return {"session_id": session_id, "events": events, "data_layer": "raw_local_evidence"}
+    return redact_for_display({"session_id": session_id, "events": events, "data_layer": "raw_local_evidence"})
 
 
 @app.get("/v1/export/{fmt}")
 def export_session(fmt: str, scope: str = "current", include_raw: bool = False):
-    """Download the captured session as JSON, XLSX, or a ZIP of CSV tables."""
+    """Download the captured session as JSON, XLSX, or a ZIP of CSV tables.
+
+    ``include_raw`` retains the raw event structure and fields, but presentation
+    redaction is still applied to names/email/phone text before bytes leave the
+    local API. The database itself is never rewritten by this endpoint.
+    """
     fmt = fmt.lower().strip()
     if fmt not in {"json", "xlsx", "csvzip"}:
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
     if scope not in {"current", "all"}:
         raise HTTPException(status_code=400, detail="scope must be current or all")
-    payload = build_export_payload(scope=scope, include_raw=include_raw)
+    payload = redact_for_display(build_export_payload(scope=scope, include_raw=include_raw))
     if fmt == "json":
         body = json_bytes(payload)
         media = "application/json"

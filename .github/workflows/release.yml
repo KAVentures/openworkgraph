@@ -91,7 +91,9 @@ jobs:
 
           For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened `browser_extension` folder as an unpacked extension.
 
-          Windows v0.33 also adds best-effort Microsoft UI Automation metadata for native controls without reading typed field values or password values.
+          Dashboard/API/MCP/export presentation now pseudonymizes detected email addresses, phone numbers and best-effort person names without destructively rewriting the rich local evidence used for workflow inference. No external AI service is used for this redaction.
+
+          Windows also includes best-effort Microsoft UI Automation metadata for native controls without reading typed field values or password values.
 
           Captured data stays local in this prototype unless the user explicitly exports it.
           EOF
