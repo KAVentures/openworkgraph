@@ -31,18 +31,24 @@ class _PolicyView:
         return text
 
 
-_VIEW = _PolicyView()
+class _IdentityLearningView(_PolicyView):
+    # Ingest-time learning can use explicit person cues such as Reply to / From /
+    # Meeting with. Display-time broad title guessing remains disabled.
+    CUE_RE = _presentation.CUE_RE
 
-# Read-only display pipeline.  It can learn aliases within a single payload, but
-# persistent registry writes are reserved for ingest via learn_persistent_identities.
+
+_VIEW = _PolicyView()
+_LEARNING_VIEW = _IdentityLearningView()
+
+# Read-only display pipeline. It can use aliases already learned on write paths,
+# but never persists new registry state while serving a GET.
 _redactor = first_name_policy.build_redactor(_VIEW, persist_registry=False)
 _redactor = mail_row_policy.wrap_redactor(_redactor, _VIEW)
 _redactor = typed_privacy_policy.wrap_redactor(_redactor, _VIEW)
 _redactor = mail_subject_policy.wrap_redactor(_redactor, _VIEW)
 
-# Same first-stage logic with persistence enabled.  Running it on ingest learns
-# only hashed aliases/tokens; no literal person name is written to the registry.
-_identity_learner = first_name_policy.build_redactor(_VIEW, persist_registry=True)
+# Ingest-time learner persists only hashed aliases/tokens from strong evidence.
+_identity_learner = first_name_policy.build_redactor(_LEARNING_VIEW, persist_registry=True)
 
 
 def initialize_privacy_state() -> None:
