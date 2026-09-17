@@ -5,14 +5,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 DIST="$ROOT/dist"
 PKG="$DIST/OpenWorkGraph-macOS-v$VERSION"
-PAYLOAD="$PKG/.openworkgraph-src"
+STAGE="$DIST/.openworkgraph-payload"
+PAYLOAD_ARCHIVE="$DIST/.openworkgraph-payload.tar.gz"
+LAUNCHER="$PKG/START_OPENWORKGRAPH.command"
 
 rm -rf "$DIST"
-mkdir -p "$PAYLOAD"
+mkdir -p "$PKG" "$STAGE"
 
-# Keep the user-facing package simple while shipping the exact source/runtime
-# payload the launcher needs. Hidden payload files remain inspectable if a
-# tester wants to audit them.
+# Build the exact source/runtime payload used by START_ON_MAC.command, but embed
+# it inside the user-facing launcher. This avoids a second Finder/Gatekeeper hop
+# through a hidden sibling directory after the ZIP is downloaded.
 rsync -a \
   --exclude '.git/' \
   --exclude '.github/' \
@@ -25,14 +27,44 @@ rsync -a \
   --exclude 'tests/' \
   --exclude 'scripts/' \
   --exclude 'config.json' \
-  "$ROOT/" "$PAYLOAD/"
+  "$ROOT/" "$STAGE/"
 
-cat > "$PKG/START_OPENWORKGRAPH.command" <<'EOF'
+tar -czf "$PAYLOAD_ARCHIVE" -C "$STAGE" .
+
+cat > "$LAUNCHER" <<'EOF'
 #!/bin/bash
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-exec /bin/bash "$ROOT/.openworkgraph-src/START_ON_MAC.command"
+
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openworkgraph-launch.XXXXXX")" || exit 1
+cleanup() { rm -rf "$TMP_ROOT"; }
+trap cleanup EXIT
+
+PAYLOAD="$TMP_ROOT/payload.tar.gz"
+if ! awk 'found {print} /^__OPENWORKGRAPH_PAYLOAD_BELOW__$/ {found=1}' "$0" | /usr/bin/base64 -D > "$PAYLOAD"; then
+  echo "OpenWorkGraph could not unpack its embedded payload."
+  echo
+  read -r -p "Press Enter to close…"
+  exit 1
+fi
+
+if ! tar -xzf "$PAYLOAD" -C "$TMP_ROOT"; then
+  echo "OpenWorkGraph could not extract its embedded payload."
+  echo
+  read -r -p "Press Enter to close…"
+  exit 1
+fi
+rm -f "$PAYLOAD"
+
+chmod +x "$TMP_ROOT/START_ON_MAC.command" 2>/dev/null || true
+/bin/bash "$TMP_ROOT/START_ON_MAC.command"
+STATUS=$?
+exit "$STATUS"
+
+__OPENWORKGRAPH_PAYLOAD_BELOW__
 EOF
+
+# macOS /usr/bin/base64 wraps by default. The decoder accepts wrapped input.
+/usr/bin/base64 < "$PAYLOAD_ARCHIVE" >> "$LAUNCHER"
 
 cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
 
@@ -43,35 +75,39 @@ OpenWorkGraph $VERSION — macOS tester build
 1. Unzip this folder.
 2. Right-click START_OPENWORKGRAPH.command and choose Open.
 3. Confirm Open if macOS asks.
-4. On first launch, OpenWorkGraph downloads its own private runtime and installs
-   itself under your user Library. You do not need to install Python manually.
+4. On first launch, OpenWorkGraph unpacks its embedded payload, downloads its
+   own private runtime, and installs itself under your user Library. You do not
+   need to install Python manually.
 5. Approve macOS Accessibility/Input Monitoring permissions if requested.
 6. The local dashboard opens automatically at http://127.0.0.1:8787.
 
 Browser context (recommended)
 -----------------------------
 Double-click ADD_BROWSER_SENSOR.command after OpenWorkGraph has started once.
-It opens the correct extension folder and your browser extension page. Enable
-Developer mode, choose Load unpacked, and select the opened browser_extension
-folder. This lets OpenWorkGraph distinguish Gmail, Docs, Salesforce and other
-browser work instead of seeing only the browser application.
+It opens the installed browser_extension folder and your browser extension page.
+Enable Developer mode, choose Load unpacked, and select the opened
+browser_extension folder. This lets OpenWorkGraph distinguish Gmail, Docs,
+Salesforce and other browser work instead of seeing only the browser application.
 
 Privacy / data location
 -----------------------
 The prototype runs locally. Captured data stays on this computer unless you
 explicitly export it. Aggregate keyboard activity is counted, but typed text and
-key identities are not recorded by the effort counter.
+key identities are not recorded by the effort counter. Display/API/export views
+pseudonymize detected identifiers after workflow processing; raw local evidence
+used for inference is not destructively rewritten.
 
 Stop OpenWorkGraph with Ctrl+C in the Terminal window it opened.
 
 Project: https://github.com/KAVentures/openworkgraph
 EOF
 
-chmod +x "$PKG/START_OPENWORKGRAPH.command" "$PKG/ADD_BROWSER_SENSOR.command"
+chmod +x "$LAUNCHER" "$PKG/ADD_BROWSER_SENSOR.command"
+rm -rf "$STAGE" "$PAYLOAD_ARCHIVE"
 
-# Stable asset name makes the README download link remain valid across releases.
-cd "$DIST"
-zip -qry "OpenWorkGraph-macOS.zip" "$(basename "$PKG")"
-shasum -a 256 "OpenWorkGraph-macOS.zip" > "OpenWorkGraph-macOS.zip.sha256"
+# ditto is Apple's ZIP tool and preserves the macOS metadata/permissions expected
+# for Finder-delivered executables more reliably than a generic zip invocation.
+/usr/bin/ditto -c -k --keepParent "$PKG" "$DIST/OpenWorkGraph-macOS.zip"
+shasum -a 256 "$DIST/OpenWorkGraph-macOS.zip" > "$DIST/OpenWorkGraph-macOS.zip.sha256"
 
 echo "Built: $DIST/OpenWorkGraph-macOS.zip"
