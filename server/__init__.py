@@ -2,10 +2,12 @@ from . import presentation as _presentation
 from .first_name_policy import install as _install_first_name_policy
 from .mail_row_policy import install as _install_mail_row_policy
 from .typed_privacy_policy import install as _install_typed_privacy_policy
+from .mail_subject_policy import install as _install_mail_subject_policy
 
 _install_first_name_policy(_presentation)
 _install_mail_row_policy(_presentation)
 _install_typed_privacy_policy(_presentation)
+_install_mail_subject_policy(_presentation)
 
 from . import db as _db
 from .sensitive_storage_policy import install as _install_sensitive_storage_policy
