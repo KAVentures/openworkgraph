@@ -184,11 +184,8 @@ def _redact_mail_row_text(text: str, presentation: Any) -> str:
     return prefix + "".join(parts)
 
 
-def install(presentation: Any) -> None:
-    """Install structured mail-row masking after the general presentation policy."""
-    previous = presentation.redact_for_display
-    if getattr(previous, "_openworkgraph_mail_row_policy", False):
-        return
+def wrap_redactor(previous: Any, presentation: Any):
+    """Compose structured mail-row masking around an existing redactor."""
 
     def redact_for_display(value: Any) -> Any:
         safe = previous(value)
@@ -238,4 +235,12 @@ def install(presentation: Any) -> None:
         return transform(safe)
 
     redact_for_display._openworkgraph_mail_row_policy = True  # type: ignore[attr-defined]
-    presentation.redact_for_display = redact_for_display
+    return redact_for_display
+
+
+def install(presentation: Any) -> None:
+    """Backward-compatible installer; production uses privacy_pipeline explicitly."""
+    previous = presentation.redact_for_display
+    if getattr(previous, "_openworkgraph_mail_row_policy", False):
+        return
+    presentation.redact_for_display = wrap_redactor(previous, presentation)
