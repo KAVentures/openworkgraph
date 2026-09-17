@@ -205,11 +205,8 @@ def _redact_confirmed_mail_row(text: str, presentation: Any) -> str:
     return prefix + "".join(parts)
 
 
-def install(presentation: Any) -> None:
-    """Install after typed_privacy_policy as the final mail-specific pass."""
-    previous = presentation.redact_for_display
-    if getattr(previous, "_openworkgraph_mail_subject_policy", False):
-        return
+def wrap_redactor(previous: Any, presentation: Any):
+    """Compose final mail-subject masking around an existing redactor."""
 
     def redact_for_display(value: Any) -> Any:
         safe = previous(value)
@@ -236,4 +233,12 @@ def install(presentation: Any) -> None:
         return transform(safe)
 
     redact_for_display._openworkgraph_mail_subject_policy = True  # type: ignore[attr-defined]
-    presentation.redact_for_display = redact_for_display
+    return redact_for_display
+
+
+def install(presentation: Any) -> None:
+    """Backward-compatible installer; production uses privacy_pipeline explicitly."""
+    previous = presentation.redact_for_display
+    if getattr(previous, "_openworkgraph_mail_subject_policy", False):
+        return
+    presentation.redact_for_display = wrap_redactor(previous, presentation)
