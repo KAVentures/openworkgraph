@@ -62,7 +62,15 @@
 const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtTime=s=>{s=Math.max(0,Number(s)||0); if(s<60)return `${Math.round(s)}s`; const m=Math.floor(s/60), r=Math.round(s%60); return `${m}m ${r}s`;};
 function downloadExport(fmt){const raw=document.querySelector('#includeRaw')?.checked?'true':'false';window.location.href=`/v1/export/${encodeURIComponent(fmt)}?scope=current&include_raw=${raw}`;}
+let summaryLoading=false;
+let summaryTimer=null;
+function scheduleSummaryRefresh(){
+  if(summaryTimer) clearTimeout(summaryTimer);
+  summaryTimer=setTimeout(()=>{ if(!document.hidden) load(); },5000);
+}
 async function load(){
+  if(summaryLoading) return;
+  summaryLoading=true;
   try{
     const r=await fetch('/v1/summary?limit=25000&scope=current'); const d=await r.json();
     const live=(d.mode||'observe')==='observe';
@@ -87,6 +95,8 @@ async function load(){
     else{document.querySelector('#sensorline').innerHTML=`<span class="ok">Browser semantic sensor connected.</span> ${esc(b.sensor_version||'current version')} · last action: ${esc(b.last_action||b.status||'connected')}${b.hostname?` on ${esc(b.hostname)}`:''}.`;}
     document.querySelector('#updated').textContent=d.generated_at?`Updated ${new Date(d.generated_at).toLocaleString()} · OpenWorkGraph ${esc(d.version||'')} · auto-refreshes every 5 seconds`:'';
   }catch(e){document.querySelector('#statusline').textContent='Could not reach the local observer. Is the launcher still running?';}
+  finally{summaryLoading=false;scheduleSummaryRefresh();}
 }
-load();setInterval(load,5000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)load();});
+load();
 </script></body></html>
