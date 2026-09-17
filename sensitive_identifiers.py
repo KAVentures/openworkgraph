@@ -76,6 +76,32 @@ _ALREADY_TOKEN_RE = re.compile(
     r"^(?:PERSONNUMMER|PATIENT_ID|JOURNAL_ID|CASE_ID|ACCOUNT_ID|PERSON)_[0-9A-F]{6}$"
 )
 
+_STRUCTURED_ID_KINDS = {
+    "personnummer": "PERSONNUMMER",
+    "personnr": "PERSONNUMMER",
+    "pnr": "PERSONNUMMER",
+    "samordningsnummer": "PERSONNUMMER",
+    "samordningsnr": "PERSONNUMMER",
+    "patientid": "PATIENT_ID",
+    "patientnr": "PATIENT_ID",
+    "patientnummer": "PATIENT_ID",
+    "journalid": "JOURNAL_ID",
+    "journalnr": "JOURNAL_ID",
+    "journalnummer": "JOURNAL_ID",
+    "caseid": "CASE_ID",
+    "casenumber": "CASE_ID",
+    "casenr": "CASE_ID",
+    "ärendeid": "CASE_ID",
+    "ärendenr": "CASE_ID",
+    "ärendenummer": "CASE_ID",
+    "accountid": "ACCOUNT_ID",
+    "accountnumber": "ACCOUNT_ID",
+    "accountnr": "ACCOUNT_ID",
+    "kontoid": "ACCOUNT_ID",
+    "kontonr": "ACCOUNT_ID",
+    "kontonummer": "ACCOUNT_ID",
+}
+
 
 def _data_dir() -> Path:
     return Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
@@ -165,20 +191,32 @@ def _personnummer_is_sensitive(match: re.Match[str], text: str) -> bool:
     if _luhn_valid(canonical):
         return True
 
-    # Hyphen/plus forms with a valid birth/coordination date are highly specific
-    # to Swedish personal identifiers. Redact even synthetic/test values with an
-    # intentionally invalid checksum rather than leaking them.
     if match.group("sep") in {"-", "+"}:
         return True
 
-    # Unseparated invalid numbers need an explicit semantic cue to avoid turning
-    # arbitrary 10/12-digit business references into personnummer tokens.
     prefix = text[max(0, match.start() - 48):match.start()]
     return bool(_PERSONNUMMER_CUE_RE.search(prefix))
 
 
 def _person_token_for_personnummer(canonical: str) -> str:
     return stable_token("PERSON", canonical)
+
+
+def structured_identifier_kind(field_name: str) -> str | None:
+    normalized = re.sub(r"[^0-9A-Za-zÅÄÖåäö]+", "", str(field_name or "")).casefold()
+    return _STRUCTURED_ID_KINDS.get(normalized)
+
+
+def tokenize_structured_identifier(field_name: str, value: str) -> str:
+    raw = str(value or "")
+    kind = structured_identifier_kind(field_name)
+    if not raw or not kind or _ALREADY_TOKEN_RE.fullmatch(raw):
+        return raw
+    textual = redact_sensitive_identifiers(raw, redact_adjacent_name=False)
+    if textual != raw:
+        return textual
+    canonical = re.sub(r"\s+", "", raw)
+    return stable_token(kind, canonical)
 
 
 def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = False) -> str:
@@ -229,14 +267,16 @@ def sanitize_event_identifiers(event: dict[str, Any]) -> dict[str, Any]:
     """Return a deep copy safe for persistence while preserving event structure."""
     e = copy.deepcopy(event)
 
-    def walk(value: Any) -> Any:
+    def walk(value: Any, *, key: str = "") -> Any:
         if isinstance(value, dict):
-            return {str(k): walk(v) for k, v in value.items()}
+            return {str(k): walk(v, key=str(k)) for k, v in value.items()}
         if isinstance(value, list):
-            return [walk(v) for v in value]
+            return [walk(v, key=key) for v in value]
         if isinstance(value, tuple):
-            return tuple(walk(v) for v in value)
+            return tuple(walk(v, key=key) for v in value)
         if isinstance(value, str):
+            if structured_identifier_kind(key):
+                return tokenize_structured_identifier(key, value)
             return redact_sensitive_identifiers(value, redact_adjacent_name=False)
         return value
 
