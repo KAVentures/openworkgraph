@@ -38,7 +38,10 @@ CUE_RE = re.compile(
     r"\b(reply\s+to|from|to|cc|bcc|sender|recipient|message|call|meeting\s+with|assigned\s+to|owner|contact)\s*[:\-]?\s+",
     re.IGNORECASE,
 )
-EMAIL_SELECT_RE = re.compile(r"\b(?:select|deselect)\s+(?P<name>[^,;<>|]{1,100})(?=\s*[,;]|$)", re.IGNORECASE)
+EMAIL_SELECT_RE = re.compile(
+    r"\b(?:select|deselect)(?:\s+(?:email|message))?(?:\s+from)?\s+(?P<name>[^,;<>|]{1,100})(?=\s*[,;]|$)",
+    re.IGNORECASE,
+)
 WORD_RE = re.compile(r"[^\W\d_][\w'’.-]*", re.UNICODE)
 
 GENERIC_LOCALPARTS = {
@@ -322,19 +325,12 @@ def _walk_strings(value: Any):
             yield from _walk_strings(item)
 
 
-def _value_has_email_context(value: Any) -> bool:
-    for text in _walk_strings(value):
-        folded = text.casefold()
-        if any(marker in folded for marker in EMAIL_CONTEXT_MARKERS):
-            return True
-    return False
-
-
-def _discover_aliases(value: Any, *, email_context: bool = False) -> dict[str, str]:
-    """Learn high-confidence person aliases from this presentation payload."""
+def _discover_aliases(value: Any) -> dict[str, str]:
+    """Learn high-confidence person aliases with source context scoped per item."""
     aliases: dict[str, str] = {}
     registry = _load_people_registry()
-    for text in _walk_strings(value):
+
+    def process_text(text: str, *, email_context: bool) -> None:
         for match in DISPLAY_EMAIL_RE.finditer(text):
             _prefix, name = _tail_name_candidate(match.group("name"))
             email = match.group("email").casefold()
@@ -373,9 +369,6 @@ def _discover_aliases(value: Any, *, email_context: bool = False) -> dict[str, s
                 aliases.setdefault(name.casefold(), token)
                 _remember_alias(name, token, registry)
 
-        # Gmail/Outlook checkbox accessibility labels commonly look like
-        # "Select Anna Svensson, Contract renewal". Treat only the sender-shaped
-        # prefix as a person and keep the subject text byte-for-byte visible.
         if email_context:
             for match in EMAIL_SELECT_RE.finditer(text):
                 name = _clean_name_candidate(match.group("name"))
@@ -383,6 +376,19 @@ def _discover_aliases(value: Any, *, email_context: bool = False) -> dict[str, s
                     token = _token("PERSON", name)
                     aliases.setdefault(name.casefold(), token)
                     _remember_alias(name, token, registry)
+
+    def visit(item: Any, *, inherited_email_context: bool = False) -> None:
+        if isinstance(item, dict):
+            email_context = inherited_email_context or _contains_email_context(item)
+            for child in item.values():
+                visit(child, inherited_email_context=email_context)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child, inherited_email_context=inherited_email_context)
+        elif isinstance(item, str):
+            process_text(item, email_context=inherited_email_context)
+
+    visit(value)
     return aliases
 
 
@@ -411,6 +417,8 @@ def _replace_known_people(text: str, registry: dict[str, str]) -> str:
         return text
     replacements: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
+    # Longest windows first. Only allow whitespace between words so punctuation
+    # and surrounding workflow text cannot be swallowed by a replacement.
     for size in (4, 3, 2, 1):
         for i in range(0, len(matches) - size + 1):
             start = matches[i].start()
@@ -530,9 +538,8 @@ def redact_for_display(value: Any) -> Any:
     Structural values (event IDs, timestamps, counts, durations, booleans) are
     preserved exactly. Only human-readable string values can be pseudonymized.
     """
-    global_email_context = _value_has_email_context(value)
     owner_aliases, owner_emails, owner_phones = _owner_identity()
-    aliases = _discover_aliases(value, email_context=global_email_context)
+    aliases = _discover_aliases(value)
     known_people = _load_people_registry()
 
     def transform(item: Any, *, inherited_email_context: bool = False, field_name: str = "") -> Any:
@@ -560,7 +567,7 @@ def redact_for_display(value: Any) -> Any:
                 owner_emails=owner_emails,
                 owner_phones=owner_phones,
                 known_people=known_people,
-                email_context=inherited_email_context or global_email_context,
+                email_context=inherited_email_context,
                 field_name=field_name,
             )
         return item
