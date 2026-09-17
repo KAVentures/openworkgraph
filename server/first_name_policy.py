@@ -36,8 +36,8 @@ PROTECTED_FIELDS = {
 }
 
 
-def install(presentation: Any) -> None:
-    """Install the v0.37 display policy on the presentation module."""
+def build_redactor(presentation: Any, *, persist_registry: bool = False):
+    """Build the first-name redactor without mutating module globals."""
 
     def load_registry() -> dict[str, set[str]]:
         try:
@@ -93,7 +93,7 @@ def install(presentation: Any) -> None:
             if token not in tokens:
                 tokens.add(token)
                 changed = True
-        if changed:
+        if changed and persist_registry:
             save_registry(registry)
 
     def registry_replacement(alias: str, registry: dict[str, set[str]]) -> str | None:
@@ -480,4 +480,14 @@ def install(presentation: Any) -> None:
 
         return transform(value)
 
-    presentation.redact_for_display = redact_for_display
+    return redact_for_display
+
+
+def install(presentation: Any) -> None:
+    """Backward-compatible installer; production uses privacy_pipeline explicitly."""
+    previous = presentation.redact_for_display
+    if getattr(previous, "_openworkgraph_first_name_policy", False):
+        return
+    redactor = build_redactor(presentation)
+    redactor._openworkgraph_first_name_policy = True  # type: ignore[attr-defined]
+    presentation.redact_for_display = redactor
