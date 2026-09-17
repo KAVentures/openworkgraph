@@ -8,8 +8,6 @@ def _presentation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
     importlib.reload(presentation)
-    from server.first_name_policy import install
-    install(presentation)
     monkeypatch.setattr(
         presentation,
         "_owner_identity",
