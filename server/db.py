@@ -249,13 +249,11 @@ def harden_existing_sensitive_identifiers() -> int:
 
 
 def table_revision(*, operational: bool = False) -> tuple[int, int]:
-    """Cheap cache revision: append-only row id plus count catches late queued events."""
+    """Cheap append-only cache revision; late queued events always receive a new id."""
     table = "normalized_events" if operational else "events"
     with connect() as conn:
-        row = conn.execute(
-            f"SELECT COALESCE(MAX(id), 0) AS max_id, COUNT(*) AS n FROM {table}"
-        ).fetchone()
-        return int(row["max_id"] or 0), int(row["n"] or 0)
+        row = conn.execute(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM {table}").fetchone()
+        return int(row["max_id"] or 0), 0
 
 
 def init_db() -> None:
