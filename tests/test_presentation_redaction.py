@@ -36,6 +36,22 @@ def test_redaction_masks_identifiers_without_losing_workflow_words(monkeypatch, 
     assert safe["duration_seconds"] == 12.5
 
 
+def test_display_name_is_masked_even_when_email_localpart_is_initials(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+
+    safe = presentation.redact_for_display({
+        "surface": "Gmail",
+        "window_title": "Contract renewal - Anna Svensson <a.s@acme.com> - Gmail",
+    })
+    assert "Anna Svensson" not in safe["window_title"]
+    assert "a.s@acme.com" not in safe["window_title"].lower()
+    assert "PERSON_" in safe["window_title"]
+    assert "EMAIL_" in safe["window_title"]
+    assert "Contract renewal" in safe["window_title"]
+
+
 def test_email_title_name_is_masked_even_without_email_address(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
@@ -130,14 +146,18 @@ def test_raw_database_keeps_rich_evidence_while_display_copy_is_masked(monkeypat
     assert stored["event_type"] == shown["event_type"] == "browser_click"
 
 
-def test_same_identifier_gets_stable_pseudonym(monkeypatch, tmp_path):
+def test_same_identifier_gets_stable_pseudonym_across_reload(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
     importlib.reload(presentation)
 
     first = presentation.redact_for_display({"label": "Send to anna.svensson@acme.com"})["label"]
-    second = presentation.redact_for_display({"label": "Reply to anna.svensson@acme.com"})["label"]
     first_token = next(part for part in first.split() if part.startswith("EMAIL_"))
+
+    # Simulate a process/module restart. The persisted installation-local key must
+    # reproduce the same visual pseudonym.
+    importlib.reload(presentation)
+    second = presentation.redact_for_display({"label": "Reply to anna.svensson@acme.com"})["label"]
     second_token = next(part for part in second.split() if part.startswith("EMAIL_"))
     assert first_token == second_token
 
