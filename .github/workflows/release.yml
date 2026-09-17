@@ -84,14 +84,16 @@ jobs:
           OpenWorkGraph is a local-first work-telemetry and organizational-context layer for AI.
 
           ### macOS tester
-          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The launcher installs its own private runtime; no manual Python setup is required.
+          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The macOS package now uses one self-contained launcher with its payload embedded inside it, matching the launcher pattern validated by testers. No manual Python setup is required.
 
           ### Windows tester
           Download **OpenWorkGraph-Windows.zip**, unzip it, then double-click **START_OPENWORKGRAPH.cmd**. The launcher installs its own private runtime; no manual Python setup is required.
 
-          For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened `browser_extension` folder as an unpacked extension.
+          For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
 
-          Dashboard/API/MCP/export presentation now pseudonymizes detected email addresses, phone numbers and best-effort person names without destructively rewriting the rich local evidence used for workflow inference. No external AI service is used for this redaction.
+          Dashboard/API/MCP/export presentation pseudonymizes detected identifiers only after workflow processing. The local user's detected/configured name is shown as **OWNER**; other high-confidence people use stable PERSON tokens. Gmail/Outlook composite checkbox labels preserve the subject/action while masking detected people. No external AI service is used for this redaction.
+
+          Raw local evidence, event counts, timing and workflow inference are not destructively rewritten by presentation masking.
 
           Windows also includes best-effort Microsoft UI Automation metadata for native controls without reading typed field values or password values.
 
