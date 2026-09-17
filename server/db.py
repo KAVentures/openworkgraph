@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from browser_privacy import harden_browser_event
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 
@@ -199,12 +200,9 @@ def _backfill_derived(conn: sqlite3.Connection) -> None:
 
 def init_db() -> None:
     with connect() as conn:
-        # Base indexes reference only legacy columns, so this succeeds for both a
-        # fresh database and an existing v31 database.
         conn.executescript(SCHEMA)
         _ensure_identity_columns(conn, "events")
         _ensure_identity_columns(conn, "normalized_events")
-        # Identity-dependent indexes are created only after old tables migrate.
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
@@ -214,6 +212,42 @@ def init_db() -> None:
             """
         )
         _backfill_derived(conn)
+
+
+def harden_existing_browser_events(config: dict[str, Any]) -> int:
+    """Sanitize previously stored browser rows and rebuild their derived twins.
+
+    This migration is idempotent and intentionally runs locally at startup. It
+    removes legacy query/fragment data such as metadata.frame_url and applies the
+    current browser exclusion policy to rows captured by older sensor versions.
+    """
+    changed = 0
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT * FROM events WHERE event_type LIKE 'browser_%' ORDER BY id ASC"
+        ).fetchall()
+        for row in existing:
+            raw = _row_to_event(row)
+            safe = harden_browser_event(raw, config)
+            if safe == raw:
+                continue
+            conn.execute(
+                """
+                UPDATE events SET app = ?, window_title = ?, screenshot_path = ?, metadata_json = ?
+                WHERE event_id = ?
+                """,
+                (
+                    safe.get("app"), safe.get("window_title"), safe.get("screenshot_path"),
+                    json.dumps(safe.get("metadata") or {}, ensure_ascii=False),
+                    safe.get("event_id"),
+                ),
+            )
+            conn.execute("DELETE FROM normalized_events WHERE event_id = ?", (safe.get("event_id"),))
+            conn.execute("DELETE FROM context_events WHERE event_id = ?", (safe.get("event_id"),))
+            _insert_event(conn, "normalized_events", normalize_event(safe))
+            _insert_context(conn, contextualize_event(safe))
+            changed += 1
+    return changed
 
 
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
