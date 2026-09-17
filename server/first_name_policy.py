@@ -61,11 +61,8 @@ def build_redactor(presentation: Any, *, persist_registry: bool = False):
 
     def save_registry(registry: dict[str, set[str]]) -> None:
         try:
-            path = presentation._people_registry_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({k: sorted(v) for k, v in registry.items() if v}, sort_keys=True),
-                encoding="utf-8",
+            presentation._save_people_registry_data(
+                {k: sorted(v) for k, v in registry.items() if v}
             )
         except Exception:
             pass
