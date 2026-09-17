@@ -265,8 +265,6 @@ def enrich_summary(
 
     return result
 
-    return result
-
 
 def install(analytics: Any) -> None:
     """Backward-compatible installer; production calls enrich_summary explicitly."""
