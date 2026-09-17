@@ -72,6 +72,11 @@ OpenWorkGraph is aimed at a different missing layer:
 
 > **What did people actually do, in what order, across which tools, with how much effort, and what normally happens in practice?**
 
+### MCP trust boundary
+
+Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before any context/process result crosses the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses command-like prompt-injection text (for example forged `SYSTEM:` / assistant roles, “ignore previous instructions”, tool-call commands or requests to reveal secrets), and adds an `_openworkgraph_security` trust annotation. The rich local evidence remains unchanged; this hardening applies only to the copy sent through MCP.
+
+
 A captured trace might look conceptually like:
 
 ```text
