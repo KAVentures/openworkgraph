@@ -171,6 +171,27 @@ def _unstated_sender_index(parts: list[str], *, has_action_prefix: bool) -> int 
     return 0 if has_time and has_trailer else None
 
 
+def _redact_email_title_segments(text: str, presentation: Any) -> str:
+    """Mask high-confidence full-name segments in a confirmed email title.
+
+    Handles titles like 'Question - Anna Svensson - Gmail' without reviving
+    generic title-case person guessing. Organization/product-shaped segments survive.
+    """
+    parts = re.split(r"(\s+(?:[-–—|·])\s+)", str(text or ""))
+    if len(parts) < 3:
+        return text
+    for index in range(0, len(parts), 2):
+        segment = parts[index].strip()
+        if not segment or any(marker in segment.casefold() for marker in ("gmail", "outlook")):
+            continue
+        words = presentation._name_words(presentation._clean_name_candidate(segment))
+        if len(words) < 2:
+            continue
+        replacement = _person_replacement(segment, presentation)
+        if replacement is not None:
+            parts[index] = parts[index].replace(segment, replacement)
+    return "".join(parts)
+
 def _redact_confirmed_mail_row(text: str, presentation: Any) -> str:
     raw = str(text or "")
     action = mail_row_policy._ACTION_PREFIX_RE.match(raw)
@@ -227,7 +248,8 @@ def wrap_redactor(previous: Any, presentation: Any):
                 and email_context
                 and field_name.casefold() in TITLEISH_FIELDS
             ):
-                return _redact_confirmed_mail_row(item, presentation)
+                row_safe = _redact_confirmed_mail_row(item, presentation)
+                return _redact_email_title_segments(row_safe, presentation)
             return item
 
         return transform(safe)
