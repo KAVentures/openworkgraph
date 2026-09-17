@@ -8,6 +8,8 @@ persistence behavior.  This module remains only for older imports.
 
 from typing import Any
 
+MIGRATION_KEY = "sensitive_identifiers_v40"
+
 
 def install(db: Any) -> None:
     # Intentionally no-op: db.insert_events/init_db enforce the policy directly.
