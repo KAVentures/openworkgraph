@@ -2,18 +2,28 @@ from __future__ import annotations
 
 """Presentation/context enrichment for desktop browser evidence.
 
-The desktop accessibility sensor knows that Google Chrome is focused and often has
-only a page title.  The browser semantic sensor independently knows the real URL
-and hostname.  This policy joins those two *summary representations* by timestamp
-so a Chrome desktop click on ``chatgpt.com`` can be shown as ChatGPT even when the
-page title itself does not contain the word "ChatGPT".
+The desktop accessibility sensor knows that Chrome/Edge/etc. is focused and often
+has only a page title. The browser semantic sensor independently knows the real
+hostname. This policy joins those summary representations so a desktop interaction
+on ``chatgpt.com`` is shown as ChatGPT even when the page title itself does not
+contain the product name.
 
-Raw events, stored window titles, task inference and effort accounting are not
-rewritten.
+v0.42 treats browser identity as short-lived *active context* rather than requiring
+another semantic browser event every few seconds. Long-lived carry-forward is only
+used inside the current observer run (or when explicit session identity is present)
+and, for legacy summary rows without session IDs, only while the desktop page title
+still matches the browser page title. This is display/summary-only: raw events,
+task inference, timing, and stored evidence are not rewritten.
 """
 
 import re
 from typing import Any
+
+
+ACTIVE_CONTEXT_MAX_AGE_SECONDS = 30 * 60
+LEGACY_CONTEXT_MAX_AGE_SECONDS = 8.0
+FUTURE_JITTER_SECONDS = 1.0
+SAME_ACTION_WINDOW_SECONDS = 2.5
 
 
 def _action_key(value: Any) -> str:
@@ -22,8 +32,6 @@ def _action_key(value: Any) -> str:
 
 def _clean_page_title(value: str) -> str:
     title = str(value or "").strip()
-    # Browser-extension events already carry document.title, but keep a fallback
-    # cleaner for older events or desktop titles that include the browser suffix.
     title = re.sub(
         r"\s+[\-–—]\s+(Google Chrome|Chrome|Microsoft Edge|Edge|Firefox|Safari|Brave|Opera|Vivaldi)(?:\s+[\-–—].*)?$",
         "",
@@ -33,8 +41,21 @@ def _clean_page_title(value: str) -> str:
     return title
 
 
+def _titles_match(desktop_title: str, browser_title: str) -> bool:
+    desktop = re.sub(r"\s+", " ", _clean_page_title(desktop_title)).strip().casefold()
+    browser = re.sub(r"\s+", " ", _clean_page_title(browser_title)).strip().casefold()
+    if not desktop or not browser:
+        return False
+    if desktop == browser:
+        return True
+    # Accessibility APIs occasionally append profile/tenant text. Require a
+    # substantial shared title rather than accepting arbitrary short substrings.
+    shorter, longer = sorted((desktop, browser), key=len)
+    return len(shorter) >= 12 and shorter in longer
+
+
 def install(analytics: Any) -> None:
-    """Wrap ``analytics.summary`` with conservative browser-context joining."""
+    """Wrap ``analytics.summary`` with conservative active-browser attribution."""
     previous = analytics.summary
     if getattr(previous, "_openworkgraph_browser_context_policy", False):
         return
@@ -46,7 +67,7 @@ def install(analytics: Any) -> None:
             return result
 
         candidates: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str, str, str, str]] = set()
 
         def add_candidate(item: Any) -> None:
             if not isinstance(item, dict):
@@ -55,7 +76,9 @@ def install(analytics: Any) -> None:
             ts = analytics._parse_ts(item.get("observed_at"))
             if not host or ts is None:
                 return
+            session_id = str(item.get("session_id") or "")
             key = (
+                session_id,
                 str(item.get("observed_at") or ""),
                 host,
                 str(item.get("pathname") or ""),
@@ -66,6 +89,7 @@ def install(analytics: Any) -> None:
             seen.add(key)
             candidates.append({
                 "ts": float(ts),
+                "session_id": session_id,
                 "hostname": host,
                 "pathname": str(item.get("pathname") or ""),
                 "window_title": str(item.get("window_title") or ""),
@@ -82,33 +106,53 @@ def install(analytics: Any) -> None:
             return result
         candidates.sort(key=lambda item: item["ts"])
 
-        def best_candidate(item: dict[str, Any]) -> dict[str, Any] | None:
+        def best_candidate(item: dict[str, Any]) -> tuple[dict[str, Any] | None, float | None, str]:
             ts = analytics._parse_ts(item.get("observed_at"))
             if ts is None:
-                return None
+                return None, None, "none"
             ts = float(ts)
             action = _action_key(item.get("action"))
+            session_id = str(item.get("session_id") or "")
 
-            # Cross-sensor reports of the same click/change are normally nearly
-            # simultaneous and are the strongest possible join signal.
+            if session_id:
+                pool = [candidate for candidate in candidates if candidate["session_id"] == session_id]
+            else:
+                pool = candidates
+            if not pool:
+                return None, None, "none"
+
             same_action = [
                 candidate
-                for candidate in candidates
-                if candidate["action"] == action and abs(candidate["ts"] - ts) <= 2.5
+                for candidate in pool
+                if candidate["action"] == action and abs(candidate["ts"] - ts) <= SAME_ACTION_WINDOW_SECONDS
             ]
             if same_action:
-                return min(same_action, key=lambda candidate: abs(candidate["ts"] - ts))
+                candidate = min(same_action, key=lambda candidate: abs(candidate["ts"] - ts))
+                return candidate, abs(candidate["ts"] - ts), "same_action"
 
-            # Otherwise use recent active browser context, mirroring the existing
-            # effort-surface logic.  A short future allowance handles sensor-order
-            # jitter without letting a later navigation relabel an old desktop row.
-            prior = [candidate for candidate in candidates if 0 <= ts - candidate["ts"] <= 8.0]
+            prior = [candidate for candidate in pool if candidate["ts"] <= ts]
             if prior:
-                return max(prior, key=lambda candidate: candidate["ts"])
-            future = [candidate for candidate in candidates if 0 <= candidate["ts"] - ts <= 1.0]
+                candidate = max(prior, key=lambda candidate: candidate["ts"])
+                age = ts - candidate["ts"]
+                explicit_same_session = bool(session_id and candidate["session_id"] == session_id)
+                current_run_title_match = bool(
+                    since is not None
+                    and _titles_match(str(item.get("window_title") or ""), candidate["window_title"])
+                )
+                if (explicit_same_session or current_run_title_match) and age <= ACTIVE_CONTEXT_MAX_AGE_SECONDS:
+                    reason = "active_session" if explicit_same_session else "active_run_title_match"
+                    return candidate, age, reason
+                if age <= LEGACY_CONTEXT_MAX_AGE_SECONDS:
+                    return candidate, age, "legacy_recent"
+
+            future = [
+                candidate for candidate in pool
+                if 0 <= candidate["ts"] - ts <= FUTURE_JITTER_SECONDS
+            ]
             if future:
-                return min(future, key=lambda candidate: candidate["ts"])
-            return None
+                candidate = min(future, key=lambda candidate: candidate["ts"])
+                return candidate, candidate["ts"] - ts, "future_jitter"
+            return None, None, "none"
 
         for item in evidence:
             if not isinstance(item, dict) or item.get("source") != "desktop":
@@ -116,7 +160,7 @@ def install(analytics: Any) -> None:
             container_app = str(item.get("app") or "")
             if not analytics.is_browser_app(container_app):
                 continue
-            candidate = best_candidate(item)
+            candidate, context_age, join_reason = best_candidate(item)
             if not candidate:
                 continue
 
@@ -127,17 +171,18 @@ def install(analytics: Any) -> None:
             if not surface or surface == "Browser":
                 continue
 
-            # Add explicit semantic fields for API/export consumers.
             item["work_surface"] = surface
             item["container_app"] = container_app
             item["browser_hostname"] = hostname
             item["browser_pathname"] = pathname
             item["page_title"] = browser_title
+            item["browser_context_join"] = join_reason
+            if context_age is not None:
+                item["browser_context_age_seconds"] = round(float(context_age), 3)
 
-            # Backward-compatible display fields for the current dashboard.  The
-            # first line becomes the actual tool (ChatGPT, Gmail, Supabase, ...),
-            # while the smaller second line retains page title + hostname + browser.
-            # These are summary-only copies; the event database is untouched.
+            # Backward-compatible dashboard fields. `source` deliberately remains
+            # desktop because that describes the sensor that observed the action;
+            # `app`/work_surface describe what the user was actually working in.
             item["app"] = surface
             item["hostname"] = ""
             item["pathname"] = ""
