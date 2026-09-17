@@ -35,7 +35,7 @@ PHONE_CANDIDATE_RE = re.compile(
     r"(?<!\w)(?:\+\d[\d\s().-]{6,}\d|\(\d{2,4}\)[\d\s.-]{5,}\d|\d{2,4}[\s]\d{2,4}(?:[\s-]\d{2,4}){1,3})(?!\w)"
 )
 CUE_RE = re.compile(
-    r"\b(reply\s+to|from|to|cc|bcc|sender|recipient|message|call|meeting\s+with|assigned\s+to|owner|contact)\s*[:\-]?\s+",
+    r"\b(reply\s+to|from|to|cc|bcc|sender|recipient|message|call|meeting\s+with|assigned\s+to|owner|contact|participant|attendee)\s*[:\-]?\s+",
     re.IGNORECASE,
 )
 EMAIL_SELECT_RE = re.compile(
@@ -43,6 +43,7 @@ EMAIL_SELECT_RE = re.compile(
     re.IGNORECASE,
 )
 WORD_RE = re.compile(r"[^\W\d_][\w'’.-]*", re.UNICODE)
+TITLE_WORD_RE = re.compile(r"(?<![\w_])([A-ZÅÄÖÉÜ][a-zåäöéüàáâãèêëíîïóôõúûüçñ'’.-]{1,})(?![\w_])", re.UNICODE)
 
 GENERIC_LOCALPARTS = {
     "admin", "billing", "careers", "contact", "hello", "help", "hr", "info",
@@ -50,23 +51,37 @@ GENERIC_LOCALPARTS = {
     "sales", "security", "service", "support", "team", "webmaster",
 }
 
-# Common work-resource words that should not become person tokens merely because
-# they are title-cased. This is intentionally conservative: presentation masking
-# should never destroy the workflow semantics the user is trying to inspect.
+# Work/resource vocabulary that should not be mistaken for a human name merely
+# because it is title-cased. This intentionally errs toward preserving semantics.
 NON_NAME_WORDS = {
-    "account", "approval", "approve", "browser", "case", "chatgpt", "chrome",
-    "client", "compose", "contract", "customer", "dashboard", "deploy", "document",
-    "email", "excel", "finance", "form", "forward", "github", "gmail", "google",
-    "invoice", "issue", "mail", "marketing", "meeting", "message", "microsoft",
-    "new", "order", "outlook", "payment", "pricing", "private", "project",
-    "question", "renewal", "reply", "request", "review", "sales", "salesforce",
-    "search", "select", "send", "sheet", "sheets", "slack", "subject", "support",
-    "task", "teams", "ticket", "update", "workflow", "workspace",
+    "account", "action", "analysis", "annual", "approval", "approve", "archive",
+    "browser", "budget", "calendar", "case", "chatgpt", "chrome", "client",
+    "compose", "contract", "customer", "dashboard", "demo", "deploy", "design",
+    "document", "draft", "email", "estimate", "excel", "final", "finance",
+    "follow", "form", "forward", "forecast", "github", "gmail", "google",
+    "invoice", "issue", "item", "items", "launch", "mail", "marketing",
+    "meeting", "message", "microsoft", "new", "notes", "notification", "offer",
+    "opportunity", "order", "outlook", "payment", "plan", "pricing", "private",
+    "product", "production", "project", "proposal", "purchase", "quarterly",
+    "question", "quote", "release", "renewal", "reply", "report", "repository",
+    "request", "research", "review", "roadmap", "sales", "salesforce", "schedule",
+    "search", "select", "send", "sheet", "sheets", "slack", "staging", "status",
+    "strategy", "subject", "summary", "support", "task", "teams", "test", "testing",
+    "ticket", "update", "weekly", "workflow", "workspace",
 }
 
 EMAIL_CONTEXT_MARKERS = (
     "gmail", "mail.google.com", "outlook", "outlook.office.com",
     "outlook.office365.com", "outlook.live.com",
+)
+TITLEISH_FIELDS = {
+    "label", "title", "window_title", "resource_title", "context_text", "subject",
+    "suggested_label", "label_evidence", "name", "description",
+}
+NAME_CONTEXT_MARKERS = (
+    "gmail", "outlook", "mail.google.com", "teams", "slack", "calendar", "meeting",
+    "salesforce", "hubspot", "contact", "customer", "document", "docs.google.com",
+    "drive.google.com", "sharepoint", "notion",
 )
 
 _TOKEN_CACHE: dict[tuple[str, str], str] = {}
@@ -163,8 +178,6 @@ def _remember_alias(alias: str, token: str, registry: dict[str, str]) -> None:
         return
     variants = [cleaned]
     words = _name_words(cleaned)
-    # Remember a first-name alias too when it is distinctive enough. Only a
-    # keyed hash is persisted; the literal name is not stored in this registry.
     if len(words) > 1 and len(words[0]) >= 3 and words[0].casefold() not in NON_NAME_WORDS:
         variants.append(words[0])
     changed = False
@@ -199,7 +212,6 @@ def _looks_like_person_name(value: str, *, allow_single: bool = False) -> bool:
 
 
 def _tail_name_candidate(value: str) -> tuple[str, str]:
-    """Return (prefix, plausible-name-tail) from a mixed header string."""
     raw = str(value or "")
     pieces = re.split(r"(\s+(?:[-–—|·])\s+|\b(?:from|to|cc|bcc|sender|recipient)\s*:\s*)", raw, flags=re.I)
     for i in range(len(pieces) - 1, -1, -1):
@@ -230,13 +242,12 @@ def _windows_display_name() -> str:
     try:
         import ctypes
         from ctypes import wintypes
-
         secur32 = ctypes.WinDLL("secur32")
         get_name = secur32.GetUserNameExW
         get_name.argtypes = [ctypes.c_int, wintypes.LPWSTR, ctypes.POINTER(wintypes.ULONG)]
         get_name.restype = wintypes.BOOL
         size = wintypes.ULONG(0)
-        get_name(3, None, ctypes.byref(size))  # NameDisplay
+        get_name(3, None, ctypes.byref(size))
         if not size.value:
             return ""
         buf = ctypes.create_unicode_buffer(size.value)
@@ -252,19 +263,12 @@ def _posix_display_name() -> str:
         return ""
     try:
         import pwd
-
         return str(pwd.getpwuid(os.getuid()).pw_gecos or "").split(",", 1)[0].strip()
     except Exception:
         return ""
 
 
 def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
-    """Return local owner aliases/emails/phones for presentation-only masking.
-
-    Explicit config values are preferred. OS account display name and username are
-    added as convenience aliases so a normal standalone install can show the local
-    user as OWNER without an onboarding form. Nothing here changes captured data.
-    """
     cache_key = str((ROOT / "config.json").resolve()) + "|" + str(_data_dir().resolve())
     if cache_key in _OWNER_CACHE:
         return _OWNER_CACHE[cache_key]
@@ -292,19 +296,17 @@ def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
         if len(words) > 1 and len(words[0]) >= 3 and words[0].casefold() not in NON_NAME_WORDS:
             aliases.setdefault(words[0].casefold(), "OWNER")
 
-    emails: set[str] = set()
-    configured_emails = cfg.get("owner_emails", [])
-    if isinstance(configured_emails, str):
-        configured_emails = [configured_emails]
-    if isinstance(configured_emails, list):
-        emails = {str(v).strip().casefold() for v in configured_emails if "@" in str(v)}
+    emails_cfg = cfg.get("owner_emails", [])
+    if isinstance(emails_cfg, str):
+        emails_cfg = [emails_cfg]
+    emails = {str(v).strip().casefold() for v in emails_cfg if "@" in str(v)} if isinstance(emails_cfg, list) else set()
 
     phones: set[str] = set()
-    configured_phones = cfg.get("owner_phones", [])
-    if isinstance(configured_phones, str):
-        configured_phones = [configured_phones]
-    if isinstance(configured_phones, list):
-        for value in configured_phones:
+    phones_cfg = cfg.get("owner_phones", [])
+    if isinstance(phones_cfg, str):
+        phones_cfg = [phones_cfg]
+    if isinstance(phones_cfg, list):
+        for value in phones_cfg:
             digits = re.sub(r"\D", "", str(value))
             if 7 <= len(digits) <= 15:
                 phones.add(digits)
@@ -314,19 +316,29 @@ def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
     return result
 
 
-def _walk_strings(value: Any):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _walk_strings(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _walk_strings(item)
+def _contains_email_context(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key in ("surface", "app", "hostname", "window_title", "resource_title", "context_text"):
+            text = str(value.get(key) or "").casefold()
+            if any(marker in text for marker in EMAIL_CONTEXT_MARKERS):
+                return True
+    return False
+
+
+def _contains_name_sensitive_context(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if _contains_email_context(value):
+        return True
+    for key in ("surface", "app", "hostname", "window_title", "resource_title", "context_text", "event_type"):
+        text = str(value.get(key) or "").casefold()
+        if any(marker in text for marker in NAME_CONTEXT_MARKERS):
+            return True
+    return False
 
 
 def _discover_aliases(value: Any) -> dict[str, str]:
-    """Learn high-confidence person aliases with source context scoped per item."""
+    """Learn only high-confidence people from structured/cued evidence."""
     aliases: dict[str, str] = {}
     registry = _load_people_registry()
 
@@ -392,33 +404,20 @@ def _discover_aliases(value: Any) -> dict[str, str]:
     return aliases
 
 
-def _contains_email_context(value: Any) -> bool:
-    if isinstance(value, dict):
-        for key in ("surface", "app", "hostname", "window_title", "resource_title", "context_text"):
-            text = str(value.get(key) or "").casefold()
-            if any(marker in text for marker in EMAIL_CONTEXT_MARKERS):
-                return True
-    return False
-
-
 def _replace_aliases(text: str, aliases: dict[str, str]) -> str:
     out = text
     for alias, replacement in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
-        if not alias:
-            continue
-        out = re.sub(rf"(?<!\w){re.escape(alias)}(?!\w)", replacement, out, flags=re.IGNORECASE)
+        if alias:
+            out = re.sub(rf"(?<!\w){re.escape(alias)}(?!\w)", replacement, out, flags=re.IGNORECASE)
     return out
 
 
 def _replace_known_people(text: str, registry: dict[str, str]) -> str:
-    """Replace previously learned names without persisting their literal text."""
     matches = list(WORD_RE.finditer(text))
     if not matches or not registry:
         return text
     replacements: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
-    # Longest windows first. Only allow whitespace between words so punctuation
-    # and surrounding workflow text cannot be swallowed by a replacement.
     for size in (4, 3, 2, 1):
         for i in range(0, len(matches) - size + 1):
             start = matches[i].start()
@@ -439,6 +438,53 @@ def _replace_known_people(text: str, registry: dict[str, str]) -> str:
     return out
 
 
+def _embedded_name_spans(text: str) -> list[tuple[int, int, str]]:
+    """Find conservative 2-4 word title-case person candidates inside rich text.
+
+    This is presentation-only and is used only in name-sensitive contexts. A span
+    is rejected if any word is common workflow/resource vocabulary.
+    """
+    words = list(TITLE_WORD_RE.finditer(text))
+    spans: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for size in (4, 3, 2):
+        for i in range(0, len(words) - size + 1):
+            start = words[i].start()
+            end = words[i + size - 1].end()
+            if any(not (end <= a or start >= b) for a, b in occupied):
+                continue
+            gaps = [text[words[j].end():words[j + 1].start()] for j in range(i, i + size - 1)]
+            if any(not gap.isspace() for gap in gaps):
+                continue
+            candidate = text[start:end]
+            parts = _name_words(candidate)
+            if any(p.casefold() in NON_NAME_WORDS for p in parts):
+                continue
+            if not _looks_like_person_name(candidate):
+                continue
+            if re.search(r"\b(?:OWNER|PERSON|EMAIL|PHONE)_", candidate):
+                continue
+            spans.append((start, end, candidate))
+            occupied.append((start, end))
+    return spans
+
+
+def _redact_embedded_names(text: str, *, owner_aliases: dict[str, str], registry: dict[str, str]) -> str:
+    """Mask likely person spans while leaving surrounding subject/title text intact."""
+    replacements: list[tuple[int, int, str]] = []
+    for start, end, candidate in _embedded_name_spans(text):
+        owner = owner_aliases.get(candidate.casefold())
+        if owner:
+            replacement = "OWNER"
+        else:
+            replacement = registry.get(_alias_hash(candidate)) or _token("PERSON", candidate)
+        replacements.append((start, end, replacement))
+    out = text
+    for start, end, replacement in sorted(replacements, reverse=True):
+        out = out[:start] + replacement + out[end:]
+    return out
+
+
 def _redact_display_email(match: re.Match[str], *, owner_aliases: dict[str, str], owner_emails: set[str]) -> str:
     raw_name = match.group("name")
     email = match.group("email").casefold()
@@ -451,7 +497,6 @@ def _redact_display_email(match: re.Match[str], *, owner_aliases: dict[str, str]
 
 
 def _redact_email_title_segments(text: str, *, owner_aliases: dict[str, str]) -> str:
-    """Best-effort masking for person-only segments in Gmail/Outlook titles."""
     colon = re.match(r"^(?P<head>[^:]{2,80})(?P<sep>:\s+)(?P<rest>.+)$", text)
     if colon and _looks_like_person_name(colon.group("head")):
         head = colon.group("head")
@@ -480,9 +525,9 @@ def redact_text(
     owner_phones: set[str] | None = None,
     known_people: dict[str, str] | None = None,
     email_context: bool = False,
+    name_sensitive_context: bool = False,
     field_name: str = "",
 ) -> str:
-    """Return a display-safe string while preserving non-PII semantics."""
     if not text:
         return text
     if re.fullmatch(r"(?:OWNER|OWNER_EMAIL|OWNER_PHONE|PERSON_[0-9A-F]{6}|EMAIL_[0-9A-F]{6}|PHONE_[0-9A-F]{6})", text):
@@ -495,8 +540,6 @@ def redact_text(
     known_people = known_people or {}
     out = text
 
-    # Handle display-name + email first so replacing a short owner alias cannot
-    # corrupt the email address before the email parser sees it.
     out = DISPLAY_EMAIL_RE.sub(
         lambda m: _redact_display_email(m, owner_aliases=owner_aliases, owner_emails=owner_emails),
         out,
@@ -516,9 +559,6 @@ def redact_text(
         return "OWNER_PHONE" if digits in owner_phones else _token("PHONE", digits)
 
     out = PHONE_CANDIDATE_RE.sub(phone_replacement, out)
-
-    # OWNER wins over generic PERSON aliases and is safe to apply globally because
-    # these aliases come from explicit config or the local OS account identity.
     out = _replace_aliases(out, owner_aliases)
     out = _replace_aliases(out, aliases)
     out = _replace_known_people(out, known_people)
@@ -528,6 +568,13 @@ def redact_text(
 
     if email_context:
         out = _redact_email_title_segments(out, owner_aliases=owner_aliases)
+
+    # v0.36: names embedded *inside* subjects/titles/observed-action labels were
+    # previously missed because the whole string was treated as free text. In a
+    # name-sensitive context, redact only conservative title-case person spans.
+    if (email_context or name_sensitive_context) and field_name.casefold() in TITLEISH_FIELDS:
+        out = _redact_embedded_names(out, owner_aliases=owner_aliases, registry=known_people)
+
     return out
 
 
@@ -542,17 +589,45 @@ def redact_for_display(value: Any) -> Any:
     aliases = _discover_aliases(value)
     known_people = _load_people_registry()
 
-    def transform(item: Any, *, inherited_email_context: bool = False, field_name: str = "") -> Any:
+    def transform(
+        item: Any,
+        *,
+        inherited_email_context: bool = False,
+        inherited_name_sensitive_context: bool = False,
+        field_name: str = "",
+    ) -> Any:
         if isinstance(item, dict):
             email_context = inherited_email_context or _contains_email_context(item)
+            name_sensitive_context = inherited_name_sensitive_context or _contains_name_sensitive_context(item)
             return {
-                key: transform(val, inherited_email_context=email_context, field_name=str(key))
+                key: transform(
+                    val,
+                    inherited_email_context=email_context,
+                    inherited_name_sensitive_context=name_sensitive_context,
+                    field_name=str(key),
+                )
                 for key, val in item.items()
             }
         if isinstance(item, list):
-            return [transform(v, inherited_email_context=inherited_email_context, field_name=field_name) for v in item]
+            return [
+                transform(
+                    v,
+                    inherited_email_context=inherited_email_context,
+                    inherited_name_sensitive_context=inherited_name_sensitive_context,
+                    field_name=field_name,
+                )
+                for v in item
+            ]
         if isinstance(item, tuple):
-            return tuple(transform(v, inherited_email_context=inherited_email_context, field_name=field_name) for v in item)
+            return tuple(
+                transform(
+                    v,
+                    inherited_email_context=inherited_email_context,
+                    inherited_name_sensitive_context=inherited_name_sensitive_context,
+                    field_name=field_name,
+                )
+                for v in item
+            )
         if isinstance(item, str):
             if field_name in {
                 "event_id", "session_id", "device_id", "sensor_id", "organization_id",
@@ -568,6 +643,7 @@ def redact_for_display(value: Any) -> Any:
                 owner_phones=owner_phones,
                 known_people=known_people,
                 email_context=inherited_email_context,
+                name_sensitive_context=inherited_name_sensitive_context,
                 field_name=field_name,
             )
         return item
