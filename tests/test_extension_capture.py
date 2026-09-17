@@ -47,7 +47,7 @@ def test_browser_delivery_is_durable_idempotent_and_sanitized():
     assert "flushBrowserQueue" in background
     assert "sanitizePendingBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.8.0"
+    assert manifest["version"] == "1.8.1"
 
 
 def test_queued_browser_event_keeps_capture_time_work_identity():

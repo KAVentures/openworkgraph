@@ -13,11 +13,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from browser_privacy import harden_browser_event
+from browser_privacy import harden_browser_event, sanitize_browser_page
 from browser_utils import is_browser_app
 from .analytics import (
     search_events, search_operational_events, summary, timeline,
     operational_timeline, semantic_activity, candidate_tasks,
+    _friendly_browser_surface,
 )
 from .context import search_context, recent_context, context_timeline
 from .db import init_db, insert_events, harden_existing_browser_events
@@ -173,6 +174,8 @@ class BrowserHeartbeat(BaseModel):
     sensor_id: str = ""
     sensor_version: str = ""
     browser_session_id: str = ""
+    work_session_id: str = ""
+    page: BrowserPage = Field(default_factory=BrowserPage)
 
 
 @app.on_event("startup")
@@ -274,11 +277,20 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
     safe_meta = safe_event.get("metadata") or {}
     safe_page = safe_meta.get("page") if isinstance(safe_meta.get("page"), dict) else {}
     BROWSER_STATUS.clear()
+    browser_surface = _friendly_browser_surface(
+        str(safe_page.get("hostname") or ""),
+        str(safe_page.get("pathname") or ""),
+        str(safe_page.get("title") or ""),
+    ) if safe_page.get("hostname") else ""
     BROWSER_STATUS.update({
         "observed_at": event.observed_at,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "status": "connected",
         "hostname": safe_page.get("hostname"),
+        "pathname": safe_page.get("pathname"),
+        "page_title": safe_page.get("title"),
+        "work_surface": browser_surface,
+        "work_session_id": ctx["session_id"],
         "last_action": event.action,
         "sensor_id": ctx["sensor_id"],
         "sensor_version": event.sensor_version,
@@ -291,14 +303,72 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
 
 @app.post("/v1/browser-heartbeat")
 def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
+    previous = dict(BROWSER_STATUS)
+    safe_page = sanitize_browser_page(status.page.model_dump(exclude_none=True))
     BROWSER_STATUS.clear()
-    BROWSER_STATUS.update(status.model_dump())
+    BROWSER_STATUS.update(status.model_dump(exclude={"page"}))
     BROWSER_STATUS["received_at"] = datetime.now(timezone.utc).isoformat()
     BROWSER_STATUS["expected_sensor_version"] = EXPECTED_BROWSER_SENSOR_VERSION
     BROWSER_STATUS["version_ok"] = bool(
         status.sensor_version and status.sensor_version == EXPECTED_BROWSER_SENSOR_VERSION
     )
+    if safe_page.get("hostname"):
+        BROWSER_STATUS["hostname"] = safe_page.get("hostname")
+        BROWSER_STATUS["pathname"] = safe_page.get("pathname")
+        BROWSER_STATUS["page_title"] = safe_page.get("title")
+        BROWSER_STATUS["work_surface"] = _friendly_browser_surface(
+            str(safe_page.get("hostname") or ""),
+            str(safe_page.get("pathname") or ""),
+            str(safe_page.get("title") or ""),
+        )
+    elif previous.get("browser_session_id") == status.browser_session_id:
+        # A transient tabs.query failure must not erase a still-valid active page.
+        for key in ("hostname", "pathname", "page_title", "work_surface"):
+            if previous.get(key):
+                BROWSER_STATUS[key] = previous[key]
     return {"status": "ok"}
+
+
+def _parse_observed_at(value: Any) -> float | None:
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _apply_live_browser_surface(result: dict[str, Any]) -> None:
+    """Fill only unresolved *live* desktop browser rows from confirmed active-tab state.
+
+    The heartbeat/browser-event timestamp is a lower bound: rows older than the
+    current active-tab confirmation are left untouched, so switching tabs cannot
+    retroactively relabel earlier desktop evidence.
+    """
+    hostname = str(BROWSER_STATUS.get("hostname") or "").strip()
+    surface = str(BROWSER_STATUS.get("work_surface") or "").strip()
+    confirmed_at = _parse_observed_at(BROWSER_STATUS.get("observed_at"))
+    if not hostname or not surface or confirmed_at is None:
+        return
+
+    status_session = str(BROWSER_STATUS.get("work_session_id") or "")
+    pathname = str(BROWSER_STATUS.get("pathname") or "")
+    page_title = str(BROWSER_STATUS.get("page_title") or "")
+    for item in result.get("recent_evidence") or []:
+        if not isinstance(item, dict) or item.get("source") != "desktop" or item.get("work_surface"):
+            continue
+        if not is_browser_app(str(item.get("app") or "")):
+            continue
+        item_session = str(item.get("session_id") or "")
+        if status_session and item_session and item_session != status_session:
+            continue
+        item_at = _parse_observed_at(item.get("observed_at"))
+        if item_at is None or item_at < confirmed_at - 1.0:
+            continue
+        item["work_surface"] = surface
+        item["container_app"] = str(item.get("app") or "")
+        item["browser_hostname"] = hostname
+        item["browser_pathname"] = pathname
+        item["page_title"] = page_title
+        item["browser_context_join"] = "live_active_tab"
 
 
 @app.get("/v1/summary")
@@ -312,6 +382,8 @@ def get_summary(limit: int = 10000, scope: str = "all"):
     result["collector"] = dict(COLLECTOR_STATUS) if COLLECTOR_STATUS else None
     result["browser_sensor"] = dict(BROWSER_STATUS) if BROWSER_STATUS else None
     result["expected_browser_sensor_version"] = EXPECTED_BROWSER_SENSOR_VERSION
+    if scope == "current":
+        _apply_live_browser_surface(result)
     return redact_for_display(result)
 
 
