@@ -22,6 +22,9 @@ HOST_FIELDS = {"hostname", "host"}
 PATIENT_NAME_FIELDS = {
     "patient", "patient_name", "patientname", "patientnamn", "patient_display_name",
 }
+SINGLE_PERSON_ROLE_FIELDS = {
+    "sender", "recipient", "contact", "participant", "attendee", "assignee", "assigned_to",
+}
 
 _WORD = r"[A-ZÅÄÖÉÜ][A-Za-zÅÄÖåäöÉéÜüÀ-ÖØ-öø-ÿ'’.-]*"
 _PATIENT_LABEL_RE = re.compile(
@@ -99,9 +102,9 @@ def install(presentation: Any) -> None:
     presentation._redact_email_title_segments = lambda text, *, owner_aliases: text
     presentation.CUE_RE = _PATIENT_CUE_RE
 
-    # Generic sender/contact/display-name fields can denote organizations. Only
-    # explicitly person/patient fields are treated as inherently person-valued.
-    from . import first_name_policy
+    # Generic multi-word sender/contact/display-name fields can denote
+    # organizations. Explicit person/patient fields remain inherently person-valued.
+    from . import first_name_policy, mail_row_policy
     first_name_policy.PERSON_FIELDS = {
         "person", "patient", "patient_name", "patientname", "patientnamn",
         "patient_display_name",
@@ -127,6 +130,20 @@ def install(presentation: Any) -> None:
             if out.casefold() in owner_aliases:
                 return "OWNER"
             return presentation._token("PERSON", out)
+
+        # A one-word value in a strongly person-oriented role is enough to hide
+        # the literal name, but not enough to claim a stable identity. Multi-word
+        # values remain available unless stronger evidence identifies them.
+        if low in SINGLE_PERSON_ROLE_FIELDS:
+            cleaned = presentation._clean_name_candidate(out)
+            words = presentation._name_words(cleaned)
+            if (
+                len(words) == 1
+                and presentation._looks_like_person_name(cleaned, allow_single=True)
+                and not mail_row_policy._looks_organization_like(cleaned, presentation)
+            ):
+                owner_aliases, _emails, _phones = presentation._owner_identity()
+                return "OWNER" if cleaned.casefold() in owner_aliases else "PERSON"
         return out
 
     def redact_for_display(value: Any) -> Any:
