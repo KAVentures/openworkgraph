@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def _analytics():
     from server import analytics
@@ -58,12 +60,18 @@ def test_chatgpt_context_persists_during_long_current_run_dwell(monkeypatch):
     out = analytics.summary(since="2026-09-17T18:59:00+00:00")
     desktop = next(item for item in out["recent_evidence"] if item["source"] == "desktop")
 
-    assert desktop["app"] == "ChatGPT"
+    assert desktop["app"] == "Google Chrome"
     assert desktop["work_surface"] == "ChatGPT"
     assert desktop["browser_hostname"] == "chatgpt.com"
     assert desktop["container_app"] == "Google Chrome"
     assert desktop["browser_context_join"] == "active_run_title_match"
     assert desktop["browser_context_age_seconds"] == 300.0
+
+
+def test_dashboard_uses_resolved_surface_instead_of_desktop_suffix():
+    html = (Path(__file__).parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert "const src=x.work_surface||(x.source==='browser'?'browser':'desktop');" in html
+    assert "${esc(page)} · ${esc(src)}" in html
 
 
 def test_long_lived_context_does_not_relabel_different_chrome_tab(monkeypatch):
