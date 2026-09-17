@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+"""Explicit presentation privacy pipeline.
+
+Production code imports this module directly.  The individual policy modules remain
+small, testable transforms; they no longer depend on import order or mutate each
+other's module globals.
+"""
+
+from typing import Any
+
+from . import presentation as _presentation
+from . import first_name_policy, mail_row_policy, typed_privacy_policy, mail_subject_policy
+
+
+class _PolicyView:
+    """Read-through view with the v0.40 conservative person-context overrides."""
+
+    CUE_RE = typed_privacy_policy._PATIENT_CUE_RE
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_presentation, name)
+
+    def _contains_name_sensitive_context(self, _value: Any) -> bool:
+        return False
+
+    def _embedded_name_spans(self, _text: str) -> list[tuple[int, int, str]]:
+        return []
+
+    def _redact_email_title_segments(self, text: str, *, owner_aliases: dict[str, str]) -> str:
+        return text
+
+
+class _IdentityLearningView(_PolicyView):
+    # Ingest-time learning can use explicit person cues such as Reply to / From /
+    # Meeting with. Display-time broad title guessing remains disabled.
+    CUE_RE = _presentation.CUE_RE
+
+
+_VIEW = _PolicyView()
+_LEARNING_VIEW = _IdentityLearningView()
+
+# Read-only display pipeline. It can use aliases already learned on write paths,
+# but never persists new registry state while serving a GET.
+_redactor = first_name_policy.build_redactor(_VIEW, persist_registry=False)
+_redactor = mail_row_policy.wrap_redactor(_redactor, _VIEW)
+_redactor = typed_privacy_policy.wrap_redactor(_redactor, _VIEW)
+_redactor = mail_subject_policy.wrap_redactor(_redactor, _VIEW)
+
+# Ingest-time learner persists only hashed aliases/tokens from strong evidence.
+_identity_learner = first_name_policy.build_redactor(_LEARNING_VIEW, persist_registry=True)
+
+
+def initialize_privacy_state() -> None:
+    """Create/load installation-local privacy state during startup, never on GET."""
+    _presentation._local_key()
+
+
+def redact_for_display(value: Any) -> Any:
+    return _redactor(value)
+
+
+def learn_persistent_identities(value: Any) -> None:
+    """Persist high-confidence identity aliases from newly ingested evidence."""
+    _identity_learner(value)

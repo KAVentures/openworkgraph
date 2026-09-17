@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from browser_privacy import harden_browser_event
 from contextualizer import contextualize_event
 from normalizer import normalize_event
+from sensitive_identifiers import sanitize_event_identifiers
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
@@ -204,6 +205,62 @@ def _backfill_derived(conn: sqlite3.Connection) -> None:
         _insert_context(conn, contextualize_event(_row_to_event(row)))
 
 
+SENSITIVE_IDENTIFIERS_MIGRATION_KEY = "sensitive_identifiers_v40"
+
+
+def harden_existing_sensitive_identifiers() -> int:
+    """One-time migration for identifiers that should never remain literal at rest."""
+    changed = 0
+    with connect() as conn:
+        if conn.execute(
+            "SELECT 1 FROM privacy_migrations WHERE migration_key = ?",
+            (SENSITIVE_IDENTIFIERS_MIGRATION_KEY,),
+        ).fetchone():
+            return 0
+        existing = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
+        for row in existing:
+            raw = _row_to_event(row)
+            safe = sanitize_event_identifiers(raw)
+            if safe == raw:
+                continue
+            conn.execute(
+                """
+                UPDATE events
+                SET app = ?, window_title = ?, metadata_json = ?
+                WHERE event_id = ?
+                """,
+                (
+                    safe.get("app"),
+                    safe.get("window_title"),
+                    json.dumps(safe.get("metadata") or {}, ensure_ascii=False),
+                    safe.get("event_id"),
+                ),
+            )
+            conn.execute("DELETE FROM normalized_events WHERE event_id = ?", (safe.get("event_id"),))
+            conn.execute("DELETE FROM context_events WHERE event_id = ?", (safe.get("event_id"),))
+            _insert_event(conn, "normalized_events", normalize_event(safe))
+            _insert_context(conn, contextualize_event(safe))
+            changed += 1
+        conn.execute(
+            "INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)",
+            (SENSITIVE_IDENTIFIERS_MIGRATION_KEY,),
+        )
+    return changed
+
+
+def table_revision(*, operational: bool = False) -> tuple[int, int]:
+    """Cheap append-only cache revision; late queued events always receive a new id."""
+    table = "normalized_events" if operational else "events"
+    try:
+        with connect() as conn:
+            row = conn.execute(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM {table}").fetchone()
+            return int(row["max_id"] or 0), 0
+    except sqlite3.OperationalError:
+        # Analytics unit tests can supply an in-memory event loader without
+        # initializing SQLite. Production startup always initializes the DB.
+        return -1, 0
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
@@ -218,6 +275,7 @@ def init_db() -> None:
             """
         )
         _backfill_derived(conn)
+    harden_existing_sensitive_identifiers()
 
 
 def _browser_privacy_migration_key(config: dict[str, Any]) -> str:
@@ -274,7 +332,7 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
     inserted = 0
     with connect() as conn:
         for raw in events:
-            e = dict(raw)
+            e = sanitize_event_identifiers(dict(raw))
             inserted += _insert_event(conn, "events", e)
             _insert_event(conn, "normalized_events", normalize_event(e))
             _insert_context(conn, contextualize_event(e))

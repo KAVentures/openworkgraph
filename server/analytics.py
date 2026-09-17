@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from bisect import bisect_left, bisect_right
+import copy
 import hashlib
+import threading
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import re
 from typing import Any
 
-from .db import rows, normalized_rows
+from .db import rows, normalized_rows, table_revision
 from normalizer import normalize_event
 from browser_utils import is_browser_app
 
@@ -544,6 +547,31 @@ def _percentile(values: list[float], q: float) -> float:
     return xs[lo] * (1.0 - frac) + xs[hi] * frac
 
 
+
+def _build_task_session_index(session_events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Index one session once so task intervals do not rescan the full session."""
+    ordered: list[dict[str, Any]] = []
+    event_times: list[float] = []
+    focus_events: list[dict[str, Any]] = []
+    focus_starts: list[float] = []
+    for e in session_events:
+        ts = _parse_ts(e.get("observed_at"))
+        if ts is None:
+            continue
+        ordered.append(e)
+        event_times.append(float(ts))
+        if e.get("event_type") == "focus_span":
+            focus_events.append(e)
+            focus_starts.append(float(ts))
+    return {
+        "events": ordered,
+        "event_times": event_times,
+        "focus_events": focus_events,
+        "focus_starts": focus_starts,
+        "timed": list(zip(ordered, event_times)),
+    }
+
+
 def _task_from_interval(
     *,
     session_id: str,
@@ -553,6 +581,7 @@ def _task_from_interval(
     end_reason: str,
     session_events: list[dict[str, Any]],
     browser_context: dict[str, list[tuple[float, dict[str, Any]]]],
+    session_index: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build one candidate task and allocate focus effort by time overlap.
 
@@ -563,12 +592,31 @@ def _task_from_interval(
     if end_ts <= start_ts:
         return None
 
-    focus = [e for e in session_events if e.get("event_type") == "focus_span"]
+    index = session_index or _build_task_session_index(session_events)
+    event_times = index["event_times"]
+    event_items = index["events"]
+    lo = bisect_left(event_times, start_ts - 0.001)
+    hi = bisect_right(event_times, end_ts + 0.001)
+    interval_events = event_items[lo:hi]
     semantic = [
-        e for e in session_events
+        e for e in interval_events
         if str(e.get("event_type") or "").startswith(("browser_", "screen_"))
-        and (lambda t: t is not None and start_ts - 0.001 <= t <= end_ts + 0.001)(_parse_ts(e.get("observed_at")))
     ]
+
+    # A focus span can start before a task boundary and overlap the interval.
+    focus_events = index["focus_events"]
+    focus_starts = index["focus_starts"]
+    focus: list[dict[str, Any]] = []
+    if focus_starts:
+        start_i = max(0, bisect_right(focus_starts, start_ts) - 1)
+        for pos in range(start_i, len(focus_events)):
+            e = focus_events[pos]
+            f0 = focus_starts[pos]
+            if f0 > end_ts + 0.001:
+                break
+            f1 = f0 + max(0.0, float(e.get("duration_seconds") or 0))
+            if f1 >= start_ts - 0.001:
+                focus.append(e)
 
     surface_seconds: Counter[str] = Counter()
     surface_markers: list[tuple[float, str]] = []
@@ -617,10 +665,6 @@ def _task_from_interval(
         return None
 
     primary = surface_seconds.most_common(1)[0][0] if surface_seconds else (_semantic_surface(semantic[-1]) if semantic else "Unknown")
-    interval_events = [
-        e for e in session_events
-        if (lambda t: t is not None and start_ts - 0.001 <= t <= end_ts + 0.001)(_parse_ts(e.get("observed_at")))
-    ]
     label, label_confidence, task_family, label_anchor = _canonical_task_label(interval_events, primary)
 
     semantic_labels: list[str] = []
@@ -701,6 +745,7 @@ def candidate_tasks(
     *,
     gap_seconds: float = 120.0,
     max_task_seconds: float = 1800.0,
+    _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Infer conservative candidate task executions from observed evidence.
 
@@ -709,7 +754,7 @@ def candidate_tasks(
     focus/effort data. It can split two tasks that occur within one long browser focus
     span without assigning the entire focus span to both tasks.
     """
-    raw_events = _event_rows(limit, since=since)
+    raw_events = list(_raw_events) if _raw_events is not None else _event_rows(limit, since=since)
     events = [normalize_event(e) for e in raw_events]
     if not events:
         return {
@@ -734,8 +779,8 @@ def candidate_tasks(
     tasks: list[dict[str, Any]] = []
     for session_id, session_events in by_session.items():
         session_events.sort(key=lambda e: _parse_ts(e.get("observed_at")) or 0)
-        timed = [(e, _parse_ts(e.get("observed_at"))) for e in session_events]
-        timed = [(e, ts) for e, ts in timed if ts is not None]
+        session_index = _build_task_session_index(session_events)
+        timed = session_index["timed"]
         if not timed:
             continue
 
@@ -834,6 +879,7 @@ def candidate_tasks(
                 end_reason=end_reason,
                 session_events=session_events,
                 browser_context=browser_context,
+                session_index=session_index,
             )
             if task is not None:
                 tasks.append(task)
@@ -940,7 +986,7 @@ def semantic_activity(limit: int = 200, since: str | None = None, *, operational
     return semantic[-max(1, min(limit, 2000)):][::-1]
 
 
-def summary(limit: int = 10000, since: str | None = None, *, operational: bool = False) -> dict[str, Any]:
+def _summary_uncached(limit: int = 10000, since: str | None = None, *, operational: bool = False) -> dict[str, Any]:
     events = _operational_event_rows(limit, since=since) if operational else _event_rows(limit, since=since)
     focus_events = [e for e in events if e.get("event_type", "focus_span") == "focus_span"]
     interaction_events = [e for e in events if str(e.get("event_type", "")).startswith("screen_")]
@@ -1118,7 +1164,11 @@ def summary(limit: int = 10000, since: str | None = None, *, operational: bool =
         if len(deduped_evidence) >= 50:
             break
 
-    task_data = candidate_tasks(limit=limit, since=since)
+    task_data = candidate_tasks(
+        limit=limit,
+        since=since,
+        _raw_events=events if not operational else None,
+    )
 
     return {
         "events": len(events),
@@ -1235,3 +1285,50 @@ def timeline(session_id: str, limit: int = 1000) -> list[dict[str, Any]]:
         "SELECT * FROM events WHERE session_id = ? ORDER BY observed_at ASC LIMIT ?",
         (session_id, max(1, min(limit, 5000))),
     )
+
+
+_SUMMARY_CACHE_LOCK = threading.RLock()
+_SUMMARY_CACHE: dict[tuple[Any, ...], tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
+def clear_summary_cache() -> None:
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE.clear()
+
+
+def summary(limit: int = 10000, since: str | None = None, *, operational: bool = False) -> dict[str, Any]:
+    """Cached summary keyed by append-only DB revision.
+
+    The returned value is deep-copied because API code adds live collector/browser
+    state after analytics.  Late queued events change MAX(id)/COUNT and therefore
+    invalidate the cache even when their observed_at timestamp is old.
+    """
+    bounded = max(1, min(int(limit), 100000))
+    revision = table_revision(operational=operational)
+    key = (bounded, since or "", bool(operational))
+    cacheable = revision[0] >= 0
+    if cacheable:
+        with _SUMMARY_CACHE_LOCK:
+            cached = _SUMMARY_CACHE.get(key)
+            if cached and cached[0] == revision:
+                return copy.deepcopy(cached[1])
+
+    result = _summary_uncached(bounded, since=since, operational=operational)
+
+    # Browser evidence enrichment is explicit, not installed by package import.
+    from . import browser_context_policy
+    result = browser_context_policy.enrich_summary(
+        result,
+        __import__(__name__, fromlist=["_"]),
+        since=since,
+    )
+
+    if cacheable:
+        with _SUMMARY_CACHE_LOCK:
+            _SUMMARY_CACHE[key] = (revision, copy.deepcopy(result))
+            # Keep only a handful of active scope/limit combinations.
+            if len(_SUMMARY_CACHE) > 8:
+                oldest = next(iter(_SUMMARY_CACHE))
+                if oldest != key:
+                    _SUMMARY_CACHE.pop(oldest, None)
+    return copy.deepcopy(result)

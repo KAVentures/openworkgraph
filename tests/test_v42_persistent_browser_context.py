@@ -5,12 +5,7 @@ from pathlib import Path
 
 def _analytics():
     from server import analytics
-    from server.browser_context_policy import install
-
-    # Some earlier tests reload server.analytics for isolation, which removes the
-    # package-level wrapper. Production startup always installs this policy, so
-    # install it explicitly here to make these regression tests order-independent.
-    install(analytics)
+    analytics.clear_summary_cache()
     return analytics
 
 

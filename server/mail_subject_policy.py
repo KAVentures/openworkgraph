@@ -171,6 +171,27 @@ def _unstated_sender_index(parts: list[str], *, has_action_prefix: bool) -> int 
     return 0 if has_time and has_trailer else None
 
 
+def _redact_email_title_segments(text: str, presentation: Any) -> str:
+    """Mask high-confidence full-name segments in a confirmed email title.
+
+    Handles titles like 'Question - Anna Svensson - Gmail' without reviving
+    generic title-case person guessing. Organization/product-shaped segments survive.
+    """
+    parts = re.split(r"(\s+(?:[-–—|·])\s+)", str(text or ""))
+    if len(parts) < 3:
+        return text
+    for index in range(0, len(parts), 2):
+        segment = parts[index].strip()
+        if not segment or any(marker in segment.casefold() for marker in ("gmail", "outlook")):
+            continue
+        words = presentation._name_words(presentation._clean_name_candidate(segment))
+        if len(words) < 2:
+            continue
+        replacement = _person_replacement(segment, presentation)
+        if replacement is not None:
+            parts[index] = parts[index].replace(segment, replacement)
+    return "".join(parts)
+
 def _redact_confirmed_mail_row(text: str, presentation: Any) -> str:
     raw = str(text or "")
     action = mail_row_policy._ACTION_PREFIX_RE.match(raw)
@@ -205,11 +226,8 @@ def _redact_confirmed_mail_row(text: str, presentation: Any) -> str:
     return prefix + "".join(parts)
 
 
-def install(presentation: Any) -> None:
-    """Install after typed_privacy_policy as the final mail-specific pass."""
-    previous = presentation.redact_for_display
-    if getattr(previous, "_openworkgraph_mail_subject_policy", False):
-        return
+def wrap_redactor(previous: Any, presentation: Any):
+    """Compose final mail-subject masking around an existing redactor."""
 
     def redact_for_display(value: Any) -> Any:
         safe = previous(value)
@@ -230,10 +248,19 @@ def install(presentation: Any) -> None:
                 and email_context
                 and field_name.casefold() in TITLEISH_FIELDS
             ):
-                return _redact_confirmed_mail_row(item, presentation)
+                row_safe = _redact_confirmed_mail_row(item, presentation)
+                return _redact_email_title_segments(row_safe, presentation)
             return item
 
         return transform(safe)
 
     redact_for_display._openworkgraph_mail_subject_policy = True  # type: ignore[attr-defined]
-    presentation.redact_for_display = redact_for_display
+    return redact_for_display
+
+
+def install(presentation: Any) -> None:
+    """Backward-compatible installer; production uses privacy_pipeline explicitly."""
+    previous = presentation.redact_for_display
+    if getattr(previous, "_openworkgraph_mail_subject_policy", False):
+        return
+    presentation.redact_for_display = wrap_redactor(previous, presentation)

@@ -94,19 +94,8 @@ def _redact_evidence_bound_names(text: str, presentation: Any) -> str:
     return out
 
 
-def install(presentation: Any) -> None:
-    """Install after first-name and mail-row policies."""
-    previous = presentation.redact_for_display
-    if getattr(previous, "_openworkgraph_typed_privacy_policy", False):
-        return
-
-    # App/vendor names and capitalization are no longer evidence of personhood.
-    # Existing structured sender/recipient/person fields remain intact because
-    # those are genuine UI/data roles rather than inferred context.
-    presentation._contains_name_sensitive_context = lambda _value: False
-    presentation._embedded_name_spans = lambda _text: []
-    presentation._redact_email_title_segments = lambda text, *, owner_aliases: text
-    presentation.CUE_RE = _PATIENT_CUE_RE
+def wrap_redactor(previous: Any, presentation: Any):
+    """Compose typed identifier/URL protection around an existing redactor."""
 
     def preprocess(item: Any, *, field_name: str = "") -> Any:
         if isinstance(item, dict):
@@ -140,4 +129,12 @@ def install(presentation: Any) -> None:
         return previous(preprocess(value))
 
     redact_for_display._openworkgraph_typed_privacy_policy = True  # type: ignore[attr-defined]
-    presentation.redact_for_display = redact_for_display
+    return redact_for_display
+
+
+def install(presentation: Any) -> None:
+    """Backward-compatible installer; production uses privacy_pipeline explicitly."""
+    previous = presentation.redact_for_display
+    if getattr(previous, "_openworkgraph_typed_privacy_policy", False):
+        return
+    presentation.redact_for_display = wrap_redactor(previous, presentation)

@@ -23,7 +23,7 @@ from .analytics import (
 from .context import search_context, recent_context, context_timeline
 from .db import init_db, insert_events, harden_existing_browser_events
 from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
-from .presentation import redact_for_display
+from .privacy_pipeline import redact_for_display, initialize_privacy_state, learn_persistent_identities
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "dashboard" / "index.html"
@@ -180,6 +180,7 @@ class BrowserHeartbeat(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    initialize_privacy_state()
     init_db()
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
@@ -197,7 +198,9 @@ def health() -> dict[str, str]:
 
 @app.post("/v1/events")
 def ingest(batch: EventBatch) -> dict[str, int]:
-    return {"inserted": insert_events([e.model_dump() for e in batch.events])}
+    events = [e.model_dump() for e in batch.events]
+    learn_persistent_identities(events)
+    return {"inserted": insert_events(events)}
 
 
 @app.post("/v1/heartbeat")
@@ -273,6 +276,7 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "metadata": metadata,
     }
     safe_event = harden_browser_event(raw_event, _runtime_config())
+    learn_persistent_identities(safe_event)
     inserted = insert_events([safe_event])
     safe_meta = safe_event.get("metadata") or {}
     safe_page = safe_meta.get("page") if isinstance(safe_meta.get("page"), dict) else {}

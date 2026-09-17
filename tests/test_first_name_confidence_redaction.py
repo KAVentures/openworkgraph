@@ -4,12 +4,15 @@ import importlib
 import json
 
 
+def _learn(value):
+    from server.privacy_pipeline import learn_persistent_identities
+    learn_persistent_identities(value)
+
+
 def _presentation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.presentation as presentation
     importlib.reload(presentation)
-    from server.first_name_policy import install
-    install(presentation)
     monkeypatch.setattr(
         presentation,
         "_owner_identity",
@@ -21,16 +24,20 @@ def _presentation(monkeypatch, tmp_path):
 def test_shared_first_name_never_asserts_one_stable_identity(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
 
-    first = presentation.redact_for_display({
+    first_payload = {
         "surface": "Gmail",
         "hostname": "mail.google.com",
         "label": "From: Anna Svensson <anna.s@acme.com>",
-    })
-    second = presentation.redact_for_display({
+    }
+    second_payload = {
         "surface": "Gmail",
         "hostname": "mail.google.com",
         "label": "From: Anna Berg <anna.b@acme.com>",
-    })
+    }
+    _learn(first_payload)
+    _learn(second_payload)
+    first = presentation.redact_for_display(first_payload)
+    second = presentation.redact_for_display(second_payload)
     bare = presentation.redact_for_display({
         "surface": "Gmail",
         "hostname": "mail.google.com",
@@ -47,11 +54,13 @@ def test_shared_first_name_never_asserts_one_stable_identity(monkeypatch, tmp_pa
 
 def test_first_name_only_is_generic_even_when_only_one_identity_is_known(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
-    presentation.redact_for_display({
+    identity = {
         "surface": "Gmail",
         "hostname": "mail.google.com",
         "label": "From: Erik Nilsson <erik.nilsson@acme.com>",
-    })
+    }
+    _learn(identity)
+    presentation.redact_for_display(identity)
 
     safe = presentation.redact_for_display({
         "surface": "Gmail",
@@ -64,11 +73,13 @@ def test_first_name_only_is_generic_even_when_only_one_identity_is_known(monkeyp
 
 def test_ambiguous_word_names_need_strong_person_context(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
-    presentation.redact_for_display({
+    identity = {
         "surface": "Gmail",
         "hostname": "mail.google.com",
         "label": "From: May Jensen <may.jensen@acme.com>",
-    })
+    }
+    _learn(identity)
+    presentation.redact_for_display(identity)
 
     report = presentation.redact_for_display({
         "surface": "Gmail",
