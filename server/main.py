@@ -7,23 +7,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from browser_privacy import harden_browser_event
 from browser_utils import is_browser_app
 from .analytics import (
     search_events, search_operational_events, summary, timeline,
     operational_timeline, semantic_activity, candidate_tasks,
 )
 from .context import search_context, recent_context, context_timeline
-from .db import init_db, insert_events
+from .db import init_db, insert_events, harden_existing_browser_events
 from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
 from .presentation import redact_for_display
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "dashboard" / "index.html"
+CONFIG_PATH = ROOT / "config.json"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "0.34.0"
 try:
     _manifest = json.loads((ROOT / "browser_extension" / "manifest.json").read_text(encoding="utf-8"))
@@ -31,7 +34,26 @@ try:
 except Exception:
     EXPECTED_BROWSER_SENSOR_VERSION = ""
 
+
+def _runtime_config() -> dict[str, Any]:
+    cfg: dict[str, Any] = {
+        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+        "excluded_title_patterns": ["password", "private", "incognito", "bank"],
+        "excluded_browser_host_patterns": [],
+    }
+    try:
+        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            cfg.update(value)
+    except Exception:
+        pass
+    return cfg
+
+
 app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION)
+# Host validation closes DNS-rebinding requests whose Host header is not the
+# loopback endpoint. testserver is retained solely for FastAPI/Starlette tests.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8787", "http://localhost:8787"],
@@ -40,6 +62,38 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["content-type", "authorization"],
 )
+
+LOCAL_WEB_ORIGINS = {"http://127.0.0.1:8787", "http://localhost:8787"}
+EXTENSION_PREFIXES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
+EXTENSION_SENSOR_ROUTES = {
+    ("GET", "/v1/browser-context"),
+    ("POST", "/v1/browser-events"),
+    ("POST", "/v1/browser-heartbeat"),
+}
+
+
+@app.middleware("http")
+async def local_api_origin_guard(request: Request, call_next):
+    """Prevent webpages/extensions from reading the local work-history API.
+
+    Local non-browser clients (MCP, CLI, exporter) normally send no Origin and
+    continue to work. Browser extensions are restricted to the three sensor
+    endpoints they actually need; they cannot read summaries, events or exports.
+    """
+    origin = str(request.headers.get("origin") or "")
+    method = request.method.upper()
+    path = request.url.path
+    if not origin:
+        return await call_next(request)
+    if origin in LOCAL_WEB_ORIGINS:
+        return await call_next(request)
+    if origin.startswith(EXTENSION_PREFIXES):
+        requested = str(request.headers.get("access-control-request-method") or method).upper()
+        if (requested, path) not in EXTENSION_SENSOR_ROUTES:
+            return JSONResponse({"detail": "browser extension origin not allowed for this endpoint"}, status_code=403)
+        return await call_next(request)
+    return JSONResponse({"detail": "non-local browser origin not allowed"}, status_code=403)
+
 
 COLLECTOR_STATUS: dict[str, Any] = {}
 BROWSER_STATUS: dict[str, Any] = {}
@@ -124,6 +178,9 @@ class BrowserHeartbeat(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    # Idempotent local migration: remove legacy URL secrets and retroactively
+    # apply browser exclusions before any API response can expose old rows.
+    harden_existing_browser_events(_runtime_config())
 
 
 @app.get("/health")
@@ -150,12 +207,6 @@ def heartbeat(status: Heartbeat) -> dict[str, str]:
 
 @app.get("/v1/browser-context")
 def browser_context() -> dict[str, str]:
-    """Return local capture identity so the browser can stamp events before queuing.
-
-    This is intentionally loopback-only with the rest of the prototype API. It
-    prevents an event captured during one observer session from being attributed
-    to a later session when an offline browser queue is replayed.
-    """
     return {
         "organization_id": str(COLLECTOR_STATUS.get("organization_id") or ""),
         "actor_id": str(COLLECTOR_STATUS.get("actor_id") or ""),
@@ -170,8 +221,6 @@ def _browser_context(event: BrowserEvent) -> dict[str, str]:
         app_name = "Browser"
     return {
         "app": app_name,
-        # Prefer capture-time identity carried by the event. Current collector
-        # status is only a fallback for old extension versions.
         "device_id": str(event.device_id or COLLECTOR_STATUS.get("device_id") or "browser-local"),
         "session_id": str(event.work_session_id or COLLECTOR_STATUS.get("session_id") or event.browser_session_id or "browser-session"),
         "organization_id": str(event.organization_id or COLLECTOR_STATUS.get("organization_id") or ""),
@@ -200,9 +249,10 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
             "clipboard_contents": False,
             "url_query": False,
             "url_fragment": False,
+            "token_like_path_segments": False,
         },
     })
-    normalized = {
+    raw_event = {
         "event_id": event.event_id or str(uuid.uuid4()),
         "observed_at": event.observed_at,
         "schema_version": "1.0",
@@ -219,18 +269,22 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "screenshot_path": None,
         "metadata": metadata,
     }
-    inserted = insert_events([normalized])
+    safe_event = harden_browser_event(raw_event, _runtime_config())
+    inserted = insert_events([safe_event])
+    safe_meta = safe_event.get("metadata") or {}
+    safe_page = safe_meta.get("page") if isinstance(safe_meta.get("page"), dict) else {}
     BROWSER_STATUS.clear()
     BROWSER_STATUS.update({
         "observed_at": event.observed_at,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "status": "connected",
-        "hostname": page.get("hostname"),
+        "hostname": safe_page.get("hostname"),
         "last_action": event.action,
         "sensor_id": ctx["sensor_id"],
         "sensor_version": event.sensor_version,
         "expected_sensor_version": EXPECTED_BROWSER_SENSOR_VERSION,
         "version_ok": bool(event.sensor_version and event.sensor_version == EXPECTED_BROWSER_SENSOR_VERSION),
+        "excluded": bool(safe_meta.get("excluded")),
     })
     return {"inserted": inserted, "status": "ok"}
 
@@ -336,12 +390,6 @@ def get_session(session_id: str, limit: int = 1000):
 
 @app.get("/v1/export/{fmt}")
 def export_session(fmt: str, scope: str = "current", include_raw: bool = False):
-    """Download the captured session as JSON, XLSX, or a ZIP of CSV tables.
-
-    ``include_raw`` retains the raw event structure and fields, but presentation
-    redaction is still applied to names/email/phone text before bytes leave the
-    local API. The database itself is never rewritten by this endpoint.
-    """
     fmt = fmt.lower().strip()
     if fmt not in {"json", "xlsx", "csvzip"}:
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
