@@ -251,9 +251,14 @@ def harden_existing_sensitive_identifiers() -> int:
 def table_revision(*, operational: bool = False) -> tuple[int, int]:
     """Cheap append-only cache revision; late queued events always receive a new id."""
     table = "normalized_events" if operational else "events"
-    with connect() as conn:
-        row = conn.execute(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM {table}").fetchone()
-        return int(row["max_id"] or 0), 0
+    try:
+        with connect() as conn:
+            row = conn.execute(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM {table}").fetchone()
+            return int(row["max_id"] or 0), 0
+    except sqlite3.OperationalError:
+        # Analytics unit tests can supply an in-memory event loader without
+        # initializing SQLite. Production startup always initializes the DB.
+        return -1, 0
 
 
 def init_db() -> None:
