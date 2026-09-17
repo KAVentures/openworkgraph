@@ -72,36 +72,46 @@ def _data_dir() -> Path:
 
 
 def _local_key() -> bytes:
-    """Return a stable installation-local key without an external service."""
+    """Return a stable installation-local key without an external service.
+
+    The key file wins once created, so pseudonyms do not change depending on
+    whether the API or desktop collector happens to start first.
+    """
     data_dir = _data_dir()
     cache_key = str(data_dir.resolve())
     if cache_key in _KEY_CACHE:
         return _KEY_CACHE[cache_key]
 
+    key_path = data_dir / ".display_redaction_key"
     key: bytes | None = None
-    identity_path = data_dir / "identity.json"
     try:
-        identity = json.loads(identity_path.read_text(encoding="utf-8"))
-        installation_id = str(identity.get("installation_id") or "").strip()
-        if installation_id:
-            key = hashlib.sha256(("openworkgraph-display:" + installation_id).encode("utf-8")).digest()
+        if key_path.exists():
+            raw = key_path.read_text(encoding="ascii").strip()
+            if raw:
+                key = bytes.fromhex(raw)
     except Exception:
-        pass
+        key = None
 
     if key is None:
-        key_path = data_dir / ".display_redaction_key"
+        identity_path = data_dir / "identity.json"
         try:
-            if key_path.exists():
-                raw = key_path.read_text(encoding="ascii").strip()
-                if raw:
-                    key = bytes.fromhex(raw)
-            if key is None:
-                data_dir.mkdir(parents=True, exist_ok=True)
-                key = secrets.token_bytes(32)
-                key_path.write_text(key.hex(), encoding="ascii")
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+            installation_id = str(identity.get("installation_id") or "").strip()
+            if installation_id:
+                key = hashlib.sha256(("openworkgraph-display:" + installation_id).encode("utf-8")).digest()
         except Exception:
-            # Read-only/test environments still get deterministic process-local
-            # pseudonyms. Normal installations persist identity.json or the key.
+            pass
+
+    if key is None:
+        key = secrets.token_bytes(32)
+
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if not key_path.exists():
+            key_path.write_text(key.hex(), encoding="ascii")
+    except Exception:
+        # Read-only/test environments still keep a process-local stable key.
+        if key is None:
             key = hashlib.sha256(cache_key.encode("utf-8", errors="ignore")).digest()
 
     _KEY_CACHE[cache_key] = key
@@ -155,6 +165,23 @@ def _looks_like_person_name(value: str, *, allow_single: bool = False) -> bool:
     return True
 
 
+def _tail_name_candidate(value: str) -> tuple[str, str]:
+    """Return (prefix, plausible-name-tail) from a mixed header string."""
+    raw = str(value or "")
+    pieces = re.split(r"(\s+(?:[-–—|·])\s+|\b(?:from|to|cc|bcc|sender|recipient)\s*:\s*)", raw, flags=re.I)
+    for i in range(len(pieces) - 1, -1, -1):
+        candidate = _clean_name_candidate(pieces[i])
+        if candidate and _looks_like_person_name(candidate, allow_single=True):
+            pos = raw.rfind(pieces[i])
+            if pos >= 0:
+                return raw[:pos] + pieces[i][: len(pieces[i]) - len(pieces[i].lstrip())], candidate
+    candidate = _clean_name_candidate(raw)
+    if _looks_like_person_name(candidate, allow_single=True):
+        pos = raw.find(candidate)
+        return raw[:pos], candidate
+    return raw, ""
+
+
 def _walk_strings(value: Any):
     if isinstance(value, str):
         yield value
@@ -174,12 +201,9 @@ def _discover_aliases(value: Any) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for text in _walk_strings(value):
         for match in DISPLAY_EMAIL_RE.finditer(text):
-            name = _clean_name_candidate(match.group("name"))
+            _prefix, name = _tail_name_candidate(match.group("name"))
             email = match.group("email").casefold()
-            # Keep only the tail after common header punctuation so a whole
-            # subject line cannot accidentally become a person alias.
-            name = re.split(r"(?:^|\s)(?:from|to|cc|bcc|sender|recipient)\s*:\s*", name, flags=re.I)[-1]
-            if _looks_like_person_name(name, allow_single=True):
+            if name:
                 aliases[name.casefold()] = _token("PERSON", email)
         for email_match in EMAIL_RE.finditer(text):
             email = email_match.group(1)
@@ -196,7 +220,6 @@ def _discover_aliases(value: Any) -> dict[str, str]:
         for match in CUE_RE.finditer(text):
             tail = text[match.end():]
             words: list[str] = []
-            consumed: list[str] = []
             for raw in re.findall(r"[^\s,;<>|()]+", tail)[:4]:
                 candidate = raw.strip(" \t\r\n\"'[]{}:-")
                 if not candidate:
@@ -204,7 +227,6 @@ def _discover_aliases(value: Any) -> dict[str, str]:
                 tentative = " ".join(words + [candidate])
                 if _looks_like_person_name(tentative, allow_single=True):
                     words.append(candidate)
-                    consumed.append(raw)
                 else:
                     break
             if words and _looks_like_person_name(" ".join(words), allow_single=True):
@@ -232,6 +254,16 @@ def _replace_aliases(text: str, aliases: dict[str, str]) -> str:
     return out
 
 
+def _redact_display_email(match: re.Match[str]) -> str:
+    raw_name = match.group("name")
+    email = match.group("email").casefold()
+    prefix, name = _tail_name_candidate(raw_name)
+    if name:
+        person = _token("PERSON", email)
+        return f"{prefix}{person} <{_token('EMAIL', email)}>"
+    return f"{raw_name} <{_token('EMAIL', email)}>"
+
+
 def _redact_email_title_segments(text: str) -> str:
     """Best-effort masking for person-only segments in Gmail/Outlook titles.
 
@@ -240,6 +272,12 @@ def _redact_email_title_segments(text: str) -> str:
     workflow words to avoid turning useful subjects such as "Contract Renewal"
     into PERSON tokens.
     """
+    # Some mail clients render "Person Name: Subject" rather than dash-separated
+    # segments. Mask only when the leading segment is strongly name-like.
+    colon = re.match(r"^(?P<head>[^:]{2,80})(?P<sep>:\s+)(?P<rest>.+)$", text)
+    if colon and _looks_like_person_name(colon.group("head")):
+        text = f"{_token('PERSON', colon.group('head'))}{colon.group('sep')}{colon.group('rest')}"
+
     parts = re.split(r"(\s+(?:[-–—|·])\s+)", text)
     if len(parts) < 3:
         return text
@@ -262,12 +300,17 @@ def redact_text(text: str, *, aliases: dict[str, str] | None = None, email_conte
     aliases = aliases or {}
     out = _replace_aliases(text, aliases)
 
+    # Handle display-name + email structures as one unit so a name is still
+    # hidden when the local part is initials or otherwise cannot teach an alias.
+    out = DISPLAY_EMAIL_RE.sub(_redact_display_email, out)
+
     # Explicit person-valued fields are safe to pseudonymize when they are a
     # plausible name. We do not apply this to arbitrary titles.
     if field_name.casefold() in {"sender", "recipient", "contact", "owner", "person", "display_name"} and _looks_like_person_name(out, allow_single=True):
         out = _token("PERSON", out)
 
-    # Email addresses and phone numbers are deterministic high-confidence cases.
+    # Remaining email addresses and phone numbers are deterministic
+    # high-confidence cases.
     out = EMAIL_RE.sub(lambda m: _token("EMAIL", m.group(1).casefold()), out)
     out = PHONE_CANDIDATE_RE.sub(_phone_token, out)
 
