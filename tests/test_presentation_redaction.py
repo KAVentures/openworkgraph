@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib
 import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_redaction_masks_identifiers_without_losing_workflow_words(monkeypatch, tmp_path):
@@ -31,6 +34,22 @@ def test_redaction_masks_identifiers_without_losing_workflow_words(monkeypatch, 
     assert safe["label"].startswith("Reply to PERSON_")
     assert safe["event_id"] == "evt-123"
     assert safe["duration_seconds"] == 12.5
+
+
+def test_email_title_name_is_masked_even_without_email_address(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+
+    safe = presentation.redact_for_display({
+        "app": "Google Chrome",
+        "window_title": "Question - Anna Svensson - Gmail",
+        "event_type": "focus_span",
+    })
+    assert "Anna Svensson" not in safe["window_title"]
+    assert "PERSON_" in safe["window_title"]
+    assert "Question" in safe["window_title"]
+    assert "Gmail" in safe["window_title"]
 
 
 def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
@@ -121,3 +140,42 @@ def test_same_identifier_gets_stable_pseudonym(monkeypatch, tmp_path):
     first_token = next(part for part in first.split() if part.startswith("EMAIL_"))
     second_token = next(part for part in second.split() if part.startswith("EMAIL_"))
     assert first_token == second_token
+
+
+def test_dates_and_workflow_metrics_are_not_mistaken_for_phone_numbers(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+
+    payload = {
+        "label": "Review due 2026-09-17",
+        "observed_at": "2026-09-17T08:31:00+00:00",
+        "keypress_count": 12345,
+        "duration_seconds": 70.0,
+    }
+    assert presentation.redact_for_display(payload) == payload
+
+
+def test_presentation_layer_cannot_enter_capture_or_inference_path():
+    # Architectural regression guard: these modules must continue to see the
+    # original rich event stream. Redaction belongs only in server/main outputs.
+    protected = [
+        "collector/main.py",
+        "collector/interactions.py",
+        "normalizer.py",
+        "contextualizer.py",
+        "server/db.py",
+        "server/analytics.py",
+    ]
+    for rel in protected:
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        assert "server.presentation" not in source
+        assert "redact_for_display" not in source
+
+
+def test_api_and_export_routes_apply_redaction_after_computation():
+    source = (ROOT / "server" / "main.py").read_text(encoding="utf-8")
+    assert "return redact_for_display(result)" in source
+    assert 'redact_for_display({"events": search_events' in source
+    assert "return redact_for_display(candidate_tasks" in source
+    assert "payload = redact_for_display(build_export_payload" in source
