@@ -13,12 +13,21 @@ import re
 from typing import Any
 
 from browser_privacy import sanitize_pathname, sanitize_url_value
-from sensitive_identifiers import redact_sensitive_identifiers
+from sensitive_identifiers import (
+    redact_sensitive_identifiers,
+    structured_identifier_kind,
+    tokenize_structured_identifier,
+)
 
 STRUCTURED_URL_FIELDS = {
     "url", "href", "uri", "frame_url", "resource_locator", "origin", "pathname",
 }
 HOST_FIELDS = {"hostname", "host"}
+PROTECTED_FIELDS = {
+    "event_id", "session_id", "device_id", "sensor_id", "organization_id",
+    "actor_id", "schema_version", "browser_session_id", "work_session_id",
+    "observed_at", "generated_at", "run_started_at",
+}
 PATIENT_NAME_FIELDS = {
     "patient", "patient_name", "patientname", "patientnamn", "patient_display_name",
 }
@@ -102,8 +111,6 @@ def install(presentation: Any) -> None:
     presentation._redact_email_title_segments = lambda text, *, owner_aliases: text
     presentation.CUE_RE = _PATIENT_CUE_RE
 
-    # Generic multi-word sender/contact/display-name fields can denote
-    # organizations. Explicit person/patient fields remain inherently person-valued.
     from . import first_name_policy, mail_row_policy
     first_name_policy.PERSON_FIELDS = {
         "person", "patient", "patient_name", "patientname", "patientnamn",
@@ -121,8 +128,12 @@ def install(presentation: Any) -> None:
             return item
 
         low = field_name.casefold()
+        if low in PROTECTED_FIELDS:
+            return item
         if low in STRUCTURED_URL_FIELDS or low in HOST_FIELDS:
             return _sanitize_locator(item, low)
+        if structured_identifier_kind(low):
+            return tokenize_structured_identifier(low, item)
 
         out = _redact_evidence_bound_names(item, presentation)
         if low in PATIENT_NAME_FIELDS and presentation._looks_like_person_name(out, allow_single=True):
