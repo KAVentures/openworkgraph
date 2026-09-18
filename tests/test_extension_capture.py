@@ -9,6 +9,7 @@ def test_browser_sensor_is_event_driven_and_frame_aware():
     cs = manifest["content_scripts"][0]
     assert cs["all_frames"] is True
     assert cs["match_about_blank"] is True
+    assert manifest["incognito"] == "not_allowed"
     content = (ROOT / "browser_extension" / "content.js").read_text()
     assert 'addEventListener("pointerdown"' in content
     assert 'addEventListener("focusin"' in content
@@ -47,7 +48,7 @@ def test_browser_delivery_is_durable_idempotent_and_sanitized():
     assert "flushBrowserQueue" in background
     assert "sanitizePendingBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.8.1"
+    assert manifest["version"] == "1.8.2"
 
 
 def test_queued_browser_event_keeps_capture_time_work_identity():
