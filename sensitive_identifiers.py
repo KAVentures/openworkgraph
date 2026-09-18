@@ -386,5 +386,6 @@ def sanitize_event_identifiers(event: dict[str, Any]) -> dict[str, Any]:
     for field in ("app", "window_title"):
         if isinstance(e.get(field), str):
             e[field] = redact_sensitive_identifiers(str(e[field]), redact_adjacent_name=False)
-    e["metadata"] = walk(e.get("metadata") or {})
+    if "metadata" in e:
+        e["metadata"] = walk(e.get("metadata") or {})
     return e
