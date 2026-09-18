@@ -20,12 +20,14 @@ from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
 from .outbox import EventOutbox
 from browser_utils import is_browser_app, normalized_browser_title
+from sensitive_identifiers import sanitize_event_identifiers
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
 LOCAL_DIR.mkdir(parents=True, exist_ok=True)
 S_SCREEN = LOCAL_DIR / "screenshots"
 S_SCREEN.mkdir(parents=True, exist_ok=True)
+MAX_JSONL_BYTES = 32 * 1024 * 1024
 STOP = False
 
 
@@ -79,15 +81,61 @@ def screenshot(event_id: str) -> str | None:
         return None
 
 
+def _sanitize_existing_jsonl() -> None:
+    """Rewrite legacy local evidence through the current storage sanitizer."""
+    path = LOCAL_DIR / "events.jsonl"
+    if not path.exists() or not path.is_file():
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as src, tmp.open("w", encoding="utf-8") as dst:
+            for line in src:
+                try:
+                    event = json.loads(line)
+                    safe = sanitize_event_identifiers(event)
+                    dst.write(json.dumps(safe, ensure_ascii=False) + "\n")
+                except Exception:
+                    # The JSONL is a diagnostic/recovery mirror, not the durable
+                    # delivery queue. Omit malformed legacy lines rather than keep
+                    # potentially sensitive plaintext that cannot be classified.
+                    continue
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def append_local(event: dict) -> None:
-    with (LOCAL_DIR / "events.jsonl").open("a", encoding="utf-8") as f:
+    path = LOCAL_DIR / "events.jsonl"
+    if path.exists() and path.stat().st_size >= MAX_JSONL_BYTES:
+        previous = LOCAL_DIR / "events.jsonl.1"
+        try:
+            previous.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            path.replace(previous)
+        except Exception:
+            pass
+    with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 
 def persist_event(event: dict, outbox: EventOutbox) -> None:
-    """Write capture evidence locally before attempting any HTTP delivery."""
-    append_local(event)
-    outbox.enqueue(event)
+    """Sanitize once, then write the same safe evidence to every local sink."""
+    safe = sanitize_event_identifiers(event)
+    append_local(safe)
+    outbox.enqueue(safe)
 
 
 def deliver_outbox_once(outbox: EventOutbox, backend_url: str, *, limit: int = 100) -> int:
@@ -278,6 +326,7 @@ def run(config_path: Path) -> None:
     cfg.update(identity)
     session_id = str(uuid.uuid4())
     activity_tracker = ActivityTracker()
+    _sanitize_existing_jsonl()
     outbox = EventOutbox(LOCAL_DIR / "collector_outbox.db")
 
     current_state: dict | None = None

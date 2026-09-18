@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-"""Compatibility shim for v0.40 storage hardening.
+"""Compatibility shim for storage hardening.
 
 The policy now lives directly in server.db so importing modules cannot change
-persistence behavior.  This module remains only for older imports.
+persistence behavior. This module remains only for older imports/tests.
 """
 
 from typing import Any
 
-MIGRATION_KEY = "sensitive_identifiers_v40"
+MIGRATION_KEY = "sensitive_identifiers_v45"
 
 
 def install(db: Any) -> None:

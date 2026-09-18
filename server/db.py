@@ -205,7 +205,7 @@ def _backfill_derived(conn: sqlite3.Connection) -> None:
         _insert_context(conn, contextualize_event(_row_to_event(row)))
 
 
-SENSITIVE_IDENTIFIERS_MIGRATION_KEY = "sensitive_identifiers_v40"
+SENSITIVE_IDENTIFIERS_MIGRATION_KEY = "sensitive_identifiers_v45"
 
 
 def harden_existing_sensitive_identifiers() -> int:

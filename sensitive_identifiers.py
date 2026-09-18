@@ -70,10 +70,48 @@ _EXPLICIT_ID_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        "BANK_ACCOUNT",
+        re.compile(
+            r"(?P<label>\b(?:bankgiro|plusgiro|bank\s*account|bankkonto)\b\s*[:=#-]?\s*)"
+            r"(?P<value>[0-9][0-9 .-]{5,24}[0-9])",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "ORG_ID",
+        re.compile(
+            r"(?P<label>\b(?:org\.?\s*(?:nr|nummer)|organisationsnummer|vat(?:\s*(?:nr|number))?|moms(?:reg(?:istrerings)?nummer)?)\b\s*[:=#-]?\s*)"
+            r"(?P<value>(?:SE\s*)?[0-9]{6}[- ]?[0-9]{4}(?:01)?|SE[0-9]{12})",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+_IBAN_RE = re.compile(
+    r"(?<![A-Z0-9])(?P<value>[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30})(?![A-Z0-9])",
+    re.IGNORECASE,
+)
+_PAN_RE = re.compile(r"(?<!\d)(?P<value>(?:\d[ -]?){12,18}\d)(?!\d)")
+_SECRET_RE = re.compile(
+    r"\b(?:"
+    r"AKIA[0-9A-Z]{16}"
+    r"|ASIA[0-9A-Z]{16}"
+    r"|sk-[A-Za-z0-9_-]{20,}"
+    r"|ghp_[A-Za-z0-9]{30,}"
+    r"|github_pat_[A-Za-z0-9_]{30,}"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+    r")\b"
+)
+_SECRET_ASSIGN_RE = re.compile(
+    r"(?P<label>\b(?:secret|token|api[_ -]?key|access[_ -]?key|password|passwd|bearer)\b\s*[:=]\s*)"
+    r"(?P<value>[^\s,;]{8,})",
+    re.IGNORECASE,
 )
 
 _ALREADY_TOKEN_RE = re.compile(
-    r"^(?:PERSONNUMMER|PATIENT_ID|JOURNAL_ID|CASE_ID|ACCOUNT_ID|PERSON)_[0-9A-F]{6}$"
+    r"^(?:PERSONNUMMER|PATIENT_ID|JOURNAL_ID|CASE_ID|ACCOUNT_ID|BANK_ACCOUNT|ORG_ID|IBAN|PAYMENT_CARD|SECRET|PERSON)_[0-9A-F]{6}$"
 )
 
 _STRUCTURED_ID_KINDS = {
@@ -100,6 +138,11 @@ _STRUCTURED_ID_KINDS = {
     "kontoid": "ACCOUNT_ID",
     "kontonr": "ACCOUNT_ID",
     "kontonummer": "ACCOUNT_ID",
+    "iban": "IBAN",
+    "cardnumber": "PAYMENT_CARD",
+    "kortnummer": "PAYMENT_CARD",
+    "organisationsnummer": "ORG_ID",
+    "orgnummer": "ORG_ID",
 }
 
 
@@ -122,6 +165,10 @@ def _local_key() -> bytes:
     try:
         raw = key_path.read_text(encoding="ascii").strip()
         if raw:
+            try:
+                os.chmod(key_path, 0o600)
+            except Exception:
+                pass
             return bytes.fromhex(raw)
     except Exception:
         pass
@@ -130,6 +177,10 @@ def _local_key() -> bytes:
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         key_path.write_text(key.hex(), encoding="ascii")
+        try:
+            os.chmod(key_path, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
     return key
@@ -145,14 +196,39 @@ def stable_token(kind: str, canonical: str) -> str:
     return f"{kind.upper()}_{digest}"
 
 
-def _luhn_valid(value: str) -> bool:
-    if len(value) != 10 or not value.isdigit():
+def _luhn_checksum_valid(value: str) -> bool:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits:
         return False
     total = 0
-    for index, char in enumerate(value[:-1]):
-        digit = int(char) * (2 if index % 2 == 0 else 1)
-        total += digit // 10 + digit % 10
-    return (10 - (total % 10)) % 10 == int(value[-1])
+    parity = len(digits) % 2
+    for index, char in enumerate(digits):
+        digit = int(char)
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
+
+
+def _luhn_valid(value: str) -> bool:
+    return len(value) == 10 and value.isdigit() and _luhn_checksum_valid(value)
+
+
+def _iban_valid(value: str) -> bool:
+    canonical = re.sub(r"\s+", "", str(value or "")).upper()
+    if not 15 <= len(canonical) <= 34:
+        return False
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]+", canonical):
+        return False
+    rearranged = canonical[4:] + canonical[:4]
+    remainder = 0
+    for char in rearranged:
+        fragment = char if char.isdigit() else str(ord(char) - 55)
+        for digit in fragment:
+            remainder = (remainder * 10 + int(digit)) % 97
+    return remainder == 1
 
 
 def _date_shape_valid(date_digits: str) -> bool:
@@ -222,9 +298,10 @@ def tokenize_structured_identifier(field_name: str, value: str) -> str:
 def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = False) -> str:
     """Pseudonymize high-confidence identifiers in human-readable text.
 
-    When ``redact_adjacent_name`` is true (presentation only), a full title-case
-    name immediately tied to a Swedish personal identifier is also replaced.
-    Storage callers leave names intact and pseudonymize only the identifier.
+    Storage redaction is deliberately narrow: validated payment identifiers,
+    credential-shaped secrets, Swedish personal identifiers and explicitly
+    labelled IDs. Ordinary business names, amounts, project/deal names and order
+    descriptions remain available for workflow understanding.
     """
     raw = str(text or "")
     if not raw or _ALREADY_TOKEN_RE.fullmatch(raw):
@@ -260,6 +337,32 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
             return f"{match.group('label')}{stable_token(_kind, value)}"
         out = pattern.sub(repl, out)
 
+    def iban_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        if not _iban_valid(value):
+            return value
+        return stable_token("IBAN", re.sub(r"\s+", "", value).upper())
+
+    out = _IBAN_RE.sub(iban_repl, out)
+
+    def pan_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        digits = re.sub(r"\D", "", value)
+        if not 13 <= len(digits) <= 19 or not _luhn_checksum_valid(digits):
+            return value
+        return stable_token("PAYMENT_CARD", digits)
+
+    out = _PAN_RE.sub(pan_repl, out)
+
+    out = _SECRET_RE.sub(lambda m: stable_token("SECRET", m.group(0)), out)
+
+    def secret_assignment_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        if _ALREADY_TOKEN_RE.fullmatch(value):
+            return match.group(0)
+        return f"{match.group('label')}{stable_token('SECRET', value)}"
+
+    out = _SECRET_ASSIGN_RE.sub(secret_assignment_repl, out)
     return out
 
 
@@ -283,5 +386,6 @@ def sanitize_event_identifiers(event: dict[str, Any]) -> dict[str, Any]:
     for field in ("app", "window_title"):
         if isinstance(e.get(field), str):
             e[field] = redact_sensitive_identifiers(str(e[field]), redact_adjacent_name=False)
-    e["metadata"] = walk(e.get("metadata") or {})
+    if "metadata" in e:
+        e["metadata"] = walk(e.get("metadata") or {})
     return e

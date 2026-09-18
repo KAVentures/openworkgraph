@@ -7,6 +7,7 @@ small, testable transforms; they no longer depend on import order or mutate each
 other's module globals.
 """
 
+import os
 from typing import Any
 
 from . import presentation as _presentation
@@ -51,9 +52,22 @@ _redactor = mail_subject_policy.wrap_redactor(_redactor, _VIEW)
 _identity_learner = first_name_policy.build_redactor(_LEARNING_VIEW, persist_registry=True)
 
 
+def _chmod_private(path) -> None:
+    try:
+        if path.exists():
+            os.chmod(path, 0o600)
+    except Exception:
+        # Windows ACLs/packaged environments may not expose POSIX chmod semantics.
+        # Privacy initialization must never prevent OpenWorkGraph from starting.
+        pass
+
+
 def initialize_privacy_state() -> None:
     """Create/load installation-local privacy state during startup, never on GET."""
     _presentation._local_key()
+    data_dir = _presentation._data_dir()
+    _chmod_private(data_dir / ".display_redaction_key")
+    _chmod_private(data_dir / ".presentation_people.json")
 
 
 def redact_for_display(value: Any) -> Any:
