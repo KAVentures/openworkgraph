@@ -23,7 +23,13 @@ from .analytics import (
 from .context import search_context, recent_context, context_timeline
 from .db import init_db, insert_events, harden_existing_browser_events
 from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
-from .privacy_pipeline import redact_for_display, initialize_privacy_state, learn_persistent_identities
+from .privacy_pipeline import (
+    redact_for_display,
+    initialize_privacy_state,
+    learn_persistent_identities,
+    reset_persistent_identities,
+)
+from .v46_migration import harden_existing_sensitive_identifiers_v46
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD = ROOT / "dashboard" / "index.html"
@@ -182,6 +188,9 @@ class BrowserHeartbeat(BaseModel):
 def startup() -> None:
     initialize_privacy_state()
     init_db()
+    # v0.46 storage hardening is idempotent and repairs legacy rows before any
+    # API response can expose them.
+    harden_existing_sensitive_identifiers_v46()
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
     harden_existing_browser_events(_runtime_config())
@@ -209,6 +218,15 @@ def heartbeat(status: Heartbeat) -> dict[str, str]:
     COLLECTOR_STATUS.update(status.model_dump())
     COLLECTOR_STATUS["received_at"] = datetime.now(timezone.utc).isoformat()
     return {"status": "ok"}
+
+
+@app.post("/v1/privacy/reset-learned-names")
+def reset_learned_names() -> dict[str, bool | str]:
+    removed = reset_persistent_identities()
+    return {
+        "status": "ok",
+        "removed_existing_registry": removed,
+    }
 
 
 @app.get("/v1/browser-context")
