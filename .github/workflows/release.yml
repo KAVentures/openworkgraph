@@ -91,10 +91,14 @@ jobs:
 
           For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
 
-          ### Privacy model
+          ### Privacy and local-interface security
           Typed text, individual key identities and clipboard contents are not captured. Screenshots are disabled in the normal configuration.
 
           High-confidence secrets and sensitive identifiers are hardened before local persistence where their literal value is not needed for workflow analysis. Presentation/API/MCP/export views additionally pseudonymize detected people/owner aliases. Rich workflow context such as company/project names, amounts, order/reference numbers and page/document titles may remain intentionally useful, so review rich exports before sharing them outside the intended analysis context.
+
+          Local API reads/control routes and MCP access are capability-protected. The dashboard uses a launcher-bootstrap local session rather than embedding the long-lived API capability in HTML. The browser sensor authenticates the local OpenWorkGraph server with HMAC challenge-response before sending browser evidence and signs sensor requests; if verification fails, pending browser evidence remains queued.
+
+          These controls reduce accidental localhost exposure, unrelated-service probing and naive port squatting. They are not a security boundary against malware already running with the same operating-system user privileges; stronger protection for that attacker model requires OS/endpoint isolation and enterprise controls.
 
           The local user's detected/configured identity can be shown as **OWNER**; other high-confidence people use stable PERSON tokens. Learned person aliases can be reset from the dashboard without deleting captured work history.
 
