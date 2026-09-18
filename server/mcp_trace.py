@@ -74,6 +74,36 @@ def compact_event(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _filter_clauses(
+    *,
+    snapshot_until: str,
+    since: str | None,
+    until: str | None,
+    query: str | None,
+    app_name: str | None,
+    session_id: str | None,
+) -> tuple[list[str], list[Any]]:
+    clauses = ["observed_at <= ?"]
+    params: list[Any] = [snapshot_until]
+    if since:
+        clauses.append("observed_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("observed_at <= ?")
+        params.append(until)
+    if app_name:
+        clauses.append("LOWER(COALESCE(app,'')) = LOWER(?)")
+        params.append(app_name)
+    if session_id:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if query:
+        like = f"%{query}%"
+        clauses.append("(COALESCE(app,'') LIKE ? OR COALESCE(window_title,'') LIKE ? OR event_type LIKE ? OR metadata_json LIKE ?)")
+        params.extend([like, like, like, like])
+    return clauses, params
+
+
 def workflow_trace(
     *,
     since: str | None = None,
@@ -81,6 +111,9 @@ def workflow_trace(
     cursor: str | None = None,
     limit: int = 100,
     scope: str = "current",
+    query: str | None = None,
+    app_name: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Return one compact, stable, chronological page of rich local evidence."""
     page_limit = max(1, min(int(limit), 500))
@@ -90,6 +123,9 @@ def workflow_trace(
         snapshot_until = str(state.get("snapshot_until") or "")
         effective_since = str(state.get("since") or "") or None
         effective_until = str(state.get("until") or "") or None
+        effective_query = str(state.get("query") or "") or None
+        effective_app = str(state.get("app_name") or "") or None
+        effective_session = str(state.get("session_id") or "") or None
         after_at = str(state.get("after_at") or "") or None
         try:
             after_id = int(state.get("after_id") or 0)
@@ -100,40 +136,36 @@ def workflow_trace(
         snapshot_until = until or datetime.now(timezone.utc).isoformat()
         effective_since = since
         effective_until = until
+        effective_query = query
+        effective_app = app_name
+        effective_session = session_id
         after_at = None
         after_id = 0
         effective_scope = scope if scope in {"current", "all"} else "current"
         if effective_scope == "current" and not effective_since:
             effective_since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") or None
 
-    clauses = ["observed_at <= ?"]
-    params: list[Any] = [snapshot_until]
-    if effective_since:
-        clauses.append("observed_at >= ?")
-        params.append(effective_since)
-    if effective_until:
-        clauses.append("observed_at <= ?")
-        params.append(effective_until)
+    clauses, params = _filter_clauses(
+        snapshot_until=snapshot_until,
+        since=effective_since,
+        until=effective_until,
+        query=effective_query,
+        app_name=effective_app,
+        session_id=effective_session,
+    )
+    count_clauses = list(clauses)
+    count_params = list(params)
     if after_at:
         clauses.append("(observed_at > ? OR (observed_at = ? AND id > ?))")
         params.extend([after_at, after_at, after_id])
 
-    where = " AND ".join(clauses)
     with connect() as conn:
-        count_clauses = ["observed_at <= ?"]
-        count_params: list[Any] = [snapshot_until]
-        if effective_since:
-            count_clauses.append("observed_at >= ?")
-            count_params.append(effective_since)
-        if effective_until:
-            count_clauses.append("observed_at <= ?")
-            count_params.append(effective_until)
         total = int(conn.execute(
             f"SELECT COUNT(*) FROM events WHERE {' AND '.join(count_clauses)}",
             tuple(count_params),
         ).fetchone()[0])
         db_rows = conn.execute(
-            f"SELECT * FROM events WHERE {where} ORDER BY observed_at ASC, id ASC LIMIT ?",
+            f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY observed_at ASC, id ASC LIMIT ?",
             tuple(params + [page_limit + 1]),
         ).fetchall()
 
@@ -147,6 +179,9 @@ def workflow_trace(
             "snapshot_until": snapshot_until,
             "since": effective_since or "",
             "until": effective_until or "",
+            "query": effective_query or "",
+            "app_name": effective_app or "",
+            "session_id": effective_session or "",
             "scope": effective_scope,
             "after_at": last.get("observed_at"),
             "after_id": last.get("id"),
@@ -162,5 +197,8 @@ def workflow_trace(
         "scope": effective_scope,
         "since": effective_since,
         "until": effective_until,
+        "query_applied": bool(effective_query),
+        "app_filter": effective_app,
+        "session_id": effective_session,
         "data_layer": "rich_local_evidence_compact",
     }
