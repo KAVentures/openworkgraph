@@ -2,7 +2,7 @@
 
 **A local-first context layer for how work actually happens.**
 
-OpenWorkGraph observes desktop and browser work, preserves customer-owned work evidence, structures it into searchable context and process telemetry, and exposes it through REST/MCP so ChatGPT, Claude and other AI systems can understand how work is actually performed — not only what is written in documents and business systems.
+OpenWorkGraph observes desktop and browser work, preserves useful customer-owned workflow evidence, structures it into searchable context and process telemetry, and exposes it through REST/MCP so ChatGPT, Claude and other AI systems can reason about how work is actually performed — not only what is written in documents and business systems.
 
 [![Tests](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml/badge.svg)](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml)
 [![Latest release](https://img.shields.io/github/v/release/KAVentures/openworkgraph)](https://github.com/KAVentures/openworkgraph/releases/latest)
@@ -22,7 +22,7 @@ OpenWorkGraph observes desktop and browser work, preserves customer-owned work e
 5. Approve **Accessibility** and **Input Monitoring** if macOS requests them.
 6. The local dashboard opens automatically at `http://127.0.0.1:8787`.
 
-Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen instructions to load the browser sensor.
+Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen instructions to load the optional browser sensor.
 
 ### Windows
 
@@ -34,33 +34,33 @@ Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen
 4. On first launch, OpenWorkGraph downloads its own private runtime. **No Python installation is required.**
 5. The local dashboard opens automatically at `http://127.0.0.1:8787`.
 
-Then double-click **`ADD_BROWSER_SENSOR.cmd`** once and follow the on-screen instructions to load the browser sensor in Chrome or Edge.
+Then double-click **`ADD_BROWSER_SENSOR.cmd`** once and follow the on-screen instructions to load the optional browser sensor in Chrome or Edge.
 
-Windows now includes best-effort **Microsoft UI Automation** metadata for native controls such as buttons, menus and fields. OpenWorkGraph reads control identity/label metadata only; it deliberately does not request typed values, selected text or password values. Some elevated applications or applications without a UI Automation provider may expose less semantic detail.
+Windows includes best-effort **Microsoft UI Automation** metadata for native controls such as buttons, menus and fields. OpenWorkGraph reads control identity/label metadata only; it deliberately does not request typed field values, selected text or password values. Some elevated applications or applications without a UI Automation provider expose less semantic detail.
 
 ### One command for Codex / Claude Code / terminal users
 
-If an agent has shell access, you can give it one command instead of downloading the ZIP manually.
+If an agent has shell access, it can install the latest Release directly.
 
-**macOS:**
+**macOS**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
 ```
 
-**Windows PowerShell:**
+**Windows PowerShell**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
 ```
 
-These commands download the **latest GitHub Release** and invoke the same standalone launcher used by ordinary testers. If you prefer not to execute a remote script directly, inspect `install.sh` / `install.ps1` in this repository first and use the Release ZIP instead.
+These commands download the latest GitHub Release and invoke the same standalone launcher used by ordinary testers. If you do not want to execute a remote script directly, inspect `install.sh` / `install.ps1` first or use the Release ZIP.
 
-The browser extension still requires a one-time browser approval because ordinary local software should not silently install browser extensions.
+The browser extension still requires one-time browser approval; local software should not silently install browser extensions.
 
-### Source ZIP also works
+### Source ZIP
 
-`Code → Download ZIP` remains usable. On macOS run `START_ON_MAC.command`; on Windows run `START_ON_WINDOWS.bat`. The Release ZIPs are cleaner for nontechnical testers.
+`Code → Download ZIP` also works. On macOS run `START_ON_MAC.command`; on Windows run `START_ON_WINDOWS.bat`. The Release ZIPs are the recommended path for nontechnical testers.
 
 ---
 
@@ -68,16 +68,11 @@ The browser extension still requires a one-time browser approval because ordinar
 
 Most enterprise AI can search what an organization has already written down: documents, email, Slack, CRM records, tickets and knowledge bases.
 
-OpenWorkGraph is aimed at a different missing layer:
+OpenWorkGraph targets a different missing layer:
 
 > **What did people actually do, in what order, across which tools, with how much effort, and what normally happens in practice?**
 
-### MCP trust boundary
-
-Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before any context/process result crosses the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses command-like prompt-injection text (for example forged `SYSTEM:` / assistant roles, “ignore previous instructions”, tool-call commands or requests to reveal secrets), and adds an `_openworkgraph_security` trust annotation. The rich local evidence remains unchanged; this hardening applies only to the copy sent through MCP.
-
-
-A captured trace might look conceptually like:
+A captured trace might conceptually look like:
 
 ```text
 09:02  Gmail          read customer request
@@ -88,7 +83,7 @@ A captured trace might look conceptually like:
 09:11  Gmail          reply
 ```
 
-That work history can then be queried by an AI through MCP/API for questions such as:
+An AI can then ask questions such as:
 
 - “What do we normally do in this situation?”
 - “Show me similar work from the past.”
@@ -96,6 +91,41 @@ That work history can then be queried by an AI through MCP/API for questions suc
 - “Which repeated processes look suitable for automation?”
 - “What internal tool would eliminate the most recurring work?”
 - “Did the new tool actually reduce the time spent on this process?”
+
+## What is captured
+
+Current capture includes:
+
+- active application and window/tab focus spans
+- browser tab activation and navigation
+- brief address-bar navigation without requiring a later click or scroll
+- foreground, engaged, probable-idle and active-input timing
+- aggregate keypress counts — **never key identities, key order or typed text**
+- global mouse clicks and throttled scrolls
+- native semantic control metadata through macOS Accessibility and Windows UI Automation, best effort
+- browser semantic events such as interactive clicks, editor/input focus, form submits and control changes
+- copy/paste **occurrence**, not clipboard contents
+- candidate task executions and repeated completed task families derived from the event stream
+- navigation fragments kept separate from completed-task evidence
+
+### Deliberately not captured in normal operation
+
+- typed text or individual key identities
+- clipboard contents
+- password-field values
+- selected text
+- screenshots or screen recording by default
+- URL query strings or fragments in browser evidence
+
+Screenshots are disabled in the normal configuration and are not part of the current product direction or normal exports.
+
+## Why the browser sensor matters
+
+Desktop observation can tell that a browser is in use, but browser-native signals make the data much more useful by separating Gmail, Google Docs, Salesforce, ChatGPT and other web tools and by capturing navigation reliably.
+
+The browser sensor uses multiple independent signals, including tab activation/update and browser navigation lifecycle events. Creating a tab, typing a URL and pressing Enter can therefore produce evidence without requiring a later click or scroll.
+
+The extension is optional: desktop capture continues without it, but browser-level context is less precise.
 
 ## Architecture
 
@@ -105,7 +135,7 @@ That work history can then be queried by an AI through MCP/API for questions suc
  Future sensors ───────┤
                        ▼
                 RAW WORK EVIDENCE
-              customer-owned truth
+               local source events
                        │
              ┌─────────┴─────────┐
              ▼                   ▼
@@ -122,38 +152,61 @@ That work history can then be queried by an AI through MCP/API for questions suc
        ChatGPT       Claude    internal agents
 ```
 
-The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable evidence so better models can reinterpret the same history later.
+The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable event evidence so later analytics or better models can reinterpret the history.
 
 ## Three local data layers
 
-OpenWorkGraph deliberately separates capture fidelity from downstream privacy/analysis policy.
+OpenWorkGraph separates capture fidelity from downstream privacy and analysis policy.
 
-1. **Raw local evidence** — the richest customer-owned source of truth for reconstruction and verification.
-2. **Customer context** — searchable organizational memory containing useful observed resource/page/window/UI context, while never adding typed field values or clipboard contents.
+1. **Raw local evidence** — the richest persisted event layer used for reconstruction and verification. “Raw” does **not** mean unsanitized: high-confidence sensitive identifiers and secrets are hardened before persistence.
+2. **Customer context** — searchable organizational memory derived from observed resource/page/window/UI context.
 3. **Normalized operational events** — a content-minimized representation used for broad process/effort analytics and task inference.
 
-## What the observer captures
+## Privacy model
 
-Current capture includes:
+OpenWorkGraph has two distinct privacy stages. Keeping them separate is important.
 
-- active application and window/tab focus spans
-- browser tab activation and navigation
-- brief address-bar navigation without requiring a later click or scroll
-- foreground, engaged, probable-idle and active-input timing
-- aggregate keypress counts — **never key identities, key order or typed text**
-- global mouse clicks and throttled scrolls
-- native semantic control metadata on macOS Accessibility and Windows UI Automation, best effort
-- browser semantic events such as interactive clicks, editor/input focus, form submits and control changes
-- copy/paste **occurrence**, not clipboard contents
-- candidate task executions
-- repeated completed task families
-- navigation fragments kept separate from completed-task evidence
+### 1. Storage-time sensitive-identifier hardening
+
+Before event evidence is persisted, high-confidence identifiers are pseudonymized or removed where the literal value is unnecessary for workflow analysis. Current handling includes, among other shapes:
+
+- Swedish personal identifiers and explicitly labelled patient/journal/case/account IDs
+- IBANs and recognized payment-card numbers
+- environment-variable/API credentials, bearer tokens, connection-string passwords and private-key blocks
+- other long Luhn-valid sensitive numbers when the system cannot confidently classify them as cards
+
+Swedish OCR/payment references, invoice/reference numbers and similar business references are **not intentionally labelled as payment cards merely because they pass Luhn**. Explicit reference cues take precedence over card-shape heuristics.
+
+Ambiguous long Luhn-valid numbers may be represented as `SENSITIVE_NUMBER_x` rather than being exposed or falsely described as a card.
+
+### 2. Presentation/export person and owner pseudonymization
+
+When data is presented through dashboard/API/MCP/export surfaces, additional presentation policy can replace personal aliases with stable tokens such as `PERSON_x` and the local user with `OWNER`.
+
+Persistent person learning is deliberately conservative. Strong evidence such as `Name <email>`, sender/recipient fields, `reply to`, `from`, `cc`, `bcc`, `meeting with` and similar person-specific contexts can teach an alias. Generic workflow phrases and status/team language such as `In Progress`, `Legal Team`, queues, boards and sprint labels are rejected from persistent person learning.
+
+The dashboard includes **Reset learned person aliases**. This deletes the local alias registry only; it does not delete or rewrite captured workflow history.
+
+See [Privacy and data handling](docs/PRIVACY_AND_DATA.md) for the detailed boundary.
+
+## What remains intentionally useful
+
+OpenWorkGraph does **not** try to remove every business fact. Depending on what appears in observable titles/labels, the local evidence and rich export can retain things such as:
+
+- company/customer names
+- project or deal names
+- order/reference numbers
+- amounts
+- document/page/window titles
+- safe UI labels
+
+Those details can be essential for understanding the workflow. They can also be sensitive. **Review a rich export before sharing it outside its intended analysis context.**
 
 ## Reliable event delivery
 
 Desktop capture is written locally first and placed into a durable SQLite outbox. If the local API is temporarily unavailable, the same event remains queued and is retried with its original event ID.
 
-The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from the moment they were captured, so delayed delivery cannot silently attach old evidence to a later session.
+The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from capture time so delayed delivery does not silently attach old evidence to a later session.
 
 ## Identity model
 
@@ -181,6 +234,20 @@ Gmail → Compose → typing effort → Send → email.compose_send
 
 Repeated task families are evidence for review — not a claim that a task is automatically safe to automate.
 
+## Exports for ChatGPT, Claude and data tools
+
+The dashboard exports a captured session as:
+
+- **XLSX** — convenient for ChatGPT/Claude and manual inspection
+- **CSV ZIP** — convenient for ChatGPT/Claude and data tools; contains `README_FOR_AI.md`
+- **JSON** — full structured representation intended primarily for code/integrations
+
+The dashboard includes **Include rich raw session evidence**. Leave it enabled when detailed reconstruction matters; disable it for a more content-minimized operational export.
+
+CSV/XLSX event tables expose common semantic fields directly, including `action`, `page_host`, `page_path`, `target_label` and `target_role`, while retaining the complete `metadata_json` column for advanced analysis.
+
+The AI data dictionary explains timing fields, stable privacy tokens, capture limits and deliberately retained context. See [Exports and AI analysis](docs/EXPORTS_AND_AI.md).
+
 ## MCP: organizational memory + workflow analysis
 
 The MCP server can expose OpenWorkGraph directly to an AI assistant.
@@ -196,6 +263,12 @@ Context-oriented tools include:
 Operational tools include workflow summaries, normalized observation search, candidate task executions, session traces and automation candidates.
 
 Raw local evidence is not exposed through MCP by default.
+
+### MCP trust boundary
+
+Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before context/process results cross the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses common command-like prompt-injection text and attaches an `_openworkgraph_security` trust annotation.
+
+This MCP hardening is separate from storage-time sensitive-identifier hardening. It applies to the copy returned to an AI tool, not to the meaning of the stored workflow event.
 
 ## REST data layers
 
@@ -219,6 +292,13 @@ Raw local evidence is not exposed through MCP by default.
 - `GET /v1/operational-sessions/{session_id}`
 - `GET /v1/tasks?scope=current`
 
+### Exports and local privacy controls
+
+- `GET /v1/export/json`
+- `GET /v1/export/xlsx`
+- `GET /v1/export/csvzip`
+- `POST /v1/privacy/reset-learned-names`
+
 ### Sensor coordination / ingestion
 
 - `GET /v1/browser-context`
@@ -227,18 +307,7 @@ Raw local evidence is not exposed through MCP by default.
 - `POST /v1/heartbeat`
 - `POST /v1/browser-heartbeat`
 
-## Browser navigation accuracy
-
-The browser sensor uses several independent browser-native signals so creating a tab, typing a URL and pressing Enter is captured without waiting for a later page interaction:
-
-- `tabs.onUpdated`
-- `webNavigation.onBeforeNavigate`
-- `webNavigation.onCommitted`
-- `webNavigation.onCompleted`
-- document-start observation
-- History API route changes for single-page applications
-
-Failed delivery is queued locally and retried.
+The local HTTP server binds to loopback (`127.0.0.1`) in the current prototype and includes origin/host restrictions to reduce unintended browser access to work-history endpoints.
 
 ## Platform status
 
@@ -250,27 +319,34 @@ Failed delivery is queued locally and retried.
 | Browser navigation + semantic events | ✅ | ✅ |
 | Durable local delivery | ✅ | ✅ |
 | Raw/context/operational layers | ✅ | ✅ |
-| Exports / REST / MCP | ✅ | ✅ |
+| XLSX / CSV ZIP / JSON exports | ✅ | ✅ |
+| REST / MCP | ✅ | ✅ |
 | Native control semantics | Accessibility API | Microsoft UI Automation |
 | Automated CI | ✅ | ✅ |
 
 Native control semantics are best effort on both platforms. Windows cannot inspect controls from every application, especially when the target application runs at a higher integrity level than OpenWorkGraph or does not expose a UI Automation provider.
 
-## Exports
+## Current limitations
 
-The dashboard can export the captured session as:
+OpenWorkGraph is not yet a finished enterprise product. Current limitations include:
 
-- JSON
-- XLSX
-- ZIP of CSV tables
+- browser semantic detail requires installation/approval of the optional extension
+- some native applications expose weak or no accessibility/UI Automation labels
+- activity timing is an estimate: a foreground window is not proof that a person was actively working every second
+- inferred tasks/patterns are analytical interpretations, not ground truth
+- rich local evidence can still contain sensitive business context even after high-confidence identifier hardening
+- enterprise-wide authentication, RBAC, centrally managed policy, retention/audit controls and fleet deployment are not yet a production control plane
 
-The normalized operational representation is available for lower-content analysis. A deliberate **Include rich raw session evidence** option includes the richer customer-owned evidence when full reconstruction is needed.
+## Documentation
 
-## Data and privacy boundary
+- [Documentation index](docs/README.md)
+- [Privacy and data handling](docs/PRIVACY_AND_DATA.md)
+- [Exports and AI analysis](docs/EXPORTS_AND_AI.md)
+- [Owner/person presentation redaction](docs/OWNER_REDACTION.md)
+- [Nontechnical testing guide](NONTECHNICAL_TESTING.md)
+- [Standalone macOS launcher notes](docs/STANDALONE_MAC_LAUNCHER.md)
 
-The current prototype server binds to `127.0.0.1`. Captured data stays on the local computer unless the user deliberately exports it or later connects it to another system.
-
-OpenWorkGraph's collection model intentionally avoids storing key identities/typed text in the effort counter and does not capture clipboard contents. Rich raw evidence can still contain sensitive visible resource names, page titles or other on-screen context, so enterprise deployment will require organization-specific collection policies, authentication, encryption, RBAC, retention rules and audit logs.
+Historical version-specific notes remain in `docs/` for traceability and are marked as historical in the documentation index.
 
 ## Development
 
