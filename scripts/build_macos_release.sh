@@ -92,10 +92,15 @@ Salesforce and other browser work instead of seeing only the browser application
 Privacy / data location
 -----------------------
 The prototype runs locally. Captured data stays on this computer unless you
-explicitly export it. Aggregate keyboard activity is counted, but typed text and
-key identities are not recorded by the effort counter. Display/API/export views
-pseudonymize detected identifiers after workflow processing; raw local evidence
-used for inference is not destructively rewritten.
+explicitly export it or connect it to another system. Aggregate keyboard activity
+is counted, but typed text, individual key identities and clipboard contents are
+not captured. Screenshots are disabled in the normal configuration.
+
+High-confidence secrets and sensitive identifiers are hardened before persistence;
+presentation/export views additionally pseudonymize detected people/owner aliases.
+Useful business context such as company/project names, amounts, order/reference
+numbers and page/document titles can remain intentionally, so review rich exports
+before sharing them outside the intended analysis context.
 
 Stop OpenWorkGraph with Ctrl+C in the Terminal window it opened.
 
