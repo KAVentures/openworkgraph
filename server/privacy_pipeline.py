@@ -2,12 +2,13 @@ from __future__ import annotations
 
 """Explicit presentation privacy pipeline.
 
-Production code imports this module directly.  The individual policy modules remain
+Production code imports this module directly. The individual policy modules remain
 small, testable transforms; they no longer depend on import order or mutate each
 other's module globals.
 """
 
 import os
+import re
 from typing import Any
 
 from . import presentation as _presentation
@@ -32,10 +33,45 @@ class _PolicyView:
         return text
 
 
+# Identity learning must be stricter than display-time recognition. Bare "to",
+# "with", "message" and "call" are common workflow language and can permanently
+# teach status/team labels as people. These cues remain available only in forms
+# that strongly imply a person.
+_STRONG_IDENTITY_CUE_RE = re.compile(
+    r"\b(?:"
+    r"reply\s+to|email\s+to|message\s+to|message\s+from|email\s+from|"
+    r"from|cc|bcc|sender|recipient|"
+    r"meeting\s+with|call\s+with|assigned\s+to|"
+    r"owner|contact|participant|attendee|assignee"
+    r")\s*[:\-]?\s+",
+    re.IGNORECASE,
+)
+
+_LEARNING_NON_NAME_WORDS = set(_presentation.NON_NAME_WORDS) | {
+    "team", "group", "department", "progress", "done", "backlog", "board",
+    "queue", "sprint", "legal", "finance", "support", "review", "todo", "do",
+}
+
+
 class _IdentityLearningView(_PolicyView):
-    # Ingest-time learning can use explicit person cues such as Reply to / From /
-    # Meeting with. Display-time broad title guessing remains disabled.
-    CUE_RE = _presentation.CUE_RE
+    # Ingest-time learning uses only strong person cues plus the email/name
+    # evidence handled by first_name_policy itself.
+    CUE_RE = _STRONG_IDENTITY_CUE_RE
+    NON_NAME_WORDS = _LEARNING_NON_NAME_WORDS
+
+    def _looks_like_person_name(self, value: str, *, allow_single: bool = False) -> bool:
+        """Apply learning-only vocabulary before the base title-case heuristic.
+
+        The base helper closes over presentation.NON_NAME_WORDS, so merely exposing
+        a stricter NON_NAME_WORDS attribute on this view is not enough. Check each
+        candidate word here before delegating to the existing heuristic.
+        """
+        words = _presentation._name_words(value)
+        for word in words:
+            bare = word.strip(".'’-_").casefold()
+            if bare in self.NON_NAME_WORDS:
+                return False
+        return _presentation._looks_like_person_name(value, allow_single=allow_single)
 
 
 _VIEW = _PolicyView()
@@ -68,6 +104,23 @@ def initialize_privacy_state() -> None:
     data_dir = _presentation._data_dir()
     _chmod_private(data_dir / ".display_redaction_key")
     _chmod_private(data_dir / ".presentation_people.json")
+
+
+def reset_persistent_identities() -> bool:
+    """Delete only learned person aliases; captured workflow evidence is untouched."""
+    path = _presentation._people_registry_path()
+    try:
+        lock = getattr(_presentation, "_REGISTRY_LOCK", None)
+        if lock is None:
+            existed = path.exists()
+            path.unlink(missing_ok=True)
+            return existed
+        with lock:
+            existed = path.exists()
+            path.unlink(missing_ok=True)
+            return existed
+    except Exception:
+        return False
 
 
 def redact_for_display(value: Any) -> Any:
