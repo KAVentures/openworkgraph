@@ -30,5 +30,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Browser sensor JavaScript syntax
+        run: |
+          node --check browser_extension/browser_auth.js
+          node --check browser_extension/secure_background.js
+          node --check browser_extension/popup.js
+          node --check browser_extension/background.js
+          node --check browser_extension/content.js
       - name: Browser sensor JavaScript tests
         run: node --test tests/js/*.test.mjs
