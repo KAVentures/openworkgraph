@@ -67,6 +67,7 @@ EOF
 /usr/bin/base64 < "$PAYLOAD_ARCHIVE" >> "$LAUNCHER"
 
 cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
+cp "$ROOT/LICENSE" "$PKG/LICENSE"
 
 cat > "$PKG/README_FIRST.txt" <<EOF
 OpenWorkGraph $VERSION — macOS tester build
@@ -111,6 +112,12 @@ Local API/MCP access is capability-protected and browser sensor requests are
 paired/signed. These controls reduce accidental localhost exposure and port
 squatting, but they are not a boundary against malware already running with the
 same macOS user privileges.
+
+License
+-------
+OpenWorkGraph is open-source software under the Apache License 2.0. The full
+license is included as LICENSE in this folder. Copyright 2026 Koyar Afrasyab
+(Kinvectum). The software license does not grant rights to project branding.
 
 Stop OpenWorkGraph with Ctrl+C in the Terminal window it opened.
 
