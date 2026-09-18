@@ -4,6 +4,11 @@ let lastNavAt = 0;
 let lastPointer = {at: 0, key: ""};
 let lastFocus = {at: 0, key: ""};
 
+const FALLBACK_LABEL_MAX_CHARS = 60;
+const FALLBACK_LABEL_MAX_WORDS = 8;
+const FALLBACK_CONTROL_TAGS = new Set(["BUTTON", "SUMMARY", "OPTION"]);
+const FALLBACK_CONTROL_ROLES = new Set(["button", "tab", "menuitem", "option", "switch", "checkbox", "radio"]);
+
 function cleanText(value, max = 160) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
@@ -47,6 +52,19 @@ function isSensitiveControl(el) {
   return type === "password" || /current-password|new-password|cc-|one-time-code/.test(autocomplete) || /password|passcode|otp|security code/.test(`${name} ${aria}`);
 }
 
+function safeFallbackControlText(el) {
+  const tag = String(el?.tagName || "").toUpperCase();
+  const role = cleanText(el?.getAttribute?.("role"), 80).toLowerCase();
+  const isControl = FALLBACK_CONTROL_TAGS.has(tag) || FALLBACK_CONTROL_ROLES.has(role);
+  const isLink = tag === "A" || role === "link";
+  if (!isControl && !isLink) return "";
+  const text = cleanText(el?.textContent);
+  if (!text) return "";
+  if (text.length > FALLBACK_LABEL_MAX_CHARS) return "";
+  if (text.split(/\s+/).filter(Boolean).length > FALLBACK_LABEL_MAX_WORDS) return "";
+  return text;
+}
+
 function labelForControl(el) {
   if (!(el instanceof Element)) return "";
   if (isSensitiveControl(el)) return "secure field";
@@ -70,9 +88,11 @@ function labelForControl(el) {
   const closestLabel = el.closest?.("label");
   if (closestLabel && cleanText(closestLabel.textContent)) return cleanText(closestLabel.textContent);
 
-  const interactive = el.matches?.("button,a,[role='button'],[role='link'],[role='tab'],[role='menuitem'],[role='option'],summary,option") ||
-    ["BUTTON", "A", "SUMMARY", "OPTION"].includes(el.tagName);
-  return interactive ? cleanText(el.textContent) : "";
+  // textContent is only a fallback. Modern apps often make an entire mail,
+  // record, or chat row clickable; capturing the row body as a "label" leaks
+  // far more content than workflow inference needs. Keep short control/link
+  // labels and otherwise rely on action + role + page context.
+  return safeFallbackControlText(el);
 }
 
 function pathElements(eventOrStart) {
@@ -178,16 +198,3 @@ addEventListener("popstate", () => sendNavigation("popstate"));
 addEventListener("hashchange", () => sendNavigation("hashchange"));
 addEventListener("DOMContentLoaded", () => sendNavigation("dom_ready"), {once: true});
 addEventListener("pageshow", () => sendNavigation("pageshow"));
-
-for (const method of ["pushState", "replaceState"]) {
-  const original = history[method];
-  history[method] = function(...args) {
-    const result = original.apply(this, args);
-    queueMicrotask(() => sendNavigation(method));
-    return result;
-  };
-}
-
-setInterval(() => {
-  if (isTopFrame() && location.href !== lastHref) sendNavigation("url_poll");
-}, 1000);
