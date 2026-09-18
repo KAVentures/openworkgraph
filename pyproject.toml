@@ -1,6 +1,6 @@
 [project]
 name = "workflow-observer"
-version = "0.45.0"
+version = "0.46.0"
 description = "Local-first work telemetry, context retrieval, workflow mining, REST API, and MCP access."
 requires-python = ">=3.11"
 dependencies = [
