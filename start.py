@@ -24,7 +24,9 @@ from server.local_auth import (
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
 EXAMPLE = ROOT / "config.example.json"
-DASHBOARD = "http://127.0.0.1:8787"
+API_HOST = "127.0.0.1"
+API_PORT = 8787
+DASHBOARD = f"http://{API_HOST}:{API_PORT}"
 MCP_HOST = "127.0.0.1"
 MCP_PORT = 8788
 MCP_ENDPOINT = f"http://{MCP_HOST}:{MCP_PORT}/mcp"
@@ -36,23 +38,28 @@ def ensure_config() -> None:
         shutil.copy2(EXAMPLE, CONFIG)
 
 
-def wait_for_api(timeout: float = 15.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(f"{DASHBOARD}/health", timeout=1) as r:
-                return r.status == 200
-        except Exception:
-            time.sleep(0.25)
-    return False
-
-
 def port_is_open(host: str, port: int, timeout: float = 0.2) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def wait_for_api(process: subprocess.Popen, timeout: float = 15.0) -> bool:
+    """Wait only for the API process we launched; never accept a replacement listener."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if process.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(f"{DASHBOARD}/health", timeout=1) as response:
+                if response.status == 200 and process.poll() is None:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.25)
+    return False
 
 
 def stop_process(p: subprocess.Popen | None) -> None:
@@ -102,8 +109,9 @@ def dashboard_url(env: dict[str, str]) -> str:
 def start_local_mcp(env: dict[str, str]) -> tuple[subprocess.Popen | None, bool]:
     """Start the authenticated local Streamable-HTTP MCP endpoint.
 
-    An already-occupied port is never assumed to be OpenWorkGraph. This avoids
-    silently directing an AI client at an unrelated localhost service.
+    An already-occupied port is never assumed to be OpenWorkGraph. Startup also
+    checks the child process before accepting an open port, closing the race where
+    an unrelated process binds 8788 after our preflight but before uvicorn does.
     """
     if port_is_open(MCP_HOST, MCP_PORT):
         return None, False
@@ -124,12 +132,12 @@ def start_local_mcp(env: dict[str, str]) -> tuple[subprocess.Popen | None, bool]
 
     deadline = time.time() + 5.0
     while time.time() < deadline:
-        if port_is_open(MCP_HOST, MCP_PORT):
-            return process, True
         if process.poll() is not None:
             return process, False
+        if port_is_open(MCP_HOST, MCP_PORT):
+            return process, True
         time.sleep(0.15)
-    return process, port_is_open(MCP_HOST, MCP_PORT)
+    return process, bool(process.poll() is None and port_is_open(MCP_HOST, MCP_PORT))
 
 
 def reset_demo_data(env: dict[str, str]) -> None:
@@ -170,16 +178,22 @@ def main() -> None:
     else:
         print("DEMO mode uses a separate synthetic-data database and resets on each demo launch.")
 
+    if port_is_open(API_HOST, API_PORT):
+        raise RuntimeError(
+            "Local port 8787 is already in use. OpenWorkGraph will not start capture or send evidence "
+            "to an unknown localhost service. Close the process using port 8787 and launch again."
+        )
+
     api = subprocess.Popen([
         sys.executable, "-m", "uvicorn", "server.secure_app:app",
-        "--host", "127.0.0.1", "--port", "8787"
+        "--host", API_HOST, "--port", str(API_PORT)
     ], cwd=ROOT, env=env)
 
     collector = None
     mcp_process = None
     try:
-        if not wait_for_api():
-            raise RuntimeError("The local dashboard could not start.")
+        if not wait_for_api(api):
+            raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
 
         mcp_process, mcp_ready = start_local_mcp(env)
         if mcp_ready:
