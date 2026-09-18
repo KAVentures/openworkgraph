@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, float] = {}
-_PAIRING_CODE: tuple[str, float] | None = None
+_PAIRING_CODE: tuple[str, float, int] | None = None
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
 
 
@@ -147,21 +147,26 @@ def dashboard_session_valid(token: str | None) -> bool:
 
 def new_pairing_code(ttl_seconds: int = 120) -> dict[str, int | str]:
     global _PAIRING_CODE
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    code = f"{secrets.randbelow(100_000_000):08d}"
     expires = time.time() + ttl_seconds
     with _LOCK:
-        _PAIRING_CODE = (code, expires)
+        _PAIRING_CODE = (code, expires, 0)
     return {"code": code, "expires_in_seconds": ttl_seconds}
 
 
-def consume_pairing_code(candidate: str) -> bool:
+def consume_pairing_code(candidate: str, *, max_attempts: int = 5) -> bool:
     global _PAIRING_CODE
     with _LOCK:
         current = _PAIRING_CODE
         if not current:
             return False
-        code, expiry = current
-        if expiry < time.time() or not hmac.compare_digest(str(candidate or ""), code):
+        code, expiry, attempts = current
+        if expiry < time.time() or attempts >= max_attempts:
+            _PAIRING_CODE = None
+            return False
+        if not hmac.compare_digest(str(candidate or ""), code):
+            attempts += 1
+            _PAIRING_CODE = None if attempts >= max_attempts else (code, expiry, attempts)
             return False
         _PAIRING_CODE = None
         return True
