@@ -3,6 +3,10 @@ name = "workflow-observer"
 version = "0.48.0"
 description = "Local-first work telemetry, context retrieval, workflow mining, REST API, and MCP access."
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+]
 dependencies = [
   "fastapi>=0.116,<1",
   "uvicorn[standard]>=0.35,<1",

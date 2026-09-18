@@ -38,6 +38,7 @@ exit /b %ERRORLEVEL%
 '@ | Set-Content -Path (Join-Path $Package "START_OPENWORKGRAPH.cmd") -Encoding ascii
 
 Copy-Item (Join-Path $Root "ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
+Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Package "LICENSE")
 
 @"
 OpenWorkGraph $Version - Windows tester build
@@ -89,6 +90,12 @@ Local API/MCP access is capability-protected and browser sensor requests are
 paired/signed. These controls reduce accidental localhost exposure and port
 squatting, but they are not a boundary against malware already running with the
 same Windows user privileges.
+
+License
+-------
+OpenWorkGraph is open-source software under the Apache License 2.0. The full
+license is included as LICENSE in this folder. Copyright 2026 Koyar Afrasyab
+(Kinvectum). The software license does not grant rights to project branding.
 
 Stop OpenWorkGraph with Ctrl+C in the console window it opened.
 

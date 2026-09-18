@@ -6,6 +6,7 @@ OpenWorkGraph observes desktop and browser work, preserves useful customer-owned
 
 [![Tests](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml/badge.svg)](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml)
 [![Latest release](https://img.shields.io/github/v/release/KAVentures/openworkgraph)](https://github.com/KAVentures/openworkgraph/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 > **Project status:** early public prototype. The current goal is accurate local capture, reconstructable work context and AI access — not employee-performance scoring or a production enterprise control plane.
 
@@ -405,3 +406,11 @@ python -m pytest -q
 `VERSION` is the canonical project version. When a new version is pushed to `main`, GitHub Actions builds both `OpenWorkGraph-macOS.zip` and `OpenWorkGraph-Windows.zip`. If that version does not already have a GitHub Release, the workflow creates one and attaches both standalone tester ZIPs plus SHA-256 checksums.
 
 Existing releases are left immutable; bump `VERSION` to publish a new release.
+
+## License
+
+OpenWorkGraph is open-source software licensed under the [Apache License 2.0](LICENSE).
+
+Copyright © 2026 Koyar Afrasyab (Kinvectum).
+
+Apache-2.0 permits commercial use, modification and redistribution subject to its terms and includes an express patent grant from contributors. The software license does not grant rights to OpenWorkGraph or Kinvectum names, logos or other branding except as required for reasonable attribution and describing the origin of the software.
