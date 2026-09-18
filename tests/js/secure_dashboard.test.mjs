@@ -17,8 +17,12 @@ test('dashboard bootstrap does not embed the installation API token', () => {
   assert.doesNotMatch(source, /__API_TOKEN__/);
 });
 
-test('AI connector setup requests authenticated MCP connection details', () => {
+test('local AI connectors use authenticated stdio while HTTP bearer is on demand only', () => {
   assert.match(source, /\/v1\/mcp-connection-config/);
-  assert.match(source, /Authorization:`Bearer \$\{c\.token\}`/);
   assert.match(source, /mcp_server\.secure_stdio/);
+  assert.match(source, /cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install/);
+  const cursorBlock = source.split('window.connectCursor', 2)[1].split('window.showBrowserPairingCode', 1)[0];
+  assert.doesNotMatch(cursorBlock, /Bearer/);
+  assert.match(source, /httpMcp\('start'\)/);
+  assert.match(source, /Bearer \$\{c\.token\}/);
 });
