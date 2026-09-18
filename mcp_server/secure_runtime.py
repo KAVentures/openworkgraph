@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 
 from server.local_auth import ensure_api_token
 from . import main as core
@@ -66,14 +67,14 @@ def authorize_tool(tool_name: str) -> None:
     try:
         state = secure_get("/v1/ai-access")
     except Exception as exc:
-        raise RuntimeError("OpenWorkGraph could not verify whether AI access is enabled") from exc
+        raise ToolError("OpenWorkGraph could not verify AI access. Keep OpenWorkGraph running and reopen its local dashboard.") from exc
     if state.get("enabled"):
         return
     try:
         secure_post("/v1/mcp-activity", {"tool": tool_name, "status": "denied", "rows": 0, "bytes": 0})
     except Exception:
         pass
-    raise RuntimeError("OpenWorkGraph AI access is OFF. Enable AI access in the local dashboard for this run.")
+    raise ToolError("OpenWorkGraph AI access is OFF. Enable AI access in the local dashboard for this run.")
 
 
 def audit_tool(tool_name: str, result: dict[str, Any]) -> None:
