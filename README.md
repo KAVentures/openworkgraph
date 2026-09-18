@@ -36,7 +36,7 @@ Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen
 
 Then double-click **`ADD_BROWSER_SENSOR.cmd`** once and follow the on-screen instructions to load the browser sensor in Chrome or Edge.
 
-Windows now includes best-effort **Microsoft UI Automation** metadata for native controls such as buttons, menus and fields. OpenWorkGraph reads control identity/label metadata only; it deliberately does not request typed values, selected text or password values. Some elevated applications or applications without a UI Automation provider may expose less semantic detail.
+Windows includes best-effort **Microsoft UI Automation** metadata for native controls such as buttons, menus and fields. OpenWorkGraph reads control identity/label metadata only; it deliberately does not request typed values, selected text or password values. Long/native row labels are bounded so list rows do not become message/body capture. Some elevated applications or applications without a UI Automation provider may expose less semantic detail.
 
 ### One command for Codex / Claude Code / terminal users
 
@@ -74,8 +74,7 @@ OpenWorkGraph is aimed at a different missing layer:
 
 ### MCP trust boundary
 
-Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before any context/process result crosses the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses command-like prompt-injection text (for example forged `SYSTEM:` / assistant roles, “ignore previous instructions”, tool-call commands or requests to reveal secrets), and adds an `_openworkgraph_security` trust annotation. The rich local evidence remains unchanged; this hardening applies only to the copy sent through MCP.
-
+Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before any context/process result crosses the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses command-like prompt-injection text (for example forged `SYSTEM:` / assistant roles, “ignore previous instructions”, tool-call commands or requests to reveal secrets), and adds an `_openworkgraph_security` trust annotation. This MCP-only hardening does not rewrite the local evidence used for reconstruction.
 
 A captured trace might look conceptually like:
 
@@ -104,8 +103,8 @@ That work history can then be queried by an AI through MCP/API for questions suc
  Browser sensor ───────┤
  Future sensors ───────┤
                        ▼
-                RAW WORK EVIDENCE
-              customer-owned truth
+             RICH LOCAL WORK EVIDENCE
+          privacy-minimized where needed
                        │
              ┌─────────┴─────────┐
              ▼                   ▼
@@ -122,15 +121,17 @@ That work history can then be queried by an AI through MCP/API for questions suc
        ChatGPT       Claude    internal agents
 ```
 
-The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable evidence so better models can reinterpret the same history later.
+The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable evidence so better models can reinterpret the same history later, while removing selected literals that are not needed to understand the workflow.
 
 ## Three local data layers
 
-OpenWorkGraph deliberately separates capture fidelity from downstream privacy/analysis policy.
+OpenWorkGraph deliberately separates capture fidelity from privacy/analysis policy.
 
-1. **Raw local evidence** — the richest customer-owned source of truth for reconstruction and verification.
+1. **Rich local evidence** — the richest customer-owned source used for reconstruction and verification. It is not byte-for-byte raw: URL query/fragment secrets, token-like URL path segments, high-confidence national/patient/case/account identifiers, validated payment identifiers and credential-shaped secrets are minimized or pseudonymized before persistence where their literal values are not needed for workflow analysis.
 2. **Customer context** — searchable organizational memory containing useful observed resource/page/window/UI context, while never adding typed field values or clipboard contents.
 3. **Normalized operational events** — a content-minimized representation used for broad process/effort analytics and task inference.
+
+Names and other ordinary business semantics are generally preserved locally because they can matter for reconstruction. Presentation layers apply additional identity masking such as `OWNER` / `PERSON_x` tokens.
 
 ## What the observer captures
 
@@ -144,16 +145,19 @@ Current capture includes:
 - global mouse clicks and throttled scrolls
 - native semantic control metadata on macOS Accessibility and Windows UI Automation, best effort
 - browser semantic events such as interactive clicks, editor/input focus, form submits and control changes
+- short semantic control labels where they are useful; long row/body-like labels are intentionally dropped rather than captured as control text
 - copy/paste **occurrence**, not clipboard contents
 - candidate task executions
 - repeated completed task families
 - navigation fragments kept separate from completed-task evidence
 
+The browser extension declares private/incognito use as **not allowed**, matching the desktop exclusion policy.
+
 ## Reliable event delivery
 
-Desktop capture is written locally first and placed into a durable SQLite outbox. If the local API is temporarily unavailable, the same event remains queued and is retried with its original event ID.
+Desktop capture is privacy-minimized first, then written to the local JSONL recovery log and durable SQLite outbox. If the local API is temporarily unavailable, the same safe event remains queued and is retried with its original event ID. Legacy local JSONL/outbox data is migrated through the same high-confidence sanitizer.
 
-The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from the moment they were captured, so delayed delivery cannot silently attach old evidence to a later session.
+The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from the moment they were captured, so delayed delivery cannot silently attach old evidence to a later session. Browser heartbeat state uses the same exclusion rules as browser events; an excluded/private page does not leak its hostname/title through the live status surface.
 
 ## Identity model
 
@@ -195,11 +199,11 @@ Context-oriented tools include:
 
 Operational tools include workflow summaries, normalized observation search, candidate task executions, session traces and automation candidates.
 
-Raw local evidence is not exposed through MCP by default.
+Rich local evidence is not exposed through MCP by default. Observed strings that do cross MCP are treated as untrusted data and pass through the MCP prompt-injection boundary described above.
 
 ## REST data layers
 
-### Raw local evidence
+### Rich local evidence
 
 - `GET /v1/summary?scope=current`
 - `GET /v1/events`
@@ -249,7 +253,7 @@ Failed delivery is queued locally and retried.
 | Key/click/scroll effort | ✅ | ✅ |
 | Browser navigation + semantic events | ✅ | ✅ |
 | Durable local delivery | ✅ | ✅ |
-| Raw/context/operational layers | ✅ | ✅ |
+| Rich/context/operational layers | ✅ | ✅ |
 | Exports / REST / MCP | ✅ | ✅ |
 | Native control semantics | Accessibility API | Microsoft UI Automation |
 | Automated CI | ✅ | ✅ |
@@ -264,13 +268,27 @@ The dashboard can export the captured session as:
 - XLSX
 - ZIP of CSV tables
 
-The normalized operational representation is available for lower-content analysis. A deliberate **Include rich raw session evidence** option includes the richer customer-owned evidence when full reconstruction is needed.
+The normalized operational representation is available for lower-content analysis. A deliberate **Include rich raw session evidence** option includes richer local evidence when full reconstruction is needed. That rich export is still subject to pre-storage URL/identifier/credential minimization; it is not a verbatim screen/content dump.
+
+## Screenshots
+
+Screenshots are **off by default**. If an operator explicitly enables `screenshots_enabled` or `interaction_screenshots_enabled`, the current prototype can save full-monitor JPEGs locally for non-excluded activity. Those pixels do **not** receive the text redaction/pseudonymization pipeline and can contain unrelated visible information from the screen. Treat screenshot mode as a high-risk diagnostic feature and keep it disabled unless you specifically need it. Excluded windows are skipped.
 
 ## Data and privacy boundary
 
-The current prototype server binds to `127.0.0.1`. Captured data stays on the local computer unless the user deliberately exports it or later connects it to another system.
+The prototype server binds to `127.0.0.1`; it does not intentionally send captured work telemetry to a cloud service. Data leaves the machine when the user deliberately exports it or explicitly connects another system/AI to the local REST/MCP interfaces.
 
-OpenWorkGraph's collection model intentionally avoids storing key identities/typed text in the effort counter and does not capture clipboard contents. Rich raw evidence can still contain sensitive visible resource names, page titles or other on-screen context, so enterprise deployment will require organization-specific collection policies, authentication, encryption, RBAC, retention rules and audit logs.
+OpenWorkGraph deliberately removes selected high-risk literals before persistence when their literal values add little workflow value. Current high-confidence handling includes Swedish personnummer and labelled patient/journal/case/account identifiers, labelled bank/organization identifiers, mod-97-valid IBANs, Luhn-valid payment-card numbers, common credential/token shapes, URL query/fragment values and token-like URL path segments. Ordinary business amounts, project/deal names, counterparties and other useful workflow semantics are intentionally not generically erased.
+
+OpenWorkGraph does not capture typed text/key identities in its keyboard effort counter and does not capture clipboard contents. Rich evidence can still contain sensitive visible resource names, page/document titles and other on-screen context. Privacy filtering reduces risk; it does not make captured workflow evidence anonymous.
+
+Local pseudonymization keys are permission-restricted where supported, but currently remain in the local OpenWorkGraph data area rather than an OS Keychain/DPAPI store so existing stable tokens are not broken by an unsafe migration.
+
+### Current prototype security limitations
+
+The localhost API currently relies on loopback binding, trusted-host/origin restrictions and browser-extension route restrictions; **same-user local processes are not yet required to present a read capability token**. Likewise, the browser sensor posts to the fixed loopback endpoint and does **not yet cryptographically authenticate the process that owns port 8787**. These are known prototype limitations, not security guarantees. A future pairing/authentication design needs to preserve dashboard, MCP and browser compatibility before it is enabled by default.
+
+See [`SECURITY.md`](SECURITY.md) for the current threat model, screenshot/key-storage caveats and the deliberately deferred hardening items.
 
 ## Development
 
