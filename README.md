@@ -248,25 +248,44 @@ CSV/XLSX event tables expose common semantic fields directly, including `action`
 
 The AI data dictionary explains timing fields, stable privacy tokens, capture limits and deliberately retained context. See [Exports and AI analysis](docs/EXPORTS_AND_AI.md).
 
-## MCP: organizational memory + workflow analysis
+## MCP: connect your AI to the local context layer
 
-The MCP server can expose OpenWorkGraph directly to an AI assistant.
+The normal OpenWorkGraph launcher starts a local Streamable-HTTP MCP endpoint at:
 
-Context-oriented tools include:
+```text
+http://127.0.0.1:8788/mcp
+```
+
+MCP startup is deliberately non-critical: if the MCP process cannot start, capture, the REST API, dashboard and manual exports continue normally.
+
+The dashboard provides connection help for several client types:
+
+- **Cursor** — one-click MCP install deep-link using Cursor's native confirmation dialog.
+- **Claude Desktop** — guided local MCP configuration using OpenWorkGraph's existing private Python runtime; the user does not need to install Python or type Terminal commands.
+- **ChatGPT** — guided custom-app / Secure MCP Tunnel setup because ChatGPT's cloud service cannot directly reach a user's localhost endpoint.
+- **Other MCP clients** — copy the local Streamable-HTTP endpoint or use the existing stdio server mode.
+
+### Rich evidence is the MCP default
+
+OpenWorkGraph's MCP is intentionally **rich-evidence-first**. Context/search/session tools expose a bounded, presentation-redacted slice of raw local evidence by default and place derived context/tasks alongside it. This is the ongoing-access equivalent of manually exporting with **Include rich raw session evidence** enabled, without dumping the entire database into every model call.
+
+Context and workflow tools include:
 
 - `get_current_work_context`
 - `search_work_history`
 - `find_similar_work`
 - `get_context_session`
 - `find_process_examples`
-
-Operational tools include workflow summaries, normalized observation search, candidate task executions, session traces and automation candidates.
-
-Raw local evidence is not exposed through MCP by default.
+- `company_workflow_summary`
+- `search_work_observations`
+- `recent_semantic_activity`
+- `candidate_task_executions`
+- `get_work_session`
+- `automation_candidates`
 
 ### MCP trust boundary
 
-Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before context/process results cross the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses common command-like prompt-injection text and attaches an `_openworkgraph_security` trust annotation.
+Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before results cross the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses common command-like prompt-injection text and attaches an `_openworkgraph_security` trust annotation.
 
 This MCP hardening is separate from storage-time sensitive-identifier hardening. It applies to the copy returned to an AI tool, not to the meaning of the stored workflow event.
 
@@ -307,7 +326,7 @@ This MCP hardening is separate from storage-time sensitive-identifier hardening.
 - `POST /v1/heartbeat`
 - `POST /v1/browser-heartbeat`
 
-The local HTTP server binds to loopback (`127.0.0.1`) in the current prototype and includes origin/host restrictions to reduce unintended browser access to work-history endpoints.
+The local HTTP server binds to loopback (`127.0.0.1`) in the current prototype and includes origin/host restrictions to reduce unintended browser access to work-history endpoints. The auto-start MCP endpoint also binds to loopback only.
 
 ## Platform status
 
@@ -335,6 +354,7 @@ OpenWorkGraph is not yet a finished enterprise product. Current limitations incl
 - activity timing is an estimate: a foreground window is not proof that a person was actively working every second
 - inferred tasks/patterns are analytical interpretations, not ground truth
 - rich local evidence can still contain sensitive business context even after high-confidence identifier hardening
+- AI clients differ in local MCP support; cloud clients may require provider-specific tunnels, app approval or administrator policy
 - enterprise-wide authentication, RBAC, centrally managed policy, retention/audit controls and fleet deployment are not yet a production control plane
 
 ## Documentation
