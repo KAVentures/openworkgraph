@@ -22,8 +22,18 @@ def data_dir() -> Path:
     return path
 
 
+def auth_dir() -> Path:
+    path = Path(os.getenv("WORKFLOW_OBSERVER_AUTH_DIR", ROOT / "data" / "auth"))
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except Exception:
+        pass
+    return path
+
+
 def _secret_file(name: str, *, directory: Path | None = None) -> Path:
-    return (directory or data_dir()) / name
+    return (directory or auth_dir()) / name
 
 
 def _read_or_create_secret(name: str, *, directory: Path | None = None) -> str:
