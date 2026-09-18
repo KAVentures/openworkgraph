@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from browser_privacy import harden_browser_event, sanitize_browser_page
+from browser_privacy import harden_browser_event, sanitize_browser_page, browser_event_is_excluded
 from browser_utils import is_browser_app
 from .analytics import (
     search_events, search_operational_events, summary, timeline,
@@ -309,6 +309,14 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
 def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
     previous = dict(BROWSER_STATUS)
     safe_page = sanitize_browser_page(status.page.model_dump(exclude_none=True))
+    excluded_page = bool(safe_page.get("hostname") or safe_page.get("title")) and browser_event_is_excluded(
+        app="Browser",
+        title=str(safe_page.get("title") or ""),
+        hostname=str(safe_page.get("hostname") or ""),
+        config=_runtime_config(),
+    )
+    if excluded_page:
+        safe_page = {}
     BROWSER_STATUS.clear()
     BROWSER_STATUS.update(status.model_dump(exclude={"page"}))
     BROWSER_STATUS["received_at"] = datetime.now(timezone.utc).isoformat()
@@ -316,6 +324,7 @@ def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
     BROWSER_STATUS["version_ok"] = bool(
         status.sensor_version and status.sensor_version == EXPECTED_BROWSER_SENSOR_VERSION
     )
+    BROWSER_STATUS["excluded"] = excluded_page
     if safe_page.get("hostname"):
         BROWSER_STATUS["hostname"] = safe_page.get("hostname")
         BROWSER_STATUS["pathname"] = safe_page.get("pathname")
@@ -325,7 +334,7 @@ def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
             str(safe_page.get("pathname") or ""),
             str(safe_page.get("title") or ""),
         )
-    elif previous.get("browser_session_id") == status.browser_session_id:
+    elif not excluded_page and previous.get("browser_session_id") == status.browser_session_id:
         # A transient tabs.query failure must not erase a still-valid active page.
         for key in ("hostname", "pathname", "page_title", "work_surface"):
             if previous.get(key):
