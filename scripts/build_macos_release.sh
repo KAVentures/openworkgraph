@@ -89,6 +89,11 @@ Enable Developer mode, choose Load unpacked, and select the opened
 browser_extension folder. This lets OpenWorkGraph distinguish Gmail, Docs,
 Salesforce and other browser work instead of seeing only the browser application.
 
+The browser sensor is paired to this OpenWorkGraph installation. It verifies the
+local server before sending browser evidence. If pairing is lost, use
+"Pair / repair browser sensor" in the dashboard and the extension popup. After
+upgrading OpenWorkGraph, reload the unpacked extension when the dashboard asks.
+
 Privacy / data location
 -----------------------
 The prototype runs locally. Captured data stays on this computer unless you
@@ -101,6 +106,11 @@ presentation/export views additionally pseudonymize detected people/owner aliase
 Useful business context such as company/project names, amounts, order/reference
 numbers and page/document titles can remain intentionally, so review rich exports
 before sharing them outside the intended analysis context.
+
+Local API/MCP access is capability-protected and browser sensor requests are
+paired/signed. These controls reduce accidental localhost exposure and port
+squatting, but they are not a boundary against malware already running with the
+same macOS user privileges.
 
 Stop OpenWorkGraph with Ctrl+C in the Terminal window it opened.
 
