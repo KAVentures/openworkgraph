@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import Request
@@ -28,6 +27,7 @@ BROWSER_ROUTES = {
     ("POST", "/v1/browser-events"),
     ("POST", "/v1/browser-heartbeat"),
 }
+BROWSER_PATHS = {path for _, path in BROWSER_ROUTES}
 PUBLIC_PATHS = {"/health"}
 EXTENSION_PREFIXES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 
@@ -86,7 +86,7 @@ def _bootstrap_script() -> str:
 
 
 def _connection_override_script() -> str:
-    """Keep MCP credentials behind the authenticated dashboard session."""
+    """Keep MCP and browser-pairing credentials behind the dashboard session."""
     return r"""
 <script>
 (() => {
@@ -110,6 +110,15 @@ def _connection_override_script() -> str:
     }
     return JSON.stringify({mcpServers:{openworkgraph:{command:'/bin/bash',args:['-lc','"$HOME/Library/Application Support/WorkflowObserver/.venv/bin/python" -m mcp_server.secure_stdio'],env:{WORKFLOW_OBSERVER_API:'http://127.0.0.1:8787'}}}},null,2);
   };
+  window.showBrowserPairingCode = async function(){
+    try{
+      await window.__owgAuthReady;
+      const r=await fetch('/v1/browser-pairing-code',{method:'POST',cache:'no-store'});
+      if(!r.ok) throw new Error('Dashboard authentication is required.');
+      const d=await r.json();
+      openModal('Pair / repair browser sensor','Local browser authentication',`<p>Normal installs pair automatically. Use this fallback only if the browser sensor says it is not paired.</p><ol class="steps"><li>Click the OpenWorkGraph browser extension icon.</li><li>Enter this 8-digit code within ${esc(d.expires_in_seconds||120)} seconds:</li></ol><div class="codebox" style="font-size:22px;letter-spacing:.14em;text-align:center">${esc(d.code)}</div><div class="note">The code can be used only once and locks after repeated wrong attempts. Browser evidence stays queued until the genuine OpenWorkGraph server proves its identity.</div>`);
+    }catch(e){openModal('Pairing unavailable','Local security',`<p>${esc(e.message||'Could not create a pairing code.')}</p><div class="note">Reopen the dashboard from the OpenWorkGraph launcher and try again.</div>`);}
+  };
   const originalOpenConnect=window.openConnect;
   window.openConnect=async function(kind){
     if(kind==='other'){
@@ -122,11 +131,19 @@ def _connection_override_script() -> str:
     if(kind==='chatgpt'){
       try{
         const c=await connectionConfig();
-        openModal('Connect ChatGPT','Secure MCP Tunnel',`<p>ChatGPT cannot directly reach localhost. Keep OpenWorkGraph running and use OpenAI's Secure MCP Tunnel/custom app flow for <code>${esc(c.endpoint)}</code>.</p><p>The local MCP endpoint now requires an <code>Authorization: Bearer …</code> header. Configure that header in the tunnel/connector if prompted.</p><div class="modal-actions"><button onclick="copyText('${c.endpoint}',this)">Copy endpoint</button><button class="secondary" onclick="copyText('Bearer ${c.token}',this)">Copy authorization value</button><a class="btn secondary" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT setup guide</a></div><div class="note">This token only authorizes the local OpenWorkGraph MCP process. Same-user malware remains outside this prototype's security boundary.</div>`);
+        openModal('Connect ChatGPT','Secure MCP Tunnel',`<p>ChatGPT cannot directly reach localhost. Keep OpenWorkGraph running and use OpenAI's Secure MCP Tunnel/custom app flow for <code>${esc(c.endpoint)}</code>.</p><p>The local MCP endpoint requires an <code>Authorization: Bearer …</code> header. Configure that header in the tunnel/connector if prompted.</p><div class="modal-actions"><button onclick="copyText('${c.endpoint}',this)">Copy endpoint</button><button class="secondary" onclick="copyText('Bearer ${c.token}',this)">Copy authorization value</button><a class="btn secondary" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT setup guide</a></div><div class="note">This token only authorizes the local OpenWorkGraph MCP process. Same-user malware remains outside this prototype's security boundary.</div>`);
       }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not create connection details.')}</p>`);} return;
     }
     return originalOpenConnect(kind);
   };
+  document.addEventListener('DOMContentLoaded',()=>{
+    const q=document.querySelector('.quickhelp');
+    if(q && !document.querySelector('#browserPairButton')){
+      const b=document.createElement('button');
+      b.id='browserPairButton';b.className='ghost';b.textContent='Pair / repair browser sensor';b.onclick=window.showBrowserPairingCode;
+      q.appendChild(b);
+    }
+  });
 })();
 </script>
 """
@@ -152,6 +169,12 @@ async def local_capability_guard(request: Request, call_next):
         return HTMLResponse(_dashboard_html())
 
     if path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    # Authorization on browser sensor requests triggers CORS preflight. Let the
+    # existing extension-origin/CORS guards answer OPTIONS without requiring the
+    # HMAC that will be present on the actual GET/POST.
+    if method == "OPTIONS" and path in BROWSER_PATHS:
         return await call_next(request)
 
     if path in {"/v1/browser-challenge", "/v1/browser-pair"} and method == "OPTIONS":
@@ -237,5 +260,4 @@ async def local_capability_guard(request: Request, call_next):
     return await call_next(request)
 
 
-# Export this name explicitly for uvicorn server.secure_app:app.
 __all__ = ["app"]
