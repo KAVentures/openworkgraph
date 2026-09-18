@@ -93,25 +93,88 @@ _IBAN_RE = re.compile(
     re.IGNORECASE,
 )
 _PAN_RE = re.compile(r"(?<!\d)(?P<value>(?:\d[ -]?){12,18}\d)(?!\d)")
+
+# Explicit business-reference cues take precedence over card-shape heuristics.
+# We inspect both sides of a candidate because UIs commonly render "1234… (OCR)".
+_NON_CARD_CUE_RE = re.compile(
+    r"(?i)\b(?:ocr(?:[-\s]?nummer|[-\s]?nr)?|referens(?:nummer)?|reference|ref|"
+    r"betalningsreferens|payment\s*reference|tracking(?:\s*(?:no|number))?|kolli|"
+    r"sändningsnummer|kundnummer|customer\s*(?:no|number)|faktura(?:nummer)?|"
+    r"invoice(?:\s*(?:no|number))?|order(?:\s*(?:no|number))?)\b"
+)
+_CARD_CUE_RE = re.compile(
+    r"(?i)\b(?:payment\s*card|credit\s*card|debit\s*card|card\s*(?:no|number)|"
+    r"kortnummer|kort\s*(?:nr|nummer)|visa|mastercard|amex|american\s+express|"
+    r"discover|diners|jcb|unionpay|maestro)\b"
+)
+
+# Common card issuer ranges. This is only used for otherwise-unlabelled numeric
+# strings; an explicit card cue masks any Luhn-valid 13–19 digit candidate.
+_CARD_IIN_RE = re.compile(
+    r"^(?:"
+    r"4"
+    r"|5[1-5]"
+    r"|2(?:2(?:2[1-9]|[3-9]\d)|[3-6]\d{2}|7(?:[01]\d|20))"
+    r"|3[47]"
+    r"|3(?:0[0-5]|[68-9])"
+    r"|6(?:011|5|4[4-9]|22(?:12[6-9]|1[3-9]\d|[2-8]\d{2}|9(?:[01]\d|2[0-5])))"
+    r"|35(?:2[89]|[3-8]\d)"
+    r"|62"
+    r"|5[06789]"
+    r")"
+)
+
 _SECRET_RE = re.compile(
-    r"\b(?:"
+    r"(?<![A-Za-z0-9])(?:"
     r"AKIA[0-9A-Z]{16}"
     r"|ASIA[0-9A-Z]{16}"
     r"|sk-[A-Za-z0-9_-]{20,}"
-    r"|ghp_[A-Za-z0-9]{30,}"
+    r"|gh[pousr]_[A-Za-z0-9]{30,}"
     r"|github_pat_[A-Za-z0-9_]{30,}"
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}"
+    r"|AIza[0-9A-Za-z_-]{35}"
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
-    r")\b"
+    r")(?![A-Za-z0-9])"
+)
+
+_SECRET_NAME = (
+    r"[A-Za-z0-9_.-]*"
+    r"(?:secret|token|api[_-]?key|access[_-]?key|private[_-]?key|password|passwd|pwd)"
+    r"[A-Za-z0-9_.-]*"
+)
+_SECRET_QUOTED_ASSIGN_RE = re.compile(
+    rf"(?P<label>(?<![A-Za-z0-9])(?:export\s+)?{_SECRET_NAME}\s*[:=]\s*)"
+    r"(?P<quote>[\"'])(?P<value>[^\r\n\"']{4,})(?P=quote)",
+    re.IGNORECASE,
 )
 _SECRET_ASSIGN_RE = re.compile(
-    r"(?P<label>\b(?:secret|token|api[_ -]?key|access[_ -]?key|password|passwd|bearer)\b\s*[:=]\s*)"
-    r"(?P<value>[^\s,;]{8,})",
+    rf"(?P<label>(?<![A-Za-z0-9])(?:export\s+)?{_SECRET_NAME}\s*[:=]\s*)"
+    r"(?P<value>[^\s\"',;]{8,})",
     re.IGNORECASE,
+)
+_BEARER_RE = re.compile(
+    r"(?i)\b(?P<label>(?:authorization\s*:\s*)?bearer\s+)"
+    r"(?P<value>[A-Za-z0-9._~+/-]{16,}=*)"
+)
+_CONN_PW_RE = re.compile(
+    r"(?i)\b(?P<pre>[a-z][a-z0-9+.-]*://[^\s:/@]+:)"
+    r"(?P<value>[^\s@]{4,})(?P<post>@)"
+)
+_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN (?P<kind>[A-Z0-9 ]*PRIVATE KEY)-----"
+    r".*?"
+    r"-----END (?P=kind)-----",
+    re.DOTALL,
 )
 
 _ALREADY_TOKEN_RE = re.compile(
-    r"^(?:PERSONNUMMER|PATIENT_ID|JOURNAL_ID|CASE_ID|ACCOUNT_ID|BANK_ACCOUNT|ORG_ID|IBAN|PAYMENT_CARD|SECRET|PERSON)_[0-9A-F]{6}$"
+    r"^(?:PERSONNUMMER|PATIENT_ID|JOURNAL_ID|CASE_ID|ACCOUNT_ID|BANK_ACCOUNT|ORG_ID|IBAN|PAYMENT_CARD|SENSITIVE_NUMBER|SECRET|PERSON|OCR_REFERENCE)_[0-9A-F]{6}$"
+)
+_LEGACY_OCR_TOKEN_RE = re.compile(
+    r"(?P<cue>\b(?:ocr(?:[-\s]?(?:nummer|nr))?|referens(?:nummer)?|betalningsreferens|payment\s*reference)\b"
+    r"[^A-Za-z0-9]{0,16})PAYMENT_CARD_(?P<digest>[0-9A-F]{6})",
+    re.IGNORECASE,
 )
 
 _STRUCTURED_ID_KINDS = {
@@ -295,6 +358,12 @@ def tokenize_structured_identifier(field_name: str, value: str) -> str:
     return stable_token(kind, canonical)
 
 
+def _nearby_has(pattern: re.Pattern[str], text: str, start: int, end: int, *, radius: int = 32) -> bool:
+    before = text[max(0, start - radius):start]
+    after = text[end:min(len(text), end + radius)]
+    return bool(pattern.search(before) or pattern.search(after))
+
+
 def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = False) -> str:
     """Pseudonymize high-confidence identifiers in human-readable text.
 
@@ -350,11 +419,32 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
         digits = re.sub(r"\D", "", value)
         if not 13 <= len(digits) <= 19 or not _luhn_checksum_valid(digits):
             return value
-        return stable_token("PAYMENT_CARD", digits)
+        if _nearby_has(_NON_CARD_CUE_RE, out, match.start(), match.end()):
+            return value
+        explicit_card = _nearby_has(_CARD_CUE_RE, out, match.start(), match.end())
+        if explicit_card or _CARD_IIN_RE.match(digits):
+            return stable_token("PAYMENT_CARD", digits)
+        # Privacy-first fallback: a Luhn-valid long number with no reference cue
+        # is still masked, but we do not tell downstream AI it was definitely a card.
+        return stable_token("SENSITIVE_NUMBER", digits)
 
     out = _PAN_RE.sub(pan_repl, out)
 
+    # Known secret shapes first, then contextual assignments/URLs/headers.
+    out = _PRIVATE_KEY_BLOCK_RE.sub(
+        lambda m: stable_token("SECRET", m.group(0)),
+        out,
+    )
     out = _SECRET_RE.sub(lambda m: stable_token("SECRET", m.group(0)), out)
+
+    def quoted_secret_assignment_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        if _ALREADY_TOKEN_RE.fullmatch(value):
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('label')}{quote}{stable_token('SECRET', value)}{quote}"
+
+    out = _SECRET_QUOTED_ASSIGN_RE.sub(quoted_secret_assignment_repl, out)
 
     def secret_assignment_repl(match: re.Match[str]) -> str:
         value = match.group("value")
@@ -363,6 +453,30 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
         return f"{match.group('label')}{stable_token('SECRET', value)}"
 
     out = _SECRET_ASSIGN_RE.sub(secret_assignment_repl, out)
+
+    def bearer_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        if _ALREADY_TOKEN_RE.fullmatch(value):
+            return match.group(0)
+        return f"{match.group('label')}{stable_token('SECRET', value)}"
+
+    out = _BEARER_RE.sub(bearer_repl, out)
+
+    def conn_repl(match: re.Match[str]) -> str:
+        value = match.group("value")
+        if _ALREADY_TOKEN_RE.fullmatch(value):
+            return match.group(0)
+        return f"{match.group('pre')}{stable_token('SECRET', value)}{match.group('post')}"
+
+    out = _CONN_PW_RE.sub(conn_repl, out)
+
+    # Old v0.45 rows may already have lost the literal OCR value. We cannot
+    # reconstruct it, but we can repair the semantics so an AI no longer reads
+    # an OCR/reference token as a payment card.
+    out = _LEGACY_OCR_TOKEN_RE.sub(
+        lambda m: f"OCR_REFERENCE_{m.group('digest').upper()}",
+        out,
+    )
     return out
 
 
