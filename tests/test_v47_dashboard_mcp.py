@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 
@@ -8,6 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
 
 
 def test_normal_launcher_starts_http_mcp_without_replacing_observer():
@@ -19,6 +30,50 @@ def test_normal_launcher_starts_http_mcp_without_replacing_observer():
     # The existing observer processes remain present.
     assert '"-m", "uvicorn", "server.main:app"' in source
     assert '"-m", "collector.main"' in source
+
+
+def test_streamable_http_mcp_process_really_starts():
+    port = _free_port()
+    env = os.environ.copy()
+    env.update({
+        "MCP_TRANSPORT": "streamable-http",
+        "MCP_HOST": "127.0.0.1",
+        "MCP_PORT": str(port),
+        # Tools call the REST API only when invoked, so server startup itself does
+        # not require a running observer API.
+        "WORKFLOW_OBSERVER_API": "http://127.0.0.1:65534",
+    })
+    process = subprocess.Popen(
+        [sys.executable, "-m", "mcp_server.main"],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    ready = False
+    try:
+        deadline = time.time() + 12.0
+        while time.time() < deadline:
+            if process.poll() is not None:
+                break
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    ready = True
+                    break
+            except OSError:
+                time.sleep(0.1)
+        if not ready:
+            stdout, stderr = process.communicate(timeout=2) if process.poll() is not None else ("", "")
+            raise AssertionError(f"MCP HTTP server did not start on port {port}. stdout={stdout!r} stderr={stderr!r}")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=4)
 
 
 def test_mcp_is_rich_evidence_first_and_keeps_security_boundary():
