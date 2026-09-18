@@ -4,6 +4,7 @@ import argparse
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -16,6 +17,9 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
 EXAMPLE = ROOT / "config.example.json"
 DASHBOARD = "http://127.0.0.1:8787"
+MCP_HOST = "127.0.0.1"
+MCP_PORT = 8788
+MCP_ENDPOINT = f"http://{MCP_HOST}:{MCP_PORT}/mcp"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
@@ -35,6 +39,14 @@ def wait_for_api(timeout: float = 15.0) -> bool:
     return False
 
 
+def port_is_open(host: str, port: int, timeout: float = 0.2) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def stop_process(p: subprocess.Popen | None) -> None:
     if p is None or p.poll() is not None:
         return
@@ -51,12 +63,46 @@ def mode_environment(mode: str) -> dict[str, str]:
     data_dir.mkdir(parents=True, exist_ok=True)
     env["WORKFLOW_OBSERVER_DATA"] = str(data_dir)
     env["WORKFLOW_OBSERVER_MODE"] = mode
+    env["WORKFLOW_OBSERVER_MCP_ENDPOINT"] = MCP_ENDPOINT
     now = datetime.now(timezone.utc)
     # Demo rows intentionally describe a recent synthetic work period. Starting
     # the demo run two hours earlier keeps those rows inside scope=current.
     run_start = now - timedelta(hours=2) if mode == "demo" else now
     env["WORKFLOW_OBSERVER_RUN_STARTED_AT"] = run_start.isoformat()
     return env
+
+
+def start_local_mcp(env: dict[str, str]) -> tuple[subprocess.Popen | None, bool]:
+    """Start the local streamable-HTTP MCP endpoint without making capture depend on it.
+
+    If another OpenWorkGraph MCP instance already owns the port, reuse it. A
+    failure to start MCP is reported to the console but never prevents the local
+    observer/dashboard from running.
+    """
+    if port_is_open(MCP_HOST, MCP_PORT):
+        return None, True
+
+    mcp_env = env.copy()
+    mcp_env["MCP_TRANSPORT"] = "streamable-http"
+    mcp_env["MCP_HOST"] = MCP_HOST
+    mcp_env["MCP_PORT"] = str(MCP_PORT)
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "mcp_server.main"],
+            cwd=ROOT,
+            env=mcp_env,
+        )
+    except Exception:
+        return None, False
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if port_is_open(MCP_HOST, MCP_PORT):
+            return process, True
+        if process.poll() is not None:
+            return process, False
+        time.sleep(0.15)
+    return process, port_is_open(MCP_HOST, MCP_PORT)
 
 
 def reset_demo_data(env: dict[str, str]) -> None:
@@ -89,7 +135,7 @@ def main() -> None:
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
     print("Optional browser semantic sensor files are installed in browser_extension/ for navigation and page-control context.")
     if system == "Windows":
-        print("Windows: foreground app/title plus keyboard/click/scroll capture are supported. Native desktop UI-control labels are currently richer on macOS; browser semantics work on Windows through the extension.")
+        print("Windows: foreground app/title plus keyboard/click/scroll capture are supported. Native UI control semantics use Microsoft UI Automation on a best-effort basis; browser semantics work through the extension.")
     elif system == "Darwin":
         print("macOS: approve Accessibility/Input Monitoring permission if requested for native desktop interaction capture.")
     if args.mode == "observe":
@@ -103,9 +149,16 @@ def main() -> None:
     ], cwd=ROOT, env=env)
 
     collector = None
+    mcp_process = None
     try:
         if not wait_for_api():
             raise RuntimeError("The local dashboard could not start.")
+
+        mcp_process, mcp_ready = start_local_mcp(env)
+        if mcp_ready:
+            print(f"Local MCP is ready at {MCP_ENDPOINT}")
+        else:
+            print("Warning: local MCP could not start. Workflow capture and exports still work normally.")
 
         if args.mode == "demo":
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
@@ -131,6 +184,7 @@ def main() -> None:
         print("\nStopping Workflow Observer…")
     finally:
         stop_process(collector)
+        stop_process(mcp_process)
         stop_process(api)
         print("Stopped. Local live/demo data remain separated in data/.\n")
 
