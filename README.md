@@ -189,6 +189,23 @@ The dashboard includes **Reset learned person aliases**. This deletes the local 
 
 See [Privacy and data handling](docs/PRIVACY_AND_DATA.md) for the detailed boundary.
 
+## Local interface security
+
+OpenWorkGraph does not treat `localhost` as authentication.
+
+The normal launcher creates installation-local capability credentials and protects the local interfaces:
+
+- raw/history/export/control API routes require an authenticated dashboard session or local API capability
+- desktop collector writes are authenticated so another local process cannot silently inject fabricated workflow history
+- the HTTP MCP endpoint requires a separate local bearer capability
+- the dashboard uses a launcher bootstrap carried in the URL fragment and exchanges it for an HttpOnly local session; the long-lived API capability is not embedded in dashboard HTML
+- the browser sensor uses HMAC challenge-response to verify that the process on port 8787 is the paired OpenWorkGraph installation **before browser evidence is sent**
+- browser requests are HMAC-signed with timestamp/nonces and replay protection
+
+If browser authentication fails, the existing extension queue keeps pending evidence rather than sending it to an unverified listener. If port 8787 is already occupied when OpenWorkGraph starts, capture does not start; it will not reuse an unknown localhost service. MCP remains non-critical: if 8788 is unavailable, capture and manual exports continue normally.
+
+These controls materially reduce accidental localhost exposure, unrelated-service probing, naive port squatting and unauthenticated local access. **They are not a security boundary against malware already running with the same operating-system user privileges.** A same-user malicious process may be able to read local credentials or inspect other user-owned resources; stronger protection for that threat model requires operating-system isolation, endpoint security and/or managed enterprise controls.
+
 ## What remains intentionally useful
 
 OpenWorkGraph does **not** try to remove every business fact. Depending on what appears in observable titles/labels, the local evidence and rich export can retain things such as:
@@ -206,7 +223,7 @@ Those details can be essential for understanding the workflow. They can also be 
 
 Desktop capture is written locally first and placed into a durable SQLite outbox. If the local API is temporarily unavailable, the same event remains queued and is retried with its original event ID.
 
-The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from capture time so delayed delivery does not silently attach old evidence to a later session.
+The browser sensor has a separate durable queue in extension storage. Browser observations keep stable sensor identity and the work-session identity from capture time so delayed delivery does not silently attach old evidence to a later session. Browser evidence remains queued when the paired local server cannot be authenticated.
 
 ## Identity model
 
@@ -250,20 +267,20 @@ The AI data dictionary explains timing fields, stable privacy tokens, capture li
 
 ## MCP: connect your AI to the local context layer
 
-The normal OpenWorkGraph launcher starts a local Streamable-HTTP MCP endpoint at:
+The normal OpenWorkGraph launcher starts an authenticated local Streamable-HTTP MCP endpoint at:
 
 ```text
 http://127.0.0.1:8788/mcp
 ```
 
-MCP startup is deliberately non-critical: if the MCP process cannot start, capture, the REST API, dashboard and manual exports continue normally.
+The endpoint requires the installation's local MCP bearer capability. The dashboard handles this for supported connection flows rather than publishing an unauthenticated localhost endpoint. MCP startup is deliberately non-critical: if the MCP process cannot start, capture, the REST API, dashboard and manual exports continue normally.
 
 The dashboard provides connection help for several client types:
 
-- **Cursor** — one-click MCP install deep-link using Cursor's native confirmation dialog.
-- **Claude Desktop** — guided local MCP configuration using OpenWorkGraph's existing private Python runtime; the user does not need to install Python or type Terminal commands.
-- **ChatGPT** — guided custom-app / Secure MCP Tunnel setup because ChatGPT's cloud service cannot directly reach a user's localhost endpoint.
-- **Other MCP clients** — copy the local Streamable-HTTP endpoint or use the existing stdio server mode.
+- **Cursor** — one-click MCP install deep-link containing the local endpoint and authorization header, followed by Cursor's native confirmation dialog.
+- **Claude Desktop** — guided local MCP configuration using OpenWorkGraph's secured stdio entrypoint and existing private Python runtime; the user does not need to install Python or type Terminal commands.
+- **ChatGPT** — guided custom-app / Secure MCP Tunnel setup because ChatGPT's cloud service cannot directly reach a user's localhost endpoint; the local bearer capability must be carried through the supported connector/tunnel configuration.
+- **Other MCP clients** — authenticated Streamable-HTTP connection details are available from the authenticated dashboard.
 
 ### Rich evidence is the MCP default
 
@@ -287,9 +304,11 @@ Context and workflow tools include:
 
 Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before results cross the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses common command-like prompt-injection text and attaches an `_openworkgraph_security` trust annotation.
 
-This MCP hardening is separate from storage-time sensitive-identifier hardening. It applies to the copy returned to an AI tool, not to the meaning of the stored workflow event.
+This MCP hardening is separate from storage-time sensitive-identifier hardening and local bearer authentication. It applies to the copy returned to an AI tool, not to the meaning of the stored workflow event.
 
 ## REST data layers
+
+The local `/v1/*` data/control routes below are authenticated in normal v0.48 operation. Browser/collector ingestion uses its own paired/capability-authenticated paths.
 
 ### Raw local evidence
 
@@ -326,7 +345,7 @@ This MCP hardening is separate from storage-time sensitive-identifier hardening.
 - `POST /v1/heartbeat`
 - `POST /v1/browser-heartbeat`
 
-The local HTTP server binds to loopback (`127.0.0.1`) in the current prototype and includes origin/host restrictions to reduce unintended browser access to work-history endpoints. The auto-start MCP endpoint also binds to loopback only.
+The local HTTP server and auto-start MCP endpoint bind to loopback (`127.0.0.1`). Host/origin restrictions remain in place in addition to the v0.48 capability/pairing controls.
 
 ## Platform status
 
@@ -339,7 +358,8 @@ The local HTTP server binds to loopback (`127.0.0.1`) in the current prototype a
 | Durable local delivery | ✅ | ✅ |
 | Raw/context/operational layers | ✅ | ✅ |
 | XLSX / CSV ZIP / JSON exports | ✅ | ✅ |
-| REST / MCP | ✅ | ✅ |
+| Authenticated REST / MCP | ✅ | ✅ |
+| Paired browser sensor | ✅ | ✅ |
 | Native control semantics | Accessibility API | Microsoft UI Automation |
 | Automated CI | ✅ | ✅ |
 
@@ -355,7 +375,8 @@ OpenWorkGraph is not yet a finished enterprise product. Current limitations incl
 - inferred tasks/patterns are analytical interpretations, not ground truth
 - rich local evidence can still contain sensitive business context even after high-confidence identifier hardening
 - AI clients differ in local MCP support; cloud clients may require provider-specific tunnels, app approval or administrator policy
-- enterprise-wide authentication, RBAC, centrally managed policy, retention/audit controls and fleet deployment are not yet a production control plane
+- local capability/pairing controls are not intended to protect against malware already running with the same OS-user privileges
+- enterprise-wide RBAC, centrally managed policy, retention/audit controls, encryption policy and fleet deployment are not yet a production control plane
 
 ## Documentation
 
