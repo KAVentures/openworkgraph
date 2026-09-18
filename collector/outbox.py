@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from sensitive_identifiers import sanitize_event_identifiers
+
 
 class EventOutbox:
     """Small durable queue between local capture and the local API.
@@ -34,17 +36,40 @@ class EventOutbox:
                   ON pending_events(created_at);
                 """
             )
+        self._sanitize_existing_pending()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _sanitize_existing_pending(self) -> None:
+        """One-time-on-start hardening for events queued by older versions."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id, payload_json FROM pending_events"
+            ).fetchall()
+            for row in rows:
+                try:
+                    event = json.loads(row["payload_json"])
+                    safe = sanitize_event_identifiers(event)
+                    payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+                except Exception:
+                    # Do not destroy a delivery queue merely because one legacy
+                    # payload is malformed; new events are always sanitized.
+                    continue
+                if payload != row["payload_json"]:
+                    conn.execute(
+                        "UPDATE pending_events SET payload_json = ? WHERE event_id = ?",
+                        (payload, row["event_id"]),
+                    )
+
     def enqueue(self, event: dict[str, Any]) -> None:
-        event_id = str(event.get("event_id") or "")
+        safe = sanitize_event_identifiers(event)
+        event_id = str(safe.get("event_id") or "")
         if not event_id:
             raise ValueError("outbox event requires event_id")
-        payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO pending_events(event_id, payload_json) VALUES (?, ?)",
