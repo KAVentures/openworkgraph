@@ -1,79 +1,181 @@
-# OpenWorkGraph v0.32 — nontechnical testing
+# OpenWorkGraph v0.46 — nontechnical testing guide
 
-The easiest test path on macOS is the standalone GitHub Release ZIP.
+This is the recommended practical test path for the current public prototype.
 
 ## Start OpenWorkGraph
+
+### macOS
 
 1. Download `OpenWorkGraph-macOS.zip` from the latest GitHub Release.
 2. Unzip it.
 3. Right-click `START_OPENWORKGRAPH.command` → **Open**.
 4. Confirm **Open** if macOS asks.
 5. Approve Accessibility/Input Monitoring if requested.
-6. The local dashboard should open automatically.
+6. The local dashboard should open automatically at `http://127.0.0.1:8787`.
 
-No manual Python installation or Terminal command setup is required.
+No manual Python installation is required.
+
+### Windows
+
+1. Download `OpenWorkGraph-Windows.zip` from the latest GitHub Release.
+2. Unzip it.
+3. Double-click `START_OPENWORKGRAPH.cmd`.
+4. Review/accept the early-prototype security warning only if you trust the repository.
+5. The local dashboard should open automatically.
+
+No manual Python installation is required.
 
 ## Add the browser sensor
 
-1. Double-click `ADD_BROWSER_SENSOR.command`.
-2. Finder opens the correct `browser_extension` folder.
-3. In Chrome/Edge, enable **Developer mode**.
-4. Click **Load unpacked** and select the opened `browser_extension` folder.
-5. The OpenWorkGraph dashboard should show the browser sensor as connected and should report the current extension version.
+The browser sensor is optional but strongly recommended for browser-heavy work.
 
-The browser sensor is important: without it, OpenWorkGraph can see the browser application but cannot reliably distinguish Gmail, Google Docs, Salesforce and other individual browser tools.
+On macOS, run `ADD_BROWSER_SENSOR.command`. On Windows, run `ADD_BROWSER_SENSOR.cmd` from the release package and follow the browser instructions.
 
-## Core checks
+The sensor is important because desktop observation alone can identify the browser application but cannot reliably separate Gmail, Google Docs, Salesforce, ChatGPT and other web tools.
 
-### 1. Brief navigation must appear immediately
+## Core functional checks
 
-Open a new tab, type a URL, press Enter, stay on the page for only 1–2 seconds, and switch away **without scrolling or clicking**.
+### 1. Brief navigation must appear without a later click
 
-Expected: Raw activity evidence / browser semantic activity contains the visited site. The visit must not depend on a later scroll or click.
+Open a new tab, type a URL, press Enter, stay on the page for only 1–2 seconds, then switch away without scrolling or clicking.
+
+Expected: the site appears in browser semantic/raw activity evidence. Capture must not depend on a later interaction.
 
 ### 2. Browser work surfaces should stay separate
 
-Use several browser tools such as Gmail, Google Docs, ChatGPT or another web app.
+Use several web tools such as Gmail, Google Docs and ChatGPT.
 
-Expected: work-surface views attribute effort to the logical browser surface rather than collapsing everything into `Google Chrome`.
+Expected: work-surface views attribute effort to logical browser surfaces instead of collapsing everything into `Google Chrome`/`Microsoft Edge`.
 
-### 3. Rich raw evidence remains understandable
+### 3. Native controls should be semantic when available
 
-Work normally for a few minutes.
+Click ordinary buttons/menus in a native application.
 
-Expected: Raw activity evidence should make it possible to reconstruct what the observer actually saw. The v0.32 context/operational layers must not destroy or replace the raw source evidence.
+Expected: where macOS Accessibility or Windows UI Automation exposes safe metadata, OpenWorkGraph should record role/label context. Some applications expose less metadata; missing labels by themselves are not necessarily a failure.
 
-### 4. Repeated completed tasks should not equal repeated navigation
+### 4. Keyboard activity must be counts only
+
+Type in a normal application for a while.
+
+Expected: keypress counts/engagement increase. OpenWorkGraph must not display or export the actual typed text or key sequence.
+
+### 5. Repeated navigation must not equal repeated completed work
 
 Bounce between two websites several times without completing a meaningful action.
 
-Expected: this may appear as a navigation fragment, but it must not become a repeated completed task merely because the same site sequence occurred more than once.
+Expected: this may appear as navigation/transition evidence but must not become a repeated completed task solely because the sequence repeated.
 
-Then perform a genuinely repeatable completed task twice, such as composing and sending two fresh emails.
+Then perform a genuinely completed task twice, such as composing and sending two fresh emails.
 
-Expected: separate task executions should be inferred, and the repeated task family should count both executions.
+Expected: separate task executions can be inferred and a repeated task family can emerge when completion evidence is present.
 
-### 5. Delivery should survive temporary interruption
+### 6. Delivery should survive temporary interruption
 
-With OpenWorkGraph running, briefly interrupt the local API/observer process or otherwise create a short delivery failure, then restore it.
+Create a brief local delivery interruption while OpenWorkGraph is running, then restore it.
 
-Expected: queued desktop/browser observations should be delivered after recovery rather than silently disappearing. The dashboard should expose backlog/connection state rather than pretending capture was complete.
+Expected: queued desktop/browser observations should be retried rather than silently disappearing. The dashboard should expose connection/backlog state.
 
-### 6. Exports
+## v0.46 privacy regression checks
 
-Capture a few minutes of work, then export the session as JSON and XLSX.
+### 7. Swedish OCR/reference numbers must not become cards
 
-Test both:
+Use visible workflow text containing a real-looking OCR/reference number, for example in a test document/title/label where it can safely be observed.
 
-- normalized/operational export without rich raw evidence
-- deliberate export with rich raw evidence included
+Expected: an explicit `OCR`/reference cue prevents the number from being described as a `PAYMENT_CARD_x` token.
 
-Expected: the normalized representation keeps task/process structure while dropping unnecessary content; the rich export preserves enough evidence for detailed reconstruction.
+The privacy rule is semantic: Luhn validity alone is not enough to call a number a card.
+
+### 8. Real payment cards stay masked
+
+For a controlled test only, use a standard non-sensitive test card number such as `4111 1111 1111 1111` in a safe local test label.
+
+Expected: it is represented as a masked `PAYMENT_CARD_x` token rather than literal digits in persisted/presented evidence.
+
+Do not use a real card number for testing.
+
+### 9. Secret/config shapes should be removed
+
+In a controlled test document/terminal using fake credentials only, try shapes such as:
+
+```text
+DATABASE_PASSWORD=fake-test-password-123
+Authorization: Bearer fakeTokenValue123456789
+postgres://admin:fake-test-password@db.example.invalid:5432/app
+```
+
+Expected: the secret value is replaced with `SECRET_x` while useful surrounding context such as the database scheme/host can remain where appropriate.
+
+Never put a real secret into a test just to verify redaction.
+
+### 10. Status/team phrases must not become people
+
+Expose labels such as:
+
+```text
+Transition to In Progress
+Meeting with Legal Team
+Sprint board: In Progress column
+```
+
+Expected: these phrases should remain status/team/process language and should not create persistent `PERSON_x` identities.
+
+### 11. Reset learned person aliases
+
+After the observer has learned a genuine person alias from strong evidence, use **Reset learned person aliases** in the dashboard.
+
+Expected: the local learned-person registry is reset, but captured workflow history and timing remain intact.
+
+## Export checks
+
+Capture several minutes of ordinary work, then test all three export formats.
+
+### CSV ZIP
+
+Recommended for direct AI analysis.
+
+Expected:
+
+- the ZIP contains `README_FOR_AI.md`
+- common event fields such as `action`, `page_host`, `page_path`, `target_label` and `target_role` are plain columns when available
+- `metadata_json` is still present for detailed analysis
+- rich raw evidence is included only when selected
+
+### XLSX
+
+Expected:
+
+- the Overview sheet contains the AI/data dictionary
+- event tables expose the same common semantic fields
+- the workbook can be inspected manually without decoding nested JSON for every common field
+
+### JSON
+
+Expected:
+
+- valid compact JSON
+- same structured payload semantics as before; consumers must not rely on whitespace/pretty-printing
 
 ## Useful AI test
 
-Give the exported session to ChatGPT, Claude or another model and ask:
+Upload the CSV ZIP or XLSX to ChatGPT/Claude and ask:
 
-> What repeated work do you see? What appears inefficient? What internal tool or automation would help most? Show the observed evidence behind each suggestion.
+> Read the data dictionary first. What repeated work, bottlenecks, handoffs or manual effort do you see? What internal tool or automation might help? For every recommendation, show the observed evidence and distinguish observations from inference. Do not infer typed text that was never captured.
 
-The goal is not that OpenWorkGraph itself must make every conclusion. The goal is to produce a sufficiently accurate, reconstructable work dataset that another AI can reason over it.
+Good output should use the available sequence/timing/semantic evidence without pretending it saw screenshots or typed content.
+
+## Privacy sanity check before sharing
+
+Rich exports may intentionally retain business context such as amounts, company/customer names, project/deal names, order/reference numbers, document/page titles and safe UI labels.
+
+Expected: secrets and high-confidence identifiers are hardened, but useful business context remains. Review a rich export before sharing it outside its intended analysis context.
+
+## What is not a failure
+
+The following can be expected in the current prototype:
+
+- some native apps expose weak/no safe control labels
+- a long row-like click may have an empty `target_label` because OpenWorkGraph intentionally suppresses oversized mail/chat/record labels
+- engagement time is an estimate, not proof of continuous work
+- the optional browser sensor may require a one-time browser reload/approval after updating
+
+The goal is a reconstructable, privacy-conscious workflow dataset — not perfect semantic understanding of every application.
