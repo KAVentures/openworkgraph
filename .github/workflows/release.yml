@@ -84,20 +84,23 @@ jobs:
           OpenWorkGraph is a local-first work-telemetry and organizational-context layer for AI.
 
           ### macOS tester
-          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The macOS package now uses one self-contained launcher with its payload embedded inside it, matching the launcher pattern validated by testers. No manual Python setup is required.
+          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The package brings its own private runtime; no manual Python setup is required.
 
           ### Windows tester
           Download **OpenWorkGraph-Windows.zip**, unzip it, then double-click **START_OPENWORKGRAPH.cmd**. The launcher installs its own private runtime; no manual Python setup is required.
 
           For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
 
-          Dashboard/API/MCP/export presentation pseudonymizes detected identifiers only after workflow processing. The local user's detected/configured name is shown as **OWNER**; other high-confidence people use stable PERSON tokens. Gmail/Outlook composite checkbox labels preserve the subject/action while masking detected people. No external AI service is used for this redaction.
+          ### Privacy model
+          Typed text, individual key identities and clipboard contents are not captured. Screenshots are disabled in the normal configuration.
 
-          Raw local evidence, event counts, timing and workflow inference are not destructively rewritten by presentation masking.
+          High-confidence secrets and sensitive identifiers are hardened before local persistence where their literal value is not needed for workflow analysis. Presentation/API/MCP/export views additionally pseudonymize detected people/owner aliases. Rich workflow context such as company/project names, amounts, order/reference numbers and page/document titles may remain intentionally useful, so review rich exports before sharing them outside the intended analysis context.
 
-          Windows also includes best-effort Microsoft UI Automation metadata for native controls without reading typed field values or password values.
+          The local user's detected/configured identity can be shown as **OWNER**; other high-confidence people use stable PERSON tokens. Learned person aliases can be reset from the dashboard without deleting captured work history.
 
-          Captured data stays local in this prototype unless the user explicitly exports it.
+          Windows includes best-effort Microsoft UI Automation metadata for native controls without reading typed field values or password values.
+
+          Captured data stays local in this prototype unless the user explicitly exports it or connects it to another system.
           EOF
 
           gh release create "$TAG" \
