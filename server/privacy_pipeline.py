@@ -59,6 +59,20 @@ class _IdentityLearningView(_PolicyView):
     CUE_RE = _STRONG_IDENTITY_CUE_RE
     NON_NAME_WORDS = _LEARNING_NON_NAME_WORDS
 
+    def _looks_like_person_name(self, value: str, *, allow_single: bool = False) -> bool:
+        """Apply learning-only vocabulary before the base title-case heuristic.
+
+        The base helper closes over presentation.NON_NAME_WORDS, so merely exposing
+        a stricter NON_NAME_WORDS attribute on this view is not enough. Check each
+        candidate word here before delegating to the existing heuristic.
+        """
+        words = _presentation._name_words(value)
+        for word in words:
+            bare = word.strip(".'’-_").casefold()
+            if bare in self.NON_NAME_WORDS:
+                return False
+        return _presentation._looks_like_person_name(value, allow_single=allow_single)
+
 
 _VIEW = _PolicyView()
 _LEARNING_VIEW = _IdentityLearningView()
