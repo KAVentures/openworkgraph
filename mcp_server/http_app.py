@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from starlette.responses import JSONResponse
 
 from server.local_auth import mcp_bearer_matches
@@ -21,6 +23,18 @@ class MCPBearerGuard:
             response = JSONResponse({"detail": "OpenWorkGraph MCP authentication required"}, status_code=401)
             await response(scope, receive, send)
             return
+
+        # Private launch-time proof used only by OpenWorkGraph's controller before
+        # it advertises a newly spawned HTTP endpoint. A listener that merely wins
+        # the port race cannot produce this nonce.
+        if scope.get("method") == "GET" and scope.get("path") == "/openworkgraph-id":
+            response = JSONResponse({
+                "server": "OpenWorkGraph",
+                "instance_nonce": os.getenv("WORKFLOW_OBSERVER_MCP_INSTANCE_NONCE", ""),
+            })
+            await response(scope, receive, send)
+            return
+
         await self.app(scope, receive, send)
 
 

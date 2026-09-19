@@ -27,9 +27,6 @@ EXAMPLE = ROOT / "config.example.json"
 API_HOST = "127.0.0.1"
 API_PORT = 8787
 DASHBOARD = f"http://{API_HOST}:{API_PORT}"
-MCP_HOST = "127.0.0.1"
-MCP_PORT = 8788
-MCP_ENDPOINT = f"http://{MCP_HOST}:{MCP_PORT}/mcp"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
@@ -81,19 +78,16 @@ def mode_environment(mode: str) -> dict[str, str]:
     env["WORKFLOW_OBSERVER_DATA"] = str(data_dir)
     env["WORKFLOW_OBSERVER_AUTH_DIR"] = str(auth_dir)
     env["WORKFLOW_OBSERVER_MODE"] = mode
-    env["WORKFLOW_OBSERVER_MCP_ENDPOINT"] = MCP_ENDPOINT
     env["WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP"] = secrets.token_urlsafe(32)
 
-    # Create all local capabilities before child processes start so concurrent
-    # API/MCP/collector startup always converges on the same installation keys.
+    # Create local capabilities before child processes start so collector/API and
+    # any later MCP process converge on the same installation credentials.
     ensure_api_token(directory=auth_dir)
     ensure_mcp_token(directory=auth_dir)
     ensure_browser_secret(directory=auth_dir)
     write_browser_pairing_bundle(ROOT / "browser_extension", directory=auth_dir)
 
     now = datetime.now(timezone.utc)
-    # Demo rows intentionally describe a recent synthetic work period. Starting
-    # the demo run two hours earlier keeps those rows inside scope=current.
     run_start = now - timedelta(hours=2) if mode == "demo" else now
     env["WORKFLOW_OBSERVER_RUN_STARTED_AT"] = run_start.isoformat()
     return env
@@ -104,40 +98,6 @@ def dashboard_url(env: dict[str, str]) -> str:
     # this launcher-only secret for an HttpOnly local session and immediately
     # removes the fragment from the address bar/history state.
     return f"{DASHBOARD}/#bootstrap={env['WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP']}"
-
-
-def start_local_mcp(env: dict[str, str]) -> tuple[subprocess.Popen | None, bool]:
-    """Start the authenticated local Streamable-HTTP MCP endpoint.
-
-    An already-occupied port is never assumed to be OpenWorkGraph. Startup also
-    checks the child process before accepting an open port, closing the race where
-    an unrelated process binds 8788 after our preflight but before uvicorn does.
-    """
-    if port_is_open(MCP_HOST, MCP_PORT):
-        return None, False
-
-    mcp_env = env.copy()
-    mcp_env.pop("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", None)
-    try:
-        process = subprocess.Popen(
-            [
-                sys.executable, "-m", "uvicorn", "mcp_server.http_app:app",
-                "--host", MCP_HOST, "--port", str(MCP_PORT),
-            ],
-            cwd=ROOT,
-            env=mcp_env,
-        )
-    except Exception:
-        return None, False
-
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
-        if process.poll() is not None:
-            return process, False
-        if port_is_open(MCP_HOST, MCP_PORT):
-            return process, True
-        time.sleep(0.15)
-    return process, bool(process.poll() is None and port_is_open(MCP_HOST, MCP_PORT))
 
 
 def reset_demo_data(env: dict[str, str]) -> None:
@@ -168,7 +128,8 @@ def main() -> None:
     print("===========================================")
     print("Your data stays on this computer in this prototype. Raw evidence is preserved, with separate searchable context and content-minimized operational layers for AI/MCP.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
-    print("Local API/MCP access is capability-protected; the browser sensor authenticates the OpenWorkGraph server before sending browser evidence.")
+    print("Local API access is capability-protected; the browser sensor authenticates the OpenWorkGraph server before sending browser evidence.")
+    print("Local AI clients use MCP over stdio. HTTP MCP is OFF by default and starts only when explicitly requested for a client that needs it.")
     if system == "Windows":
         print("Windows: foreground app/title plus keyboard/click/scroll capture are supported. Native UI control semantics use Microsoft UI Automation on a best-effort basis; browser semantics work through the extension.")
     elif system == "Darwin":
@@ -190,18 +151,9 @@ def main() -> None:
     ], cwd=ROOT, env=env)
 
     collector = None
-    mcp_process = None
     try:
         if not wait_for_api(api):
             raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
-
-        mcp_process, mcp_ready = start_local_mcp(env)
-        if mcp_ready:
-            print(f"Authenticated local MCP is ready at {MCP_ENDPOINT}")
-        elif port_is_open(MCP_HOST, MCP_PORT):
-            print("Warning: port 8788 is already occupied. OpenWorkGraph will not trust or reuse the unknown service. Capture and exports still work normally.")
-        else:
-            print("Warning: local MCP could not start. Workflow capture and exports still work normally.")
 
         opened_dashboard = dashboard_url(env)
         if args.mode == "demo":
@@ -209,6 +161,7 @@ def main() -> None:
             webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
             print("Demo data is isolated from your real observations.")
+            print("AI access starts OFF. Enable it in the dashboard only if you want an MCP client to read this run.")
             print("Close this window or press Ctrl+C when finished.\n")
             while True:
                 time.sleep(1)
@@ -218,6 +171,7 @@ def main() -> None:
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
             print("The durable local outbox retries capture events if the API is temporarily unavailable.")
+            print("AI access starts OFF on every launch and can be enabled from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
             collector_env = env.copy()
@@ -230,7 +184,6 @@ def main() -> None:
         print("\nStopping Workflow Observer…")
     finally:
         stop_process(collector)
-        stop_process(mcp_process)
         stop_process(api)
         print("Stopped. Local live/demo data remain separated in data/.\n")
 

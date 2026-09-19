@@ -37,5 +37,7 @@ jobs:
           node --check browser_extension/popup.js
           node --check browser_extension/background.js
           node --check browser_extension/content.js
+      - name: Authenticated dashboard JavaScript syntax
+        run: python scripts/check_injected_dashboard_js.py
       - name: Browser sensor JavaScript tests
         run: node --test tests/js/*.test.mjs

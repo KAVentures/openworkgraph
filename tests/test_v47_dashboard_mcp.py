@@ -7,7 +7,6 @@ import sys
 import time
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -21,18 +20,21 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def test_normal_launcher_starts_http_mcp_without_replacing_observer():
+def test_normal_launcher_is_stdio_first_without_replacing_observer():
     source = _read("start.py")
-    assert 'MCP_PORT = 8788' in source
-    assert '"mcp_server.http_app:app"' in source
-    assert 'stop_process(mcp_process)' in source
-    # The same observer remains present underneath authenticated wrappers.
     assert '"server.secure_app:app"' in source
     assert '"-m", "collector.secure_main"' in source
-    assert 'write_browser_pairing_bundle' in source
+    assert "write_browser_pairing_bundle" in source
+    assert "MCP_PORT = 8788" not in source
+    assert '"mcp_server.http_app:app"' not in source
+    assert "start_local_mcp" not in source
+    assert "HTTP MCP is OFF by default" in source
+    optional = _read("server/mcp_http_control.py")
+    assert '"mcp_server.http_app:app"' in optional
+    assert 'f"http://{HOST}:{port}/mcp"' in optional
 
 
-def test_streamable_http_mcp_process_really_starts(tmp_path):
+def test_streamable_http_mcp_process_still_available_for_on_demand_clients(tmp_path):
     port = _free_port()
     env = os.environ.copy()
     env.update({
@@ -42,11 +44,7 @@ def test_streamable_http_mcp_process_really_starts(tmp_path):
     })
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "mcp_server.http_app:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     ready = False
     try:
@@ -56,8 +54,7 @@ def test_streamable_http_mcp_process_really_starts(tmp_path):
                 break
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                    ready = True
-                    break
+                    ready = True; break
             except OSError:
                 time.sleep(0.1)
         if not ready:
@@ -66,24 +63,25 @@ def test_streamable_http_mcp_process_really_starts(tmp_path):
     finally:
         if process.poll() is None:
             process.terminate()
-            try:
-                process.wait(timeout=4)
+            try: process.wait(timeout=4)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=4)
+                process.kill(); process.wait(timeout=4)
 
 
-def test_mcp_is_rich_evidence_first_and_keeps_security_boundary():
+def test_mcp_is_compact_rich_evidence_first_and_keeps_security_boundary():
     source = _read("mcp_server/main.py")
-    assert '"/v1/events"' in source
-    assert '"/v1/semantic-activity"' in source
-    assert 'f"/v1/sessions/{session_id}"' in source
-    assert '"raw_local_evidence"' in source
-    assert '"data_layer": "rich_ai_context"' in source
-    assert 'return _return_observed(' in source
-    assert 'raw evidence is not exposed through MCP by default' not in source.lower()
+    assert "def get_workflow_trace(" in source
+    assert '"/v1/workflow-trace"' in source
+    assert "openworkgraph://ai-guide" in source
+    assert "AI_DATA_DICTIONARY_MD" in source
+    assert "rich_ai_context_compact" in source
+    assert "raw_local_evidence" not in source  # no duplicated raw bundle in default tool output
+    assert "protect_observed_payload" in source
     assert "mcp_bearer_matches" in _read("mcp_server/http_app.py")
-    assert "ensure_api_token" in _read("mcp_server/secure_runtime.py")
+    secure = _read("mcp_server/secure_runtime.py")
+    assert "ensure_api_token" in secure
+    assert 'secure_get("/v1/ai-access")' in secure
+    assert '"status": "denied"' in secure
 
 
 def test_dashboard_keeps_existing_observer_sections_and_adds_top_actions():
@@ -106,15 +104,19 @@ def test_dashboard_keeps_existing_observer_sections_and_adds_top_actions():
     assert "Other MCP app" in html
 
 
-def test_cursor_and_claude_connections_are_security_wrapped():
+def test_cursor_and_claude_connections_use_stdio_and_chatgpt_http_is_on_demand():
     html = _read("dashboard/index.html")
     secure = _read("server/secure_app.py")
     assert "cursor://anysphere.cursor-deeplink/mcp/install" in secure
-    assert "Authorization:`Bearer ${c.token}`" in secure
-    assert "mcp_server.secure_stdio" in secure
+    assert '"transport": "stdio"' in secure
+    assert '"-m", "mcp_server.secure_stdio"' in secure
+    assert "Authorization:`Bearer ${c.token}`" not in secure.split("window.connectCursor", 1)[1].split("window.showBrowserPairingCode", 1)[0]
+    assert "httpMcp('start')" in secure
     assert "Secure MCP Tunnel" in secure
     assert "help.openai.com/en/articles/12584461" in secure
     assert "support.claude.com/en/articles/10949351" in html
+    assert "AI access" in secure
+    assert "Recent AI activity" in secure
 
 
 def test_raw_export_toggle_is_synchronized_top_and_bottom():

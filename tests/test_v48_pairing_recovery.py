@@ -70,7 +70,6 @@ def test_manual_browser_pairing_is_short_lived_one_time_and_extension_scoped(tmp
         assert len(code) == 8 and code.isdigit()
         assert issued.json()["expires_in_seconds"] <= 120
 
-        # Ordinary localhost callers cannot redeem a browser credential.
         no_origin = httpx.post(base + "/v1/browser-pair", json={"code": code})
         assert no_origin.status_code == 403
 
@@ -79,17 +78,31 @@ def test_manual_browser_pairing_is_short_lived_one_time_and_extension_scoped(tmp
         assert paired.status_code == 200
         assert paired.json()["secret"] == expected_secret
 
-        # The same pairing code cannot be replayed.
         replay = httpx.post(base + "/v1/browser-pair", json={"code": code}, headers=origin)
         assert replay.status_code == 401
     finally:
         _stop(process)
 
 
-def test_launcher_source_refuses_unknown_api_port_and_does_not_reuse_mcp_port():
+def test_launcher_refuses_unknown_api_port_and_http_mcp_is_explicit_and_verified():
     source = (ROOT / "start.py").read_text(encoding="utf-8")
+    optional = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
+    http_app = (ROOT / "mcp_server" / "http_app.py").read_text(encoding="utf-8")
+
     assert "if port_is_open(API_HOST, API_PORT):" in source
     assert "will not start capture or send evidence" in source
     assert "wait_for_api(api)" in source
     assert "if process.poll() is not None:" in source
-    assert "if port_is_open(MCP_HOST, MCP_PORT):\n        return None, False" in source
+
+    # v0.49 no longer starts or trusts a fixed MCP HTTP port during normal launch.
+    assert "MCP_PORT" not in source
+    assert "mcp_server.http_app:app" not in source
+    assert "HTTP MCP is OFF by default" in source
+
+    # When HTTP MCP is requested explicitly, its child proves a launch nonce
+    # before the endpoint is exposed to the dashboard/client.
+    assert "WORKFLOW_OBSERVER_MCP_INSTANCE_NONCE" in optional
+    assert "_verify_instance" in optional
+    assert "/openworkgraph-id" in optional
+    assert "/openworkgraph-id" in http_app
+    assert "instance_nonce" in http_app
