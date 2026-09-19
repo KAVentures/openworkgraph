@@ -118,20 +118,34 @@ def test_unauthenticated_reads_and_collector_writes_fail_closed(secured_api):
     assert any(event.get("event_id") == "v48-test-event" for event in readback.json().get("events", []))
 
 
-def test_dashboard_bootstrap_uses_cookie_not_master_token(secured_api):
+def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_api):
     base = secured_api["base"]
     shell = httpx.get(base + "/")
     assert shell.status_code == 200
     assert secured_api["api_token"] not in shell.text
     assert secured_api["mcp_token"] not in shell.text
     assert "WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP" not in shell.text
+
     with httpx.Client(base_url=base) as client:
         assert client.get("/v1/summary?scope=current").status_code == 401
         login = client.post("/v1/dashboard-session", json={"bootstrap": secured_api["bootstrap"]})
         assert login.status_code == 200
-        assert "httponly" in login.headers.get("set-cookie", "").lower()
-        assert client.get("/v1/summary?scope=current").status_code == 200
-        config = client.get("/v1/mcp-connection-config")
+        assert "set-cookie" not in login.headers
+        session = login.json()["session"]
+        assert session and session not in shell.text
+
+        # Bootstrap is one-use, while the resulting dashboard session remains
+        # reusable so a normal dashboard refresh does not log the user out.
+        assert client.post("/v1/dashboard-session", json={"bootstrap": secured_api["bootstrap"]}).status_code == 401
+        session_auth = {"Authorization": f"OWG-Session {session}"}
+        assert client.get("/v1/summary?scope=current", headers=session_auth).status_code == 200
+        assert client.get("/v1/summary?scope=current", headers=session_auth).status_code == 200
+
+        # A host-scoped cookie replay must no longer authenticate anything.
+        leaked_cookie = {"Cookie": f"owg_dashboard_session={session}"}
+        assert client.get("/v1/summary?scope=current", headers=leaked_cookie).status_code == 401
+
+        config = client.get("/v1/mcp-connection-config", headers=session_auth)
         assert config.status_code == 200
         cfg = config.json()
         assert cfg["transport"] == "stdio"
