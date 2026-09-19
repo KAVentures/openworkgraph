@@ -10,18 +10,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from .local_auth import (
     bearer_matches,
     browser_server_proof,
+    consume_export_ticket,
     consume_pairing_code,
-    create_dashboard_session,
-    dashboard_bootstrap_matches,
     dashboard_session_valid,
     ensure_browser_secret,
+    exchange_dashboard_bootstrap,
+    issue_export_ticket,
     local_security_note,
     new_pairing_code,
     verify_browser_authorization,
 )
 from .main import DASHBOARD, app
 
-DASHBOARD_COOKIE = "owg_dashboard_session"
 COLLECTOR_ROUTES = {("POST", "/v1/events"), ("POST", "/v1/heartbeat")}
 BROWSER_ROUTES = {
     ("GET", "/v1/browser-context"),
@@ -31,6 +31,8 @@ BROWSER_ROUTES = {
 BROWSER_PATHS = {path for _, path in BROWSER_ROUTES}
 PUBLIC_PATHS = {"/health"}
 EXTENSION_PREFIXES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
+BLOCKED_DEV_PATHS = {"/openapi.json", "/redoc"}
+ALLOWED_LOCAL_HOSTS = {"127.0.0.1", "localhost", "testserver", "::1"}
 
 
 def _json_error(detail: str, status: int) -> JSONResponse:
@@ -47,8 +49,24 @@ def _extension_cors(response: Response, origin: str) -> Response:
     return response
 
 
+def _request_host_allowed(request: Request) -> bool:
+    raw = str(request.headers.get("host") or "").strip().lower()
+    if not raw:
+        return False
+    if raw.startswith("[") and "]" in raw:
+        hostname = raw[1:raw.index("]")]
+    elif ":" in raw:
+        hostname = raw.rsplit(":", 1)[0]
+    else:
+        hostname = raw
+    return hostname in ALLOWED_LOCAL_HOSTS
+
+
 def _dashboard_authenticated(request: Request) -> bool:
-    return dashboard_session_valid(request.cookies.get(DASHBOARD_COOKIE))
+    raw = str(request.headers.get("authorization") or "")
+    if not raw.lower().startswith("owg-session "):
+        return False
+    return dashboard_session_valid(raw[len("owg-session "):].strip())
 
 
 def _api_authenticated(request: Request) -> bool:
@@ -56,16 +74,20 @@ def _api_authenticated(request: Request) -> bool:
 
 
 def _bootstrap_script() -> str:
-    """Authenticate the launched dashboard without ever embedding the API token."""
+    """Authenticate the launched dashboard without exposing a host-scoped cookie."""
     return r"""
 <script>
 (() => {
   const nativeFetch = window.fetch.bind(window);
+  const SESSION_KEY = 'owg_dashboard_session_v1';
+  let dashboardSession = sessionStorage.getItem(SESSION_KEY) || '';
   const fragment = new URLSearchParams((location.hash || '').replace(/^#/, ''));
   const bootstrap = fragment.get('bootstrap') || '';
   if (bootstrap) history.replaceState(null, '', location.pathname + location.search);
+
   window.__owgAuthReady = (async () => {
-    if (!bootstrap) return true;
+    if (dashboardSession) return true;
+    if (!bootstrap) return false;
     try {
       const r = await nativeFetch('/v1/dashboard-session', {
         method: 'POST',
@@ -73,13 +95,28 @@ def _bootstrap_script() -> str:
         body: JSON.stringify({bootstrap}),
         cache: 'no-store'
       });
-      return r.ok;
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.session) return false;
+      dashboardSession = String(d.session);
+      sessionStorage.setItem(SESSION_KEY, dashboardSession);
+      return true;
     } catch (_) { return false; }
   })();
-  window.fetch = async (input, init) => {
+
+  window.fetch = async (input, init={}) => {
     const url = typeof input === 'string' ? input : String(input?.url || '');
-    if (url.startsWith('/v1/') && url !== '/v1/dashboard-session') await window.__owgAuthReady;
-    return nativeFetch(input, init);
+    if (!url.startsWith('/v1/') || url === '/v1/dashboard-session') return nativeFetch(input, init);
+    const authenticated = await window.__owgAuthReady;
+    const headers = new Headers(init.headers || (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
+    if (authenticated && dashboardSession && !headers.has('Authorization')) {
+      headers.set('Authorization', `OWG-Session ${dashboardSession}`);
+    }
+    const response = await nativeFetch(input, {...init, headers});
+    if (response.status === 401 && dashboardSession) {
+      dashboardSession = '';
+      sessionStorage.removeItem(SESSION_KEY);
+    }
+    return response;
   };
 })();
 </script>
@@ -87,7 +124,7 @@ def _bootstrap_script() -> str:
 
 
 def _connection_override_script() -> str:
-    """Add stdio-first MCP setup, per-run AI access, and local audit visibility."""
+    """Add stdio-first MCP setup, per-run AI access, audit visibility and safe exports."""
     return r"""
 <script>
 (() => {
@@ -98,6 +135,26 @@ def _connection_override_script() -> str:
     if(!r.ok) throw new Error(d.detail||d.error||'OpenWorkGraph request failed');
     return d;
   }
+
+  window.downloadExport = async function(fmt){
+    try{
+      const raw=rawEnabled();
+      const d=await jsonCall('/v1/export-ticket',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({format:String(fmt||''),scope:'current',include_raw:raw})
+      });
+      const a=document.createElement('a');
+      a.href=d.url;
+      a.style.display='none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }catch(e){
+      openModal('Export unavailable','Local security',`<p>${esc(e.message||'Could not authorize this export.')}</p><div class="note">If OpenWorkGraph restarted, reopen the dashboard from the launcher and try again.</div>`);
+    }
+  };
+
   async function connectionConfig(){return jsonCall('/v1/mcp-connection-config');}
   async function setAiAccess(enabled){return jsonCall('/v1/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});}
   async function httpMcp(action){return jsonCall('/v1/mcp-http',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});}
@@ -145,7 +202,7 @@ def _connection_override_script() -> str:
         await ensureAiAccess();
         const c=await httpMcp('start');
         if(!c.running)throw new Error(c.error||'Could not start the local HTTP MCP bridge.');
-        openModal('Connect ChatGPT live','On-demand HTTP MCP',`<p>ChatGPT cannot directly reach a local stdio process, so OpenWorkGraph started an authenticated HTTP MCP endpoint <strong>only for this live connection</strong>. Use OpenAI's Secure MCP Tunnel/custom app flow; do not expose the port publicly.</p><h3>Endpoint</h3><div class="codebox">${esc(c.endpoint)}</div><h3>Authorization</h3><div class="codebox">Bearer ${esc(c.token)}</div><div class="modal-actions"><button id="copyChatEndpoint">Copy endpoint</button><button class="secondary" id="copyChatAuth">Copy authorization</button><a class="btn secondary" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT setup guide</a></div><div class="note" style="margin-top:12px">Every tool call still checks the dashboard's AI access switch. The HTTP endpoint stops when OpenWorkGraph exits or when you stop it from the connection panel.</div>`);
+        openModal('Connect ChatGPT live','On-demand HTTP MCP',`<p>ChatGPT cannot directly reach a local stdio process, so OpenWorkGraph started an authenticated HTTP MCP endpoint <strong>only for this live connection</strong>. Use OpenAI's Secure MCP Tunnel/custom app flow; do not expose the port publicly.</p><h3>Endpoint</h3><div class="codebox">${esc(c.endpoint)}</div><h3>Authorization</h3><div class="codebox">Bearer ${esc(c.token)}</div><div class="modal-actions"><button id="copyChatEndpoint">Copy endpoint</button><button class="secondary" id="copyChatAuth">Copy authorization</button><a class="btn secondary" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT setup guide</a></div><div class="note" style="margin-top:12px">This bearer is temporary and dies when the HTTP MCP bridge stops or OpenWorkGraph exits. Every tool call also checks the dashboard's AI access switch.</div>`);
         document.querySelector('#copyChatEndpoint').onclick=function(){copyText(c.endpoint,this)};
         document.querySelector('#copyChatAuth').onclick=function(){copyText(`Bearer ${c.token}`,this)};
         refreshAiPanel();
@@ -156,7 +213,7 @@ def _connection_override_script() -> str:
         await ensureAiAccess();
         const c=await connectionConfig();
         const cfg=JSON.stringify(stdioObject(c),null,2);
-        openModal('Other MCP client','Local stdio preferred',`<p>For clients that can launch a local MCP process, use stdio. This avoids a standing MCP network listener.</p><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyOtherCfg">Copy stdio config</button><button class="secondary" id="startHttpBtn">Start HTTP MCP instead</button></div><div class="note">HTTP MCP is intended only for clients that cannot use stdio. Its endpoint is allocated dynamically and is never assumed from a fixed port.</div>`);
+        openModal('Other MCP client','Local stdio preferred',`<p>For clients that can launch a local MCP process, use stdio. This avoids a standing MCP network listener.</p><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyOtherCfg">Copy stdio config</button><button class="secondary" id="startHttpBtn">Start HTTP MCP instead</button></div><div class="note">HTTP MCP is intended only for clients that cannot use stdio. Its endpoint and bearer are temporary and allocated only when you start it.</div>`);
         document.querySelector('#copyOtherCfg').onclick=function(){copyText(cfg,this)};
         document.querySelector('#startHttpBtn').onclick=async function(){const h=await httpMcp('start');const txt=JSON.stringify({url:h.endpoint,headers:{Authorization:`Bearer ${h.token}`}},null,2);copyText(txt,this);this.textContent='HTTP config copied';refreshAiPanel();};
         refreshAiPanel();
@@ -220,6 +277,14 @@ async def local_capability_guard(request: Request, call_next):
     path = request.url.path
     origin = str(request.headers.get("origin") or "")
 
+    # This check must run before any route handled directly by this middleware.
+    if not _request_host_allowed(request):
+        return _json_error("untrusted Host header", 400)
+
+    # The shipped app does not need FastAPI's interactive schema/docs surface.
+    if path in BLOCKED_DEV_PATHS or path.startswith("/docs"):
+        return _json_error("not found", 404)
+
     if method == "GET" and path == "/":
         return HTMLResponse(_dashboard_html())
     if path in PUBLIC_PATHS:
@@ -234,12 +299,10 @@ async def local_capability_guard(request: Request, call_next):
             payload: dict[str, Any] = await request.json()
         except Exception:
             return _json_error("invalid dashboard bootstrap request", 400)
-        if not dashboard_bootstrap_matches(str(payload.get("bootstrap") or "")):
-            return _json_error("invalid dashboard bootstrap", 401)
-        session = create_dashboard_session()
-        response = JSONResponse({"status": "ok"})
-        response.set_cookie(DASHBOARD_COOKIE, session, httponly=True, samesite="strict", secure=False, path="/", max_age=12 * 60 * 60)
-        return response
+        session = exchange_dashboard_bootstrap(str(payload.get("bootstrap") or ""))
+        if not session:
+            return _json_error("invalid or already-used dashboard bootstrap", 401)
+        return JSONResponse({"status": "ok", "session": session, "expires_in_seconds": 12 * 60 * 60})
 
     if path == "/v1/browser-challenge" and method == "POST":
         try:
@@ -260,6 +323,36 @@ async def local_capability_guard(request: Request, call_next):
         if not consume_pairing_code(code):
             return _extension_cors(_json_error("invalid or expired pairing code", 401), origin)
         return _extension_cors(JSONResponse({"secret": ensure_browser_secret()}), origin)
+
+    if path == "/v1/export-ticket" and method == "POST":
+        if not _api_authenticated(request):
+            return _json_error("authentication required", 401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return _json_error("invalid export ticket request", 400)
+        export_format = str(payload.get("format") or "").lower()
+        scope = str(payload.get("scope") or "current").lower()
+        include_raw = bool(payload.get("include_raw", True))
+        if export_format not in {"json", "xlsx", "csvzip"} or scope not in {"current", "all"}:
+            return _json_error("invalid export format or scope", 400)
+        issued = issue_export_ticket(export_format, scope, include_raw)
+        raw = "true" if include_raw else "false"
+        ticket = str(issued["ticket"])
+        return JSONResponse({
+            **issued,
+            "url": f"/v1/export/{export_format}?scope={scope}&include_raw={raw}&ticket={ticket}",
+        })
+
+    if method == "GET" and path.startswith("/v1/export/") and request.query_params.get("ticket"):
+        export_format = path.rsplit("/", 1)[-1].lower()
+        scope = str(request.query_params.get("scope") or "current").lower()
+        include_raw = str(request.query_params.get("include_raw") or "true").lower() == "true"
+        if not consume_export_ticket(
+            str(request.query_params.get("ticket") or ""), export_format, scope, include_raw
+        ):
+            return _json_error("invalid or expired export ticket", 401)
+        return await call_next(request)
 
     if path == "/v1/browser-pairing-code" and method == "POST":
         if not _api_authenticated(request):
