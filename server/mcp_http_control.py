@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .local_auth import auth_dir, ensure_mcp_token
+from .local_auth import auth_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
@@ -21,6 +21,7 @@ _LOCK = threading.RLock()
 _PROCESS: subprocess.Popen | None = None
 _ENDPOINT: str | None = None
 _INSTANCE_NONCE: str | None = None
+_TOKEN: str | None = None
 
 
 def _port_free(port: int) -> bool:
@@ -55,13 +56,13 @@ def _write_state(endpoint: str | None) -> None:
 
 
 def _alive() -> bool:
-    return _PROCESS is not None and _PROCESS.poll() is None and bool(_ENDPOINT)
+    return _PROCESS is not None and _PROCESS.poll() is None and bool(_ENDPOINT) and bool(_TOKEN)
 
 
-def _verify_instance(port: int, nonce: str) -> bool:
+def _verify_instance(port: int, nonce: str, token: str) -> bool:
     request = urllib.request.Request(
         f"http://{HOST}:{port}/openworkgraph-id",
-        headers={"Authorization": f"Bearer {ensure_mcp_token()}"},
+        headers={"Authorization": f"Bearer {token}"},
     )
     try:
         with urllib.request.urlopen(request, timeout=0.4) as response:
@@ -74,27 +75,31 @@ def _verify_instance(port: int, nonce: str) -> bool:
 
 
 def status() -> dict[str, Any]:
-    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE
+    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE, _TOKEN
     with _LOCK:
         if _PROCESS is not None and _PROCESS.poll() is not None:
-            _PROCESS = None; _ENDPOINT = None; _INSTANCE_NONCE = None; _write_state(None)
+            _PROCESS = None; _ENDPOINT = None; _INSTANCE_NONCE = None; _TOKEN = None; _write_state(None)
         return {"running": _alive(), "endpoint": _ENDPOINT if _alive() else None, "transport": "streamable-http" if _alive() else None}
 
 
 def start_http_mcp() -> dict[str, Any]:
-    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE
+    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE, _TOKEN
     with _LOCK:
         current = status()
         if current["running"]:
-            return {**current, "token": ensure_mcp_token()}
+            # An explicit start request may need the currently active token for
+            # setup UI, but ordinary status calls never reveal it.
+            return {**current, "token": _TOKEN}
 
         for port in _candidate_ports():
             if not _port_free(port):
                 continue
             nonce = secrets.token_urlsafe(32)
+            token = secrets.token_urlsafe(48)
             env = os.environ.copy()
             env.pop("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", None)
             env["WORKFLOW_OBSERVER_MCP_INSTANCE_NONCE"] = nonce
+            env["WORKFLOW_OBSERVER_MCP_BRIDGE_TOKEN"] = token
             process = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "mcp_server.http_app:app", "--host", HOST, "--port", str(port)],
                 cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -103,26 +108,28 @@ def start_http_mcp() -> dict[str, Any]:
             while time.time() < deadline:
                 if process.poll() is not None:
                     break
-                if _verify_instance(port, nonce):
+                if _verify_instance(port, nonce, token):
                     _PROCESS = process
                     _ENDPOINT = f"http://{HOST}:{port}/mcp"
                     _INSTANCE_NONCE = nonce
+                    _TOKEN = token
                     _write_state(_ENDPOINT)
-                    return {"running": True, "endpoint": _ENDPOINT, "transport": "streamable-http", "token": ensure_mcp_token()}
+                    return {"running": True, "endpoint": _ENDPOINT, "transport": "streamable-http", "token": token}
                 time.sleep(0.08)
             if process.poll() is None:
                 process.terminate()
                 try: process.wait(timeout=1)
                 except Exception: process.kill()
+        _TOKEN = None
         _write_state(None)
         return {"running": False, "endpoint": None, "transport": None, "error": "Could not start and verify local HTTP MCP"}
 
 
 def stop_http_mcp() -> dict[str, Any]:
-    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE
+    global _PROCESS, _ENDPOINT, _INSTANCE_NONCE, _TOKEN
     with _LOCK:
         process = _PROCESS
-        _PROCESS = None; _ENDPOINT = None; _INSTANCE_NONCE = None
+        _PROCESS = None; _ENDPOINT = None; _INSTANCE_NONCE = None; _TOKEN = None
         if process is not None and process.poll() is None:
             process.terminate()
             try: process.wait(timeout=2)
