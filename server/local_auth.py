@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, float] = {}
+_CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
+_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
 
@@ -125,6 +127,12 @@ def bearer_matches(header: str | None, expected: str | None = None) -> bool:
 
 
 def mcp_bearer_matches(header: str | None) -> bool:
+    # The managed v0.49+ HTTP bridge receives an ephemeral per-bridge token.
+    # Retain the installation token only as a compatibility fallback for an
+    # explicitly/manual-launched HTTP MCP process.
+    bridge_token = os.getenv("WORKFLOW_OBSERVER_MCP_BRIDGE_TOKEN", "").strip()
+    if bridge_token:
+        return bearer_matches(header, bridge_token)
     return bearer_matches(header, ensure_mcp_token())
 
 
@@ -144,6 +152,26 @@ def create_dashboard_session(ttl_seconds: int = 12 * 60 * 60) -> str:
     return token
 
 
+def exchange_dashboard_bootstrap(candidate: str, ttl_seconds: int = 12 * 60 * 60) -> str | None:
+    """Consume the launch bootstrap exactly once and return a dashboard session."""
+    expected = os.getenv("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", "")
+    if not expected or not candidate:
+        return None
+    with _LOCK:
+        if expected in _CONSUMED_DASHBOARD_BOOTSTRAPS:
+            return None
+        if not hmac.compare_digest(candidate, expected):
+            return None
+        token = secrets.token_urlsafe(32)
+        now = time.time()
+        _DASHBOARD_SESSIONS[token] = now + ttl_seconds
+        _CONSUMED_DASHBOARD_BOOTSTRAPS.add(expected)
+        for key, expiry in list(_DASHBOARD_SESSIONS.items()):
+            if expiry < now:
+                _DASHBOARD_SESSIONS.pop(key, None)
+        return token
+
+
 def dashboard_session_valid(token: str | None) -> bool:
     if not token:
         return False
@@ -153,6 +181,40 @@ def dashboard_session_valid(token: str | None) -> bool:
             _DASHBOARD_SESSIONS.pop(str(token), None)
             return False
         return True
+
+
+def issue_export_ticket(
+    export_format: str,
+    scope: str,
+    include_raw: bool,
+    ttl_seconds: int = 30,
+) -> dict[str, int | str]:
+    token = secrets.token_urlsafe(32)
+    expires = time.time() + ttl_seconds
+    with _LOCK:
+        now = time.time()
+        for key, value in list(_EXPORT_TICKETS.items()):
+            if value[0] < now:
+                _EXPORT_TICKETS.pop(key, None)
+        _EXPORT_TICKETS[token] = (expires, str(export_format), str(scope), bool(include_raw))
+    return {"ticket": token, "expires_in_seconds": ttl_seconds}
+
+
+def consume_export_ticket(token: str, export_format: str, scope: str, include_raw: bool) -> bool:
+    if not token:
+        return False
+    with _LOCK:
+        current = _EXPORT_TICKETS.pop(str(token), None)
+        if not current:
+            return False
+        expiry, expected_format, expected_scope, expected_raw = current
+        if expiry < time.time():
+            return False
+        return (
+            hmac.compare_digest(str(export_format), expected_format)
+            and hmac.compare_digest(str(scope), expected_scope)
+            and bool(include_raw) is expected_raw
+        )
 
 
 def new_pairing_code(ttl_seconds: int = 120) -> dict[str, int | str]:
