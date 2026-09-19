@@ -10,11 +10,23 @@ test('runtime-injected dashboard security JavaScript parses', () => {
   for (const script of scripts) new Function(script);
 });
 
-test('dashboard bootstrap does not embed the installation API token', () => {
+test('dashboard bootstrap uses a port-scoped session capability, not cookies or the API token', () => {
   assert.match(source, /\/v1\/dashboard-session/);
-  assert.match(source, /httponly=True/);
+  assert.match(source, /sessionStorage/);
+  assert.match(source, /OWG-Session/);
   assert.match(source, /history\.replaceState/);
+  assert.doesNotMatch(source, /set_cookie\(/);
+  assert.doesNotMatch(source, /DASHBOARD_COOKIE/);
   assert.doesNotMatch(source, /__API_TOKEN__/);
+});
+
+test('dashboard exports use short-lived server tickets rather than cookie navigation', () => {
+  assert.match(source, /\/v1\/export-ticket/);
+  assert.match(source, /issue_export_ticket/);
+  assert.match(source, /consume_export_ticket/);
+  const override = source.split('window.downloadExport', 2)[1].split('async function connectionConfig', 1)[0];
+  assert.match(override, /export-ticket/);
+  assert.doesNotMatch(override, /location\.href/);
 });
 
 test('local AI connectors use authenticated stdio while HTTP bearer is on demand only', () => {
