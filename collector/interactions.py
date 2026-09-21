@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import platform
 import threading
 import time
 from collections import deque
@@ -16,6 +18,61 @@ class RawInteraction:
     dx: float | None = None
     dy: float | None = None
     occurred_mono: float = 0.0
+
+
+@dataclass
+class RawClipboardAction:
+    """Privacy-safe clipboard behavior signal.
+
+    Only the action kind and an optional OS clipboard change token are retained.
+    Clipboard contents, selected text and arbitrary key identities are never read.
+    """
+
+    kind: str
+    occurred_mono: float = 0.0
+    clipboard_change_token: int | None = None
+
+
+def clipboard_change_token() -> int | None:
+    """Return an OS clipboard sequence/change counter without reading contents."""
+
+    system = platform.system()
+    if system == "Darwin":
+        try:
+            from AppKit import NSPasteboard
+
+            return int(NSPasteboard.generalPasteboard().changeCount())
+        except Exception:
+            return None
+    if system == "Windows":
+        try:
+            return int(ctypes.windll.user32.GetClipboardSequenceNumber())
+        except Exception:
+            return None
+    return None
+
+
+def classify_clipboard_shortcut(
+    key_char: str | None,
+    *,
+    command_down: bool,
+    control_down: bool,
+    platform_name: str | None = None,
+) -> str | None:
+    """Classify only copy/cut/paste shortcuts; ignore every other key identity.
+
+    macOS uses Command+C/X/V. Windows uses Control+C/X/V. The helper is pure so
+    behavior can be regression-tested without installing an OS keyboard hook.
+    """
+
+    char = str(key_char or "").lower()
+    if char not in {"c", "x", "v"}:
+        return None
+    system = platform_name or platform.system()
+    modifier_down = command_down if system == "Darwin" else control_down
+    if not modifier_down:
+        return None
+    return {"c": "copy", "x": "cut", "v": "paste"}[char]
 
 
 class ActivityTracker:
@@ -95,15 +152,27 @@ class ActivityTracker:
 
 
 class KeyboardActivitySensor:
-    """Global keyboard activity counter that never stores key identities.
+    """Global keyboard activity counter with optional safe clipboard shortcuts.
 
-    The callback receives only a timestamp. The actual key object supplied by the
-    operating system is intentionally ignored immediately.
+    Ordinary key identities are discarded immediately. When clipboard behavior
+    capture is enabled, the sensor recognizes only Command/Control+C/X/V and emits
+    copy/cut/paste actions without reading clipboard contents or selected text.
     """
 
-    def __init__(self, callback: Callable[[float], Any]) -> None:
+    def __init__(
+        self,
+        callback: Callable[[float], Any],
+        *,
+        clipboard_callback: Callable[[RawClipboardAction], Any] | None = None,
+        capture_clipboard_shortcuts: bool = False,
+    ) -> None:
         self.callback = callback
+        self.clipboard_callback = clipboard_callback
+        self.capture_clipboard_shortcuts = bool(capture_clipboard_shortcuts)
         self._listener = None
+        self._command_down = False
+        self._control_down = False
+        self._last_clipboard_action: tuple[str, float] | None = None
 
     def start(self) -> bool:
         try:
@@ -111,14 +180,86 @@ class KeyboardActivitySensor:
         except Exception:
             return False
 
-        def on_press(_key):
+        command_keys = {
+            value
+            for value in (
+                getattr(keyboard.Key, "cmd", None),
+                getattr(keyboard.Key, "cmd_l", None),
+                getattr(keyboard.Key, "cmd_r", None),
+            )
+            if value is not None
+        }
+        control_keys = {
+            value
+            for value in (
+                getattr(keyboard.Key, "ctrl", None),
+                getattr(keyboard.Key, "ctrl_l", None),
+                getattr(keyboard.Key, "ctrl_r", None),
+            )
+            if value is not None
+        }
+
+        def on_press(key):
+            now = time.monotonic()
             try:
-                self.callback(time.monotonic())
+                self.callback(now)
+            except Exception:
+                pass
+
+            if not self.capture_clipboard_shortcuts or self.clipboard_callback is None:
+                return
+
+            try:
+                if key in command_keys:
+                    self._command_down = True
+                    return
+                if key in control_keys:
+                    self._control_down = True
+                    return
+            except Exception:
+                pass
+
+            # Read only KeyCode.char for C/X/V classification, then discard it.
+            char = getattr(key, "char", None)
+            action = classify_clipboard_shortcut(
+                char,
+                command_down=self._command_down,
+                control_down=self._control_down,
+            )
+            if action is None:
+                return
+
+            # pynput can repeat a held key. Avoid duplicate behavior rows while
+            # preserving legitimately repeated copy/paste operations.
+            if self._last_clipboard_action is not None:
+                last_action, last_at = self._last_clipboard_action
+                if action == last_action and now - last_at < 0.2:
+                    return
+            self._last_clipboard_action = (action, now)
+            try:
+                self.clipboard_callback(
+                    RawClipboardAction(
+                        kind=action,
+                        occurred_mono=now,
+                        clipboard_change_token=clipboard_change_token(),
+                    )
+                )
+            except Exception:
+                pass
+
+        def on_release(key):
+            if not self.capture_clipboard_shortcuts:
+                return
+            try:
+                if key in command_keys:
+                    self._command_down = False
+                if key in control_keys:
+                    self._control_down = False
             except Exception:
                 pass
 
         try:
-            self._listener = keyboard.Listener(on_press=on_press)
+            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
             self._listener.start()
             return True
         except Exception:
