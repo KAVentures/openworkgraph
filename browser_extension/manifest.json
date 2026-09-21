@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Workflow Observer Browser Sensor",
-  "version": "1.9.0",
-  "version_name": "1.9.0-v48-local-auth",
-  "description": "Local-only semantic browser telemetry for Workflow Observer. Query values/fragments and typed field values are not collected.",
+  "version": "1.10.0",
+  "version_name": "1.10.0-v52-workflow-links",
+  "description": "Local-only semantic browser telemetry for Workflow Observer. Query values/fragments, typed field values, and clipboard contents are not collected.",
   "incognito": "not_allowed",
   "permissions": [
     "tabs",
@@ -19,7 +19,8 @@
   "background": {
     "scripts": [
       "browser_auth.js",
-      "background.js"
+      "background.js",
+      "workflow_enrichment.js"
     ],
     "service_worker": "secure_background.js"
   },
@@ -30,7 +31,8 @@
         "https://*/*"
       ],
       "js": [
-        "content.js"
+        "content.js",
+        "content_enrichment.js"
       ],
       "run_at": "document_start",
       "all_frames": true,

@@ -51,6 +51,8 @@
   "interaction_screenshots_enabled": false,
   "capture_ui_labels": true,
   "keyboard_activity_enabled": true,
+  "clipboard_behavior_enabled": true,
+  "clipboard_link_max_seconds": 7200,
   "activity_active_window_seconds": 5,
   "engaged_grace_seconds": 60
 }
