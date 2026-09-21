@@ -40,7 +40,9 @@ Therefore:
 - Browser context may still exist in desktop-derived titles, accessibility labels, interaction events and transitions.
 - Use the `source` field and the capture manifest to understand provenance and limitations.
 
-## Timing and effort fields
+## AI data dictionary
+
+### Timing and effort fields
 
 - `focus_span`: time during which one application/window remained in the foreground.
 - `foreground_seconds`: total time the work surface/window was in front.
@@ -60,7 +62,7 @@ Thinking time cannot always be distinguished from inactivity. Use timing as evid
 - Browser query strings, URL fragments, and token-like path segments are removed or normalized.
 - A target label may be empty when a control did not expose a safe accessibility label or when a long content row was deliberately not copied into the label field.
 - Rows marked `Excluded` carry timing/activity only; sensitive application/title/content was intentionally omitted by the active capture policy.
-- Useful workflow context such as company names, project/deal names, amounts, order/reference numbers, document/page titles and safe UI labels may deliberately remain because they can be necessary to understand the work.
+- Amounts, company names, project/deal names, order/reference numbers, document/page titles and other useful workflow context may deliberately remain because they can be necessary to understand the work.
 
 Review rich exports before sharing them outside the intended analysis context.
 
