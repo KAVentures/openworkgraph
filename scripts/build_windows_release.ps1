@@ -38,6 +38,8 @@ exit /b %ERRORLEVEL%
 '@ | Set-Content -Path (Join-Path $Package "START_OPENWORKGRAPH.cmd") -Encoding ascii
 
 Copy-Item (Join-Path $Root "ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
+Copy-Item (Join-Path $Root "AI_GUIDE.md") (Join-Path $Package "AI_GUIDE.md")
+Copy-Item (Join-Path $Root "PROMPT.md") (Join-Path $Package "PROMPT.md")
 Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Package "LICENSE")
 
 @"
@@ -52,18 +54,29 @@ OpenWorkGraph $Version - Windows tester build
    itself under %LOCALAPPDATA%\OpenWorkGraph. No system Python is required.
 5. The local dashboard opens automatically at http://127.0.0.1:8787.
 
-Browser context (recommended)
+Browser enrichment (optional)
 -----------------------------
-After OpenWorkGraph has started once, double-click ADD_BROWSER_SENSOR.cmd.
-Explorer opens the browser_extension folder and Chrome/Edge opens its Extensions
-page. Enable Developer mode, choose Load unpacked, and select the folder Explorer
-opened. This lets OpenWorkGraph distinguish Gmail, Docs, Salesforce and other
-browser work instead of seeing only the browser application.
+OpenWorkGraph works without the browser extension: desktop observation can still
+capture browser focus, exposed window/page titles, timing and interactions.
+
+For richer browser-native context, after OpenWorkGraph has started once,
+double-click ADD_BROWSER_SENSOR.cmd. Explorer opens the browser_extension folder
+and Chrome/Edge opens its Extensions page. Enable Developer mode, choose Load
+unpacked, and select the folder Explorer opened. The optional sensor adds
+structured hostname/path, navigation and safe page/control semantics when available.
 
 The browser sensor is paired to this OpenWorkGraph installation. It verifies the
 local server before sending browser evidence. If pairing is lost, use
 "Pair / repair browser sensor" in the dashboard and the extension popup. After
 upgrading OpenWorkGraph, reload the unpacked extension when the dashboard asks.
+
+AI analysis
+-----------
+AI_GUIDE.md explains how ChatGPT, Claude and other AI systems should interpret
+OpenWorkGraph evidence. PROMPT.md is a short starter instruction you can use when
+uploading an export. Exports also carry the guide, prompt and a capture manifest,
+so the AI can distinguish captured evidence from OpenWorkGraph's derived heuristic
+views and can tell whether browser-extension evidence was present.
 
 Windows native UI semantics
 ---------------------------
