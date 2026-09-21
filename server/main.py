@@ -17,12 +17,13 @@ from browser_privacy import harden_browser_event, sanitize_browser_page, browser
 from browser_utils import is_browser_app
 from .analytics import (
     search_events, search_operational_events, summary, timeline,
-    operational_timeline, semantic_activity, candidate_tasks,
+    operational_timeline, semantic_activity,
     _friendly_browser_surface,
 )
+from .context_layers import candidate_tasks, apply_to_summary
 from .context import search_context, recent_context, context_timeline
 from .db import init_db, insert_events, harden_existing_browser_events
-from .exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
+from .context_exporter import build_export_payload, csv_zip_bytes, export_filename, json_bytes, xlsx_bytes
 from .privacy_pipeline import (
     redact_for_display,
     initialize_privacy_state,
@@ -405,7 +406,7 @@ def _apply_live_browser_surface(result: dict[str, Any]) -> None:
 @app.get("/v1/summary")
 def get_summary(limit: int = 10000, scope: str = "all"):
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
-    result = summary(limit, since=since)
+    result = apply_to_summary(summary(limit, since=since), limit=limit, since=since)
     result["mode"] = os.getenv("WORKFLOW_OBSERVER_MODE", "observe")
     result["scope"] = scope
     result["run_started_at"] = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT")

@@ -85,6 +85,16 @@ Privacy-normalized and compact representations useful for indexing, scanning and
 ### Inferred tasks / repeated task families
 Model-free heuristic interpretations of captured events. They are not additional observations and should not override the underlying evidence.
 
+### Agent turns / factual context / task evidence
+When present, these are regeneratable context indexes linked back to captured source events.
+
+- `agent_turns` identifies observed Send/Run/Generate-style interactions in recognized agentic tools. A turn is an interaction boundary, not proof of the user's higher-level task or of when an agent finished.
+- `factual_context_timeline` groups focus-span facts with nearby observed semantic actions and keeps source event IDs. It does not infer goals.
+- `task_evidence` links heuristic task rows to evidence windows, observed outcomes, and agent-turn event IDs.
+- Same-context agent-submit boundaries may be merged only conservatively when the session, agent surface, non-empty context anchor, and short timing gap agree. Treat the resulting task boundary as heuristic.
+
+For long histories, prefer retrieving the supporting source rows through `get_workflow_trace` rather than trusting these derived indexes alone.
+
 ### Capture manifest
 Describes what evidence sources and capabilities were observed in the export and what was not captured. Use it before drawing conclusions from missing fields.
 
