@@ -67,6 +67,8 @@ EOF
 /usr/bin/base64 < "$PAYLOAD_ARCHIVE" >> "$LAUNCHER"
 
 cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
+cp "$ROOT/AI_GUIDE.md" "$PKG/AI_GUIDE.md"
+cp "$ROOT/PROMPT.md" "$PKG/PROMPT.md"
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 
 cat > "$PKG/README_FIRST.txt" <<EOF
@@ -82,18 +84,29 @@ OpenWorkGraph $VERSION — macOS tester build
 5. Approve macOS Accessibility/Input Monitoring permissions if requested.
 6. The local dashboard opens automatically at http://127.0.0.1:8787.
 
-Browser context (recommended)
+Browser enrichment (optional)
 -----------------------------
-Double-click ADD_BROWSER_SENSOR.command after OpenWorkGraph has started once.
-It opens the installed browser_extension folder and your browser extension page.
-Enable Developer mode, choose Load unpacked, and select the opened
-browser_extension folder. This lets OpenWorkGraph distinguish Gmail, Docs,
-Salesforce and other browser work instead of seeing only the browser application.
+OpenWorkGraph works without the browser extension: desktop observation can still
+capture browser focus, exposed window/page titles, timing and interactions.
+
+For richer browser-native context, double-click ADD_BROWSER_SENSOR.command after
+OpenWorkGraph has started once. It opens the installed browser_extension folder
+and your browser extension page. Enable Developer mode, choose Load unpacked, and
+select the opened browser_extension folder. The optional sensor adds structured
+hostname/path, navigation and safe page/control semantics when available.
 
 The browser sensor is paired to this OpenWorkGraph installation. It verifies the
 local server before sending browser evidence. If pairing is lost, use
 "Pair / repair browser sensor" in the dashboard and the extension popup. After
 upgrading OpenWorkGraph, reload the unpacked extension when the dashboard asks.
+
+AI analysis
+-----------
+AI_GUIDE.md explains how ChatGPT, Claude and other AI systems should interpret
+OpenWorkGraph evidence. PROMPT.md is a short starter instruction you can use when
+uploading an export. Exports also carry the guide, prompt and a capture manifest,
+so the AI can distinguish captured evidence from OpenWorkGraph's derived heuristic
+views and can tell whether browser-extension evidence was present.
 
 Privacy / data location
 -----------------------
