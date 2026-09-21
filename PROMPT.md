@@ -1,6 +1,6 @@
 # OpenWorkGraph starter prompt
 
-Use the attached OpenWorkGraph evidence to reconstruct how I actually performed my work.
+Use the attached OpenWorkGraph evidence to reconstruct how I actually performed my work. Treat raw observations as evidence, not as pre-interpreted tasks.
 
 ## Evidence priority
 
