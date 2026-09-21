@@ -112,21 +112,29 @@ jobs:
           cat > /tmp/openworkgraph-release-notes.md <<EOF
           ## OpenWorkGraph ${TAG}
 
-          OpenWorkGraph is a local-first work-telemetry and organizational-context layer for AI.
+          OpenWorkGraph is a local-first workflow-evidence and organizational-context layer for the AI you already use.
+
+          ### AI-ready context packages
+          Exports now carry a canonical AI guide, a short starter prompt, and a capture manifest explaining which evidence sources were observed. Raw captured evidence remains the primary record when included; inferred tasks, repeated families and summaries are explicitly treated as heuristic convenience views rather than ground truth. The existing JSON/XLSX/CSV-ZIP endpoints and filenames remain compatible.
+
+          The CSV ZIP can be uploaded directly as an AI context package. XLSX exports include dedicated **AI guide**, **Starter prompt**, and **Capture manifest** sheets. The same canonical guide is exposed through MCP as **openworkgraph://ai-guide**.
 
           ### macOS tester
-          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The package brings its own private runtime; no manual Python setup is required.
+          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The package brings its own private runtime; no manual Python setup is required. **AI_GUIDE.md** and **PROMPT.md** are included in the download.
 
           ### Windows tester
-          Download **OpenWorkGraph-Windows.zip**, unzip it, then double-click **START_OPENWORKGRAPH.cmd**. The launcher installs its own private runtime; no manual Python setup is required.
+          Download **OpenWorkGraph-Windows.zip**, unzip it, then double-click **START_OPENWORKGRAPH.cmd**. The launcher installs its own private runtime; no manual Python setup is required. **AI_GUIDE.md** and **PROMPT.md** are included in the download.
 
-          For detailed browser/tab context, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
+          ### Optional browser enrichment
+          OpenWorkGraph works without the browser extension: desktop observation can still provide browser focus, exposed window/page titles, timing, interactions and transitions. For richer browser-native hostname/path, navigation and safe control semantics, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
+
+          A capture manifest records whether browser-extension semantic events were observed. Zero browser semantic events therefore means the optional extension did not contribute semantic events in that export; it does not mean that no browser workflow evidence was captured.
 
           ### Claude Desktop
           **OpenWorkGraph-Claude.mcpb** is a small local desktop extension that launches the authenticated OpenWorkGraph stdio MCP server from an existing OpenWorkGraph installation. Install OpenWorkGraph first, then install the MCP bundle in Claude Desktop. AI access starts OFF on every OpenWorkGraph launch and must be enabled from the local dashboard.
 
           ### MCP behavior
-          Local AI clients use stdio by default, so OpenWorkGraph no longer keeps a separate MCP HTTP port open during normal use. HTTP MCP starts only on demand for clients such as ChatGPT live connections that need a network transport. Rich workflow evidence is exposed through compact paginated traces rather than repeated full internal event objects.
+          Local AI clients use stdio by default, so OpenWorkGraph does not keep a separate MCP HTTP port open during normal use. HTTP MCP starts only on demand for clients such as ChatGPT live connections that need a network transport. Rich workflow evidence is exposed through compact paginated traces rather than repeated full internal event objects.
 
           ### Privacy and local-interface security
           Typed text, individual key identities and clipboard contents are not captured. Screenshots are disabled in the normal configuration.
