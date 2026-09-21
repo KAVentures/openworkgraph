@@ -15,7 +15,13 @@ import httpx
 
 from .platform import active_window
 from .accessibility import element_at_position
-from .interactions import InteractionSensor, KeyboardActivitySensor, ActivityTracker, RawInteraction
+from .interactions import (
+    InteractionSensor,
+    KeyboardActivitySensor,
+    ActivityTracker,
+    RawInteraction,
+    RawClipboardAction,
+)
 from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
 from .outbox import EventOutbox
@@ -57,6 +63,8 @@ def load_config(path: Path) -> dict:
         "interaction_screenshots_enabled": False,
         "capture_ui_labels": True,
         "keyboard_activity_enabled": True,
+        "clipboard_behavior_enabled": True,
+        "clipboard_link_max_seconds": 7200,
         "activity_active_window_seconds": 5,
         "engaged_grace_seconds": 60,
     }
@@ -299,18 +307,99 @@ def _interaction_event(
     }
 
 
+def _clipboard_event(
+    *,
+    raw: RawClipboardAction,
+    cfg: dict,
+    session_id: str,
+    event_id: str,
+    transfer_id: str | None,
+    linked_copy_event_id: str | None = None,
+    link_age_seconds: float | None = None,
+) -> dict:
+    w = active_window()
+    state = _public_window(w, cfg)
+    metadata: dict = {
+        "source": "desktop",
+        "action": raw.kind,
+        "evidence_channel": "keyboard_shortcut",
+        "clipboard_contents_captured": False,
+        "clipboard_source_observed": bool(linked_copy_event_id) if raw.kind == "paste" else True,
+        "privacy": {
+            "key_identities": False,
+            "typed_values": False,
+            "clipboard_contents": False,
+        },
+        "excluded": state["excluded"],
+    }
+    if raw.clipboard_change_token is not None:
+        metadata["clipboard_change_token"] = int(raw.clipboard_change_token)
+    if transfer_id:
+        metadata["clipboard_transfer_id"] = transfer_id
+    if linked_copy_event_id:
+        metadata["linked_copy_event_id"] = linked_copy_event_id
+    if link_age_seconds is not None:
+        metadata["clipboard_link_age_seconds"] = round(max(0.0, float(link_age_seconds)), 3)
+
+    return {
+        "event_id": event_id,
+        "observed_at": utcnow(),
+        **_identity_fields(cfg),
+        "session_id": session_id,
+        "app": state["app"],
+        "window_title": state["window_title"],
+        "event_type": f"clipboard_{raw.kind}",
+        "duration_seconds": 0.0,
+        "screenshot_path": None,
+        "metadata": metadata,
+    }
+
+
 def _interaction_worker(
-    q: "queue.Queue[RawInteraction | None]",
+    q: "queue.Queue[RawInteraction | RawClipboardAction | None]",
     cfg: dict,
     session_id: str,
     outbox: EventOutbox,
 ) -> None:
+    last_clipboard_source: dict | None = None
+    link_max_seconds = max(0.0, float(cfg.get("clipboard_link_max_seconds", 7200)))
+
     while True:
         raw = q.get()
         try:
             if raw is None:
                 return
-            event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
+            if isinstance(raw, RawClipboardAction):
+                event_id = str(uuid.uuid4())
+                transfer_id: str | None = None
+                linked_copy_event_id: str | None = None
+                link_age_seconds: float | None = None
+
+                if raw.kind in {"copy", "cut"}:
+                    transfer_id = str(uuid.uuid4())
+                    last_clipboard_source = {
+                        "event_id": event_id,
+                        "transfer_id": transfer_id,
+                        "occurred_mono": raw.occurred_mono,
+                    }
+                elif raw.kind == "paste" and last_clipboard_source is not None:
+                    age = max(0.0, raw.occurred_mono - float(last_clipboard_source["occurred_mono"]))
+                    if age <= link_max_seconds:
+                        transfer_id = str(last_clipboard_source["transfer_id"])
+                        linked_copy_event_id = str(last_clipboard_source["event_id"])
+                        link_age_seconds = age
+
+                event = _clipboard_event(
+                    raw=raw,
+                    cfg=cfg,
+                    session_id=session_id,
+                    event_id=event_id,
+                    transfer_id=transfer_id,
+                    linked_copy_event_id=linked_copy_event_id,
+                    link_age_seconds=link_age_seconds,
+                )
+            else:
+                event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
             persist_event(event, outbox)
         except Exception:
             pass
@@ -347,7 +436,7 @@ def run(config_path: Path) -> None:
     )
     delivery.start()
 
-    interaction_q: "queue.Queue[RawInteraction | None]" = queue.Queue(maxsize=5000)
+    interaction_q: "queue.Queue[RawInteraction | RawClipboardAction | None]" = queue.Queue(maxsize=5000)
     worker = threading.Thread(
         target=_interaction_worker, args=(interaction_q, cfg, session_id, outbox), daemon=True
     )
@@ -355,6 +444,12 @@ def run(config_path: Path) -> None:
 
     def enqueue_interaction(raw: RawInteraction) -> None:
         activity_tracker.record(raw.kind, raw.occurred_mono)
+        try:
+            interaction_q.put(raw, timeout=0.05)
+        except queue.Full:
+            pass
+
+    def enqueue_clipboard(raw: RawClipboardAction) -> None:
         try:
             interaction_q.put(raw, timeout=0.05)
         except queue.Full:
@@ -374,7 +469,11 @@ def run(config_path: Path) -> None:
         sensor_started = sensor.start()
 
     if cfg.get("keyboard_activity_enabled", True):
-        keyboard_sensor = KeyboardActivitySensor(lambda t: activity_tracker.record("key", t))
+        keyboard_sensor = KeyboardActivitySensor(
+            lambda t: activity_tracker.record("key", t),
+            clipboard_callback=enqueue_clipboard,
+            capture_clipboard_shortcuts=cfg.get("clipboard_behavior_enabled", True),
+        )
         keyboard_started = keyboard_sensor.start()
 
     print(f"Workflow Observer collector started. session={session_id}")
@@ -383,7 +482,9 @@ def run(config_path: Path) -> None:
     print("Polling detects focus/tab changes; unchanged polls are NOT stored as events.")
     print("Screen interaction capture: " + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable"))
     print("Keyboard activity: " + ("ON (counts only; key identities/text are discarded)" if keyboard_started else "OFF / permission unavailable"))
-    print("Typed text, key identities, and clipboard contents are never stored. Ctrl+C stops collection.")
+    clipboard_started = bool(keyboard_started and cfg.get("clipboard_behavior_enabled", True))
+    print("Clipboard behavior: " + ("ON (copy/cut/paste actions only; contents never read)" if clipboard_started else "OFF"))
+    print("Typed text, ordinary key identities, and clipboard contents are never stored. Ctrl+C stops collection.")
 
     while not STOP:
         w = active_window()
