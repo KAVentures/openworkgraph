@@ -11,50 +11,34 @@ from typing import Any
 
 import xlsxwriter
 
-from .analytics import (
-    candidate_tasks,
-    semantic_activity,
-    summary,
-)
+from .analytics import candidate_tasks, semantic_activity, summary
 from .db import normalized_rows, rows
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
+AI_GUIDE_PATH = ROOT / "AI_GUIDE.md"
+PROMPT_PATH = ROOT / "PROMPT.md"
 
-AI_DATA_DICTIONARY_MD = """# OpenWorkGraph export guide for AI analysis
 
-## What the timing and effort fields mean
-- `focus_span`: time during which one application/window remained in the foreground.
-- `foreground_seconds`: total time the work surface/window was in front.
-- `engaged_seconds`: foreground time with recent keyboard, click, or scroll activity; it is an activity estimate, not proof the user was continuously working.
-- `active_input_seconds`: time very close to observed keyboard/mouse input.
-- `idle_seconds`: foreground time outside the engagement grace window.
-- `keypress_count`: number of keypresses observed. OpenWorkGraph never stores which keys were pressed or the text that was typed.
-- `click_count` and `scroll_count`: counts of observed interactions.
+def _read_bundled_text(path: Path, fallback: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip() + "\n"
+    except Exception:
+        return fallback.strip() + "\n"
 
-## Stable privacy tokens
-- `PERSON`: an unnamed or deliberately non-linkable person.
-- `PERSON_x`: the same pseudonymized person each time that stable token appears.
-- `EMAIL_x`, `IBAN_x`, `PAYMENT_CARD_x`, `SENSITIVE_NUMBER_x`, `SECRET_x`: masked values that remain stable within this installation/export context.
-- `OCR_REFERENCE_x`: a legacy reference/OCR value that an older version had incorrectly classified as a payment card. The original digits cannot be reconstructed.
-- Other identifier tokens such as `PATIENT_ID_x`, `CASE_ID_x`, `ACCOUNT_ID_x` and `ORG_ID_x` are stable pseudonyms for the corresponding identifier type.
 
-## Capture limits
-- Typed text and key identities are never captured.
-- Clipboard contents are never captured; only the occurrence of copy/paste may be recorded.
-- Screenshots are not part of normal capture/export.
-- `Excluded` rows carry timing/activity only; the sensitive application/title/content is intentionally omitted.
-- A target label may be empty when the clicked item was a long mail/chat/record row or when the application did not expose a safe accessibility label.
-- Browser query strings, URL fragments, and token-like path segments are removed or normalized.
-
-## Deliberately retained workflow context
-Amounts, company names, project/deal names, order numbers, document/page titles and other workflow context may be retained on purpose because they can be necessary to understand the work. Review the export before sharing it outside the intended analysis context.
-
-## Reading the layers
-- Raw local evidence is the richest captured event stream.
-- Operational events are privacy-normalized/derived representations intended for workflow analysis.
-- Inferred tasks and repeated task families are model-free analytical interpretations of the captured event stream, not additional observations.
-"""
+AI_DATA_DICTIONARY_MD = _read_bundled_text(
+    AI_GUIDE_PATH,
+    """# OpenWorkGraph AI guide
+Treat observed workflow rows as evidence. Derived tasks and summaries are heuristic indexes, not ground truth. Typed text, individual key identities and clipboard contents are not captured. Browser-extension events are optional; desktop-derived browser evidence can still exist when browser semantic events are zero.
+""",
+)
+AI_STARTER_PROMPT_MD = _read_bundled_text(
+    PROMPT_PATH,
+    """# OpenWorkGraph starter prompt
+Use the OpenWorkGraph evidence to reconstruct how I worked. Treat raw observations as evidence and derived tasks/summaries as non-authoritative heuristics. Combine this workflow evidence with all other context and tools available to you, and clearly distinguish observations from your inferences.
+""",
+)
 
 
 def _since_for_scope(scope: str) -> str | None:
@@ -86,6 +70,35 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _capture_manifest(*, scope: str, include_raw: bool, raw_summary: dict[str, Any]) -> dict[str, Any]:
+    browser_events = int(raw_summary.get("browser_semantic_events", 0) or 0)
+    event_count = int(raw_summary.get("events", 0) or 0)
+    return {
+        "schema_version": "1.0",
+        "product": "OpenWorkGraph / Workflow Observer",
+        "product_version": VERSION,
+        "scope": scope,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "evidence": {
+            "raw_local_evidence_included": bool(include_raw),
+            "desktop_observer": "observed_in_export" if event_count else "no_events_in_export",
+            "browser_extension": "observed_in_export" if browser_events else "not_observed_in_export",
+            "browser_extension_semantic_event_count": browser_events,
+            "desktop_browser_context_may_still_be_present": True,
+            "typed_text_captured": False,
+            "individual_key_identities_captured": False,
+            "clipboard_contents_captured": False,
+            "screenshots_in_normal_capture": False,
+        },
+        "interpretation": {
+            "raw_local_evidence_role": "primary captured evidence when included",
+            "operational_layers_role": "privacy-normalized derived/index views",
+            "inferred_tasks_role": "heuristic convenience index; not ground truth",
+            "missing_browser_extension_events_mean": "No browser-extension semantic events were observed in this export; desktop-derived browser evidence may still exist.",
+        },
+    }
+
+
 def build_export_payload(*, scope: str = "current", include_raw: bool = False) -> dict[str, Any]:
     since = _since_for_scope(scope)
     operational_summary = summary(100000, since=since, operational=True)
@@ -93,6 +106,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
     task_data = candidate_tasks(limit=100000, since=since)
     operational_events = _query_table("normalized_events", since=since)
     raw_events = _query_table("events", since=since) if include_raw else []
+    manifest = _capture_manifest(scope=scope, include_raw=include_raw, raw_summary=raw_summary)
 
     return {
         "export": {
@@ -107,7 +121,11 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
                 if include_raw
                 else "This export contains the privacy-normalized operational layer; raw local evidence is excluded."
             ),
+            "interpretation_note": "Observed evidence is authoritative for what was captured. Inferred tasks/summaries are non-authoritative heuristics that AI should verify against evidence.",
         },
+        "capture_manifest": manifest,
+        "ai_guide_markdown": AI_DATA_DICTIONARY_MD,
+        "starter_prompt_markdown": AI_STARTER_PROMPT_MD,
         "overview": {
             "operational": operational_summary,
             "raw_capture_counts": {
@@ -131,13 +149,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
 
 
 def json_bytes(payload: dict[str, Any]) -> bytes:
-    # Compact serialization materially reduces upload size without changing the
-    # JSON schema or removing fields used by existing code.
-    return json.dumps(
-        _jsonable(payload),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    return json.dumps(_jsonable(payload), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _metadata_parts(e: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -151,13 +163,7 @@ def _metadata_parts(e: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], 
 
 def _flatten_event(e: dict[str, Any]) -> dict[str, Any]:
     meta, page, target = _metadata_parts(e)
-    target_label = (
-        target.get("label")
-        or target.get("title")
-        or target.get("description")
-        or target.get("help")
-        or ""
-    )
+    target_label = target.get("label") or target.get("title") or target.get("description") or target.get("help") or ""
     target_role = target.get("role") or target.get("localized_role") or target.get("tag") or ""
     return {
         "observed_at": e.get("observed_at"),
@@ -184,6 +190,7 @@ def _flatten_event(e: dict[str, Any]) -> dict[str, Any]:
 def _task_row(t: dict[str, Any]) -> dict[str, Any]:
     b = t.get("boundary") or {}
     return {
+        "interpretation_status": "heuristic_not_ground_truth",
         "started_at": t.get("started_at"),
         "ended_at": t.get("ended_at"),
         "task_label": t.get("suggested_label"),
@@ -208,6 +215,7 @@ def _task_row(t: dict[str, Any]) -> dict[str, Any]:
 
 def _family_row(p: dict[str, Any]) -> dict[str, Any]:
     return {
+        "interpretation_status": "heuristic_not_ground_truth",
         "task_label": p.get("suggested_label"),
         "task_family": p.get("task_family") or p.get("signature"),
         "observed_count": p.get("observed_count", 0),
@@ -240,27 +248,34 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "README.txt",
-            "OpenWorkGraph session export\n\n"
-            + payload["export"]["privacy_note"]
-            + "\nFor AI analysis, read README_FOR_AI.md first.\n"
+            "OpenWorkGraph AI context package\n\n"
+            + str(payload["export"].get("privacy_note") or "")
+            + "\n\nStart with START_HERE.md, AI_GUIDE.md, and CAPTURE_MANIFEST.json.\n"
+            + "Observed evidence is the primary record; inferred tasks and repeated families are heuristic convenience indexes.\n"
             + "Each CSV represents one table from the captured session.\n",
         )
-        zf.writestr("README_FOR_AI.md", AI_DATA_DICTIONARY_MD)
+        zf.writestr("START_HERE.md", str(payload.get("starter_prompt_markdown") or AI_STARTER_PROMPT_MD))
+        zf.writestr("AI_GUIDE.md", str(payload.get("ai_guide_markdown") or AI_DATA_DICTIONARY_MD))
+        zf.writestr("README_FOR_AI.md", str(payload.get("ai_guide_markdown") or AI_DATA_DICTIONARY_MD))
+        zf.writestr(
+            "CAPTURE_MANIFEST.json",
+            json.dumps(_jsonable(payload.get("capture_manifest") or {}), ensure_ascii=False, indent=2),
+        )
         for filename, records in files.items():
             buf = io.StringIO(newline="")
             if records:
                 keys: list[str] = []
-                for r in records:
-                    for k in r.keys():
-                        if k not in keys:
-                            keys.append(k)
+                for record in records:
+                    for key in record.keys():
+                        if key not in keys:
+                            keys.append(key)
                 writer = csv.DictWriter(buf, fieldnames=keys)
                 writer.writeheader()
-                for r in records:
+                for record in records:
                     cooked = {}
-                    for k in keys:
-                        v = r.get(k)
-                        cooked[k] = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+                    for key in keys:
+                        value = record.get(key)
+                        cooked[key] = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
                     writer.writerow(cooked)
             zf.writestr(filename, buf.getvalue().encode("utf-8-sig"))
     return out.getvalue()
@@ -272,6 +287,19 @@ def _xlsx_value(v: Any) -> Any:
     if v is None:
         return ""
     return v
+
+
+def _flatten_mapping(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    rows_out: list[tuple[str, Any]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            rows_out.extend(_flatten_mapping(child, child_prefix))
+    elif isinstance(value, list):
+        rows_out.append((prefix, json.dumps(value, ensure_ascii=False)))
+    else:
+        rows_out.append((prefix, value))
+    return rows_out
 
 
 def xlsx_bytes(payload: dict[str, Any]) -> bytes:
@@ -304,12 +332,14 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         ("Run started at", payload["export"].get("run_started_at")),
         ("Raw local evidence included", str(payload["export"].get("include_raw_local_evidence"))),
         ("Privacy note", payload["export"].get("privacy_note")),
+        ("Interpretation note", payload["export"].get("interpretation_note")),
     ]
-    for i, (k, v) in enumerate(meta_rows, start=4):
-        overview.write(i - 1, 0, k, header_fmt if i == 4 else text_fmt)
-        overview.write(i - 1, 1, _xlsx_value(v), wrap_fmt)
+    for i, (key, value) in enumerate(meta_rows, start=4):
+        overview.write(i - 1, 0, key, header_fmt if i == 4 else text_fmt)
+        overview.write(i - 1, 1, _xlsx_value(value), wrap_fmt)
+
     op = payload.get("overview", {}).get("operational", {})
-    overview.write("A12", "Operational summary", section_fmt)
+    overview.write("A13", "Operational summary", section_fmt)
     kpis = [
         ("Focus periods", op.get("focus_events", 0)),
         ("Engaged seconds", op.get("total_engaged_seconds", 0)),
@@ -320,24 +350,19 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         ("Inferred tasks", len(payload.get("inferred_tasks") or [])),
         ("Repeated task families", len(payload.get("repeated_task_families") or [])),
     ]
-    for i, (k, v) in enumerate(kpis, start=13):
-        overview.write(i - 1, 0, k, text_fmt)
-        overview.write(i - 1, 1, v, num_fmt if isinstance(v, float) else int_fmt)
+    for i, (key, value) in enumerate(kpis, start=14):
+        overview.write(i - 1, 0, key, text_fmt)
+        overview.write(i - 1, 1, value, num_fmt if isinstance(value, float) else int_fmt)
 
-    overview.write("A23", "AI data dictionary", section_fmt)
-    dictionary_rows = [
-        ("focus_span", "Time during which one application/window remained in the foreground."),
-        ("engaged_seconds", "Foreground time with recent input activity; an estimate, not proof of continuous work."),
-        ("keypress_count", "Count only. Which keys were pressed and typed text are never stored."),
-        ("PERSON / PERSON_x", "PERSON is unnamed/non-linkable; PERSON_x is a stable pseudonym for the same person."),
-        ("EMAIL_x / IBAN_x / PAYMENT_CARD_x / SENSITIVE_NUMBER_x / SECRET_x", "Stable masked values; SENSITIVE_NUMBER_x means a long Luhn-valid number was masked without asserting it was a card."),
-        ("Excluded", "Timing/activity only; sensitive app/title/content is intentionally omitted."),
-        ("Empty target_label", "May occur for long mail/chat/record rows or controls without a safe exposed label."),
-        ("Retained context", "Amounts, company names, project/deal names and order numbers may be kept intentionally. Review before sharing."),
-    ]
-    for row_idx, (term, meaning) in enumerate(dictionary_rows, start=23):
-        overview.write(row_idx, 0, term, text_fmt)
-        overview.write(row_idx, 1, meaning, wrap_fmt)
+    overview.write("A24", "How AI should read this", section_fmt)
+    overview.write("A25", "Observed evidence", text_fmt)
+    overview.write("B25", "Primary record of what OpenWorkGraph captured.", wrap_fmt)
+    overview.write("A26", "Derived tasks/summaries", text_fmt)
+    overview.write("B26", "Heuristic convenience indexes; verify against evidence and reconstruct workflow when needed.", wrap_fmt)
+    overview.write("A27", "Browser semantic events = 0", text_fmt)
+    overview.write("B27", "Means no browser-extension semantic events were observed; desktop-derived browser evidence may still be present.", wrap_fmt)
+    overview.write("A28", "Full instructions", text_fmt)
+    overview.write("B28", "Read the 'AI guide', 'Starter prompt', and 'Capture manifest' sheets.", wrap_fmt)
 
     def write_table(sheet_name: str, records: list[dict[str, Any]], *, widths: dict[str, int] | None = None) -> None:
         ws = wb.add_worksheet(sheet_name[:31])
@@ -347,46 +372,60 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
             ws.write(0, 0, "No data captured for this table.")
             return
         keys: list[str] = []
-        for r in records:
-            for k in r.keys():
-                if k not in keys:
-                    keys.append(k)
+        for record in records:
+            for key in record.keys():
+                if key not in keys:
+                    keys.append(key)
         for col, key in enumerate(keys):
             ws.write(0, col, key, header_fmt)
             width = (widths or {}).get(key, min(40, max(12, len(key) + 2)))
             ws.set_column(col, col, width)
         for row_idx, record in enumerate(records, start=1):
             for col, key in enumerate(keys):
-                v = _xlsx_value(record.get(key))
-                if isinstance(v, bool):
-                    ws.write_boolean(row_idx, col, v, text_fmt)
-                elif isinstance(v, (int, float)) and not isinstance(v, bool):
-                    ws.write_number(row_idx, col, float(v), num_fmt if isinstance(v, float) else int_fmt)
+                value = _xlsx_value(record.get(key))
+                if isinstance(value, bool):
+                    ws.write_boolean(row_idx, col, value, text_fmt)
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    ws.write_number(row_idx, col, float(value), num_fmt if isinstance(value, float) else int_fmt)
                 else:
-                    ws.write(row_idx, col, v, wrap_fmt if isinstance(v, str) and len(v) > 60 else text_fmt)
+                    ws.write(row_idx, col, value, wrap_fmt if isinstance(value, str) and len(value) > 60 else text_fmt)
         ws.autofilter(0, 0, len(records), len(keys) - 1)
+
+    guide_ws = wb.add_worksheet("AI guide")
+    guide_ws.hide_gridlines(2)
+    guide_ws.set_column("A:A", 110)
+    for row_idx, line in enumerate(str(payload.get("ai_guide_markdown") or AI_DATA_DICTIONARY_MD).splitlines()):
+        guide_ws.write(row_idx, 0, line, title_fmt if row_idx == 0 else wrap_fmt)
+
+    prompt_ws = wb.add_worksheet("Starter prompt")
+    prompt_ws.hide_gridlines(2)
+    prompt_ws.set_column("A:A", 110)
+    for row_idx, line in enumerate(str(payload.get("starter_prompt_markdown") or AI_STARTER_PROMPT_MD).splitlines()):
+        prompt_ws.write(row_idx, 0, line, title_fmt if row_idx == 0 else wrap_fmt)
+
+    manifest_ws = wb.add_worksheet("Capture manifest")
+    manifest_ws.hide_gridlines(2)
+    manifest_ws.set_column("A:A", 48)
+    manifest_ws.set_column("B:B", 80)
+    manifest_ws.write(0, 0, "Field", header_fmt)
+    manifest_ws.write(0, 1, "Value", header_fmt)
+    for row_idx, (key, value) in enumerate(_flatten_mapping(payload.get("capture_manifest") or {}), start=1):
+        manifest_ws.write(row_idx, 0, key, text_fmt)
+        manifest_ws.write(row_idx, 1, _xlsx_value(value), wrap_fmt)
 
     effort = list(payload.get("effort_by_surface") or [])
     write_table("Effort by surface", effort, widths={"surface": 24, "container_app": 22})
-    write_table("Inferred tasks", [_task_row(x) for x in payload.get("inferred_tasks") or []], widths={"task_label": 28, "task_family": 28, "surfaces": 38, "semantic_actions": 45})
-    write_table("Repeated families", [_family_row(x) for x in payload.get("repeated_task_families") or []], widths={"task_label": 28, "task_family": 30, "surfaces": 38})
+    write_table("Inferred tasks", [_task_row(x) for x in payload.get("inferred_tasks") or []], widths={"interpretation_status": 28, "task_label": 28, "task_family": 28, "surfaces": 38, "semantic_actions": 45})
+    write_table("Repeated families", [_family_row(x) for x in payload.get("repeated_task_families") or []], widths={"interpretation_status": 28, "task_label": 28, "task_family": 30, "surfaces": 38})
     write_table("Transitions", list(payload.get("transitions") or []), widths={"from": 30, "to": 30})
-    write_table(
-        "Operational events",
-        [_flatten_event(x) for x in payload.get("operational_events") or []],
-        widths={"app_or_surface": 24, "window_title": 28, "target_label": 36, "page_host": 26, "event_type": 22, "metadata_json": 55},
-    )
+    write_table("Operational events", [_flatten_event(x) for x in payload.get("operational_events") or []], widths={"app_or_surface": 24, "window_title": 28, "target_label": 36, "page_host": 26, "event_type": 22, "metadata_json": 55})
     write_table("Semantic activity", list(payload.get("operational_semantic_activity") or []), widths={"app": 24, "label": 40, "event_type": 24})
     if "raw_local_evidence" in payload:
-        write_table(
-            "RAW local evidence",
-            [_flatten_event(x) for x in payload.get("raw_local_evidence") or []],
-            widths={"app_or_surface": 24, "window_title": 50, "target_label": 40, "page_host": 26, "event_type": 22, "metadata_json": 65},
-        )
+        write_table("RAW local evidence", [_flatten_event(x) for x in payload.get("raw_local_evidence") or []], widths={"app_or_surface": 24, "window_title": 50, "target_label": 40, "page_host": 26, "event_type": 22, "metadata_json": 65})
 
     if effort:
         top = effort[:10]
-        start_row = 34
+        start_row = 31
         overview.write(start_row, 0, "Top work surfaces by engaged time", section_fmt)
         overview.write(start_row + 1, 0, "Surface", header_fmt)
         overview.write(start_row + 1, 1, "Engaged seconds", header_fmt)
