@@ -67,6 +67,68 @@ def test_timestamp_offsets_normalize_to_same_instant_and_invalid_is_rejected():
         pass
 
 
+def test_single_use_enrollment_is_org_bound_and_duplicate_device_is_not_replaced(tmp_path):
+    settings, _ = _settings(tmp_path)
+    app = create_app(settings=settings)
+    with TestClient(app) as client:
+        grant = client.post(
+            "/v1/admin/enrollment-codes",
+            headers={"Authorization": "Bearer enroll-secret"},
+            json={"organization_id": "acme", "actor_id": "alice", "expires_minutes": 30},
+        )
+        assert grant.status_code == 200, grant.text
+        code = grant.json()["token"]
+
+        wrong_org = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": f"Bearer {code}"},
+            json={"organization_id": "contoso", "actor_id": "alice", "device_id": "mac-1"},
+        )
+        assert wrong_org.status_code == 403
+
+        # Wrong-org attempt currently consumes the one-time grant, so mint a fresh
+        # code and confirm the successful path and duplicate-device protection.
+        grant2 = client.post(
+            "/v1/admin/enrollment-codes",
+            headers={"Authorization": "Bearer enroll-secret"},
+            json={"organization_id": "acme", "actor_id": "alice"},
+        )
+        code2 = grant2.json()["token"]
+        enrolled = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": f"Bearer {code2}"},
+            json={"organization_id": "acme", "actor_id": "alice", "device_id": "mac-1"},
+        )
+        assert enrolled.status_code == 200, enrolled.text
+        assert enrolled.json()["organization_id"] == "acme"
+        assert enrolled.json()["enrollment_mode"] == "single_use_code"
+
+        replay = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": f"Bearer {code2}"},
+            json={"organization_id": "acme", "actor_id": "alice", "device_id": "mac-2"},
+        )
+        assert replay.status_code == 401
+
+        grant3 = client.post(
+            "/v1/admin/enrollment-codes",
+            headers={"Authorization": "Bearer enroll-secret"},
+            json={"organization_id": "acme", "actor_id": "alice"},
+        )
+        duplicate = client.post(
+            "/v1/devices/enroll",
+            headers={"Authorization": f"Bearer {grant3.json()['token']}"},
+            json={"organization_id": "acme", "actor_id": "alice", "device_id": "mac-1"},
+        )
+        assert duplicate.status_code == 409
+        # Original device credential remains valid; duplicate enrollment did not revoke it.
+        policy = client.get(
+            "/v1/device-policy",
+            headers={"Authorization": f"Bearer {enrolled.json()['token']}"},
+        )
+        assert policy.status_code == 200
+
+
 def test_bad_gateway_cursor_is_400_and_offset_query_is_chronological(tmp_path):
     settings, db = _settings(tmp_path)
     app = create_app(settings=settings, db=db)
@@ -193,7 +255,7 @@ def test_pause_creates_permanent_local_only_interval(tmp_path, monkeypatch):
 
 
 def test_spreadsheet_formula_strings_are_neutralized_without_mutating_json_semantics():
-    assert _spreadsheet_safe_value("=HYPERLINK(\"https://evil.invalid\")") .startswith("'")
+    assert _spreadsheet_safe_value("=HYPERLINK(\"https://evil.invalid\")").startswith("'")
     assert _spreadsheet_safe_value("normal title") == "normal title"
 
     payload = {
