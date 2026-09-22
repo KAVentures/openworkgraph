@@ -117,7 +117,6 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             raise HTTPException(status_code=401, detail="Gateway enrollment issuer token required")
 
     def effective_actor(p: Principal, requested: str | None) -> str | None:
-        """Apply an optional actor restriction embedded in an integration token."""
         restricted = str(p.actor_id or "").strip()
         requested_value = str(requested or "").strip()
         if restricted:
@@ -152,7 +151,8 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "inferred_tasks_authoritative": False,
             "max_event_bytes": settings.max_event_bytes,
             "max_batch_bytes": settings.max_batch_bytes,
-            "enrollment": "single_use_organization_bound_grants",
+            "preferred_enrollment": "single_use_organization_bound_grants",
+            "legacy_shared_enrollment_supported": True,
         }
 
     @app.post("/v1/admin/enrollment-codes")
@@ -180,30 +180,39 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             organization_id=organization_id,
             principal_id="gateway-enrollment-issuer",
             action="device.enrollment_code.created",
-            details={
-                "grant_id": grant["grant_id"],
-                "actor_id": actor_id,
-                "expires_at": grant["expires_at"],
-            },
+            details={"grant_id": grant["grant_id"], "actor_id": actor_id, "expires_at": grant["expires_at"]},
         )
         return grant
 
     @app.post("/v1/devices/enroll")
     def enroll_device(request: EnrollmentRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-        grant = consume_enrollment_grant(db, _bearer(authorization))
+        presented = _bearer(authorization)
+        grant = consume_enrollment_grant(db, presented)
+        legacy_shared_secret = False
         if grant is None:
-            raise HTTPException(status_code=401, detail="valid unused OpenWorkGraph enrollment code required")
-        organization_id = str(grant["organization_id"]).strip()
-        actor_id = str(grant.get("actor_id") or "").strip()
-        requested_org = request.organization_id.strip()
-        requested_actor = request.actor_id.strip()
+            # v0.53 compatibility: existing self-hosted installs may still use the
+            # long-lived enrollment secret directly. Keep this working for now,
+            # but never allow it to silently replace an already-enrolled device.
+            if not env_token_matches(presented, settings.enrollment_token):
+                raise HTTPException(status_code=401, detail="valid unused OpenWorkGraph enrollment code required")
+            organization_id = request.organization_id.strip()
+            actor_id = request.actor_id.strip()
+            grant_id = "legacy-shared-enrollment"
+            legacy_shared_secret = True
+        else:
+            organization_id = str(grant["organization_id"]).strip()
+            actor_id = str(grant.get("actor_id") or "").strip()
+            grant_id = str(grant["grant_id"])
+            requested_org = request.organization_id.strip()
+            requested_actor = request.actor_id.strip()
+            if requested_org and requested_org != organization_id:
+                raise HTTPException(status_code=403, detail="enrollment code is bound to another organization")
+            if actor_id and requested_actor and requested_actor != actor_id:
+                raise HTTPException(status_code=403, detail="enrollment code is bound to another actor")
+
         device_id = request.device_id.strip()
-        if requested_org and requested_org != organization_id:
-            raise HTTPException(status_code=403, detail="enrollment code is bound to another organization")
-        if actor_id and requested_actor and requested_actor != actor_id:
-            raise HTTPException(status_code=403, detail="enrollment code is bound to another actor")
-        if not device_id:
-            raise HTTPException(status_code=400, detail="device_id is required")
+        if not organization_id or not device_id:
+            raise HTTPException(status_code=400, detail="organization_id and device_id are required")
         if max(len(organization_id), len(device_id), len(actor_id)) > 512:
             raise HTTPException(status_code=400, detail="organization/actor/device identifiers must be at most 512 characters")
         if active_device_exists(db, organization_id=organization_id, device_id=device_id):
@@ -224,7 +233,11 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             organization_id=organization_id,
             principal_id=token_id,
             action="device.enrolled",
-            details={"device_id": device_id, "grant_id": grant["grant_id"]},
+            details={
+                "device_id": device_id,
+                "grant_id": grant_id,
+                "legacy_shared_secret": legacy_shared_secret,
+            },
         )
         return {
             "token": token,
@@ -233,6 +246,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "actor_id": actor_id,
             "device_id": device_id,
             "scopes": sorted(DEVICE_SCOPES),
+            "enrollment_mode": "legacy_shared_secret" if legacy_shared_secret else "single_use_code",
             "note": "The device token is shown once. Store it in the endpoint credential store/file.",
         }
 
@@ -470,8 +484,6 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
                 until=until,
                 actor_id=actor_id,
                 cursor=cursor,
-                # Filter at the evidence query instead of consuming the first N
-                # unrelated focus/click events and only then looking for transfers.
                 query="clipboard_transfer_id",
                 limit=500,
             )
