@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collector.interactions import RawInteraction
-from collector.main import _capture_gap_event, _focus_span_event, _interaction_event
+from collector.main import _capture_gap_event, _capture_health_event, _focus_span_event, _interaction_event
 
 
 def _cfg() -> dict:
@@ -60,3 +60,18 @@ def test_capture_gap_does_not_claim_foreground_application():
     assert event["app"] == "Capture gap"
     assert event["window_title"] == ""
     assert "No foreground application is asserted" in event["metadata"]["interpretation"]
+
+
+def test_capture_health_is_safe_raw_evidence_about_known_loss():
+    counters = {
+        "interaction_worker_errors": 1,
+        "interaction_queue_dropped": 3,
+        "clipboard_queue_dropped": 0,
+        "capture_gap_count": 1,
+        "focus_checkpoint_count": 4,
+    }
+    event = _capture_health_event(capture_health=counters, cfg=_cfg(), session_id="s1")
+    assert event["event_type"] == "capture_health"
+    assert event["metadata"]["capture_health"] == counters
+    assert event["metadata"]["privacy"]["typed_values"] is False
+    assert event["metadata"]["privacy"]["clipboard_contents"] is False
