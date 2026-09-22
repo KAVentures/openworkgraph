@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 AI_GUIDE_PATH = ROOT / "AI_GUIDE.md"
 PROMPT_PATH = ROOT / "PROMPT.md"
+EXCEL_DATA_ROWS_PER_SHEET = 1_048_575
 
 
 def _read_bundled_text(path: Path, fallback: str) -> str:
@@ -45,19 +46,37 @@ def _since_for_scope(scope: str) -> str | None:
     return os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
 
 
-def _query_table(table: str, *, since: str | None, limit: int = 100000) -> list[dict[str, Any]]:
+def _loader_for(table: str):
     if table == "events":
-        loader = rows
-    elif table == "normalized_events":
-        loader = normalized_rows
-    else:
-        raise ValueError("unsupported table")
+        return rows
+    if table == "normalized_events":
+        return normalized_rows
+    raise ValueError("unsupported table")
+
+
+def _query_table(table: str, *, since: str | None) -> list[dict[str, Any]]:
+    """Return the complete evidence table for the requested scope.
+
+    Exports must never silently truncate evidence. Derived summaries may use bounded
+    analytical windows for responsiveness, but the exported evidence tables are
+    complete and the manifest states that explicitly.
+    """
+    loader = _loader_for(table)
     if since:
         return loader(
-            f"SELECT * FROM {table} WHERE observed_at >= ? ORDER BY observed_at ASC LIMIT ?",
-            (since, limit),
+            f"SELECT * FROM {table} WHERE observed_at >= ? ORDER BY observed_at ASC",
+            (since,),
         )
-    return loader(f"SELECT * FROM {table} ORDER BY observed_at ASC LIMIT ?", (limit,))
+    return loader(f"SELECT * FROM {table} ORDER BY observed_at ASC")
+
+
+def _count_table(table: str, *, since: str | None) -> int:
+    loader = _loader_for(table)
+    if since:
+        result = loader(f"SELECT COUNT(*) AS count FROM {table} WHERE observed_at >= ?", (since,))
+    else:
+        result = loader(f"SELECT COUNT(*) AS count FROM {table}")
+    return int((result[0] if result else {}).get("count", 0) or 0)
 
 
 def _jsonable(value: Any) -> Any:
@@ -70,9 +89,16 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _capture_manifest(*, scope: str, include_raw: bool, raw_summary: dict[str, Any]) -> dict[str, Any]:
+def _capture_manifest(
+    *,
+    scope: str,
+    include_raw: bool,
+    raw_summary: dict[str, Any],
+    operational_rows: int,
+    raw_rows: int,
+) -> dict[str, Any]:
     browser_events = int(raw_summary.get("browser_semantic_events", 0) or 0)
-    event_count = int(raw_summary.get("events", 0) or 0)
+    event_count = raw_rows
     return {
         "schema_version": "1.0",
         "product": "OpenWorkGraph / Workflow Observer",
@@ -83,18 +109,25 @@ def _capture_manifest(*, scope: str, include_raw: bool, raw_summary: dict[str, A
             "raw_local_evidence_included": bool(include_raw),
             "desktop_observer": "observed_in_export" if event_count else "no_events_in_export",
             "browser_extension": "observed_in_export" if browser_events else "not_observed_in_export",
+            # Keep the v0.50-v0.53 public key while also making the bounded-summary
+            # nature explicit in the additive key below.
             "browser_extension_semantic_event_count": browser_events,
+            "browser_extension_semantic_event_count_in_bounded_summary": browser_events,
             "desktop_browser_context_may_still_be_present": True,
             "typed_text_captured": False,
             "individual_key_identities_captured": False,
             "clipboard_contents_captured": False,
             "screenshots_in_normal_capture": False,
+            "operational_evidence_rows_exported": operational_rows,
+            "raw_evidence_rows_exported": raw_rows if include_raw else 0,
+            "evidence_tables_truncated": False,
         },
         "interpretation": {
             "raw_local_evidence_role": "primary captured evidence when included",
             "operational_layers_role": "privacy-normalized derived/index views",
             "inferred_tasks_role": "heuristic convenience index; not ground truth",
-            "missing_browser_extension_events_mean": "No browser-extension semantic events were observed in this export; desktop-derived browser evidence may still exist.",
+            "derived_analytics_note": "Some summaries/heuristic indexes intentionally use bounded analytical windows; evidence tables themselves are complete.",
+            "missing_browser_extension_events_mean": "No browser-extension semantic events were observed in the bounded summary; desktop-derived browser evidence may still exist.",
         },
     }
 
@@ -106,7 +139,15 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
     task_data = candidate_tasks(limit=100000, since=since)
     operational_events = _query_table("normalized_events", since=since)
     raw_events = _query_table("events", since=since) if include_raw else []
-    manifest = _capture_manifest(scope=scope, include_raw=include_raw, raw_summary=raw_summary)
+    operational_count = len(operational_events)
+    raw_count = len(raw_events) if include_raw else _count_table("events", since=since)
+    manifest = _capture_manifest(
+        scope=scope,
+        include_raw=include_raw,
+        raw_summary=raw_summary,
+        operational_rows=operational_count,
+        raw_rows=raw_count,
+    )
 
     return {
         "export": {
@@ -116,6 +157,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
             "scope": scope,
             "run_started_at": os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
             "include_raw_local_evidence": bool(include_raw),
+            "evidence_tables_truncated": False,
             "privacy_note": (
                 "Raw local evidence may contain names, subjects, document titles, URLs, and other sensitive content."
                 if include_raw
@@ -129,10 +171,15 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         "overview": {
             "operational": operational_summary,
             "raw_capture_counts": {
-                "events": raw_summary.get("events", 0),
+                "events": raw_count,
+                # Preserve established keys for callers; these three are bounded
+                # analytic counts, while `events` and evidence tables are complete.
                 "focus_events": raw_summary.get("focus_events", 0),
                 "screen_interactions": raw_summary.get("screen_interactions", 0),
                 "browser_semantic_events": raw_summary.get("browser_semantic_events", 0),
+                "focus_events_in_bounded_summary": raw_summary.get("focus_events", 0),
+                "screen_interactions_in_bounded_summary": raw_summary.get("screen_interactions", 0),
+                "browser_semantic_events_in_bounded_summary": raw_summary.get("browser_semantic_events", 0),
             },
         },
         "effort_by_surface": operational_summary.get("surfaces", []),
@@ -232,6 +279,15 @@ def _family_row(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _spreadsheet_safe_value(value: Any) -> Any:
+    """Neutralize spreadsheet formulas without changing canonical JSON evidence."""
+    if not isinstance(value, str):
+        return value
+    if value and value[0] in {"=", "+", "-", "@"}:
+        return "'" + value
+    return value
+
+
 def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
     files: dict[str, list[dict[str, Any]]] = {
         "effort_by_surface.csv": list(payload.get("effort_by_surface") or []),
@@ -252,6 +308,7 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
             + str(payload["export"].get("privacy_note") or "")
             + "\n\nStart with START_HERE.md, AI_GUIDE.md, and CAPTURE_MANIFEST.json.\n"
             + "Observed evidence is the primary record; inferred tasks and repeated families are heuristic convenience indexes.\n"
+            + "Spreadsheet-leading formula characters are escaped in CSV/XLSX only; JSON evidence remains literal.\n"
             + "Each CSV represents one table from the captured session.\n",
         )
         zf.writestr("START_HERE.md", str(payload.get("starter_prompt_markdown") or AI_STARTER_PROMPT_MD))
@@ -275,7 +332,8 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
                     cooked = {}
                     for key in keys:
                         value = record.get(key)
-                        cooked[key] = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+                        value = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+                        cooked[key] = _spreadsheet_safe_value(value)
                     writer.writerow(cooked)
             zf.writestr(filename, buf.getvalue().encode("utf-8-sig"))
     return out.getvalue()
@@ -283,10 +341,10 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
 
 def _xlsx_value(v: Any) -> Any:
     if isinstance(v, (dict, list, tuple)):
-        return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+        v = json.dumps(v, ensure_ascii=False, separators=(",", ":"))
     if v is None:
         return ""
-    return v
+    return _spreadsheet_safe_value(v)
 
 
 def _flatten_mapping(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
@@ -304,7 +362,11 @@ def _flatten_mapping(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
 
 def xlsx_bytes(payload: dict[str, Any]) -> bytes:
     out = io.BytesIO()
-    wb = xlsxwriter.Workbook(out, {"in_memory": True})
+    wb = xlsxwriter.Workbook(out, {
+        "in_memory": True,
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+    })
     wb.set_properties({
         "title": "OpenWorkGraph session export",
         "subject": "Captured workflow data",
@@ -331,6 +393,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         ("Scope", payload["export"].get("scope")),
         ("Run started at", payload["export"].get("run_started_at")),
         ("Raw local evidence included", str(payload["export"].get("include_raw_local_evidence"))),
+        ("Evidence tables truncated", str(payload["export"].get("evidence_tables_truncated"))),
         ("Privacy note", payload["export"].get("privacy_note")),
         ("Interpretation note", payload["export"].get("interpretation_note")),
     ]
@@ -365,43 +428,47 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
     overview.write("B28", "Read the 'AI guide', 'Starter prompt', and 'Capture manifest' sheets.", wrap_fmt)
 
     def write_table(sheet_name: str, records: list[dict[str, Any]], *, widths: dict[str, int] | None = None) -> None:
-        ws = wb.add_worksheet(sheet_name[:31])
-        ws.freeze_panes(1, 0)
-        ws.hide_gridlines(2)
-        if not records:
-            ws.write(0, 0, "No data captured for this table.")
-            return
-        keys: list[str] = []
-        for record in records:
-            for key in record.keys():
-                if key not in keys:
-                    keys.append(key)
-        for col, key in enumerate(keys):
-            ws.write(0, col, key, header_fmt)
-            width = (widths or {}).get(key, min(40, max(12, len(key) + 2)))
-            ws.set_column(col, col, width)
-        for row_idx, record in enumerate(records, start=1):
+        chunks = [records[i:i + EXCEL_DATA_ROWS_PER_SHEET] for i in range(0, len(records), EXCEL_DATA_ROWS_PER_SHEET)] or [[]]
+        for part_number, chunk in enumerate(chunks, start=1):
+            suffix = "" if len(chunks) == 1 else f" {part_number}"
+            base = sheet_name[:31 - len(suffix)]
+            ws = wb.add_worksheet((base + suffix)[:31])
+            ws.freeze_panes(1, 0)
+            ws.hide_gridlines(2)
+            if not chunk:
+                ws.write(0, 0, "No data captured for this table.")
+                continue
+            keys: list[str] = []
+            for record in chunk:
+                for key in record.keys():
+                    if key not in keys:
+                        keys.append(key)
             for col, key in enumerate(keys):
-                value = _xlsx_value(record.get(key))
-                if isinstance(value, bool):
-                    ws.write_boolean(row_idx, col, value, text_fmt)
-                elif isinstance(value, (int, float)) and not isinstance(value, bool):
-                    ws.write_number(row_idx, col, float(value), num_fmt if isinstance(value, float) else int_fmt)
-                else:
-                    ws.write(row_idx, col, value, wrap_fmt if isinstance(value, str) and len(value) > 60 else text_fmt)
-        ws.autofilter(0, 0, len(records), len(keys) - 1)
+                ws.write(0, col, key, header_fmt)
+                width = (widths or {}).get(key, min(40, max(12, len(key) + 2)))
+                ws.set_column(col, col, width)
+            for row_idx, record in enumerate(chunk, start=1):
+                for col, key in enumerate(keys):
+                    value = _xlsx_value(record.get(key))
+                    if isinstance(value, bool):
+                        ws.write_boolean(row_idx, col, value, text_fmt)
+                    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                        ws.write_number(row_idx, col, float(value), num_fmt if isinstance(value, float) else int_fmt)
+                    else:
+                        ws.write(row_idx, col, value, wrap_fmt if isinstance(value, str) and len(value) > 60 else text_fmt)
+            ws.autofilter(0, 0, len(chunk), len(keys) - 1)
 
     guide_ws = wb.add_worksheet("AI guide")
     guide_ws.hide_gridlines(2)
     guide_ws.set_column("A:A", 110)
     for row_idx, line in enumerate(str(payload.get("ai_guide_markdown") or AI_DATA_DICTIONARY_MD).splitlines()):
-        guide_ws.write(row_idx, 0, line, title_fmt if row_idx == 0 else wrap_fmt)
+        guide_ws.write(row_idx, 0, _xlsx_value(line), title_fmt if row_idx == 0 else wrap_fmt)
 
     prompt_ws = wb.add_worksheet("Starter prompt")
     prompt_ws.hide_gridlines(2)
     prompt_ws.set_column("A:A", 110)
     for row_idx, line in enumerate(str(payload.get("starter_prompt_markdown") or AI_STARTER_PROMPT_MD).splitlines()):
-        prompt_ws.write(row_idx, 0, line, title_fmt if row_idx == 0 else wrap_fmt)
+        prompt_ws.write(row_idx, 0, _xlsx_value(line), title_fmt if row_idx == 0 else wrap_fmt)
 
     manifest_ws = wb.add_worksheet("Capture manifest")
     manifest_ws.hide_gridlines(2)
@@ -410,7 +477,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
     manifest_ws.write(0, 0, "Field", header_fmt)
     manifest_ws.write(0, 1, "Value", header_fmt)
     for row_idx, (key, value) in enumerate(_flatten_mapping(payload.get("capture_manifest") or {}), start=1):
-        manifest_ws.write(row_idx, 0, key, text_fmt)
+        manifest_ws.write(row_idx, 0, _xlsx_value(key), text_fmt)
         manifest_ws.write(row_idx, 1, _xlsx_value(value), wrap_fmt)
 
     effort = list(payload.get("effort_by_surface") or [])
@@ -430,7 +497,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         overview.write(start_row + 1, 0, "Surface", header_fmt)
         overview.write(start_row + 1, 1, "Engaged seconds", header_fmt)
         for i, item in enumerate(top, start=start_row + 2):
-            overview.write(i, 0, item.get("surface", ""), text_fmt)
+            overview.write(i, 0, _xlsx_value(item.get("surface", "")), text_fmt)
             overview.write_number(i, 1, float(item.get("engaged_seconds") or 0), num_fmt)
         chart = wb.add_chart({"type": "bar"})
         chart.add_series({

@@ -26,23 +26,36 @@ def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
-def _restrict_allowlist(local: list[str], remote: list[str]) -> list[str]:
+def _restrict_allowlist(local: list[str], remote: list[str]) -> tuple[list[str], bool]:
+    """Return the narrowest allowlist and whether it explicitly denies all.
+
+    Existing configuration semantics are preserved: an empty allowlist on either
+    side means that side is unrestricted. The only ambiguous case was two
+    non-empty, disjoint allowlists: their empty intersection must mean *share
+    nothing*, not unrestricted. ``deny_all`` carries that internal result without
+    changing the public config format.
+    """
     a = {str(x) for x in local if str(x)}
     b = {str(x) for x in remote if str(x)}
     if a and b:
-        return sorted(a & b)
-    return sorted(a or b)
+        intersection = sorted(a & b)
+        return intersection, not bool(intersection)
+    return sorted(a or b), False
 
 
 def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dict[str, Any] | None) -> dict[str, Any]:
     """Combine policies so a remote organization can never broaden the local floor."""
     local = normalize_policy(local_policy)
     remote = normalize_policy(organization_policy)
+    allowed_event_types, deny_all_event_types = _restrict_allowlist(
+        local["allowed_event_types"], remote["allowed_event_types"]
+    )
     return {
         "share_excluded": bool(local["share_excluded"] and remote["share_excluded"]),
         "share_window_titles": bool(local["share_window_titles"] and remote["share_window_titles"]),
         "share_metadata": bool(local["share_metadata"] and remote["share_metadata"]),
-        "allowed_event_types": _restrict_allowlist(local["allowed_event_types"], remote["allowed_event_types"]),
+        "allowed_event_types": allowed_event_types,
+        "_deny_all_event_types": deny_all_event_types,
         "strip_metadata_keys": sorted(set(local["strip_metadata_keys"]) | set(remote["strip_metadata_keys"])),
     }
 
@@ -60,6 +73,8 @@ def prepare_event_for_gateway(event: dict[str, Any], policy: dict[str, Any]) -> 
     if not isinstance(metadata, dict):
         metadata = {}
     if bool(metadata.get("excluded")) and not policy.get("share_excluded", False):
+        return None
+    if policy.get("_deny_all_event_types", False):
         return None
     allowed = {str(x) for x in policy.get("allowed_event_types") or []}
     if allowed and str(event.get("event_type") or "") not in allowed:

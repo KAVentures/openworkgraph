@@ -68,12 +68,49 @@ def _push_batch(client: httpx.Client, url: str, events: list[dict[str, Any]]) ->
     return {str(x) for x in data.get("acknowledged_event_ids") or []}
 
 
+def _terminal_http_failure(exc: httpx.HTTPStatusError) -> bool:
+    return exc.response.status_code in {400, 413, 422}
+
+
+def _push_batch_resilient(
+    client: httpx.Client,
+    url: str,
+    events: list[dict[str, Any]],
+) -> tuple[set[str], dict[str, str]]:
+    """Deliver good events even when one event is terminally invalid.
+
+    Authentication/server/network failures remain retryable and abort the cycle.
+    Validation/size failures are isolated by recursively splitting the batch. A
+    single terminally bad event is returned for local quarantine rather than
+    blocking every later event forever.
+    """
+    if not events:
+        return set(), {}
+    try:
+        return _push_batch(client, url, events), {}
+    except httpx.HTTPStatusError as exc:
+        if not _terminal_http_failure(exc):
+            raise
+        if len(events) == 1:
+            event_id = str(events[0].get("event_id") or "")
+            try:
+                detail = str(exc.response.json().get("detail") or exc.response.text)
+            except Exception:
+                detail = exc.response.text
+            return set(), {event_id: f"HTTP {exc.response.status_code}: {detail}"[:500]}
+        middle = len(events) // 2
+        left_ok, left_bad = _push_batch_resilient(client, url, events[:middle])
+        right_ok, right_bad = _push_batch_resilient(client, url, events[middle:])
+        return left_ok | right_ok, left_bad | right_bad
+
+
 def run(config_path: Path, *, once: bool = False) -> int:
     """Synchronize privacy-approved local evidence to an optional company Gateway.
 
     Local capture never depends on this worker. The cursor advances only after a
-    complete Gateway acknowledgement (or after endpoint policy intentionally
-    excludes a row), making network retries idempotent by event_id.
+    complete Gateway acknowledgement, explicit policy/pause exclusion, or local
+    quarantine of a terminally invalid event. Network/auth/server failures remain
+    retryable and never advance the cursor.
     """
     global STOP
     STOP = False
@@ -130,36 +167,47 @@ def run(config_path: Path, *, once: bool = False) -> int:
 
                 state.set("status", "syncing")
                 prepared: list[dict[str, Any]] = []
-                shareable_ids: list[str] = []
+                local_id_by_event_id: dict[str, int] = {}
                 last_local_id = cursor
                 for local_id, event in rows:
                     last_local_id = local_id
+                    if state.skipped(local_id):
+                        continue
                     item = prepare_event_for_gateway(event, policy)
-                    if item is not None:
-                        event_id = str(item.get("event_id") or "").strip()
-                        if not event_id:
-                            raise RuntimeError(
-                                f"Local evidence row {local_id} is missing event_id; sync cursor was not advanced"
-                            )
-                        prepared.append(item)
-                        shareable_ids.append(event_id)
+                    if item is None:
+                        continue
+                    event_id = str(item.get("event_id") or "").strip()
+                    if not event_id:
+                        raise RuntimeError(
+                            f"Local evidence row {local_id} is missing event_id; sync cursor was not advanced"
+                        )
+                    prepared.append(item)
+                    local_id_by_event_id[event_id] = local_id
 
+                acknowledged: set[str] = set()
+                rejected: dict[str, str] = {}
                 if prepared:
-                    acknowledged = _push_batch(client, settings.url, prepared)
-                    expected = set(shareable_ids)
-                    if not expected.issubset(acknowledged):
+                    acknowledged, rejected = _push_batch_resilient(client, settings.url, prepared)
+                    expected = set(local_id_by_event_id)
+                    processed = acknowledged | set(rejected)
+                    if not expected.issubset(processed):
                         raise RuntimeError("Gateway did not acknowledge the complete evidence batch")
+                    for event_id, reason in rejected.items():
+                        local_id = local_id_by_event_id.get(event_id)
+                        if local_id is not None:
+                            state.quarantine(local_id, event_id, reason)
 
-                # Rows excluded by endpoint/company policy are intentionally marked
-                # processed. Shareable rows advance only after complete acknowledgement.
+                # Policy-excluded, pause-excluded and terminally quarantined rows are
+                # intentionally processed. Shareable rows advance only after ACK.
                 state.set_int("last_local_event_id", last_local_id)
                 state.set("last_success_at", _now())
-                state.set_int("last_batch_shared", len(prepared))
+                state.set_int("last_batch_shared", len(acknowledged))
+                state.set_int("quarantined_events", state.quarantine_count())
                 state.set("last_error", "")
                 state.set("status", "connected")
                 delay = settings.poll_seconds
                 if once:
-                    return len(prepared)
+                    return len(acknowledged)
             except Exception as exc:
                 message = str(exc)[:500]
                 state.set("status", "error")

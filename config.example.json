@@ -8,6 +8,8 @@
   "backend_url": "http://127.0.0.1:8787",
   "poll_seconds": 2,
   "heartbeat_seconds": 5,
+  "focus_checkpoint_seconds": 120,
+  "capture_gap_seconds": 30,
   "change_detection": "application",
   "screenshot_interval_seconds": 20,
   "screenshots_enabled": false,

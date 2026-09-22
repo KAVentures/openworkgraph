@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
+from shared.time_utils import normalize_optional_timestamp, normalize_timestamp
 from .db import GatewayDB
 
 
@@ -24,13 +25,7 @@ def _decode_cursor(value: str) -> dict[str, Any]:
 
 
 def _cursor_filter(state: dict[str, Any], key: str, requested: str | None) -> str | None:
-    """Resolve cursor state without allowing it to widen an explicit request.
-
-    The cursor is client-visible pagination state, not an authorization token.
-    Any filter supplied by the current authenticated request therefore wins over
-    the cursor copy. This is particularly important for actor_id, which can be
-    injected server-side from an actor-restricted integration credential.
-    """
+    """Resolve cursor state without allowing it to widen an explicit request."""
     requested_value = str(requested or "").strip()
     if requested is not None:
         return requested_value or None
@@ -57,9 +52,10 @@ def workflow_trace(
     if cursor and not state:
         raise ValueError("invalid workflow-trace cursor")
     if state:
-        snapshot_until = str(state.get("snapshot_until") or "")
-        if not snapshot_until:
+        snapshot_until_raw = str(state.get("snapshot_until") or "")
+        if not snapshot_until_raw:
             raise ValueError("invalid workflow-trace cursor")
+        snapshot_until = normalize_timestamp(snapshot_until_raw)
         since = _cursor_filter(state, "since", since)
         until = _cursor_filter(state, "until", until)
         query = _cursor_filter(state, "query", query)
@@ -67,14 +63,23 @@ def workflow_trace(
         device_id = _cursor_filter(state, "device_id", device_id)
         session_id = _cursor_filter(state, "session_id", session_id)
         event_type = _cursor_filter(state, "event_type", event_type)
-        after_at = str(state.get("after_at") or "") or None
+        after_at_raw = str(state.get("after_at") or "")
         after_event_id = str(state.get("after_event_id") or "") or None
-        if not after_at or not after_event_id:
+        if not after_at_raw or not after_event_id:
             raise ValueError("invalid workflow-trace cursor")
+        after_at = normalize_timestamp(after_at_raw)
     else:
-        snapshot_until = until or datetime.now(timezone.utc).isoformat()
+        since = normalize_optional_timestamp(since)
+        until = normalize_optional_timestamp(until)
+        snapshot_until = until or normalize_timestamp(datetime.now(timezone.utc).isoformat())
         after_at = None
         after_event_id = None
+
+    # Cursor copies of filters are not trusted as authorization state, but their
+    # timestamp values still need the same canonical validation as first-page input.
+    if state:
+        since = normalize_optional_timestamp(since)
+        until = normalize_optional_timestamp(until)
 
     rows = db.trace_rows(
         organization_id=organization_id,
