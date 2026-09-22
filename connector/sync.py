@@ -77,7 +77,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
     """
     global STOP
     STOP = False
-    data_dir = Path(os.getenv("WORKFLOW_OBSERVER_DATA", config_path.parent / "data"))
+    data_dir = Path(os.getenv("WORKFLOW_OBSERVER_DATA", config_path.parent / "data" / "live"))
     auth_dir = Path(os.getenv("WORKFLOW_OBSERVER_AUTH_DIR", config_path.parent / "data" / "auth"))
     settings = load_gateway_settings(config_path, auth_dir=auth_dir)
     if not settings.enabled:
@@ -86,7 +86,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
         raise RuntimeError("gateway.enabled is true but gateway.url is empty")
     token = load_device_token(settings)
     if not token:
-        raise RuntimeError("Gateway is enabled but no device token exists. Run `python -m connector.enroll` first.")
+        raise RuntimeError("Gateway is enabled but no device token exists. Enroll from the dashboard or run `python -m connector.enroll` first.")
 
     state = SyncState(data_dir / "gateway_sync_state.db")
     db_path = data_dir / "workflow_observer.db"
@@ -136,12 +136,17 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     last_local_id = local_id
                     item = prepare_event_for_gateway(event, policy)
                     if item is not None:
+                        event_id = str(item.get("event_id") or "").strip()
+                        if not event_id:
+                            raise RuntimeError(
+                                f"Local evidence row {local_id} is missing event_id; sync cursor was not advanced"
+                            )
                         prepared.append(item)
-                        shareable_ids.append(str(item.get("event_id") or ""))
+                        shareable_ids.append(event_id)
 
                 if prepared:
                     acknowledged = _push_batch(client, settings.url, prepared)
-                    expected = {x for x in shareable_ids if x}
+                    expected = set(shareable_ids)
                     if not expected.issubset(acknowledged):
                         raise RuntimeError("Gateway did not acknowledge the complete evidence batch")
 
@@ -173,7 +178,7 @@ def main() -> None:
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    run(Path(args.config), once=args.once)
+    run(Path(args.config).resolve(), once=args.once)
 
 
 if __name__ == "__main__":
