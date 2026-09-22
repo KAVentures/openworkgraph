@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from gateway.auth import Principal
+from fastapi.testclient import TestClient
+
+from gateway.app import create_app
+from gateway.auth import Principal, issue_token
 from gateway.db import GatewayDB
 from gateway.lifecycle import (
     apply_retention,
@@ -12,12 +15,22 @@ from gateway.lifecycle import (
     set_retention_policy,
 )
 from gateway.query import workflow_trace
+from gateway.settings import GatewaySettings
 
 
 def _db(tmp_path) -> GatewayDB:
     db = GatewayDB(f"sqlite:///{tmp_path / 'gateway.db'}")
     db.init()
     return db
+
+
+def _settings(db: GatewayDB) -> GatewaySettings:
+    return GatewaySettings(
+        database_url=db.database_url,
+        admin_token="admin-secret",
+        enrollment_token="enroll-secret",
+        max_batch=500,
+    )
 
 
 def _principal(org: str, actor: str = "alice", device: str = "device-1") -> Principal:
@@ -152,3 +165,75 @@ def test_retention_can_be_disabled_without_deleting_remaining_rows(tmp_path):
     # Disabling retention restores visibility for rows that have not been
     # physically purged. Configuration changes never silently delete data.
     assert workflow_trace(db, organization_id="acme", limit=10)["rows"][0]["event_id"] == "kept"
+
+
+def test_gateway_retention_admin_api_is_non_destructive_and_versioned(tmp_path):
+    db = _db(tmp_path)
+    now = datetime.now(timezone.utc)
+    db.insert_events(_principal("acme"), [_event("old", now - timedelta(days=60))])
+    app = create_app(settings=_settings(db), db=db)
+
+    with TestClient(app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["version"] == "0.54.0"
+
+        before = count_evidence(db, "acme")
+        response = client.put(
+            "/v1/admin/retention/acme",
+            headers={"Authorization": "Bearer admin-secret"},
+            json={"retention_days": 30},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["retention_days"] == 30
+        assert response.json()["enabled"] is True
+        assert count_evidence(db, "acme") == before
+
+        readback = client.get(
+            "/v1/admin/retention/acme",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
+        assert readback.status_code == 200
+        assert readback.json()["retention_days"] == 30
+
+        disabled = client.put(
+            "/v1/admin/retention/acme",
+            headers={"Authorization": "Bearer admin-secret"},
+            json={"retention_days": None},
+        )
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()["enabled"] is False
+        assert count_evidence(db, "acme") == before
+
+
+def test_current_context_obeys_retention_without_deleting_rows(tmp_path):
+    db = _db(tmp_path)
+    now = datetime.now(timezone.utc)
+    db.insert_events(
+        _principal("acme"),
+        [
+            _event("expired-context", now - timedelta(days=90)),
+            _event("recent-context", now - timedelta(days=1)),
+        ],
+    )
+    set_retention_policy(db, "acme", 30)
+
+    token = issue_token("owg_service")
+    db.put_token(
+        token_id="service-context",
+        token=token,
+        token_type="integration",
+        organization_id="acme",
+        actor_id="",
+        scopes={"context:read", "evidence:read"},
+    )
+    app = create_app(settings=_settings(db), db=db)
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/context/current?limit=10",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200, response.text
+        assert [row["event_id"] for row in response.json()["rows"]] == ["recent-context"]
+        # Read filtering is not a destructive side effect.
+        assert count_evidence(db, "acme") == 2
