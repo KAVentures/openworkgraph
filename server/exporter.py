@@ -109,6 +109,9 @@ def _capture_manifest(
             "raw_local_evidence_included": bool(include_raw),
             "desktop_observer": "observed_in_export" if event_count else "no_events_in_export",
             "browser_extension": "observed_in_export" if browser_events else "not_observed_in_export",
+            # Keep the v0.50-v0.53 public key while also making the bounded-summary
+            # nature explicit in the additive key below.
+            "browser_extension_semantic_event_count": browser_events,
             "browser_extension_semantic_event_count_in_bounded_summary": browser_events,
             "desktop_browser_context_may_still_be_present": True,
             "typed_text_captured": False,
@@ -169,6 +172,11 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
             "operational": operational_summary,
             "raw_capture_counts": {
                 "events": raw_count,
+                # Preserve established keys for callers; these three are bounded
+                # analytic counts, while `events` and evidence tables are complete.
+                "focus_events": raw_summary.get("focus_events", 0),
+                "screen_interactions": raw_summary.get("screen_interactions", 0),
+                "browser_semantic_events": raw_summary.get("browser_semantic_events", 0),
                 "focus_events_in_bounded_summary": raw_summary.get("focus_events", 0),
                 "screen_interactions_in_bounded_summary": raw_summary.get("screen_interactions", 0),
                 "browser_semantic_events_in_bounded_summary": raw_summary.get("browser_semantic_events", 0),
