@@ -23,6 +23,7 @@ class EnrollmentRequest(BaseModel):
 
 class IntegrationTokenRequest(BaseModel):
     organization_id: str
+    actor_id: str = ""
     scopes: list[str] = Field(default_factory=lambda: ["evidence:read"])
     label: str = ""
 
@@ -98,6 +99,16 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         if not env_token_matches(_bearer(authorization), settings.admin_token):
             raise HTTPException(status_code=401, detail="Gateway admin token required")
 
+    def effective_actor(p: Principal, requested: str | None) -> str | None:
+        """Apply an optional actor restriction embedded in an integration token."""
+        restricted = str(p.actor_id or "").strip()
+        requested_value = str(requested or "").strip()
+        if restricted:
+            if requested_value and requested_value != restricted:
+                raise HTTPException(status_code=403, detail="integration token is restricted to another actor")
+            return restricted
+        return requested_value or None
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -154,14 +165,28 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "note": "The device token is shown once. Store it in the endpoint credential store/file.",
         }
 
+    @app.post("/v1/device/revoke")
+    def revoke_current_device(p: Principal = Depends(principal)) -> dict[str, Any]:
+        if p.token_type != "device":
+            raise HTTPException(status_code=403, detail="only a device token can revoke itself")
+        revoked = db.revoke_token(p.token_id)
+        db.audit(
+            organization_id=p.organization_id,
+            principal_id=p.token_id,
+            action="device.revoked",
+            details={"device_id": p.device_id, "revoked": revoked},
+        )
+        return {"revoked": revoked, "device_id": p.device_id}
+
     @app.post("/v1/admin/integration-tokens")
     def create_integration_token(request: IntegrationTokenRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         organization_id = request.organization_id.strip()
+        actor_id = request.actor_id.strip()
         if not organization_id:
             raise HTTPException(status_code=400, detail="organization_id is required")
-        if len(organization_id) > 512:
-            raise HTTPException(status_code=400, detail="organization_id must be at most 512 characters")
+        if max(len(organization_id), len(actor_id)) > 512:
+            raise HTTPException(status_code=400, detail="organization_id/actor_id must be at most 512 characters")
         scopes = normalize_scopes(request.scopes)
         unknown = scopes - ALLOWED_INTEGRATION_SCOPES
         if unknown:
@@ -170,17 +195,25 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             raise HTTPException(status_code=400, detail="at least one scope is required")
         token = issue_token("owg_service")
         token_id = f"service_{uuid.uuid4().hex}"
-        db.put_token(token_id=token_id, token=token, token_type="integration", organization_id=organization_id, scopes=scopes)
+        db.put_token(
+            token_id=token_id,
+            token=token,
+            token_type="integration",
+            organization_id=organization_id,
+            actor_id=actor_id,
+            scopes=scopes,
+        )
         db.audit(
             organization_id=organization_id,
             principal_id="gateway-admin",
             action="integration.token.created",
-            details={"token_id": token_id, "scopes": sorted(scopes), "label": request.label[:120]},
+            details={"token_id": token_id, "scopes": sorted(scopes), "actor_id": actor_id, "label": request.label[:120]},
         )
         return {
             "token": token,
             "token_id": token_id,
             "organization_id": organization_id,
+            "actor_id": actor_id,
             "scopes": sorted(scopes),
             "note": "The service token is shown once. Store it in the integration secret store.",
         }
@@ -265,6 +298,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         p: Principal = Depends(principal),
     ) -> dict[str, Any]:
         require(p, "evidence:read")
+        actor_id = effective_actor(p, actor_id)
         result = workflow_trace(
             db,
             organization_id=p.organization_id,
@@ -282,13 +316,14 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             organization_id=p.organization_id,
             principal_id=p.token_id,
             action="evidence.trace.read",
-            details={"returned": result["returned"]},
+            details={"returned": result["returned"], "actor_id": actor_id or ""},
         )
         return result
 
     @app.post("/v1/search")
     def search(request: SearchRequest, p: Principal = Depends(principal)) -> dict[str, Any]:
         require(p, "evidence:read")
+        actor_id = effective_actor(p, request.actor_id)
         result = workflow_trace(
             db,
             organization_id=p.organization_id,
@@ -296,7 +331,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             until=request.until,
             limit=request.limit,
             query=request.query,
-            actor_id=request.actor_id,
+            actor_id=actor_id,
             device_id=request.device_id,
             session_id=request.session_id,
         )
@@ -305,7 +340,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             organization_id=p.organization_id,
             principal_id=p.token_id,
             action="evidence.search",
-            details={"returned": result["returned"]},
+            details={"returned": result["returned"], "actor_id": actor_id or ""},
         )
         return result
 
@@ -317,13 +352,14 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         p: Principal = Depends(principal),
     ) -> dict[str, Any]:
         require(p, "context:read")
+        actor_id = effective_actor(p, actor_id)
         recent = db.recent_rows(organization_id=p.organization_id, actor_id=actor_id, device_id=device_id, limit=limit)
         rows = [rich_evidence_row(row, include_identity=True) for row in recent]
         db.audit(
             organization_id=p.organization_id,
             principal_id=p.token_id,
             action="context.current.read",
-            details={"returned": len(rows)},
+            details={"returned": len(rows), "actor_id": actor_id or ""},
         )
         return {
             "rows": rows,
@@ -342,6 +378,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         p: Principal = Depends(principal),
     ) -> dict[str, Any]:
         require(p, "transfers:read")
+        actor_id = effective_actor(p, actor_id)
         rows: list[dict[str, Any]] = []
         cursor: str | None = None
         while len(rows) < limit:
@@ -372,7 +409,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             organization_id=p.organization_id,
             principal_id=p.token_id,
             action="transfers.read",
-            details={"evidence_rows_scanned": len(rows), "transfers_returned": len(items)},
+            details={"evidence_rows_scanned": len(rows), "transfers_returned": len(items), "actor_id": actor_id or ""},
         )
         return {
             "items": items,
