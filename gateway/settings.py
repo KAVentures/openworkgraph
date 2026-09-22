@@ -10,6 +10,8 @@ class GatewaySettings:
     admin_token: str
     enrollment_token: str
     max_batch: int = 500
+    max_event_bytes: int = 262_144
+    max_batch_bytes: int = 8_388_608
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -21,4 +23,6 @@ class GatewaySettings:
             admin_token=os.getenv("OWG_GATEWAY_ADMIN_TOKEN", ""),
             enrollment_token=os.getenv("OWG_GATEWAY_ENROLLMENT_TOKEN", ""),
             max_batch=max(1, min(int(os.getenv("OWG_GATEWAY_MAX_BATCH", "500")), 5000)),
+            max_event_bytes=max(16_384, min(int(os.getenv("OWG_GATEWAY_MAX_EVENT_BYTES", "262144")), 4_194_304)),
+            max_batch_bytes=max(262_144, min(int(os.getenv("OWG_GATEWAY_MAX_BATCH_BYTES", "8388608")), 67_108_864)),
         )
