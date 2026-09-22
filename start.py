@@ -27,6 +27,7 @@ EXAMPLE = ROOT / "config.example.json"
 API_HOST = "127.0.0.1"
 API_PORT = 8787
 DASHBOARD = f"http://{API_HOST}:{API_PORT}"
+SECURE_API_APP = "server.secure_app:app"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
@@ -147,15 +148,18 @@ def main() -> None:
             "to an unknown localhost service. Close the process using port 8787 and launch again."
         )
 
+    # The enterprise runner installs only additive Gateway controls, then serves
+    # the established hardened local app target below. This preserves the local
+    # security boundary instead of replacing it with a parallel application.
     api = subprocess.Popen([
-        sys.executable, "-m", "uvicorn", "server.enterprise_app:app",
+        sys.executable, "-m", "server.enterprise_runner",
         "--host", API_HOST, "--port", str(API_PORT)
     ], cwd=ROOT, env=env)
 
     collector = None
     try:
         if not wait_for_api(api):
-            raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
+            raise RuntimeError(f"The authenticated local dashboard ({SECURE_API_APP}) could not start on port 8787.")
 
         opened_dashboard = dashboard_url(env)
         if args.mode == "demo":
