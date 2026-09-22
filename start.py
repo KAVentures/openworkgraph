@@ -27,6 +27,7 @@ EXAMPLE = ROOT / "config.example.json"
 API_HOST = "127.0.0.1"
 API_PORT = 8787
 DASHBOARD = f"http://{API_HOST}:{API_PORT}"
+SECURE_API_APP = "server.secure_app:app"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
 
 
@@ -106,6 +107,7 @@ def reset_demo_data(env: dict[str, str]) -> None:
     for name in (
         "workflow_observer.db", "workflow_observer.db-wal", "workflow_observer.db-shm",
         "outbox.db", "outbox.db-wal", "outbox.db-shm", "events.jsonl",
+        "gateway_sync_state.db", "gateway_sync_state.db-wal", "gateway_sync_state.db-shm",
         ".presentation_people.json", ".display_redaction_key",
     ):
         try:
@@ -126,7 +128,8 @@ def main() -> None:
 
     print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
     print("===========================================")
-    print("Your data stays on this computer in this prototype. Raw evidence is preserved, with separate searchable context and content-minimized operational layers for AI/MCP.")
+    print("Evidence is captured and stored locally first. It leaves this computer only through an explicit export/AI connection or an explicitly enrolled organization Gateway.")
+    print("Raw rich evidence is canonical; inferred tasks and process labels are regeneratable hints rather than ground truth.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
     print("Local API access is capability-protected; the browser sensor authenticates the OpenWorkGraph server before sending browser evidence.")
     print("Local AI clients use MCP over stdio. HTTP MCP is OFF by default and starts only when explicitly requested for a client that needs it.")
@@ -135,9 +138,9 @@ def main() -> None:
     elif system == "Darwin":
         print("macOS: approve Accessibility/Input Monitoring permission if requested for native desktop interaction capture.")
     if args.mode == "observe":
-        print("LIVE mode uses its own database; demo data is excluded.")
+        print("LIVE mode uses its own database; demo data is excluded. Organization Gateway controls are available in the dashboard.")
     else:
-        print("DEMO mode uses a separate synthetic-data database and resets on each demo launch.")
+        print("DEMO mode uses a separate synthetic-data database, resets on each demo launch, and never synchronizes to an organization Gateway.")
 
     if port_is_open(API_HOST, API_PORT):
         raise RuntimeError(
@@ -145,22 +148,25 @@ def main() -> None:
             "to an unknown localhost service. Close the process using port 8787 and launch again."
         )
 
+    # The enterprise runner installs only additive Gateway controls, then serves
+    # the established hardened local app target below. This preserves the local
+    # security boundary instead of replacing it with a parallel application.
     api = subprocess.Popen([
-        sys.executable, "-m", "uvicorn", "server.secure_app:app",
+        sys.executable, "-m", "server.enterprise_runner",
         "--host", API_HOST, "--port", str(API_PORT)
     ], cwd=ROOT, env=env)
 
     collector = None
     try:
         if not wait_for_api(api):
-            raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
+            raise RuntimeError(f"The authenticated local dashboard ({SECURE_API_APP}) could not start on port 8787.")
 
         opened_dashboard = dashboard_url(env)
         if args.mode == "demo":
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
             webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
-            print("Demo data is isolated from your real observations.")
+            print("Demo data is isolated from your real observations and is never Gateway-synchronized.")
             print("AI access starts OFF. Enable it in the dashboard only if you want an MCP client to read this run.")
             print("Close this window or press Ctrl+C when finished.\n")
             while True:
@@ -170,8 +176,9 @@ def main() -> None:
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
-            print("The durable local outbox retries capture events if the API is temporarily unavailable.")
+            print("The durable local outbox retries capture events if the local API is temporarily unavailable.")
             print("AI access starts OFF on every launch and can be enabled from the dashboard.")
+            print("Organization Gateway sharing is OFF unless explicitly enrolled; connect/pause/resume/disconnect from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
             collector_env = env.copy()

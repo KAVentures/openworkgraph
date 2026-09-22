@@ -1,9 +1,12 @@
 # OpenWorkGraph documentation
 
-This directory contains implementation and privacy notes for the current OpenWorkGraph prototype plus a small number of historical version-specific notes kept for traceability.
+This directory contains implementation, privacy, self-hosting and integration notes for the current OpenWorkGraph prototype plus a small number of historical version-specific notes kept for traceability.
 
 ## Current documentation
 
+- [Self-hosting the organization Gateway](SELF_HOSTING.md) — run the optional Gateway/PostgreSQL data plane entirely in customer-controlled infrastructure, enroll endpoints, manage sharing policy, and create scoped integration credentials.
+- [How MCP works](MCP_ARCHITECTURE.md) — plain-language explanation of local stdio MCP, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
+- [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company brains and other AI platforms.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for ChatGPT/Claude.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.

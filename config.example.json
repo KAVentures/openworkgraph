@@ -54,5 +54,20 @@
   "clipboard_behavior_enabled": true,
   "clipboard_link_max_seconds": 7200,
   "activity_active_window_seconds": 5,
-  "engaged_grace_seconds": 60
+  "engaged_grace_seconds": 60,
+  "gateway": {
+    "enabled": false,
+    "url": "",
+    "verify_tls": true,
+    "batch_size": 100,
+    "poll_seconds": 2,
+    "policy_refresh_seconds": 60,
+    "local_policy": {
+      "share_excluded": false,
+      "share_window_titles": true,
+      "share_metadata": true,
+      "allowed_event_types": [],
+      "strip_metadata_keys": []
+    }
+  }
 }

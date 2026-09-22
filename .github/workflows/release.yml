@@ -14,10 +14,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build standalone macOS tester ZIP
         run: bash scripts/build_macos_release.sh
-
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -31,11 +29,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build standalone Windows tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
-
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -76,25 +72,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Download macOS assets
         uses: actions/download-artifact@v4
         with:
           name: OpenWorkGraph-macOS
           path: release-assets
-
       - name: Download Windows assets
         uses: actions/download-artifact@v4
         with:
           name: OpenWorkGraph-Windows
           path: release-assets
-
       - name: Download Claude MCP bundle
         uses: actions/download-artifact@v4
         with:
           name: OpenWorkGraph-Claude
           path: release-assets
-
       - name: Publish GitHub Release when VERSION is new
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,40 +104,35 @@ jobs:
           cat > /tmp/openworkgraph-release-notes.md <<EOF
           ## OpenWorkGraph ${TAG}
 
-          OpenWorkGraph is a local-first workflow-evidence and organizational-context layer for the AI you already use.
+          OpenWorkGraph is a local-first, open-source work-evidence layer for AI. v0.53 adds an **optional self-hosted organization Gateway** without changing the no-account local product.
 
-          ### AI-ready context packages
-          Exports now carry a canonical AI guide, a short starter prompt, and a capture manifest explaining which evidence sources were observed. Raw captured evidence remains the primary record when included; inferred tasks, repeated families and summaries are explicitly treated as heuristic convenience views rather than ground truth. The existing JSON/XLSX/CSV-ZIP endpoints and filenames remain compatible.
+          ### Local-first remains the default
+          A normal OpenWorkGraph install still captures to local SQLite, provides local exports/API/MCP, and requires no OpenWorkGraph account. Gateway sharing is disabled by default. Capture continues locally if a configured Gateway or network is unavailable.
 
-          The CSV ZIP can be uploaded directly as an AI context package. XLSX exports include dedicated **AI guide**, **Starter prompt**, and **Capture manifest** sheets. The same canonical guide is exposed through MCP as **openworkgraph://ai-guide**.
+          ### Self-hosted organization Gateway
+          Organizations can run the Gateway and PostgreSQL entirely in infrastructure they control. The endpoint connector makes outbound requests to that customer-controlled Gateway after endpoint-side policy filtering. OpenWorkGraph/Kinvectum does not need to receive or store the organization's workflow evidence.
 
-          ### macOS tester
-          Download **OpenWorkGraph-macOS.zip**, unzip it, then right-click **START_OPENWORKGRAPH.command → Open**. The package brings its own private runtime; no manual Python setup is required. **AI_GUIDE.md** and **PROMPT.md** are included in the download.
+          The repository includes **deploy/Dockerfile.gateway**, **deploy/docker-compose.yml**, and **docs/SELF_HOSTING.md**.
 
-          ### Windows tester
-          Download **OpenWorkGraph-Windows.zip**, unzip it, then double-click **START_OPENWORKGRAPH.cmd**. The launcher installs its own private runtime; no manual Python setup is required. **AI_GUIDE.md** and **PROMPT.md** are included in the download.
+          ### Vendor-neutral REST + MCP
+          The Gateway exposes organization-scoped rich evidence through REST for backend platforms such as automation/company-context systems. A thin MCP adapter exposes the same evidence service to AI/agent clients. MCP is an interface, not a cloud-storage requirement; see **docs/MCP_ARCHITECTURE.md**.
 
-          ### Optional browser enrichment
-          OpenWorkGraph works without the browser extension: desktop observation can still provide browser focus, exposed window/page titles, timing, interactions and transitions. For richer browser-native hostname/path, navigation and safe control semantics, run the included **ADD_BROWSER_SENSOR** helper once and load the opened browser_extension folder as an unpacked extension.
+          ### Raw rich evidence is canonical
+          The canonical workflow trace now preserves privacy-hardened event metadata and stable event IDs so an AI can reconstruct work directly from observed evidence. Browser/tab context, safe control semantics, semantic-action hints, copy/paste transfer linkage and effort/timing metadata remain available when observed. Inferred tasks/process families remain regeneratable hints, not ground truth.
 
-          A capture manifest records whether browser-extension semantic events were observed. Zero browser semantic events therefore means the optional extension did not contribute semantic events in that export; it does not mean that no browser workflow evidence was captured.
+          ### Enterprise data-plane controls
+          Device write credentials and integration read credentials are separate and revocable. Gateway queries are tenant-scoped. Event identity is scoped by organization. Organization/actor/device identity comes from the authenticated endpoint credential rather than uploaded JSON. Endpoint policy can only be narrowed by organization policy, not broadened. Sharing can be paused independently of local capture.
+
+          Typed text, ordinary key identities, clipboard contents and screenshot bytes are outside the Gateway contract and are rejected/not synchronized.
+
+          ### macOS / Windows testers
+          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. The standalone desktop product remains usable without the Gateway. **AI_GUIDE.md** and **PROMPT.md** are included.
 
           ### Claude Desktop
-          **OpenWorkGraph-Claude.mcpb** is a small local desktop extension that launches the authenticated OpenWorkGraph stdio MCP server from an existing OpenWorkGraph installation. Install OpenWorkGraph first, then install the MCP bundle in Claude Desktop. AI access starts OFF on every OpenWorkGraph launch and must be enabled from the local dashboard.
+          **OpenWorkGraph-Claude.mcpb** remains a small local stdio MCP wrapper for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
 
-          ### MCP behavior
-          Local AI clients use stdio by default, so OpenWorkGraph does not keep a separate MCP HTTP port open during normal use. HTTP MCP starts only on demand for clients such as ChatGPT live connections that need a network transport. Rich workflow evidence is exposed through compact paginated traces rather than repeated full internal event objects.
-
-          ### Privacy and local-interface security
-          Typed text, individual key identities and clipboard contents are not captured. Screenshots are disabled in the normal configuration.
-
-          High-confidence secrets and sensitive identifiers are hardened before local persistence where their literal value is not needed for workflow analysis. Presentation/API/MCP/export views additionally pseudonymize detected people/owner aliases. Rich workflow context such as company/project names, amounts, order/reference numbers and page/document titles may remain intentionally useful, so review rich exports before sharing them outside the intended analysis context.
-
-          Local API reads/control routes are capability-protected. The browser sensor authenticates the local OpenWorkGraph server with HMAC challenge-response before sending browser evidence and signs sensor requests; if verification fails, pending browser evidence remains queued.
-
-          These controls reduce accidental localhost exposure, unrelated-service probing and naive port squatting. They are not a security boundary against malware already running with the same operating-system user privileges; stronger protection for that attacker model requires OS/endpoint isolation and enterprise controls.
-
-          Captured data stays local in this prototype unless the user explicitly exports it or enables an AI connection that requests evidence.
+          ### Security note
+          Self-hosted production deployments should use customer-controlled TLS/network access, secret management, retention/backups and identity infrastructure appropriate to their environment. The v0.53 Gateway data plane uses explicit device/service credentials and can sit behind an organization OAuth/OIDC-aware access proxy; native SSO/SCIM provisioning is not required for the core self-hosted data plane.
           EOF
 
           gh release create "$TAG" \

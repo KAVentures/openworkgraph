@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openworkgraph
+      POSTGRES_USER: openworkgraph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - openworkgraph-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openworkgraph -d openworkgraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      OWG_GATEWAY_DATABASE_URL: postgresql://openworkgraph:${POSTGRES_PASSWORD}@postgres:5432/openworkgraph
+      OWG_GATEWAY_ADMIN_TOKEN: ${OWG_GATEWAY_ADMIN_TOKEN}
+      OWG_GATEWAY_ENROLLMENT_TOKEN: ${OWG_GATEWAY_ENROLLMENT_TOKEN}
+    ports:
+      - "${OWG_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${OWG_GATEWAY_PORT:-8790}:8790"
+
+volumes:
+  openworkgraph-postgres:

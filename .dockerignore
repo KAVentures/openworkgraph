@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+.runtime
+.pytest_cache
+__pycache__
+data
+dist
+config.json
+*.pyc

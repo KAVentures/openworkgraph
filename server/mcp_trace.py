@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
 from .db import connect
 
 
@@ -21,57 +22,6 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-
-
-def _meta_parts(meta: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    m = meta if isinstance(meta, dict) else {}
-    page = m.get("page") if isinstance(m.get("page"), dict) else {}
-    target = m.get("target") if isinstance(m.get("target"), dict) else {}
-    return m, page, target
-
-
-def _nested_number(meta: dict[str, Any], key: str) -> float | int:
-    candidates: list[Any] = [meta]
-    for name in ("activity", "effort", "timing", "input"):
-        value = meta.get(name)
-        if isinstance(value, dict):
-            candidates.append(value)
-    for source in candidates:
-        value = source.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return value
-    return 0
-
-
-def compact_event(row: dict[str, Any]) -> dict[str, Any]:
-    try:
-        meta = json.loads(row.get("metadata_json") or "{}") if "metadata_json" in row else row.get("metadata") or {}
-    except Exception:
-        meta = {}
-    meta, page, target = _meta_parts(meta)
-    target_label = target.get("label") or target.get("title") or target.get("description") or target.get("help") or ""
-    target_role = target.get("role") or target.get("localized_role") or target.get("tag") or ""
-    return {
-        "observed_at": row.get("observed_at"),
-        "app": row.get("app"),
-        "window_title": row.get("window_title"),
-        "event_type": row.get("event_type"),
-        "action": meta.get("action", ""),
-        "target_label": target_label,
-        "target_role": target_role,
-        "page_host": page.get("hostname", ""),
-        "page_path": page.get("pathname", ""),
-        "duration_seconds": row.get("duration_seconds", 0) or 0,
-        "foreground_seconds": _nested_number(meta, "foreground_seconds"),
-        "engaged_seconds": _nested_number(meta, "engaged_seconds"),
-        "active_input_seconds": _nested_number(meta, "active_input_seconds"),
-        "idle_seconds": _nested_number(meta, "idle_seconds"),
-        "keypress_count": _nested_number(meta, "keypress_count"),
-        "click_count": _nested_number(meta, "click_count"),
-        "scroll_count": _nested_number(meta, "scroll_count"),
-        "source": row.get("source", ""),
-        "session_id": row.get("session_id", ""),
-    }
 
 
 def _filter_clauses(
@@ -115,7 +65,13 @@ def workflow_trace(
     app_name: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return one compact, stable, chronological page of rich local evidence."""
+    """Return a stable chronological page of canonical rich local evidence.
+
+    The event metadata is intentionally preserved so an AI can reconstruct work
+    directly from observed evidence rather than being limited by OpenWorkGraph's
+    current deterministic task inference. Internal actor/device/sensor IDs and
+    local screenshot paths remain outside the local MCP trace.
+    """
     page_limit = max(1, min(int(limit), 500))
     state = _decode_cursor(cursor or "") if cursor else {}
 
@@ -171,7 +127,7 @@ def workflow_trace(
 
     has_more = len(db_rows) > page_limit
     visible = db_rows[:page_limit]
-    rows = [compact_event(dict(row)) for row in visible]
+    rows = [rich_evidence_row(dict(row), include_identity=False) for row in visible]
     next_cursor = None
     if has_more and visible:
         last = dict(visible[-1])
@@ -200,5 +156,7 @@ def workflow_trace(
         "query_applied": bool(effective_query),
         "app_filter": effective_app,
         "session_id": effective_session,
-        "data_layer": "rich_local_evidence_compact",
+        "data_layer": "privacy_hardened_raw_rich_evidence",
+        "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
+        "derived_task_inference_authoritative": False,
     }
