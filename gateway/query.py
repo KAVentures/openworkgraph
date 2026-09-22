@@ -23,27 +23,18 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         return {}
 
 
-def _cursor_filter(
-    state: dict[str, Any],
-    key: str,
-    requested: str | None,
-    *,
-    security_boundary: bool = False,
-) -> str | None:
-    """Resolve a cursor-carried filter without letting it widen an explicit request.
+def _cursor_filter(state: dict[str, Any], key: str, requested: str | None) -> str | None:
+    """Resolve cursor state without allowing it to widen an explicit request.
 
-    Cursors are pagination state rather than authorization credentials. When the
-    caller supplies a filter again (notably an actor restriction derived from the
-    authenticated integration token), the cursor must carry the same value. This
-    prevents a client-edited base64 cursor from removing that restriction.
+    The cursor is client-visible pagination state, not an authorization token.
+    Any filter supplied by the current authenticated request therefore wins over
+    the cursor copy. This is particularly important for actor_id, which can be
+    injected server-side from an actor-restricted integration credential.
     """
-    cursor_value = str(state.get(key) or "").strip()
     requested_value = str(requested or "").strip()
     if requested is not None:
-        if cursor_value != requested_value:
-            label = "authorized actor" if security_boundary else key
-            raise ValueError(f"cursor {label} filter does not match the current request")
         return requested_value or None
+    cursor_value = str(state.get(key) or "").strip()
     return cursor_value or None
 
 
@@ -72,7 +63,7 @@ def workflow_trace(
         since = _cursor_filter(state, "since", since)
         until = _cursor_filter(state, "until", until)
         query = _cursor_filter(state, "query", query)
-        actor_id = _cursor_filter(state, "actor_id", actor_id, security_boundary=True)
+        actor_id = _cursor_filter(state, "actor_id", actor_id)
         device_id = _cursor_filter(state, "device_id", device_id)
         session_id = _cursor_filter(state, "session_id", session_id)
         event_type = _cursor_filter(state, "event_type", event_type)
