@@ -59,7 +59,6 @@ def _event(event_id: str = "evt-1") -> dict:
         "event_id": event_id,
         "observed_at": "2026-09-22T09:00:00+00:00",
         "schema_version": "1.0",
-        # Deliberately spoofed. The authenticated device identity must win.
         "organization_id": "evil-org",
         "actor_id": "evil-actor",
         "device_id": "evil-device",
@@ -109,7 +108,7 @@ def test_gateway_enforces_authenticated_tenant_identity_and_preserves_rich_evide
         assert trace.status_code == 200, trace.text
         payload = trace.json()
         assert payload["data_layer"] == "privacy_hardened_raw_rich_evidence"
-        assert payload["derived_task_inference_authoritative"] is False if "derived_task_inference_authoritative" in payload else True
+        assert payload["derived_task_inference_authoritative"] is False
         row = payload["rows"][0]
         assert row["event_id"] == "evt-1"
         assert row["organization_id"] == "acme"
@@ -140,29 +139,39 @@ def test_gateway_is_idempotent_and_service_tokens_cannot_ingest(tmp_path):
         assert denied.status_code == 403
 
 
-def test_gateway_tenant_isolation(tmp_path):
+def test_gateway_tenant_isolation_and_event_ids_are_tenant_scoped(tmp_path):
     app, _ = _gateway(tmp_path)
     with TestClient(app) as client:
         acme_device = _enroll(client, "acme", "alice-mac", "alice")
+        contoso_device = _enroll(client, "contoso", "bob-mac", "bob")
         acme_service = _service(client, "acme")
-        other_service = _service(client, "contoso")
-        client.post(
-            "/v1/evidence/batch",
-            headers={"Authorization": f"Bearer {acme_device['token']}"},
-            json={"events": [_event()]},
-        ).raise_for_status()
+        contoso_service = _service(client, "contoso")
 
-        acme = client.get("/v1/workflow-trace", headers={"Authorization": f"Bearer {acme_service['token']}"})
-        other = client.get("/v1/workflow-trace", headers={"Authorization": f"Bearer {other_service['token']}"})
-        assert acme.json()["returned"] == 1
-        assert other.json()["returned"] == 0
+        for device in (acme_device, contoso_device):
+            response = client.post(
+                "/v1/evidence/batch",
+                headers={"Authorization": f"Bearer {device['token']}"},
+                json={"events": [_event("same-event-id")]},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["inserted"] == 1
+
+        acme = client.get("/v1/workflow-trace", headers={"Authorization": f"Bearer {acme_service['token']}"}).json()
+        contoso = client.get("/v1/workflow-trace", headers={"Authorization": f"Bearer {contoso_service['token']}"}).json()
+        assert acme["returned"] == 1
+        assert contoso["returned"] == 1
+        assert acme["rows"][0]["organization_id"] == "acme"
+        assert acme["rows"][0]["actor_id"] == "alice"
+        assert contoso["rows"][0]["organization_id"] == "contoso"
+        assert contoso["rows"][0]["actor_id"] == "bob"
 
 
-def test_gateway_rejects_forbidden_content_contract(tmp_path):
+def test_gateway_rejects_forbidden_content_and_capture_flags(tmp_path):
     app, _ = _gateway(tmp_path)
     with TestClient(app) as client:
         device = _enroll(client, "acme", "alice-mac", "alice")
         headers = {"Authorization": f"Bearer {device['token']}"}
+
         bad = _event()
         bad["metadata"]["typed_text"] = "this must never be accepted"
         response = client.post("/v1/evidence/batch", headers=headers, json={"events": [bad]})
@@ -174,6 +183,12 @@ def test_gateway_rejects_forbidden_content_contract(tmp_path):
         response2 = client.post("/v1/evidence/batch", headers=headers, json={"events": [bad2]})
         assert response2.status_code == 400
         assert "privacy" in response2.text
+
+        bad3 = _event("evt-3")
+        bad3["metadata"]["clipboard_contents_captured"] = True
+        response3 = client.post("/v1/evidence/batch", headers=headers, json={"events": [bad3]})
+        assert response3.status_code == 400
+        assert "privacy contract" in response3.text
 
 
 def test_company_policy_can_only_restrict_endpoint_policy():
