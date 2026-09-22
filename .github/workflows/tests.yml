@@ -46,13 +46,94 @@ jobs:
 
   gateway-container:
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: test-postgres-password
+      OWG_GATEWAY_ADMIN_TOKEN: test-admin-token
+      OWG_GATEWAY_ENROLLMENT_TOKEN: test-enrollment-token
+      OWG_GATEWAY_PORT: "8790"
     steps:
       - uses: actions/checkout@v4
       - name: Validate self-host compose configuration
-        env:
-          POSTGRES_PASSWORD: test-postgres-password
-          OWG_GATEWAY_ADMIN_TOKEN: test-admin-token
-          OWG_GATEWAY_ENROLLMENT_TOKEN: test-enrollment-token
         run: docker compose -f deploy/docker-compose.yml config >/dev/null
       - name: Build self-hosted Gateway image
         run: docker build -f deploy/Dockerfile.gateway -t openworkgraph-gateway:test .
+      - name: Start PostgreSQL and Gateway
+        run: docker compose -f deploy/docker-compose.yml up -d --build
+      - name: Wait for Gateway health
+        run: |
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8790/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f deploy/docker-compose.yml logs
+          exit 1
+      - name: Exercise PostgreSQL tenant data plane
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+
+          BASE = "http://127.0.0.1:8790"
+
+          def request(method, path, body=None, token=None):
+              data = None if body is None else json.dumps(body).encode()
+              headers = {"Content-Type": "application/json"}
+              if token:
+                  headers["Authorization"] = f"Bearer {token}"
+              req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=10) as response:
+                  return json.loads(response.read().decode())
+
+          device = request("POST", "/v1/devices/enroll", {
+              "organization_id": "ci-acme",
+              "actor_id": "ci-alice",
+              "device_id": "ci-device",
+          }, "test-enrollment-token")
+
+          event = {
+              "event_id": "ci-event-1",
+              "observed_at": "2026-09-22T10:00:00+00:00",
+              "organization_id": "spoofed-org",
+              "actor_id": "spoofed-actor",
+              "device_id": "spoofed-device",
+              "sensor_id": "browser:ci",
+              "source": "browser_extension",
+              "session_id": "ci-session",
+              "app": "Browser",
+              "window_title": "CI rich evidence",
+              "event_type": "browser_paste",
+              "duration_seconds": 0,
+              "metadata": {
+                  "action": "paste",
+                  "tab_context_id": "runtime:ci-tab",
+                  "clipboard_transfer_id": "ci-transfer",
+                  "privacy": {"typed_values": False, "clipboard_contents": False, "key_identities": False},
+              },
+          }
+          ingest = request("POST", "/v1/evidence/batch", {"events": [event]}, device["token"])
+          assert ingest["inserted"] == 1, ingest
+
+          service = request("POST", "/v1/admin/integration-tokens", {
+              "organization_id": "ci-acme",
+              "label": "CI integration",
+              "scopes": ["evidence:read", "context:read", "transfers:read"],
+          }, "test-admin-token")
+          trace = request("GET", "/v1/workflow-trace?limit=10", token=service["token"])
+          assert trace["returned"] == 1, trace
+          row = trace["rows"][0]
+          assert row["organization_id"] == "ci-acme", row
+          assert row["actor_id"] == "ci-alice", row
+          assert row["device_id"] == "ci-device", row
+          assert row["metadata"]["tab_context_id"] == "runtime:ci-tab", row
+          assert row["clipboard_transfer_id"] == "ci-transfer", row
+          assert trace["derived_task_inference_authoritative"] is False
+          print("Gateway/PostgreSQL integration test passed")
+          PY
+      - name: Show Gateway logs on failure
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs
+      - name: Stop self-host stack
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v
