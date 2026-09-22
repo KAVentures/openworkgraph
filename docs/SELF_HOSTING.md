@@ -58,28 +58,46 @@ Production deployments should terminate TLS at a customer-controlled reverse pro
 
 ## Enroll an endpoint
 
-The organization administrator supplies the Gateway URL, organization identifier, and short-lived/bootstrap enrollment secret to an approved endpoint administrator.
+### Preferred: single-use organization-bound enrollment code
 
-From the OpenWorkGraph endpoint installation:
+Use the Gateway admin token or enrollment-issuer secret to mint a short-lived code bound to the intended organization and, optionally, actor:
+
+```bash
+curl -X POST https://openworkgraph.company.internal/v1/admin/enrollment-codes \
+  -H 'Authorization: Bearer <admin-or-enrollment-issuer-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "organization_id":"acme",
+    "actor_id":"alice",
+    "expires_minutes":30
+  }'
+```
+
+Give the returned one-time code to the approved endpoint. From the endpoint installation:
 
 ```bash
 python -m connector.enroll \
   --gateway https://openworkgraph.company.internal \
   --organization acme \
   --actor alice \
-  --enrollment-token '<enrollment secret>'
+  --enrollment-token '<single-use enrollment code>'
 ```
+
+The Gateway, not endpoint event JSON, determines the organization/actor/device identity attached to synchronized evidence. A single-use code cannot be reused, expires, and cannot silently replace another active device credential. Re-enrolling an existing active `device_id` returns a conflict until the old device is explicitly revoked or rotated.
+
+For compatibility with existing v0.53 self-hosted deployments, the long-lived `OWG_GATEWAY_ENROLLMENT_TOKEN` can still be supplied directly to the enrollment endpoint. This legacy path is intended as a migration/bootstrap path; single-use organization-bound codes are preferred for normal provisioning.
 
 Enrollment:
 
-1. creates/replaces a device-specific write credential;
-2. stores it locally (not in the Gateway database as plaintext);
+1. creates a device-specific write credential;
+2. stores the device credential locally (the Gateway stores only its hash);
 3. configures `gateway.enabled=true` and the Gateway URL;
-4. associates the endpoint with its organization/actor/device identity.
+4. associates the endpoint with its organization/actor/device identity;
+5. sets the synchronization boundary to the current local event ID, so **pre-enrollment history remains local by default**.
 
-The Gateway stores only a hash of the device token. At ingestion it ignores organization/actor/device identity claimed by event JSON and uses the authenticated device identity instead.
+At ingestion the Gateway ignores organization/actor/device identity claimed by event JSON and uses the authenticated device identity instead.
 
-Restart OpenWorkGraph after enrollment. The normal launcher starts the Gateway connector as an independent process only when the endpoint is explicitly configured and enrolled.
+The running dashboard can enroll without restarting OpenWorkGraph. CLI enrollment remains available for administrators and scripted setup.
 
 ## Pause or resume company sharing
 
@@ -91,6 +109,13 @@ python -m connector.control status
 python -m connector.control resume
 ```
 
+In v0.53.1, pause has privacy semantics rather than queue semantics:
+
+- evidence captured before the pause can finish synchronizing normally;
+- evidence captured while paused stays in the local canonical database;
+- that paused interval is recorded as a permanent local-only skip range and is **not backfilled on resume**;
+- resuming only shares later eligible evidence.
+
 The endpoint's canonical evidence database remains local throughout.
 
 ## Sharing policy
@@ -100,7 +125,7 @@ Two policies are combined before transmission:
 - the endpoint-local policy;
 - the organization policy returned by the Gateway.
 
-The merge is restrictive: organization policy can narrow what is shared but cannot broaden a restriction set locally on the endpoint.
+The merge is restrictive: organization policy can narrow what is shared but cannot broaden a restriction set locally on the endpoint. If both sides specify non-empty event-type allowlists and their intersection is empty, synchronization shares **no event types**; an empty intersection never means “allow everything.”
 
 Examples of controls include:
 
@@ -113,6 +138,16 @@ Examples of controls include:
 Policy is enforced **before transmission**. If the current organization policy cannot be fetched, synchronization fails closed rather than uploading with a potentially broader fallback policy.
 
 Typed text, ordinary key identities, clipboard contents, and screenshot bytes are outside the Gateway contract. The Gateway rejects payloads that claim to contain those categories.
+
+## Synchronization failure handling
+
+Network, authentication, and server failures remain retryable and do not advance the local synchronization cursor.
+
+A terminally invalid event (for example an event rejected as oversized or violating the Gateway privacy contract) is isolated rather than blocking every later event forever. Good rows in the surrounding batch continue, while the bad local row is placed in the endpoint's synchronization quarantine with its reason. The dashboard exposes the quarantine count. Quarantine never deletes the local canonical evidence.
+
+## Time handling
+
+Gateway ingest and query boundaries accept timezone-aware ISO-8601 timestamps such as `2026-09-23T12:00:00+02:00` or `2026-09-23T10:00:00Z`. They are parsed and normalized to a fixed UTC representation before storage/comparison. Invalid or timezone-naive timestamps are rejected rather than being compared as arbitrary text.
 
 ## Create a REST integration credential
 
@@ -151,6 +186,8 @@ GET  /v1/transfers
 
 `/v1/workflow-trace` is the canonical organization evidence interface. Results are chronological, bounded, and cursor-paginated. Each row retains the privacy-hardened event metadata plus its `event_id`, while also exposing useful flat indexes such as page/target, timing, tab context, semantic-action hints, and transfer IDs.
 
+Invalid cursors and invalid timestamp bounds return a client error instead of an internal-server error. `/v1/transfers` searches transfer-bearing evidence rather than consuming its result limit on unrelated focus/click rows.
+
 OpenWorkGraph does not require a deterministic task label before an AI can inspect this evidence.
 
 ## Data ownership and storage
@@ -164,10 +201,12 @@ In the self-hosted deployment:
 
 The customer is responsible for production database backups, encryption, retention, access controls, TLS, identity-provider integration, and applicable legal/compliance requirements for its deployment.
 
+> Retention/erasure controls are still a separate enterprise-hardening milestone. Do not represent v0.53.1 as providing a complete organization retention or data-subject erasure system.
+
 ## Development mode
 
 For automated tests and local development the Gateway also supports a SQLite URL. PostgreSQL is the production self-hosting target.
 
 ## Enterprise identity
 
-v0.53 uses explicit device and scoped service credentials so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native Entra/Okta/SCIM/MDM provisioning is a later enterprise layer; it is not required for the core self-hosted data plane.
+v0.53.1 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native Entra/Okta/SCIM/MDM provisioning remains a later enterprise layer; it is not required for the core self-hosted data plane.
