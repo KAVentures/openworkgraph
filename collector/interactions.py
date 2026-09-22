@@ -18,6 +18,9 @@ class RawInteraction:
     dx: float | None = None
     dy: float | None = None
     occurred_mono: float = 0.0
+    # Filled by the collector callback at interaction time before worker queuing.
+    # Contains only already privacy-filtered app/window state, never typed content.
+    context: dict[str, Any] | None = None
 
 
 @dataclass
@@ -31,6 +34,7 @@ class RawClipboardAction:
     kind: str
     occurred_mono: float = 0.0
     clipboard_change_token: int | None = None
+    context: dict[str, Any] | None = None
 
 
 def clipboard_change_token() -> int | None:
@@ -219,7 +223,6 @@ class KeyboardActivitySensor:
             except Exception:
                 pass
 
-            # Read only KeyCode.char for C/X/V classification, then discard it.
             char = getattr(key, "char", None)
             action = classify_clipboard_shortcut(
                 char,
@@ -229,8 +232,6 @@ class KeyboardActivitySensor:
             if action is None:
                 return
 
-            # pynput can repeat a held key. Avoid duplicate behavior rows while
-            # preserving legitimately repeated copy/paste operations.
             if self._last_clipboard_action is not None:
                 last_action, last_at = self._last_clipboard_action
                 if action == last_action and now - last_at < 0.2:
@@ -258,13 +259,10 @@ class KeyboardActivitySensor:
             except Exception:
                 pass
 
-        try:
-            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-            self._listener.start()
-            return True
-        except Exception:
-            self._listener = None
-            return False
+        self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self._listener.daemon = True
+        self._listener.start()
+        return True
 
     def stop(self) -> None:
         try:
@@ -275,12 +273,6 @@ class KeyboardActivitySensor:
 
 
 class InteractionSensor:
-    """Global mouse interaction sensor.
-
-    Mouse movement is ignored. Scroll events are throttled so ordinary scrolling
-    does not create thousands of rows.
-    """
-
     def __init__(
         self,
         callback: Callable[[RawInteraction], Any],
@@ -292,9 +284,9 @@ class InteractionSensor:
         self.callback = callback
         self.capture_clicks = capture_clicks
         self.capture_scrolls = capture_scrolls
-        self.scroll_min_interval_seconds = max(0.25, float(scroll_min_interval_seconds))
-        self._listener = None
-        self._last_scroll = 0.0
+        self.scroll_min_interval_seconds = max(0.0, float(scroll_min_interval_seconds))
+        self._mouse_listener = None
+        self._last_scroll_at = 0.0
 
     def start(self) -> bool:
         try:
@@ -302,61 +294,45 @@ class InteractionSensor:
         except Exception:
             return False
 
-        def on_click(x, y, button, pressed, *extra):
-            if not self.capture_clicks or not pressed:
+        def on_click(x, y, button, pressed):
+            if not pressed or not self.capture_clicks:
                 return
-            injected = bool(extra[0]) if extra else False
-            if injected:
-                return
-            try:
-                name = getattr(button, "name", None) or str(button).split(".")[-1]
-                self.callback(
-                    RawInteraction(
-                        kind="click",
-                        x=float(x),
-                        y=float(y),
-                        button=str(name),
-                        occurred_mono=time.monotonic(),
-                    )
+            self.callback(
+                RawInteraction(
+                    kind="click",
+                    x=float(x),
+                    y=float(y),
+                    button=getattr(button, "name", str(button)),
+                    occurred_mono=time.monotonic(),
                 )
-            except Exception:
-                pass
+            )
 
-        def on_scroll(x, y, dx, dy, *extra):
+        def on_scroll(x, y, dx, dy):
             if not self.capture_scrolls:
                 return
-            injected = bool(extra[0]) if extra else False
-            if injected:
-                return
             now = time.monotonic()
-            if now - self._last_scroll < self.scroll_min_interval_seconds:
+            if now - self._last_scroll_at < self.scroll_min_interval_seconds:
                 return
-            self._last_scroll = now
-            try:
-                self.callback(
-                    RawInteraction(
-                        kind="scroll",
-                        x=float(x),
-                        y=float(y),
-                        dx=float(dx),
-                        dy=float(dy),
-                        occurred_mono=now,
-                    )
+            self._last_scroll_at = now
+            self.callback(
+                RawInteraction(
+                    kind="scroll",
+                    x=float(x),
+                    y=float(y),
+                    dx=float(dx),
+                    dy=float(dy),
+                    occurred_mono=now,
                 )
-            except Exception:
-                pass
+            )
 
-        try:
-            self._listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
-            self._listener.start()
-            return True
-        except Exception:
-            self._listener = None
-            return False
+        self._mouse_listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
+        self._mouse_listener.daemon = True
+        self._mouse_listener.start()
+        return True
 
     def stop(self) -> None:
         try:
-            if self._listener is not None:
-                self._listener.stop()
+            if self._mouse_listener is not None:
+                self._mouse_listener.stop()
         except Exception:
             pass
