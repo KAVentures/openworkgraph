@@ -23,7 +23,20 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         return {}
 
 
-def workflow_trace(db: GatewayDB, *, organization_id: str, since: str | None = None, until: str | None = None, cursor: str | None = None, limit: int = 100, query: str | None = None, actor_id: str | None = None, device_id: str | None = None, session_id: str | None = None, event_type: str | None = None) -> dict[str, Any]:
+def workflow_trace(
+    db: GatewayDB,
+    *,
+    organization_id: str,
+    since: str | None = None,
+    until: str | None = None,
+    cursor: str | None = None,
+    limit: int = 100,
+    query: str | None = None,
+    actor_id: str | None = None,
+    device_id: str | None = None,
+    session_id: str | None = None,
+    event_type: str | None = None,
+) -> dict[str, Any]:
     page_limit = max(1, min(int(limit), 500))
     state = _decode_cursor(cursor or "") if cursor else {}
     if state:
@@ -42,7 +55,19 @@ def workflow_trace(db: GatewayDB, *, organization_id: str, since: str | None = N
         after_at = None
         after_event_id = None
 
-    rows = db.trace_rows(organization_id=organization_id, since=since, until=snapshot_until, after_at=after_at, after_event_id=after_event_id, query=query, actor_id=actor_id, device_id=device_id, session_id=session_id, event_type=event_type, limit=page_limit + 1)
+    rows = db.trace_rows(
+        organization_id=organization_id,
+        since=since,
+        until=snapshot_until,
+        after_at=after_at,
+        after_event_id=after_event_id,
+        query=query,
+        actor_id=actor_id,
+        device_id=device_id,
+        session_id=session_id,
+        event_type=event_type,
+        limit=page_limit + 1,
+    )
     has_more = len(rows) > page_limit
     visible = rows[:page_limit]
     rich = [rich_evidence_row(row, include_identity=True) for row in visible]
@@ -69,4 +94,5 @@ def workflow_trace(db: GatewayDB, *, organization_id: str, since: str | None = N
         "snapshot_until": snapshot_until,
         "data_layer": "privacy_hardened_raw_rich_evidence",
         "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
+        "derived_task_inference_authoritative": False,
     }
