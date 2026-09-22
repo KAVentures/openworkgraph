@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from shared.time_utils import normalize_timestamp
 from .db import GatewayDB
+from .settings import GatewaySettings
 
 
 SQLITE_SCHEMA = """
@@ -45,6 +48,7 @@ def normalize_retention_days(value: int | None) -> int | None:
 
 
 def set_retention_policy(db: GatewayDB, organization_id: str, retention_days: int | None) -> dict[str, Any]:
+    init_lifecycle_schema(db)
     org = str(organization_id or "").strip()
     if not org:
         raise ValueError("organization_id is required")
@@ -78,6 +82,7 @@ def get_retention_policy(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    init_lifecycle_schema(db)
     org = str(organization_id or "").strip()
     with db.connect() as conn:
         cur = db._execute(
@@ -101,7 +106,7 @@ def get_retention_policy(
         "enabled": days is not None,
         "cutoff": cutoff,
         "updated_at": str(data.get("updated_at") or "") if data else "",
-        "physical_delete_on_ingest": days is not None,
+        "physical_cleanup": "explicit_or_scheduled",
         "audit_log_retained": True,
     }
 
@@ -152,11 +157,8 @@ def _evidence_filter(
     return " AND ".join(clauses), tuple(params)
 
 
-def count_evidence(
-    db: GatewayDB,
-    organization_id: str,
-    **filters: Any,
-) -> int:
+def count_evidence(db: GatewayDB, organization_id: str, **filters: Any) -> int:
+    init_lifecycle_schema(db)
     where, params = _evidence_filter(organization_id, **filters)
     with db.connect() as conn:
         cur = db._execute(conn, f"SELECT COUNT(*) AS count FROM evidence_events WHERE {where}", params)
@@ -166,32 +168,19 @@ def count_evidence(
     return int(data.get("count", 0) or 0)
 
 
-def delete_evidence(
-    db: GatewayDB,
-    organization_id: str,
-    **filters: Any,
-) -> int:
+def delete_evidence(db: GatewayDB, organization_id: str, **filters: Any) -> int:
+    init_lifecycle_schema(db)
     where, params = _evidence_filter(organization_id, **filters)
     with db.connect() as conn:
         cur = db._execute(conn, f"DELETE FROM evidence_events WHERE {where}", params)
         return max(0, int(cur.rowcount or 0))
 
 
-def apply_retention(
-    db: GatewayDB,
-    organization_id: str,
-    *,
-    dry_run: bool = False,
-) -> dict[str, Any]:
+def apply_retention(db: GatewayDB, organization_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     policy = get_retention_policy(db, organization_id)
     cutoff = policy.get("cutoff")
     if not cutoff:
-        return {
-            **policy,
-            "candidate_rows": 0,
-            "deleted_rows": 0,
-            "dry_run": bool(dry_run),
-        }
+        return {**policy, "candidate_rows": 0, "deleted_rows": 0, "dry_run": bool(dry_run)}
     candidates = count_evidence(db, organization_id, before=cutoff)
     deleted = 0 if dry_run else delete_evidence(db, organization_id, before=cutoff)
     return {
@@ -200,3 +189,129 @@ def apply_retention(
         "deleted_rows": deleted,
         "dry_run": bool(dry_run),
     }
+
+
+def _database() -> GatewayDB:
+    settings = GatewaySettings.from_env()
+    db = GatewayDB(settings.database_url)
+    db.init()
+    init_lifecycle_schema(db)
+    return db
+
+
+def _print(value: dict[str, Any]) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="OpenWorkGraph Gateway evidence lifecycle administration")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    status = sub.add_parser("status", help="Show retention state for one organization")
+    status.add_argument("--organization", required=True)
+
+    set_retention = sub.add_parser("set-retention", help="Set or disable organization retention")
+    set_retention.add_argument("--organization", required=True)
+    group = set_retention.add_mutually_exclusive_group(required=True)
+    group.add_argument("--days", type=int)
+    group.add_argument("--disable", action="store_true")
+
+    apply_cmd = sub.add_parser("apply-retention", help="Preview or physically delete evidence older than the retention cutoff")
+    apply_cmd.add_argument("--organization", required=True)
+    apply_cmd.add_argument("--execute", action="store_true")
+    apply_cmd.add_argument("--confirm", default="")
+
+    purge = sub.add_parser("purge", help="Preview or delete organization evidence matching explicit selectors")
+    purge.add_argument("--organization", required=True)
+    purge.add_argument("--before")
+    purge.add_argument("--after")
+    purge.add_argument("--actor")
+    purge.add_argument("--device")
+    purge.add_argument("--session")
+    purge.add_argument("--event-type")
+    purge.add_argument("--all-evidence", action="store_true")
+    purge.add_argument("--execute", action="store_true")
+    purge.add_argument("--confirm", default="")
+
+    args = parser.parse_args()
+    db = _database()
+    org = str(args.organization or "").strip()
+    if not org:
+        parser.error("--organization is required")
+
+    if args.command == "status":
+        _print(get_retention_policy(db, org))
+        return
+
+    if args.command == "set-retention":
+        days = None if args.disable else args.days
+        previous = get_retention_policy(db, org)
+        result = set_retention_policy(db, org, days)
+        db.audit(
+            organization_id=org,
+            principal_id="gateway-lifecycle-cli",
+            action="lifecycle.retention.updated",
+            details={"previous_retention_days": previous.get("retention_days"), "retention_days": result.get("retention_days")},
+        )
+        _print(result)
+        return
+
+    if args.command == "apply-retention":
+        if args.execute and args.confirm != f"APPLY {org}":
+            parser.error(f"destructive apply requires --confirm 'APPLY {org}'")
+        result = apply_retention(db, org, dry_run=not args.execute)
+        db.audit(
+            organization_id=org,
+            principal_id="gateway-lifecycle-cli",
+            action="lifecycle.retention.applied" if args.execute else "lifecycle.retention.preview",
+            details={
+                "retention_days": result.get("retention_days"),
+                "candidate_rows": result.get("candidate_rows", 0),
+                "deleted_rows": result.get("deleted_rows", 0),
+            },
+        )
+        _print(result)
+        return
+
+    filters = {
+        "before": args.before,
+        "after": args.after,
+        "actor_id": args.actor,
+        "device_id": args.device,
+        "session_id": args.session,
+        "event_type": args.event_type,
+    }
+    restrictive = any(value for value in filters.values())
+    if args.all_evidence and restrictive:
+        parser.error("--all-evidence cannot be combined with other purge selectors")
+    if not args.all_evidence and not restrictive:
+        parser.error("purge requires at least one selector or --all-evidence")
+    if args.execute and args.confirm != f"DELETE {org}":
+        parser.error(f"destructive purge requires --confirm 'DELETE {org}'")
+    selected = {} if args.all_evidence else filters
+    candidates = count_evidence(db, org, **selected)
+    deleted = delete_evidence(db, org, **selected) if args.execute else 0
+    selector_types = [key for key, value in filters.items() if value]
+    db.audit(
+        organization_id=org,
+        principal_id="gateway-lifecycle-cli",
+        action="evidence.purged" if args.execute else "evidence.purge.preview",
+        details={
+            "all_evidence": bool(args.all_evidence),
+            "selector_types": selector_types,
+            "candidate_rows": candidates,
+            "deleted_rows": deleted,
+        },
+    )
+    _print({
+        "organization_id": org,
+        "dry_run": not args.execute,
+        "all_evidence": bool(args.all_evidence),
+        "candidate_rows": candidates,
+        "deleted_rows": deleted,
+        "audit_log_deleted": False,
+    })
+
+
+if __name__ == "__main__":
+    main()
