@@ -6,6 +6,7 @@ import os
 import signal
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ def _stop(*_args) -> None:
     STOP = True
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _row_event(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)
     value.pop("id", None)
@@ -34,6 +39,7 @@ def _row_event(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _read_local_rows(db_path: Path, after_id: int, limit: int) -> list[tuple[int, dict[str, Any]]]:
+    """Read from the canonical local evidence database, regardless of sensor source."""
     if not db_path.exists():
         return []
     conn = sqlite3.connect(db_path, timeout=10)
@@ -63,6 +69,14 @@ def _push_batch(client: httpx.Client, url: str, events: list[dict[str, Any]]) ->
 
 
 def run(config_path: Path, *, once: bool = False) -> int:
+    """Synchronize privacy-approved local evidence to an optional company Gateway.
+
+    Local capture never depends on this worker. The cursor advances only after a
+    complete Gateway acknowledgement (or after endpoint policy intentionally
+    excludes a row), making network retries idempotent by event_id.
+    """
+    global STOP
+    STOP = False
     data_dir = Path(os.getenv("WORKFLOW_OBSERVER_DATA", config_path.parent / "data"))
     auth_dir = Path(os.getenv("WORKFLOW_OBSERVER_AUTH_DIR", config_path.parent / "data" / "auth"))
     settings = load_gateway_settings(config_path, auth_dir=auth_dir)
@@ -82,24 +96,39 @@ def run(config_path: Path, *, once: bool = False) -> int:
     policy: dict[str, Any] = merge_policies(settings.local_policy, {})
     policy_fetched_at = 0.0
     delay = settings.poll_seconds
+    state.set("gateway_url", settings.url)
 
     with httpx.Client(headers=headers, timeout=10, verify=settings.verify_tls) as client:
         while not STOP:
+            if state.get_bool("sharing_paused", False):
+                state.set("status", "paused")
+                state.set("last_error", "")
+                if once:
+                    return 0
+                time.sleep(settings.poll_seconds)
+                continue
+
             try:
                 now = time.monotonic()
                 if now - policy_fetched_at >= settings.policy_refresh_seconds:
+                    # Fail closed: if the company's current policy cannot be fetched,
+                    # do not upload using a potentially broader stale/default policy.
                     remote = _fetch_policy(client, settings.url)
                     policy = merge_policies(settings.local_policy, remote)
                     policy_fetched_at = now
+                    state.set("policy_refreshed_at", _now())
 
                 cursor = state.get_int("last_local_event_id", 0)
                 rows = _read_local_rows(db_path, cursor, settings.batch_size)
                 if not rows:
+                    state.set("status", "connected")
+                    state.set("last_error", "")
                     if once:
                         return 0
                     time.sleep(settings.poll_seconds)
                     continue
 
+                state.set("status", "syncing")
                 prepared: list[dict[str, Any]] = []
                 shareable_ids: list[str] = []
                 last_local_id = cursor
@@ -116,18 +145,26 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     if not expected.issubset(acknowledged):
                         raise RuntimeError("Gateway did not acknowledge the complete evidence batch")
 
-                # Rows excluded by endpoint policy are intentionally considered processed;
-                # shareable rows advance only after complete Gateway acknowledgement.
+                # Rows excluded by endpoint/company policy are intentionally marked
+                # processed. Shareable rows advance only after complete acknowledgement.
                 state.set_int("last_local_event_id", last_local_id)
+                state.set("last_success_at", _now())
+                state.set_int("last_batch_shared", len(prepared))
+                state.set("last_error", "")
+                state.set("status", "connected")
                 delay = settings.poll_seconds
                 if once:
                     return len(prepared)
             except Exception as exc:
+                message = str(exc)[:500]
+                state.set("status", "error")
+                state.set("last_error", message)
                 if once:
                     raise
-                print(f"OpenWorkGraph Gateway sync paused: {exc}")
+                print(f"OpenWorkGraph Gateway sync paused by error: {message}")
                 time.sleep(delay)
                 delay = min(30.0, max(settings.poll_seconds, delay * 1.8))
+    state.set("status", "stopped")
     return 0
 
 
