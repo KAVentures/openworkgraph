@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -18,6 +19,20 @@ def _paths(config_path: Path) -> tuple[Path, Path, Path]:
     data_dir = Path(os.getenv("WORKFLOW_OBSERVER_DATA", root / "data" / "live"))
     auth_dir = Path(os.getenv("WORKFLOW_OBSERVER_AUTH_DIR", root / "data" / "auth"))
     return root, data_dir, auth_dir
+
+
+def _max_local_event_id(data_dir: Path) -> int:
+    db_path = data_dir / "workflow_observer.db"
+    if not db_path.exists():
+        return 0
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
+        return int(row[0] if row else 0)
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
 
 
 def _read_config(config_path: Path) -> dict[str, Any]:
@@ -66,9 +81,10 @@ def enroll_endpoint(
 ) -> dict[str, Any]:
     """Enroll this endpoint without creating an OpenWorkGraph cloud account.
 
-    The one-time/admin enrollment token is used only for this request and is never
-    written to config. The returned device credential is stored in the local auth
-    directory and the endpoint's config is updated atomically.
+    The enrollment credential is used only for this request and is never written
+    to config. New enrollment shares evidence from this point forward by default;
+    pre-enrollment local history remains local unless a future explicit backfill
+    flow is requested.
     """
     gateway_url = normalize_gateway_url(gateway_url, allow_insecure_http=allow_insecure_http)
     organization_id = str(organization_id or "").strip()
@@ -127,10 +143,16 @@ def enroll_endpoint(
     _write_config(config_path, root)
 
     state = SyncState(data_dir / "gateway_sync_state.db")
+    # Privacy-safe default: connecting now does not silently backfill historical
+    # evidence captured before the user/organization established this connection.
+    enrollment_boundary = _max_local_event_id(data_dir)
+    state.set_int("last_local_event_id", enrollment_boundary)
+    state.delete("pause_started_after_id")
     state.set_bool("sharing_paused", False)
     state.set("status", "not_started")
     state.set("last_error", "")
     state.set("gateway_url", gateway_url)
+    state.set("history_sync_mode", "from_enrollment_forward")
 
     return {
         "gateway_url": gateway_url,
@@ -139,6 +161,8 @@ def enroll_endpoint(
         "device_id": str(payload.get("device_id") or resolved_device_id),
         "enrolled": True,
         "sharing_paused": False,
+        "history_sync_mode": "from_enrollment_forward",
+        "pre_enrollment_rows_kept_local": enrollment_boundary,
         "credential_exposed": False,
     }
 
