@@ -14,7 +14,6 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from connector.config import load_device_token, load_gateway_settings
 from server.local_auth import (
     ensure_api_token,
     ensure_browser_secret,
@@ -107,38 +106,13 @@ def reset_demo_data(env: dict[str, str]) -> None:
     for name in (
         "workflow_observer.db", "workflow_observer.db-wal", "workflow_observer.db-shm",
         "outbox.db", "outbox.db-wal", "outbox.db-shm", "events.jsonl",
+        "gateway_sync_state.db", "gateway_sync_state.db-wal", "gateway_sync_state.db-shm",
         ".presentation_people.json", ".display_redaction_key",
     ):
         try:
             (data_dir / name).unlink(missing_ok=True)
         except Exception:
             pass
-
-
-def _start_gateway_connector(env: dict[str, str]) -> subprocess.Popen | None:
-    """Start sharing only when this endpoint was explicitly configured and enrolled."""
-    auth_dir = Path(env["WORKFLOW_OBSERVER_AUTH_DIR"])
-    settings = load_gateway_settings(CONFIG, auth_dir=auth_dir)
-    if not settings.enabled:
-        print("Organization Gateway: OFF — local-only mode.")
-        return None
-    if not settings.url:
-        print("Organization Gateway: configured but URL is empty; local capture will continue only.")
-        return None
-    if not load_device_token(settings):
-        print("Organization Gateway: configured but endpoint is not enrolled; local capture will continue only.")
-        print("Enroll with: python -m connector.enroll --gateway <url> --organization <id> --enrollment-token <token>")
-        return None
-
-    connector_env = env.copy()
-    connector_env.pop("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", None)
-    print(f"Organization Gateway: connected mode configured for {settings.url}")
-    print("Gateway sharing is a separate worker; stopping/failing it never stops local capture.")
-    return subprocess.Popen(
-        [sys.executable, "-m", "connector.sync", "--config", str(CONFIG)],
-        cwd=ROOT,
-        env=connector_env,
-    )
 
 
 def main() -> None:
@@ -163,9 +137,9 @@ def main() -> None:
     elif system == "Darwin":
         print("macOS: approve Accessibility/Input Monitoring permission if requested for native desktop interaction capture.")
     if args.mode == "observe":
-        print("LIVE mode uses its own database; demo data is excluded.")
+        print("LIVE mode uses its own database; demo data is excluded. Organization Gateway controls are available in the dashboard.")
     else:
-        print("DEMO mode uses a separate synthetic-data database and resets on each demo launch.")
+        print("DEMO mode uses a separate synthetic-data database, resets on each demo launch, and never synchronizes to an organization Gateway.")
 
     if port_is_open(API_HOST, API_PORT):
         raise RuntimeError(
@@ -174,12 +148,11 @@ def main() -> None:
         )
 
     api = subprocess.Popen([
-        sys.executable, "-m", "uvicorn", "server.secure_app:app",
+        sys.executable, "-m", "uvicorn", "server.enterprise_app:app",
         "--host", API_HOST, "--port", str(API_PORT)
     ], cwd=ROOT, env=env)
 
     collector = None
-    gateway_connector = None
     try:
         if not wait_for_api(api):
             raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
@@ -195,13 +168,13 @@ def main() -> None:
             while True:
                 time.sleep(1)
         else:
-            gateway_connector = _start_gateway_connector(env)
             webbrowser.open(opened_dashboard)
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
             print("The durable local outbox retries capture events if the local API is temporarily unavailable.")
             print("AI access starts OFF on every launch and can be enabled from the dashboard.")
+            print("Organization Gateway sharing is OFF unless explicitly enrolled; connect/pause/resume/disconnect from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
             collector_env = env.copy()
@@ -213,7 +186,6 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopping Workflow Observer…")
     finally:
-        stop_process(gateway_connector)
         stop_process(collector)
         stop_process(api)
         print("Stopped. Local live/demo data remain separated in data/.\n")
