@@ -49,6 +49,8 @@ def load_config(path: Path) -> dict:
         "backend_url": "http://127.0.0.1:8787",
         "poll_seconds": 2,
         "heartbeat_seconds": 5,
+        "focus_checkpoint_seconds": 120,
+        "capture_gap_seconds": 30,
         "change_detection": "application",
         "screenshot_interval_seconds": 20,
         "screenshots_enabled": False,
@@ -103,9 +105,6 @@ def _sanitize_existing_jsonl() -> None:
                     safe = sanitize_event_identifiers(event)
                     dst.write(json.dumps(safe, ensure_ascii=False) + "\n")
                 except Exception:
-                    # The JSONL is a diagnostic/recovery mirror, not the durable
-                    # delivery queue. Omit malformed legacy lines rather than keep
-                    # potentially sensitive plaintext that cannot be classified.
                     continue
         os.replace(tmp, path)
         try:
@@ -236,6 +235,7 @@ def _focus_span_event(
     session_id: str,
     screenshot_path: str | None = None,
     activity: dict | None = None,
+    boundary_reason: str = "focus_change",
 ) -> dict:
     activity = dict(activity or {})
     return {
@@ -253,25 +253,41 @@ def _focus_span_event(
             "excluded": state["excluded"],
             "screenshot_captured_locally": bool(screenshot_path),
             "change_detection": cfg.get("change_detection", "application"),
+            "focus_boundary": boundary_reason,
             "activity": activity,
             "privacy": {"key_identities": False, "typed_values": False},
         },
     }
 
 
-def _interaction_event(
-    *,
-    raw: RawInteraction,
-    cfg: dict,
-    session_id: str,
-) -> dict:
-    w = active_window()
-    state = _public_window(w, cfg)
+def _capture_gap_event(*, started_at: str, duration_seconds: float, cfg: dict, session_id: str) -> dict:
+    return {
+        "event_id": str(uuid.uuid4()),
+        "observed_at": started_at,
+        **_identity_fields(cfg),
+        "session_id": session_id,
+        "app": "Capture gap",
+        "window_title": "",
+        "event_type": "capture_gap",
+        "duration_seconds": max(0.0, float(duration_seconds)),
+        "screenshot_path": None,
+        "metadata": {
+            "source": "desktop",
+            "reason": "poll_gap_or_suspend",
+            "interpretation": "No foreground application is asserted for this interval.",
+            "privacy": {"key_identities": False, "typed_values": False},
+        },
+    }
+
+
+def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> dict:
+    state = dict(raw.context) if isinstance(raw.context, dict) else _public_window(active_window(), cfg)
     metadata: dict = {
         "source": "desktop",
         "action": raw.kind,
         "x": round(raw.x, 1),
         "y": round(raw.y, 1),
+        "context_observed_at_interaction": bool(raw.context),
     }
     if raw.button:
         metadata["button"] = raw.button
@@ -284,6 +300,7 @@ def _interaction_event(
         target = element_at_position(raw.x, raw.y)
         if target:
             metadata["target"] = target
+            metadata["target_observation_phase"] = "post_interaction_best_effort"
 
     event_id = str(uuid.uuid4())
     shot = None
@@ -317,12 +334,12 @@ def _clipboard_event(
     linked_copy_event_id: str | None = None,
     link_age_seconds: float | None = None,
 ) -> dict:
-    w = active_window()
-    state = _public_window(w, cfg)
+    state = dict(raw.context) if isinstance(raw.context, dict) else _public_window(active_window(), cfg)
     metadata: dict = {
         "source": "desktop",
         "action": raw.kind,
         "evidence_channel": "keyboard_shortcut",
+        "context_observed_at_interaction": bool(raw.context),
         "clipboard_contents_captured": False,
         "clipboard_source_observed": bool(linked_copy_event_id) if raw.kind == "paste" else True,
         "privacy": {
@@ -360,6 +377,7 @@ def _interaction_worker(
     cfg: dict,
     session_id: str,
     outbox: EventOutbox,
+    capture_health: dict[str, int],
 ) -> None:
     last_clipboard_source: dict | None = None
     link_max_seconds = max(0.0, float(cfg.get("clipboard_link_max_seconds", 7200)))
@@ -402,7 +420,7 @@ def _interaction_worker(
                 event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
             persist_event(event, outbox)
         except Exception:
-            pass
+            capture_health["interaction_worker_errors"] = capture_health.get("interaction_worker_errors", 0) + 1
         finally:
             q.task_done()
 
@@ -415,6 +433,13 @@ def run(config_path: Path) -> None:
     cfg.update(identity)
     session_id = str(uuid.uuid4())
     activity_tracker = ActivityTracker()
+    capture_health = {
+        "interaction_worker_errors": 0,
+        "interaction_queue_dropped": 0,
+        "clipboard_queue_dropped": 0,
+        "capture_gap_count": 0,
+        "focus_checkpoint_count": 0,
+    }
     _sanitize_existing_jsonl()
     outbox = EventOutbox(LOCAL_DIR / "collector_outbox.db")
 
@@ -424,6 +449,9 @@ def run(config_path: Path) -> None:
     current_started_mono = 0.0
     current_screenshot: str | None = None
     last_heartbeat = 0.0
+    last_poll_mono = 0.0
+    last_poll_wall_epoch = 0.0
+    last_poll_wall_iso = ""
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
@@ -438,22 +466,32 @@ def run(config_path: Path) -> None:
 
     interaction_q: "queue.Queue[RawInteraction | RawClipboardAction | None]" = queue.Queue(maxsize=5000)
     worker = threading.Thread(
-        target=_interaction_worker, args=(interaction_q, cfg, session_id, outbox), daemon=True
+        target=_interaction_worker,
+        args=(interaction_q, cfg, session_id, outbox, capture_health),
+        daemon=True,
     )
     worker.start()
 
+    def snapshot_context() -> dict | None:
+        try:
+            return _public_window(active_window(), cfg)
+        except Exception:
+            return None
+
     def enqueue_interaction(raw: RawInteraction) -> None:
         activity_tracker.record(raw.kind, raw.occurred_mono)
+        raw.context = snapshot_context()
         try:
             interaction_q.put(raw, timeout=0.05)
         except queue.Full:
-            pass
+            capture_health["interaction_queue_dropped"] += 1
 
     def enqueue_clipboard(raw: RawClipboardAction) -> None:
+        raw.context = snapshot_context()
         try:
             interaction_q.put(raw, timeout=0.05)
         except queue.Full:
-            pass
+            capture_health["clipboard_queue_dropped"] += 1
 
     sensor = None
     sensor_started = False
@@ -479,7 +517,7 @@ def run(config_path: Path) -> None:
     print(f"Workflow Observer collector started. session={session_id}")
     print(f"device={cfg['device_id']} sensor={cfg['sensor_id']}")
     print(f"Durable delivery queue: {outbox.count()} pending event(s) at startup.")
-    print("Polling detects focus/tab changes; unchanged polls are NOT stored as events.")
+    print(f"Focus spans checkpoint every {max(30, float(cfg.get('focus_checkpoint_seconds', 120))):g}s so crashes cannot erase arbitrarily long work periods.")
     print("Screen interaction capture: " + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable"))
     print("Keyboard activity: " + ("ON (counts only; key identities/text are discarded)" if keyboard_started else "OFF / permission unavailable"))
     clipboard_started = bool(keyboard_started and cfg.get("clipboard_behavior_enabled", True))
@@ -487,11 +525,57 @@ def run(config_path: Path) -> None:
     print("Typed text, ordinary key identities, and clipboard contents are never stored. Ctrl+C stops collection.")
 
     while not STOP:
+        now_mono = time.monotonic()
+        now_dt = datetime.now(timezone.utc)
+        now_wall = now_dt.isoformat()
+        now_wall_epoch = now_dt.timestamp()
+
+        # Detect suspend/lock/stall generically by an unexpectedly large polling
+        # gap. Never attribute the unobserved interval to the previously focused app.
+        gap_threshold = max(10.0, float(cfg.get("capture_gap_seconds", 30)))
+        if last_poll_mono > 0:
+            mono_gap = max(0.0, now_mono - last_poll_mono)
+            wall_gap = max(0.0, now_wall_epoch - last_poll_wall_epoch)
+            if max(mono_gap, wall_gap) > gap_threshold:
+                if current_state is not None:
+                    observed_end_mono = min(
+                        now_mono,
+                        last_poll_mono + max(0.5, float(cfg.get("poll_seconds", 2))),
+                    )
+                    if observed_end_mono > current_started_mono:
+                        activity = activity_tracker.summarize(
+                            current_started_mono,
+                            observed_end_mono,
+                            active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+                            engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+                        )
+                        persist_event(_focus_span_event(
+                            state=current_state,
+                            started_at=current_started_wall,
+                            duration_seconds=observed_end_mono - current_started_mono,
+                            cfg=cfg,
+                            session_id=session_id,
+                            screenshot_path=current_screenshot,
+                            activity=activity,
+                            boundary_reason="capture_gap",
+                        ), outbox)
+                if last_poll_wall_iso:
+                    persist_event(_capture_gap_event(
+                        started_at=last_poll_wall_iso,
+                        duration_seconds=wall_gap,
+                        cfg=cfg,
+                        session_id=session_id,
+                    ), outbox)
+                    capture_health["capture_gap_count"] += 1
+                current_state = None
+                current_key = None
+                current_started_wall = ""
+                current_started_mono = 0.0
+                current_screenshot = None
+
         w = active_window()
         state = _public_window(w, cfg)
         key = _change_key(state, cfg)
-        now_mono = time.monotonic()
-        now_wall = utcnow()
 
         if current_state is None:
             current_state = state
@@ -507,7 +591,7 @@ def run(config_path: Path) -> None:
                 active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
                 engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
             )
-            event = _focus_span_event(
+            persist_event(_focus_span_event(
                 state=current_state,
                 started_at=current_started_wall,
                 duration_seconds=now_mono - current_started_mono,
@@ -515,8 +599,8 @@ def run(config_path: Path) -> None:
                 session_id=session_id,
                 screenshot_path=current_screenshot,
                 activity=activity,
-            )
-            persist_event(event, outbox)
+                boundary_reason="focus_change",
+            ), outbox)
 
             current_state = state
             current_key = key
@@ -525,6 +609,31 @@ def run(config_path: Path) -> None:
             current_screenshot = None
             if cfg.get("screenshots_enabled") and not state["excluded"]:
                 current_screenshot = screenshot(str(uuid.uuid4()))
+
+        else:
+            checkpoint_seconds = max(30.0, float(cfg.get("focus_checkpoint_seconds", 120)))
+            if now_mono - current_started_mono >= checkpoint_seconds:
+                activity = activity_tracker.summarize(
+                    current_started_mono, now_mono,
+                    active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+                    engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+                )
+                persist_event(_focus_span_event(
+                    state=current_state,
+                    started_at=current_started_wall,
+                    duration_seconds=now_mono - current_started_mono,
+                    cfg=cfg,
+                    session_id=session_id,
+                    screenshot_path=current_screenshot,
+                    activity=activity,
+                    boundary_reason="periodic_checkpoint",
+                ), outbox)
+                capture_health["focus_checkpoint_count"] += 1
+                current_started_wall = now_wall
+                current_started_mono = now_mono
+                current_screenshot = None
+                if cfg.get("screenshots_enabled") and not state["excluded"]:
+                    current_screenshot = screenshot(str(uuid.uuid4()))
 
         if now_mono - last_heartbeat >= float(cfg.get("heartbeat_seconds", 5)):
             post_heartbeat(
@@ -545,11 +654,15 @@ def run(config_path: Path) -> None:
                     ) if current_state is not None else {},
                     "keyboard_sensor": keyboard_started,
                     "outbox_pending": outbox.count(),
+                    "capture_health": dict(capture_health),
                 },
                 cfg["backend_url"],
             )
             last_heartbeat = now_mono
 
+        last_poll_mono = now_mono
+        last_poll_wall_epoch = now_wall_epoch
+        last_poll_wall_iso = now_wall
         time.sleep(max(0.5, float(cfg["poll_seconds"])))
 
     if sensor is not None:
@@ -560,7 +673,7 @@ def run(config_path: Path) -> None:
         interaction_q.put(None, timeout=0.5)
         interaction_q.join()
     except Exception:
-        pass
+        capture_health["interaction_worker_errors"] += 1
 
     if current_state is not None:
         end_mono = time.monotonic()
@@ -569,7 +682,7 @@ def run(config_path: Path) -> None:
             active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
             engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
         )
-        event = _focus_span_event(
+        persist_event(_focus_span_event(
             state=current_state,
             started_at=current_started_wall,
             duration_seconds=end_mono - current_started_mono,
@@ -577,8 +690,8 @@ def run(config_path: Path) -> None:
             session_id=session_id,
             screenshot_path=current_screenshot,
             activity=activity,
-        )
-        persist_event(event, outbox)
+            boundary_reason="shutdown",
+        ), outbox)
 
     for _ in range(5):
         if outbox.count() == 0:
@@ -587,7 +700,7 @@ def run(config_path: Path) -> None:
             break
     delivery_stop.set()
     delivery.join(timeout=1)
-    print(f"Collector stopped. {outbox.count()} event(s) remain queued for next launch.")
+    print(f"Collector stopped. {outbox.count()} event(s) remain queued for next launch. capture_health={capture_health}")
 
 
 def main() -> None:
