@@ -25,6 +25,16 @@ FORBIDDEN_CONTENT_KEYS = {
     "key_identities",
 }
 
+FORBIDDEN_TRUE_FLAGS = {
+    "typed_text_captured",
+    "typed_values_captured",
+    "clipboard_content_captured",
+    "clipboard_contents_captured",
+    "key_identity_captured",
+    "key_identities_captured",
+    "screenshot_bytes_captured",
+}
+
 
 def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
@@ -50,6 +60,8 @@ def _privacy_contract_violation(value: Any, path: str = "$") -> str | None:
             lowered = str(key).lower()
             if lowered in FORBIDDEN_CONTENT_KEYS and child not in (None, "", False, [], {}):
                 return f"{path}.{key} contains content OpenWorkGraph must not ingest"
+            if lowered in FORBIDDEN_TRUE_FLAGS and child is True:
+                return f"{path}.{key}=true contradicts the OpenWorkGraph privacy contract"
             found = _privacy_contract_violation(child, f"{path}.{key}")
             if found:
                 return found
