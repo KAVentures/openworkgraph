@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
-
-from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,20 +25,33 @@ def test_enterprise_controls_extend_the_established_secure_app():
     assert "from .secure_app import app" in enterprise
 
 
-def test_gateway_dashboard_routes_inherit_local_capability_auth(monkeypatch):
-    # Demo mode prevents any optional Gateway worker from starting while this
-    # test exercises the shared local capability guard.
-    monkeypatch.setenv("WORKFLOW_OBSERVER_MODE", "demo")
-    from server.enterprise_app import app
+def test_gateway_dashboard_routes_inherit_local_capability_auth():
+    # Importing secure_app intentionally installs middleware/routes onto the
+    # shared FastAPI app object. Exercise that in a subprocess so this security
+    # regression test cannot mutate server.main.app for unrelated legacy tests.
+    code = r'''
+from fastapi.testclient import TestClient
+from server.enterprise_app import app
 
-    with TestClient(app) as client:
-        response = client.get("/v1/gateway-status")
-        assert response.status_code == 401
-        assert response.json()["detail"] == "authentication required"
+with TestClient(app) as client:
+    response = client.get("/v1/gateway-status")
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "authentication required"
 
-        response2 = client.post(
-            "/v1/gateway-sharing",
-            json={"enabled": True},
-        )
-        assert response2.status_code == 401
-        assert response2.json()["detail"] == "authentication required"
+    response2 = client.post("/v1/gateway-sharing", json={"enabled": True})
+    assert response2.status_code == 401, response2.text
+    assert response2.json()["detail"] == "authentication required"
+'''
+    env = os.environ.copy()
+    env["WORKFLOW_OBSERVER_MODE"] = "demo"
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, (
+        f"isolated secure-app check failed\nstdout={completed.stdout}\nstderr={completed.stderr}"
+    )
