@@ -43,3 +43,16 @@ jobs:
         run: python scripts/check_injected_dashboard_js.py
       - name: Browser sensor JavaScript tests
         run: node --test tests/js/*.test.mjs
+
+  gateway-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate self-host compose configuration
+        env:
+          POSTGRES_PASSWORD: test-postgres-password
+          OWG_GATEWAY_ADMIN_TOKEN: test-admin-token
+          OWG_GATEWAY_ENROLLMENT_TOKEN: test-enrollment-token
+        run: docker compose -f deploy/docker-compose.yml config >/dev/null
+      - name: Build self-hosted Gateway image
+        run: docker build -f deploy/Dockerfile.gateway -t openworkgraph-gateway:test .
