@@ -8,8 +8,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
+from shared.time_utils import normalize_timestamp
 from .auth import ALLOWED_INTEGRATION_SCOPES, DEVICE_SCOPES, Principal, env_token_matches, issue_token, normalize_scopes
 from .db import GatewayDB
+from .enrollment import active_device_exists, consume_enrollment_grant, create_enrollment_grant, init_enrollment_schema
 from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .settings import GatewaySettings
@@ -19,6 +21,12 @@ class EnrollmentRequest(BaseModel):
     organization_id: str
     actor_id: str = ""
     device_id: str
+
+
+class EnrollmentGrantRequest(BaseModel):
+    organization_id: str
+    actor_id: str = ""
+    expires_minutes: int = 30
 
 
 class IntegrationTokenRequest(BaseModel):
@@ -72,7 +80,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     db = db or GatewayDB(settings.database_url)
     app = FastAPI(
         title="OpenWorkGraph Gateway",
-        version="0.53.0",
+        version="0.53.1",
         description="Self-hosted organization evidence gateway. Raw privacy-hardened evidence is canonical; inferred tasks are not treated as ground truth.",
     )
     app.state.settings = settings
@@ -81,6 +89,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     @app.on_event("startup")
     def startup() -> None:
         db.init()
+        init_enrollment_schema(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -99,6 +108,14 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         if not env_token_matches(_bearer(authorization), settings.admin_token):
             raise HTTPException(status_code=401, detail="Gateway admin token required")
 
+    def require_enrollment_issuer(authorization: str | None) -> None:
+        token = _bearer(authorization)
+        if not (
+            env_token_matches(token, settings.admin_token)
+            or env_token_matches(token, settings.enrollment_token)
+        ):
+            raise HTTPException(status_code=401, detail="Gateway enrollment issuer token required")
+
     def effective_actor(p: Principal, requested: str | None) -> str | None:
         """Apply an optional actor restriction embedded in an integration token."""
         restricted = str(p.actor_id or "").strip()
@@ -109,12 +126,18 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             return restricted
         return requested_value or None
 
+    def trace_or_400(**kwargs: Any) -> dict[str, Any]:
+        try:
+            return workflow_trace(db, **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "server": "OpenWorkGraph Gateway",
-            "version": "0.53.0",
+            "version": "0.53.1",
             "storage": "postgresql" if db.is_postgres else "sqlite-development",
             "self_hosted": True,
         }
@@ -129,19 +152,62 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "inferred_tasks_authoritative": False,
             "max_event_bytes": settings.max_event_bytes,
             "max_batch_bytes": settings.max_batch_bytes,
+            "enrollment": "single_use_organization_bound_grants",
         }
+
+    @app.post("/v1/admin/enrollment-codes")
+    def create_enrollment_code(
+        request: EnrollmentGrantRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_enrollment_issuer(authorization)
+        organization_id = request.organization_id.strip()
+        actor_id = request.actor_id.strip()
+        if not organization_id:
+            raise HTTPException(status_code=400, detail="organization_id is required")
+        if max(len(organization_id), len(actor_id)) > 512:
+            raise HTTPException(status_code=400, detail="organization_id/actor_id must be at most 512 characters")
+        try:
+            grant = create_enrollment_grant(
+                db,
+                organization_id=organization_id,
+                actor_id=actor_id,
+                expires_minutes=request.expires_minutes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.audit(
+            organization_id=organization_id,
+            principal_id="gateway-enrollment-issuer",
+            action="device.enrollment_code.created",
+            details={
+                "grant_id": grant["grant_id"],
+                "actor_id": actor_id,
+                "expires_at": grant["expires_at"],
+            },
+        )
+        return grant
 
     @app.post("/v1/devices/enroll")
     def enroll_device(request: EnrollmentRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-        if not env_token_matches(_bearer(authorization), settings.enrollment_token):
-            raise HTTPException(status_code=401, detail="Gateway enrollment token required")
-        organization_id = request.organization_id.strip()
+        grant = consume_enrollment_grant(db, _bearer(authorization))
+        if grant is None:
+            raise HTTPException(status_code=401, detail="valid unused OpenWorkGraph enrollment code required")
+        organization_id = str(grant["organization_id"]).strip()
+        actor_id = str(grant.get("actor_id") or "").strip()
+        requested_org = request.organization_id.strip()
+        requested_actor = request.actor_id.strip()
         device_id = request.device_id.strip()
-        actor_id = request.actor_id.strip()
-        if not organization_id or not device_id:
-            raise HTTPException(status_code=400, detail="organization_id and device_id are required")
+        if requested_org and requested_org != organization_id:
+            raise HTTPException(status_code=403, detail="enrollment code is bound to another organization")
+        if actor_id and requested_actor and requested_actor != actor_id:
+            raise HTTPException(status_code=403, detail="enrollment code is bound to another actor")
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id is required")
         if max(len(organization_id), len(device_id), len(actor_id)) > 512:
             raise HTTPException(status_code=400, detail="organization/actor/device identifiers must be at most 512 characters")
+        if active_device_exists(db, organization_id=organization_id, device_id=device_id):
+            raise HTTPException(status_code=409, detail="device_id is already enrolled; revoke or rotate it explicitly")
         token = issue_token("owg_device")
         token_id = f"device_{uuid.uuid4().hex}"
         db.put_token(
@@ -152,9 +218,14 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             actor_id=actor_id,
             device_id=device_id,
             scopes=set(DEVICE_SCOPES),
-            replace_device=True,
+            replace_device=False,
         )
-        db.audit(organization_id=organization_id, principal_id=token_id, action="device.enrolled", details={"device_id": device_id})
+        db.audit(
+            organization_id=organization_id,
+            principal_id=token_id,
+            action="device.enrolled",
+            details={"device_id": device_id, "grant_id": grant["grant_id"]},
+        )
         return {
             "token": token,
             "token_id": token_id,
@@ -221,7 +292,14 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     @app.delete("/v1/admin/tokens/{token_id}")
     def revoke_token(token_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
-        return {"revoked": db.revoke_token(token_id), "token_id": token_id}
+        revoked = db.revoke_token(token_id)
+        db.audit(
+            organization_id="_admin",
+            principal_id="gateway-admin",
+            action="token.revoked",
+            details={"token_id": token_id, "revoked": revoked},
+        )
+        return {"revoked": revoked, "token_id": token_id}
 
     @app.put("/v1/admin/policy/{organization_id}")
     def update_policy(organization_id: str, request: PolicyRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -261,6 +339,10 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             required_error = _required_event_fields(event)
             if required_error:
                 raise HTTPException(status_code=400, detail=required_error)
+            try:
+                observed_at = normalize_timestamp(str(event.get("observed_at") or ""))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"event.observed_at: {exc}") from exc
             event_bytes = _json_size(event)
             if event_bytes > settings.max_event_bytes:
                 raise HTTPException(status_code=413, detail=f"event exceeds max {settings.max_event_bytes} bytes")
@@ -271,6 +353,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             if violation:
                 raise HTTPException(status_code=400, detail=violation)
             item = dict(event)
+            item["observed_at"] = observed_at
             item.pop("screenshot_path", None)
             item.pop("screenshot_bytes", None)
             safe_events.append(item)
@@ -299,8 +382,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     ) -> dict[str, Any]:
         require(p, "evidence:read")
         actor_id = effective_actor(p, actor_id)
-        result = workflow_trace(
-            db,
+        result = trace_or_400(
             organization_id=p.organization_id,
             since=since,
             until=until,
@@ -324,8 +406,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     def search(request: SearchRequest, p: Principal = Depends(principal)) -> dict[str, Any]:
         require(p, "evidence:read")
         actor_id = effective_actor(p, request.actor_id)
-        result = workflow_trace(
-            db,
+        result = trace_or_400(
             organization_id=p.organization_id,
             since=request.since,
             until=request.until,
@@ -379,37 +460,43 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     ) -> dict[str, Any]:
         require(p, "transfers:read")
         actor_id = effective_actor(p, actor_id)
-        rows: list[dict[str, Any]] = []
+        grouped: dict[str, list[dict[str, Any]]] = {}
         cursor: str | None = None
-        while len(rows) < limit:
-            page = workflow_trace(
-                db,
+        scanned = 0
+        while True:
+            page = trace_or_400(
                 organization_id=p.organization_id,
                 since=since,
                 until=until,
                 actor_id=actor_id,
                 cursor=cursor,
-                limit=min(500, limit - len(rows)),
+                # Filter at the evidence query instead of consuming the first N
+                # unrelated focus/click events and only then looking for transfers.
+                query="clipboard_transfer_id",
+                limit=500,
             )
-            rows.extend(page["rows"])
+            for row in page["rows"]:
+                scanned += 1
+                transfer_id = str(
+                    row.get("clipboard_transfer_id")
+                    or (row.get("metadata") or {}).get("clipboard_transfer_id")
+                    or ""
+                )
+                if transfer_id:
+                    grouped.setdefault(transfer_id, []).append(row)
             cursor = page.get("next_cursor")
             if not cursor:
                 break
 
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            transfer_id = str(row.get("clipboard_transfer_id") or (row.get("metadata") or {}).get("clipboard_transfer_id") or "")
-            if transfer_id:
-                grouped.setdefault(transfer_id, []).append(row)
         items = [
             {"clipboard_transfer_id": key, "events": value, "event_count": len(value)}
-            for key, value in grouped.items()
+            for key, value in list(grouped.items())[:limit]
         ]
         db.audit(
             organization_id=p.organization_id,
             principal_id=p.token_id,
             action="transfers.read",
-            details={"evidence_rows_scanned": len(rows), "transfers_returned": len(items), "actor_id": actor_id or ""},
+            details={"transfer_evidence_rows_scanned": scanned, "transfers_returned": len(items), "actor_id": actor_id or ""},
         )
         return {
             "items": items,
