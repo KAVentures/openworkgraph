@@ -8,7 +8,7 @@ Lifecycle controls are deliberately opt-in:
 
 - organization retention is **disabled by default**;
 - changing retention configuration does not itself physically delete rows;
-- the canonical workflow-trace layer applies an enabled retention cutoff as a server-side visibility floor;
+- canonical workflow trace, search/transfer reads, and current-context reads apply an enabled retention cutoff as a server-side visibility floor;
 - physical deletion is a separate dry-run-first operation;
 - arbitrary purge requires at least one explicit selector, unless the administrator deliberately chooses the whole organization;
 - destructive CLI operations require an organization-specific confirmation string;
@@ -18,33 +18,48 @@ This means an existing v0.53.1 deployment that never configures lifecycle policy
 
 ## Configure retention
 
-The lifecycle CLI uses the same `OWG_GATEWAY_DATABASE_URL` / Gateway environment configuration as the server.
+Retention can be configured through the Gateway admin API or directly through the self-hosted lifecycle CLI. Both write the same `organization_lifecycle` policy table.
 
-Show the current policy:
+Read the current policy:
+
+```bash
+curl https://openworkgraph.company.internal/v1/admin/retention/acme \
+  -H 'Authorization: Bearer <admin token>'
+```
+
+Set a 30-day policy without deleting rows:
+
+```bash
+curl -X PUT https://openworkgraph.company.internal/v1/admin/retention/acme \
+  -H 'Authorization: Bearer <admin token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"retention_days":30}'
+```
+
+Disable it again without deleting remaining rows:
+
+```bash
+curl -X PUT https://openworkgraph.company.internal/v1/admin/retention/acme \
+  -H 'Authorization: Bearer <admin token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"retention_days":null}'
+```
+
+The equivalent CLI uses the same `OWG_GATEWAY_DATABASE_URL` / Gateway environment configuration as the server:
 
 ```bash
 python -m gateway.lifecycle status --organization acme
-```
-
-Set a 30-day retention policy:
-
-```bash
 python -m gateway.lifecycle set-retention --organization acme --days 30
-```
-
-Disable retention again without deleting remaining evidence:
-
-```bash
 python -m gateway.lifecycle set-retention --organization acme --disable
 ```
 
-When retention is enabled, `/v1/workflow-trace` and the search/transfer interfaces that build on the canonical trace cannot widen a query earlier than the organization cutoff. The cutoff is re-applied on every cursor page, so an older cursor cannot bypass a policy that was tightened after pagination began.
+When retention is enabled, `/v1/workflow-trace`, `/v1/search`, `/v1/transfers`, and `/v1/context/current` cannot expose evidence older than the organization cutoff. The canonical trace cutoff is re-applied on every cursor page, so an older cursor cannot bypass a policy that was tightened after pagination began.
 
 ## Logical retention versus physical deletion
 
 Retention has two stages on purpose.
 
-1. **Logical visibility:** the canonical Gateway evidence trace stops returning evidence older than the retention cutoff.
+1. **Logical visibility:** Gateway read interfaces stop returning evidence older than the retention cutoff.
 2. **Physical cleanup:** an administrator or scheduled job removes expired rows from `evidence_events`.
 
 Preview a cleanup:
@@ -110,7 +125,7 @@ Every lifecycle count/delete operation includes `organization_id` in the databas
 
 ## Audit behavior
 
-Lifecycle configuration changes, retention previews/applies, and purge previews/operations are written to the existing Gateway audit log by the CLI. Purge audit entries record selector **types and counts**, not the deleted window titles, metadata, copied content (which OpenWorkGraph never captures), or selector identity values.
+Retention configuration changes made through the API or CLI are written to the existing Gateway audit log. CLI retention previews/applies and purge previews/operations are also audited. Purge audit entries record selector **types and counts**, not the deleted window titles, metadata, copied content (which OpenWorkGraph never captures), or selector identity values.
 
 The audit log is intentionally not removed by evidence purge. Organizations that need a separate audit-log retention policy should manage that as a distinct control rather than silently coupling it to evidence deletion.
 
