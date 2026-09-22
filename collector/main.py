@@ -280,6 +280,26 @@ def _capture_gap_event(*, started_at: str, duration_seconds: float, cfg: dict, s
     }
 
 
+def _capture_health_event(*, capture_health: dict[str, int], cfg: dict, session_id: str) -> dict:
+    return {
+        "event_id": str(uuid.uuid4()),
+        "observed_at": utcnow(),
+        **_identity_fields(cfg),
+        "session_id": session_id,
+        "app": "OpenWorkGraph",
+        "window_title": "",
+        "event_type": "capture_health",
+        "duration_seconds": 0.0,
+        "screenshot_path": None,
+        "metadata": {
+            "source": "collector",
+            "capture_health": dict(capture_health),
+            "interpretation": "Nonzero counters indicate known capture degradation; zero counters are not proof that no external capture limitation existed.",
+            "privacy": {"key_identities": False, "typed_values": False, "clipboard_contents": False},
+        },
+    }
+
+
 def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> dict:
     state = dict(raw.context) if isinstance(raw.context, dict) else _public_window(active_window(), cfg)
     metadata: dict = {
@@ -440,6 +460,7 @@ def run(config_path: Path) -> None:
         "capture_gap_count": 0,
         "focus_checkpoint_count": 0,
     }
+    last_capture_health_evidence: dict[str, int] = dict(capture_health)
     _sanitize_existing_jsonl()
     outbox = EventOutbox(LOCAL_DIR / "collector_outbox.db")
 
@@ -451,7 +472,6 @@ def run(config_path: Path) -> None:
     last_heartbeat = 0.0
     last_poll_mono = 0.0
     last_poll_wall_epoch = 0.0
-    last_poll_wall_iso = ""
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
@@ -517,6 +537,7 @@ def run(config_path: Path) -> None:
     print(f"Workflow Observer collector started. session={session_id}")
     print(f"device={cfg['device_id']} sensor={cfg['sensor_id']}")
     print(f"Durable delivery queue: {outbox.count()} pending event(s) at startup.")
+    print("Polling detects focus/tab changes; long unchanged focus is checkpointed into durable spans rather than repeated polling rows.")
     print(f"Focus spans checkpoint every {max(30, float(cfg.get('focus_checkpoint_seconds', 120))):g}s so crashes cannot erase arbitrarily long work periods.")
     print("Screen interaction capture: " + ("ON (clicks + throttled scrolls)" if sensor_started else "OFF / permission unavailable"))
     print("Keyboard activity: " + ("ON (counts only; key identities/text are discarded)" if keyboard_started else "OFF / permission unavailable"))
@@ -529,6 +550,7 @@ def run(config_path: Path) -> None:
         now_dt = datetime.now(timezone.utc)
         now_wall = now_dt.isoformat()
         now_wall_epoch = now_dt.timestamp()
+        expected_poll = max(0.5, float(cfg.get("poll_seconds", 2)))
 
         # Detect suspend/lock/stall generically by an unexpectedly large polling
         # gap. Never attribute the unobserved interval to the previously focused app.
@@ -538,10 +560,7 @@ def run(config_path: Path) -> None:
             wall_gap = max(0.0, now_wall_epoch - last_poll_wall_epoch)
             if max(mono_gap, wall_gap) > gap_threshold:
                 if current_state is not None:
-                    observed_end_mono = min(
-                        now_mono,
-                        last_poll_mono + max(0.5, float(cfg.get("poll_seconds", 2))),
-                    )
+                    observed_end_mono = min(now_mono, last_poll_mono + expected_poll)
                     if observed_end_mono > current_started_mono:
                         activity = activity_tracker.summarize(
                             current_started_mono,
@@ -559,10 +578,15 @@ def run(config_path: Path) -> None:
                             activity=activity,
                             boundary_reason="capture_gap",
                         ), outbox)
-                if last_poll_wall_iso:
+                gap_duration = max(0.0, wall_gap - expected_poll)
+                if gap_duration > 0:
+                    gap_start = datetime.fromtimestamp(
+                        last_poll_wall_epoch + expected_poll,
+                        timezone.utc,
+                    ).isoformat()
                     persist_event(_capture_gap_event(
-                        started_at=last_poll_wall_iso,
-                        duration_seconds=wall_gap,
+                        started_at=gap_start,
+                        duration_seconds=gap_duration,
                         cfg=cfg,
                         session_id=session_id,
                     ), outbox)
@@ -636,6 +660,14 @@ def run(config_path: Path) -> None:
                     current_screenshot = screenshot(str(uuid.uuid4()))
 
         if now_mono - last_heartbeat >= float(cfg.get("heartbeat_seconds", 5)):
+            heartbeat_activity = activity_tracker.summarize(
+                current_started_mono, now_mono,
+                active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
+                engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
+            ) if current_state is not None else {}
+            # Nest inside the established `activity` field so older local APIs keep
+            # accepting the heartbeat while new dashboards can inspect health.
+            heartbeat_activity["capture_health"] = dict(capture_health)
             post_heartbeat(
                 {
                     "device_id": cfg["device_id"],
@@ -647,23 +679,26 @@ def run(config_path: Path) -> None:
                     "app": state["app"],
                     "window_title": state["window_title"],
                     "focus_elapsed_seconds": round(max(0.0, now_mono - current_started_mono), 3),
-                    "activity": activity_tracker.summarize(
-                        current_started_mono, now_mono,
-                        active_window_seconds=float(cfg.get("activity_active_window_seconds", 5)),
-                        engaged_grace_seconds=float(cfg.get("engaged_grace_seconds", 60)),
-                    ) if current_state is not None else {},
+                    "activity": heartbeat_activity,
                     "keyboard_sensor": keyboard_started,
                     "outbox_pending": outbox.count(),
-                    "capture_health": dict(capture_health),
                 },
                 cfg["backend_url"],
             )
+            # Persist sparse quality evidence only when counters have changed and
+            # at least one known degradation/diagnostic counter is nonzero.
+            if capture_health != last_capture_health_evidence and any(capture_health.values()):
+                persist_event(_capture_health_event(
+                    capture_health=capture_health,
+                    cfg=cfg,
+                    session_id=session_id,
+                ), outbox)
+                last_capture_health_evidence = dict(capture_health)
             last_heartbeat = now_mono
 
         last_poll_mono = now_mono
         last_poll_wall_epoch = now_wall_epoch
-        last_poll_wall_iso = now_wall
-        time.sleep(max(0.5, float(cfg["poll_seconds"])))
+        time.sleep(expected_poll)
 
     if sensor is not None:
         sensor.stop()
@@ -691,6 +726,13 @@ def run(config_path: Path) -> None:
             screenshot_path=current_screenshot,
             activity=activity,
             boundary_reason="shutdown",
+        ), outbox)
+
+    if capture_health != last_capture_health_evidence and any(capture_health.values()):
+        persist_event(_capture_health_event(
+            capture_health=capture_health,
+            cfg=cfg,
+            session_id=session_id,
         ), outbox)
 
     for _ in range(5):
