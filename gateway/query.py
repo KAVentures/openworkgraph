@@ -23,6 +23,30 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         return {}
 
 
+def _cursor_filter(
+    state: dict[str, Any],
+    key: str,
+    requested: str | None,
+    *,
+    security_boundary: bool = False,
+) -> str | None:
+    """Resolve a cursor-carried filter without letting it widen an explicit request.
+
+    Cursors are pagination state rather than authorization credentials. When the
+    caller supplies a filter again (notably an actor restriction derived from the
+    authenticated integration token), the cursor must carry the same value. This
+    prevents a client-edited base64 cursor from removing that restriction.
+    """
+    cursor_value = str(state.get(key) or "").strip()
+    requested_value = str(requested or "").strip()
+    if requested is not None:
+        if cursor_value != requested_value:
+            label = "authorized actor" if security_boundary else key
+            raise ValueError(f"cursor {label} filter does not match the current request")
+        return requested_value or None
+    return cursor_value or None
+
+
 def workflow_trace(
     db: GatewayDB,
     *,
@@ -39,17 +63,23 @@ def workflow_trace(
 ) -> dict[str, Any]:
     page_limit = max(1, min(int(limit), 500))
     state = _decode_cursor(cursor or "") if cursor else {}
+    if cursor and not state:
+        raise ValueError("invalid workflow-trace cursor")
     if state:
         snapshot_until = str(state.get("snapshot_until") or "")
-        since = str(state.get("since") or "") or None
-        until = str(state.get("until") or "") or None
-        query = str(state.get("query") or "") or None
-        actor_id = str(state.get("actor_id") or "") or None
-        device_id = str(state.get("device_id") or "") or None
-        session_id = str(state.get("session_id") or "") or None
-        event_type = str(state.get("event_type") or "") or None
+        if not snapshot_until:
+            raise ValueError("invalid workflow-trace cursor")
+        since = _cursor_filter(state, "since", since)
+        until = _cursor_filter(state, "until", until)
+        query = _cursor_filter(state, "query", query)
+        actor_id = _cursor_filter(state, "actor_id", actor_id, security_boundary=True)
+        device_id = _cursor_filter(state, "device_id", device_id)
+        session_id = _cursor_filter(state, "session_id", session_id)
+        event_type = _cursor_filter(state, "event_type", event_type)
         after_at = str(state.get("after_at") or "") or None
         after_event_id = str(state.get("after_event_id") or "") or None
+        if not after_at or not after_event_id:
+            raise ValueError("invalid workflow-trace cursor")
     else:
         snapshot_until = until or datetime.now(timezone.utc).isoformat()
         after_at = None
