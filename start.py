@@ -14,6 +14,7 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from connector.config import load_device_token, load_gateway_settings
 from server.local_auth import (
     ensure_api_token,
     ensure_browser_secret,
@@ -114,6 +115,32 @@ def reset_demo_data(env: dict[str, str]) -> None:
             pass
 
 
+def _start_gateway_connector(env: dict[str, str]) -> subprocess.Popen | None:
+    """Start sharing only when this endpoint was explicitly configured and enrolled."""
+    auth_dir = Path(env["WORKFLOW_OBSERVER_AUTH_DIR"])
+    settings = load_gateway_settings(CONFIG, auth_dir=auth_dir)
+    if not settings.enabled:
+        print("Organization Gateway: OFF — local-only mode.")
+        return None
+    if not settings.url:
+        print("Organization Gateway: configured but URL is empty; local capture will continue only.")
+        return None
+    if not load_device_token(settings):
+        print("Organization Gateway: configured but endpoint is not enrolled; local capture will continue only.")
+        print("Enroll with: python -m connector.enroll --gateway <url> --organization <id> --enrollment-token <token>")
+        return None
+
+    connector_env = env.copy()
+    connector_env.pop("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", None)
+    print(f"Organization Gateway: connected mode configured for {settings.url}")
+    print("Gateway sharing is a separate worker; stopping/failing it never stops local capture.")
+    return subprocess.Popen(
+        [sys.executable, "-m", "connector.sync", "--config", str(CONFIG)],
+        cwd=ROOT,
+        env=connector_env,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["demo", "observe"], default="observe")
@@ -126,7 +153,8 @@ def main() -> None:
 
     print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
     print("===========================================")
-    print("Your data stays on this computer in this prototype. Raw evidence is preserved, with separate searchable context and content-minimized operational layers for AI/MCP.")
+    print("Evidence is captured and stored locally first. It leaves this computer only through an explicit export/AI connection or an explicitly enrolled organization Gateway.")
+    print("Raw rich evidence is canonical; inferred tasks and process labels are regeneratable hints rather than ground truth.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
     print("Local API access is capability-protected; the browser sensor authenticates the OpenWorkGraph server before sending browser evidence.")
     print("Local AI clients use MCP over stdio. HTTP MCP is OFF by default and starts only when explicitly requested for a client that needs it.")
@@ -151,6 +179,7 @@ def main() -> None:
     ], cwd=ROOT, env=env)
 
     collector = None
+    gateway_connector = None
     try:
         if not wait_for_api(api):
             raise RuntimeError("The authenticated local dashboard could not start on port 8787.")
@@ -160,17 +189,18 @@ def main() -> None:
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
             webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
-            print("Demo data is isolated from your real observations.")
+            print("Demo data is isolated from your real observations and is never Gateway-synchronized.")
             print("AI access starts OFF. Enable it in the dashboard only if you want an MCP client to read this run.")
             print("Close this window or press Ctrl+C when finished.\n")
             while True:
                 time.sleep(1)
         else:
+            gateway_connector = _start_gateway_connector(env)
             webbrowser.open(opened_dashboard)
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
-            print("The durable local outbox retries capture events if the API is temporarily unavailable.")
+            print("The durable local outbox retries capture events if the local API is temporarily unavailable.")
             print("AI access starts OFF on every launch and can be enabled from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
@@ -183,6 +213,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopping Workflow Observer…")
     finally:
+        stop_process(gateway_connector)
         stop_process(collector)
         stop_process(api)
         print("Stopped. Local live/demo data remain separated in data/.\n")
