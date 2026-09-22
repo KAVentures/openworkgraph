@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from typing import Any
+
+from sensitive_identifiers import sanitize_event_identifiers
+
+DEFAULT_LOCAL_POLICY: dict[str, Any] = {
+    "share_excluded": False,
+    "share_window_titles": True,
+    "share_metadata": True,
+    "allowed_event_types": [],
+    "strip_metadata_keys": [],
+}
+
+
+def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    result = dict(DEFAULT_LOCAL_POLICY)
+    for key in ("share_excluded", "share_window_titles", "share_metadata"):
+        if key in source:
+            result[key] = bool(source[key])
+    for key in ("allowed_event_types", "strip_metadata_keys"):
+        raw = source.get(key)
+        if isinstance(raw, list):
+            result[key] = sorted({str(x).strip() for x in raw if str(x).strip()})
+    return result
+
+
+def _restrict_allowlist(local: list[str], remote: list[str]) -> list[str]:
+    a = {str(x) for x in local if str(x)}
+    b = {str(x) for x in remote if str(x)}
+    if a and b:
+        return sorted(a & b)
+    return sorted(a or b)
+
+
+def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dict[str, Any] | None) -> dict[str, Any]:
+    """Combine policies so a remote organization can never broaden the local floor."""
+    local = normalize_policy(local_policy)
+    remote = normalize_policy(organization_policy)
+    return {
+        "share_excluded": bool(local["share_excluded"] and remote["share_excluded"]),
+        "share_window_titles": bool(local["share_window_titles"] and remote["share_window_titles"]),
+        "share_metadata": bool(local["share_metadata"] and remote["share_metadata"]),
+        "allowed_event_types": _restrict_allowlist(local["allowed_event_types"], remote["allowed_event_types"]),
+        "strip_metadata_keys": sorted(set(local["strip_metadata_keys"]) | set(remote["strip_metadata_keys"])),
+    }
+
+
+def _strip_keys(value: Any, blocked: set[str]) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _strip_keys(v, blocked) for k, v in value.items() if str(k) not in blocked}
+    if isinstance(value, list):
+        return [_strip_keys(x, blocked) for x in value]
+    return value
+
+
+def prepare_event_for_gateway(event: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if bool(metadata.get("excluded")) and not policy.get("share_excluded", False):
+        return None
+    allowed = {str(x) for x in policy.get("allowed_event_types") or []}
+    if allowed and str(event.get("event_type") or "") not in allowed:
+        return None
+
+    result = dict(event)
+    result.pop("screenshot_path", None)
+    if not policy.get("share_window_titles", True):
+        result["window_title"] = ""
+    if not policy.get("share_metadata", True):
+        result["metadata"] = {"gateway_sync": {"source": "local_privacy_hardened_store", "raw_metadata_preserved": False}}
+    else:
+        blocked = {str(x) for x in policy.get("strip_metadata_keys") or []}
+        safe_metadata = _strip_keys(metadata, blocked)
+        if not isinstance(safe_metadata, dict):
+            safe_metadata = {}
+        safe_metadata["gateway_sync"] = {
+            "source": "local_privacy_hardened_store",
+            "raw_metadata_preserved": not bool(blocked),
+        }
+        result["metadata"] = safe_metadata
+
+    # Defense-in-depth: the canonical local store has already been hardened, but
+    # synchronize only another sanitized copy.
+    return sanitize_event_identifiers(result)
