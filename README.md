@@ -1,457 +1,375 @@
 # OpenWorkGraph
 
-**A local-first context layer for how work actually happens.**
+**Open-source, local-first context infrastructure for how work actually happens.**
 
-OpenWorkGraph observes desktop and browser work, preserves useful customer-owned workflow evidence, structures it into searchable context and process telemetry, and makes it available for manual export or controlled AI access through MCP.
+OpenWorkGraph observes desktop and browser work, preserves privacy-hardened rich evidence locally, and lets authorized AI systems query that evidence through exports, REST, or MCP.
+
+The local product requires **no account and no cloud storage**. Organizations can optionally run the new **OpenWorkGraph Gateway** and PostgreSQL entirely inside infrastructure they control.
 
 [![Tests](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml/badge.svg)](https://github.com/KAVentures/openworkgraph/actions/workflows/tests.yml)
 [![Latest release](https://img.shields.io/github/v/release/KAVentures/openworkgraph)](https://github.com/KAVentures/openworkgraph/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-> **Project status:** early public prototype. The current goal is accurate local capture, reconstructable work context and useful AI access — not employee-performance scoring or a finished enterprise control plane.
+> **Project status:** early public infrastructure. The priorities are reconstructable work evidence, strong local defaults, self-hosting, and controlled AI access — not employee productivity scoring.
 
-## Try it
+## Why OpenWorkGraph
 
-### macOS
+Most enterprise AI can retrieve what an organization has already written down: documents, email, chat, tickets, CRM records, meeting notes and knowledge bases.
+
+OpenWorkGraph targets a different missing layer:
+
+> **What did people actually do, in what order, across which tools, with what observable effort and information handoffs?**
+
+A rich observed trace might contain:
+
+```text
+09:02  Gmail          focus / customer request
+09:04  Salesforce     search account
+09:05  Google Sheets  pricing sheet
+09:07  copy → paste   Sheets → Salesforce
+09:10  Salesforce     submit update
+09:11  Gmail          send response
+```
+
+An AI can reconstruct the workflow from the evidence rather than depending on OpenWorkGraph to permanently decide what the task “means.”
+
+---
+
+# Try the local product
+
+## macOS
 
 **[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
 
-1. Download and unzip `OpenWorkGraph-macOS.zip`.
+1. Download and unzip the ZIP.
 2. Right-click **`START_OPENWORKGRAPH.command` → Open**.
 3. Confirm **Open** if macOS asks.
-4. On first launch, OpenWorkGraph downloads its own private runtime. No system Python is required.
-5. Approve **Accessibility** and **Input Monitoring** if macOS requests them.
-6. The local dashboard opens automatically at `http://127.0.0.1:8787`.
+4. OpenWorkGraph installs its own private runtime; no system Python is required.
+5. Approve Accessibility/Input Monitoring if requested.
+6. The authenticated local dashboard opens at `http://127.0.0.1:8787`.
 
-Then double-click **`ADD_BROWSER_SENSOR.command`** once and follow the on-screen instructions to load the optional browser sensor.
+For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and load the opened extension folder.
 
-### Windows
+## Windows
 
 **[⬇ Download the latest Windows tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip)**
 
-1. Download and unzip `OpenWorkGraph-Windows.zip`.
+1. Download and unzip the ZIP.
 2. Double-click **`START_OPENWORKGRAPH.cmd`**.
-3. If Windows shows a security warning for this early unsigned prototype, review the source and proceed only if you trust this repository.
-4. On first launch, OpenWorkGraph downloads its own private runtime. No system Python is required.
-5. The local dashboard opens automatically at `http://127.0.0.1:8787`.
+3. Review any Windows security warning for this early unsigned prototype.
+4. OpenWorkGraph installs its own private runtime; no system Python is required.
+5. The local dashboard opens at `http://127.0.0.1:8787`.
 
-Then double-click **`ADD_BROWSER_SENSOR.cmd`** once and load the opened `browser_extension` folder in Chrome or Edge.
+For richer Chrome/Edge context, run **`ADD_BROWSER_SENSOR.cmd`** once.
 
-Windows includes best-effort **Microsoft UI Automation** metadata for native controls. OpenWorkGraph reads safe control identity/label metadata, not typed field values, selected text or password values.
+## One command
 
-### One command for agent / terminal users
-
-**macOS**
+macOS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
 ```
 
-**Windows PowerShell**
+Windows PowerShell:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
 ```
 
-If you do not want to execute a remote script directly, inspect the script first or use the Release ZIP.
+Inspect remote scripts before executing them if that is your security policy.
 
 ---
 
-## What OpenWorkGraph is
+# Local-first architecture
 
-Most enterprise AI can search what an organization has already written down: documents, email, chat, CRM records, tickets and knowledge bases.
-
-OpenWorkGraph targets a different missing layer:
-
-> **What did people actually do, in what order, across which tools, with how much effort, and what normally happens in practice?**
-
-A captured trace might conceptually look like:
-
-```text
-09:02  Gmail          read customer request
-09:04  Salesforce     search account
-09:05  Google Sheets  check pricing
-09:07  Teams          ask colleague
-09:10  Salesforce     update case
-09:11  Gmail          reply
-```
-
-An AI can then ask questions such as:
-
-- “What do we normally do in this situation?”
-- “Show me similar work from the past.”
-- “Where are we spending the most manual effort?”
-- “Which repeated processes look suitable for automation?”
-- “What internal tool would eliminate the most recurring work?”
-- “Did the new tool actually reduce the time spent on this process?”
-
-## What is captured
-
-Current capture includes:
-
-- active application and window/tab focus spans
-- browser tab activation and navigation
-- brief address-bar navigation without requiring a later click or scroll
-- foreground, engaged, probable-idle and active-input timing
-- aggregate keypress counts — **never key identities, key order or typed text**
-- global mouse clicks and throttled scrolls
-- native semantic control metadata through macOS Accessibility and Windows UI Automation, best effort
-- browser semantic events such as interactive clicks, editor/input focus, form submits and control changes
-- copy/paste **occurrence**, not clipboard contents
-- candidate task executions and repeated completed task families derived from the event stream
-- navigation fragments kept separate from completed-task evidence
-
-### Deliberately not captured in normal operation
-
-- typed text or individual key identities
-- clipboard contents
-- password-field values
-- selected text
-- screenshots or screen recording by default
-- URL query strings or fragments in browser evidence
-
-Screenshots are disabled in the normal configuration and are not part of the current product direction or normal exports.
-
-## Why the browser sensor matters
-
-Desktop observation can tell that a browser is in use, but browser-native signals make the evidence much more useful by separating Gmail, Google Docs, Salesforce, ChatGPT and other web tools and by capturing navigation reliably.
-
-The extension is optional. Desktop capture continues without it, but browser-level context is less precise.
-
-## Architecture
+A normal installation is completely useful by itself:
 
 ```text
  Desktop sensor ───────┐
  Browser sensor ───────┤
  Future sensors ───────┤
-                       ▼
-                RAW WORK EVIDENCE
-               local source events
-                       │
-             ┌─────────┴─────────┐
-             ▼                   ▼
-       CONTEXT LAYER       OPERATIONAL LAYER
-     resources/history      tasks/effort/
-      searchable memory    patterns/processes
-             │                   │
-             └─────────┬─────────┘
-                       ▼
-              REST / export / MCP
+                       v
+          privacy-hardened rich evidence
+                       |
+                       v
+                 local SQLite
+                /      |      \
+               /       |       \
+        dashboard    export    local MCP
 ```
 
-The observer does not need to permanently decide what a workflow “means.” It preserves reconstructable event evidence so later analytics or better models can reinterpret the history.
+No OpenWorkGraph account is required.
 
-## Three local data layers
+Evidence is written locally first. The browser extension is optional. Local export and MCP continue to work whether or not any organization Gateway exists.
 
-1. **Raw local evidence** — the richest persisted event layer used for reconstruction and verification. “Raw” does not mean unsanitized: high-confidence sensitive identifiers and secrets are hardened before persistence.
-2. **Customer context** — searchable organizational memory derived from observed resource/page/window/UI context.
-3. **Normalized operational events** — a content-minimized representation used for broad process/effort analytics and task inference.
+## Optional organization Gateway
 
-## Privacy model
+For organizations that want continuous context available to authorized company systems:
 
-OpenWorkGraph deliberately separates capture fidelity from downstream privacy/presentation policy.
+```text
+Employee endpoint
+  local capture + local SQLite
+           |
+           | optional outbound HTTPS
+           | after endpoint-side policy
+           v
+Customer infrastructure
+  OpenWorkGraph Gateway
+  customer PostgreSQL
+      /            \
+   REST             MCP
+    |                |
+ Akai/Codos      AI/agents
+ internal apps
+```
 
-### Storage-time sensitive-identifier hardening
+The Gateway is open source and self-hostable from this same repository. OpenWorkGraph/Kinvectum does **not** have to store or transit the customer's evidence.
 
-Before event evidence is persisted, high-confidence identifiers are pseudonymized or removed where their literal value is unnecessary for workflow analysis. Current handling includes, among other shapes:
-
-- Swedish personal identifiers and explicitly labelled patient/journal/case/account IDs
-- IBANs and recognized payment-card numbers
-- environment-variable/API credentials, bearer tokens, connection-string passwords and private-key blocks
-- other long Luhn-valid sensitive numbers when the system cannot confidently classify them
-
-Swedish OCR/payment references, invoice/reference numbers and similar business references are not intentionally labelled as payment cards merely because they pass Luhn. Explicit reference cues take precedence over card-shape heuristics.
-
-### Presentation/export person and owner pseudonymization
-
-When evidence is presented through dashboard/API/MCP/export surfaces, additional presentation policy can replace detected people with stable `PERSON_x` tokens and the local user with `OWNER`.
-
-The dashboard includes **Reset learned person aliases**. This deletes the local alias registry only; it does not delete or rewrite captured workflow history.
-
-See [Privacy and data handling](docs/PRIVACY_AND_DATA.md).
-
-## Local interface security
-
-OpenWorkGraph does **not** treat `localhost` as authentication.
-
-The normal launcher creates installation-local capability credentials and protects the local interfaces:
-
-- raw/history/export/control API routes require an authenticated dashboard session or local API capability
-- desktop collector writes are authenticated so another local process cannot silently inject fabricated workflow history
-- the dashboard exchanges a launcher-only URL-fragment bootstrap for an HttpOnly local session; the long-lived API capability is not embedded in dashboard HTML
-- the browser sensor verifies the genuine OpenWorkGraph server with HMAC challenge-response **before browser evidence is sent**
-- browser requests are HMAC-signed with timestamp/nonces and replay protection
-- local MCP clients use **stdio** by default, avoiding a standing MCP network port
-- when HTTP MCP is explicitly requested, it is bearer-protected, started on an available loopback port, and proves a random launch-time instance nonce before the dashboard advertises it
-
-If browser authentication fails, the existing extension queue keeps pending evidence rather than sending it to an unverified listener. If port 8787 is already occupied when OpenWorkGraph starts, capture does not start; it will not reuse an unknown localhost service.
-
-These controls materially reduce accidental localhost exposure, unrelated-service probing, naive port squatting and unauthenticated local access. **They are not a security boundary against malware already running with the same operating-system user privileges.** Stronger protection for that threat model requires OS isolation, endpoint security and/or managed enterprise controls.
-
-## What remains intentionally useful
-
-OpenWorkGraph does not try to erase every business fact. Depending on observable titles/labels, rich local evidence can intentionally retain:
-
-- company/customer names
-- project or deal names
-- order/reference/invoice numbers
-- amounts
-- document/page/window titles
-- safe UI labels
-
-Those details can be essential for understanding a workflow. They can also be sensitive.
+See **[Self-hosting](docs/SELF_HOSTING.md)**.
 
 ---
 
-# Using OpenWorkGraph with AI
+# Raw rich evidence is canonical
 
-There are three intentionally different paths.
+OpenWorkGraph deliberately separates observed evidence from interpretations.
 
-## 1. Export and upload — universal/default
+```text
+                 canonical rich evidence
+                        |
+           +------------+------------+
+           |            |            |
+         AI reads     search       heuristics
+           |            |            |
+           v            v            v
+   reconstruction    retrieval   task/process hints
+```
 
-The dashboard exports a captured session as:
+Deterministic task inference can be useful, but it is not treated as ground truth. A newer model should be able to reinterpret old evidence without the capture layer having thrown away useful detail.
 
-- **XLSX** — convenient for ChatGPT/Claude and manual inspection
-- **CSV ZIP** — convenient for ChatGPT/Claude/data tools and includes `README_FOR_AI.md`
-- **JSON** — full structured representation intended primarily for code/integrations
+The canonical AI trace preserves, when observed:
 
-The dashboard includes **Include rich raw session evidence**. Leave it enabled when detailed reconstruction matters; disable it for a more content-minimized operational export.
+- stable `event_id` provenance;
+- timestamp, app/window, event type and source;
+- browser hostname/path;
+- safe native/browser control role and label;
+- tab and browser-session context;
+- semantic-action hints plus confidence;
+- copy/cut/paste occurrence and transfer linkage;
+- foreground, engaged, idle and active-input timing;
+- aggregate keypress/click/scroll counts;
+- the underlying privacy-hardened event metadata.
 
-This is the simplest path for any AI that accepts files. The user can inspect exactly what is being shared before uploading it.
+Results are bounded and cursor-paginated rather than dumping an entire history into every model call.
 
-## 2. Local MCP — Claude Desktop, Cursor and other local MCP clients
+---
 
-Local clients use **stdio by default**:
+# What OpenWorkGraph captures
+
+Current capture can include:
+
+- foreground application and window/tab focus spans;
+- browser tab activation/navigation when the optional extension is installed;
+- foreground, engaged, probable-idle and active-input timing;
+- aggregate keypress **counts**;
+- global mouse clicks and throttled scrolls;
+- best-effort native control metadata through macOS Accessibility / Windows UI Automation;
+- browser semantic actions such as clicks, submits and control changes;
+- copy/cut/paste **occurrence and linkage**, never clipboard contents.
+
+## Deliberately not captured in normal operation
+
+- typed text or ordinary key identities/order;
+- clipboard contents;
+- password-field values;
+- selected text;
+- screenshots/screen recording by default;
+- browser URL query strings/fragments in structured browser evidence.
+
+High-confidence secrets and sensitive identifiers are hardened before persistence where their literal value is not needed. Presentation/export/MCP layers add further protections appropriate to their trust boundary.
+
+Rich business context can intentionally remain when useful — for example project/customer names, amounts, document titles, safe UI labels, and order/reference identifiers. Review evidence before sharing it outside its intended context.
+
+See **[Privacy and data handling](docs/PRIVACY_AND_DATA.md)**.
+
+---
+
+# AI access
+
+## 1. Export and upload
+
+The dashboard can export JSON, XLSX, or CSV ZIP. The AI guide and starter prompt are bundled with context packages.
+
+Use rich raw evidence when accurate reconstruction matters. Derived summaries/tasks are convenience views.
+
+## 2. Local MCP
+
+Local clients such as Claude Desktop and Cursor normally use MCP over **stdio**:
 
 ```text
 AI application
-      │
-      │ stdio
-      ▼
+     |
+     | MCP / stdio
+     v
 OpenWorkGraph MCP
-      │
-      ▼
-authenticated local API → local evidence
+     |
+     v
+authenticated local API
+     |
+     v
+local SQLite
 ```
 
-No separate MCP network port is kept open during normal OpenWorkGraph operation.
+No separate MCP network port is kept open for normal local use.
 
-### AI access switch
+AI access starts OFF on every OpenWorkGraph launch. The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
-MCP reading is **OFF on every OpenWorkGraph launch**.
-
-The dashboard contains an **AI access** control. Connecting a local AI can enable access for the current run; turning it off causes subsequent MCP tool calls — including already-configured clients — to be denied immediately.
-
-The setting is intentionally process-local and resets to OFF when OpenWorkGraph restarts.
-
-### Local MCP activity
-
-The dashboard keeps a short local activity view showing, for example:
+The canonical tool is:
 
 ```text
-20:12  get_workflow_trace       96 rows · 41 KB · 14:02–15:18
-20:14  automation_candidates     7 rows · 3 KB
+get_workflow_trace(...)
 ```
 
-The default audit record contains the tool name, time, result-row count, approximate returned bytes and evidence time range. Search terms/tool arguments are deliberately not stored in the activity log by default.
+It exposes rich-but-paginated observed evidence. Other summary/task tools are optional indexes and should point back to source evidence when a conclusion matters.
 
-### Cursor
+## 3. Gateway REST / MCP
 
-The dashboard’s **Add to Cursor** action installs an stdio MCP configuration using Cursor’s native confirmation flow. The configuration points at OpenWorkGraph’s existing private Python runtime and `mcp_server.secure_stdio`; it does not place the long-lived HTTP MCP bearer token in the Cursor deep link.
+Backend products do not need MCP. They can call the customer-hosted Gateway REST API directly.
 
-### Claude Desktop
+AI/agent frameworks can instead use the Gateway MCP adapter. Both interfaces query the same organization-scoped evidence service.
 
-The v0.49+ GitHub Release includes:
-
-**`OpenWorkGraph-Claude.mcpb`**
-
-This is a small Claude Desktop extension wrapper. It does not contain workflow history. It launches the authenticated OpenWorkGraph stdio MCP server from an existing OpenWorkGraph installation.
-
-**[⬇ Download the latest Claude Desktop extension](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Claude.mcpb)**
-
-Install OpenWorkGraph first, then install/approve the `.mcpb` in Claude Desktop. The dashboard also provides a manual stdio configuration as a fallback for clients or environments where desktop-extension installation is unavailable.
-
-## 3. ChatGPT live / network-only MCP — advanced
-
-ChatGPT cannot directly start the local OpenWorkGraph stdio process. For ChatGPT live access, the dashboard can explicitly start an authenticated **HTTP MCP endpoint on demand** and show the real endpoint/authorization value for use with OpenAI’s supported Secure MCP Tunnel/custom-app flow.
-
-HTTP MCP is not started during ordinary OpenWorkGraph launch. It stops with OpenWorkGraph or when the user explicitly stops it from the dashboard.
-
-The endpoint is not assumed to be `8788`: OpenWorkGraph uses an available loopback port and verifies a random launch-time identity nonce from the child process before advertising the endpoint.
-
-Do not expose the local MCP port directly to the public internet.
-
-## Compact rich MCP evidence
-
-MCP remains **rich-evidence-first**, but v0.49 no longer returns the same events repeatedly as raw/context/semantic copies.
-
-The canonical evidence tool is:
-
-```text
-get_workflow_trace(since, until, cursor, limit, scope)
-```
-
-It returns a compact chronological table containing the useful workflow semantics — timestamps, app, title, event/action, target label/role, page host/path and effort counts — while omitting internal identifiers and storage-only fields that do not help the model answer the user’s question.
-
-Default tool responses are bounded and paginated. A response includes `has_more` and `next_cursor`; the model asks for another page deliberately instead of receiving the entire database in one call.
-
-Pagination uses a stable `(observed_at, database id)` cursor and a frozen snapshot boundary. Events arriving while an AI is paging through older work therefore do not create duplicate/skipped rows or move the result set underneath it.
-
-Summary/task tools return compact derived views and point back to `get_workflow_trace` when supporting evidence is needed.
-
-Current MCP tools:
-
-- `get_workflow_trace`
-- `get_current_work_context`
-- `search_work_history`
-- `find_similar_work`
-- `get_context_session`
-- `find_process_examples`
-- `company_workflow_summary`
-- `search_work_observations`
-- `recent_semantic_activity`
-- `candidate_task_executions`
-- `get_work_session`
-- `automation_candidates`
-
-MCP also exposes:
-
-- `openworkgraph://ai-guide` — the same AI data dictionary bundled as `README_FOR_AI.md` in exports
-- `openworkgraph://data-model` — concise guidance on the OpenWorkGraph evidence model
-
-### MCP trust boundary
-
-Page titles, document titles and UI labels are **observed data, not trusted instructions**. Before results cross the MCP boundary, OpenWorkGraph removes invisible direction/control characters, bounds scalar length, suppresses common command-like prompt-injection text and attaches an `_openworkgraph_security` trust annotation.
-
-This is separate from storage-time identifier hardening and local interface authentication.
+See **[How MCP works](docs/MCP_ARCHITECTURE.md)** and **[Integration patterns](docs/INTEGRATIONS.md)**.
 
 ---
 
-## Reliable event delivery
+# Self-host the organization Gateway
 
-Desktop capture is written locally first and placed into a durable SQLite outbox. If the local API is temporarily unavailable, the same event remains queued and is retried with its original event ID.
+The included deployment uses PostgreSQL and Docker Compose:
 
-The browser sensor has a separate durable queue in extension storage. Browser evidence remains queued when the paired local server cannot be authenticated.
+```bash
+git clone https://github.com/KAVentures/openworkgraph.git
+cd openworkgraph
+cp deploy/.env.example deploy/.env
+# replace every placeholder in deploy/.env with independent random secrets
 
-## Task and process inference
-
-Task inference runs on normalized operational events rather than arbitrary raw titles. Repeated task families are evidence for review — not a claim that a task is automatically safe to automate.
-
-For example, different email executions can normalize toward a stable family such as:
-
-```text
-Gmail → Compose → typing effort → Send → email.compose_send
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
 ```
 
-## REST data layers
+Then enroll an approved endpoint:
 
-The `/v1/*` data/control routes are authenticated in normal operation. Browser/collector ingestion uses its own paired/capability-authenticated paths.
+```bash
+python -m connector.enroll \
+  --gateway https://openworkgraph.company.internal \
+  --organization acme \
+  --actor alice \
+  --enrollment-token '<enrollment secret>'
+```
 
-### Raw / context / operational evidence
+Gateway sharing can be paused without stopping local capture:
 
-- `GET /v1/summary?scope=current`
-- `GET /v1/events`
-- `GET /v1/semantic-activity`
-- `GET /v1/sessions/{session_id}`
-- `GET /v1/context-events?query=...`
-- `GET /v1/context-sessions/{session_id}`
-- `GET /v1/operational-summary?scope=current`
-- `GET /v1/operational-events`
-- `GET /v1/operational-semantic-activity`
-- `GET /v1/operational-sessions/{session_id}`
-- `GET /v1/tasks?scope=current`
+```bash
+python -m connector.control pause
+python -m connector.control status
+python -m connector.control resume
+```
 
-### AI/MCP control and compact trace
+Endpoint local policy is enforced before transmission. Organization policy can further restrict sharing but cannot broaden endpoint restrictions.
 
-- `GET /v1/workflow-trace`
-- `GET/POST /v1/ai-access`
-- `GET/POST /v1/mcp-activity`
-- `GET/POST /v1/mcp-http`
-- `GET /v1/mcp-connection-config`
+See **[Self-hosting](docs/SELF_HOSTING.md)** for production notes and integration-token setup.
 
-### Exports / privacy controls
+---
 
-- `GET /v1/export/json`
-- `GET /v1/export/xlsx`
-- `GET /v1/export/csvzip`
-- `POST /v1/privacy/reset-learned-names`
+# Gateway security model
 
-### Sensor coordination / ingestion
+v0.53 intentionally separates identities:
 
-- `GET /v1/browser-context`
-- `POST /v1/events`
-- `POST /v1/browser-events`
-- `POST /v1/heartbeat`
-- `POST /v1/browser-heartbeat`
+- **device credentials** can write evidence for the authenticated endpoint and read organization sharing policy;
+- **integration credentials** can read only explicitly granted scopes;
+- **admin/enrollment bootstrap secrets** are setup/control capabilities, not routine integration credentials.
 
-## Platform status
+The Gateway stores hashes of device/service tokens. Organization, actor and device identity are taken from the authenticated endpoint credential rather than trusted from uploaded JSON. Evidence event identity is scoped by organization. Reads are tenant-scoped and audited without logging search terms/evidence into the audit record by default.
 
-| Capability | macOS | Windows |
-| --- | --- | --- |
-| Standalone no-Python tester ZIP | ✅ | ✅ |
-| Active app/window telemetry | ✅ | ✅ |
-| Key/click/scroll effort | ✅ | ✅ |
-| Browser navigation + semantic events | ✅ | ✅ |
-| Durable local delivery | ✅ | ✅ |
-| Raw/context/operational layers | ✅ | ✅ |
-| XLSX / CSV ZIP / JSON exports | ✅ | ✅ |
-| Authenticated REST | ✅ | ✅ |
-| Local stdio MCP | ✅ | ✅ |
-| Optional authenticated HTTP MCP | ✅ | ✅ |
-| Paired browser sensor | ✅ | ✅ |
-| Native control semantics | Accessibility API | Microsoft UI Automation |
-| Automated CI | ✅ | ✅ |
+Current integration read scopes:
 
-Native control semantics are best effort on both platforms.
+```text
+evidence:read
+context:read
+transfers:read
+```
 
-## Current limitations
+For larger deployments the Gateway can sit behind customer-controlled OAuth/OIDC/SSO infrastructure. Native Entra/Okta/SCIM/MDM provisioning is a later enterprise layer rather than a requirement for the core data plane.
 
-OpenWorkGraph is not yet a finished enterprise product. Current limitations include:
+---
 
-- browser semantic detail requires installation/approval of the optional extension
-- some native applications expose weak or no accessibility/UI Automation labels
-- activity timing is an estimate; a foreground window is not proof a person was actively working every second
-- inferred tasks/patterns are analytical interpretations, not ground truth
-- rich local evidence can still contain sensitive business context after high-confidence identifier hardening
-- every MCP tool result sent to an AI is data sent to that AI provider for processing; use the AI-access switch deliberately
-- AI clients differ in MCP support and managed workspaces may require administrator approval
-- local capability/pairing controls are not intended to protect against malware already running with the same OS-user privileges
-- enterprise-wide RBAC, centrally managed policy, retention/audit controls, encryption policy and fleet deployment are not yet a production control plane
+# REST interface
 
-## Documentation
+Local endpoints remain authenticated in normal operation. The self-hosted organization Gateway exposes a separate organization-scoped API.
 
-- [Documentation index](docs/README.md)
-- [Privacy and data handling](docs/PRIVACY_AND_DATA.md)
-- [Exports and AI analysis](docs/EXPORTS_AND_AI.md)
-- [Owner/person presentation redaction](docs/OWNER_REDACTION.md)
-- [Nontechnical testing guide](NONTECHNICAL_TESTING.md)
-- [Standalone macOS launcher notes](docs/STANDALONE_MAC_LAUNCHER.md)
+Core Gateway endpoints:
 
-## Development
+```text
+GET  /v1/capabilities
+GET  /v1/workflow-trace
+POST /v1/search
+GET  /v1/context/current
+GET  /v1/transfers
+```
 
-Python 3.11+ is supported for source development. Standalone tester packages bring their own private Python runtime.
+`/v1/workflow-trace` is the canonical evidence endpoint.
+
+---
+
+# Reliable delivery
+
+Local desktop capture uses a durable queue into the local API. Browser evidence has its own extension queue.
+
+Organization synchronization is independent of both. It reads the canonical local event database and advances its durable cursor only after the Gateway acknowledges the complete shareable batch. Retries are idempotent by organization-scoped event ID.
+
+If the current organization policy cannot be fetched, synchronization fails closed rather than sharing under a potentially broader fallback policy.
+
+---
+
+# What OpenWorkGraph is not
+
+OpenWorkGraph is not intended to produce an employee “productivity score” or silently judge individual performance.
+
+The useful organizational object is the **workflow/process evidence**: what steps occur, where effort accumulates, how tools are crossed, where information moves, which exception paths recur, and what an authorized AI could potentially improve or automate.
+
+Deployers remain responsible for applicable workplace/privacy law, transparency, purpose limitation, retention and access controls.
+
+---
+
+# Development
+
+Python 3.11+:
 
 ```bash
 python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-The test suite runs in GitHub Actions on macOS, Windows and Linux. Browser JavaScript, runtime-injected dashboard JavaScript, a real stdio MCP handshake/tool call, HTTP MCP authentication, stable pagination and package builds are covered by automated regression tests.
+Gateway/PostgreSQL development extras:
 
-## Releases
+```bash
+python -m pip install -e ".[gateway,dev]"
+```
 
-`VERSION` is the canonical project version. When a new version is pushed to `main`, GitHub Actions builds:
+The CI matrix tests Linux, macOS and Windows, browser JavaScript, and builds the self-hosted Gateway container. Pull requests also build the standalone macOS/Windows packages and Claude MCP bundle before merge.
 
-- `OpenWorkGraph-macOS.zip`
-- `OpenWorkGraph-Windows.zip`
-- `OpenWorkGraph-Claude.mcpb`
+---
 
-Existing releases are left immutable; bump `VERSION` to publish a new GitHub Release.
+# Documentation
 
-## License
+- [Self-hosting](docs/SELF_HOSTING.md)
+- [How MCP works](docs/MCP_ARCHITECTURE.md)
+- [Integration patterns](docs/INTEGRATIONS.md)
+- [Privacy and data handling](docs/PRIVACY_AND_DATA.md)
+- [Exports and AI](docs/EXPORTS_AND_AI.md)
+- [Nontechnical testing](NONTECHNICAL_TESTING.md)
 
-OpenWorkGraph is open-source software licensed under the [Apache License 2.0](LICENSE).
+---
 
-Copyright © 2026 Koyar Afrasyab (Kinvectum).
+# License
 
-Apache-2.0 permits commercial use, modification and redistribution subject to its terms and includes an express patent grant from contributors. The software license does not grant rights to OpenWorkGraph or Kinvectum names, logos or other branding except as required for reasonable attribution and describing the origin of the software.
+Apache License 2.0. See [LICENSE](LICENSE).
+
+Copyright 2026 Koyar Afrasyab (Kinvectum). The software license does not grant rights to project branding.
