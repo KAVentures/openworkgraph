@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -21,6 +22,8 @@ CREATE TABLE IF NOT EXISTS organization_lifecycle (
 POSTGRES_SCHEMA = SQLITE_SCHEMA
 
 MAX_RETENTION_DAYS = 36500
+_INITIALIZED_POSTGRES_DATABASES: set[str] = set()
+_SCHEMA_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -28,14 +31,27 @@ def _now() -> str:
 
 
 def init_lifecycle_schema(db: GatewayDB) -> None:
-    """Idempotently add lifecycle configuration without changing evidence rows."""
+    """Idempotently add lifecycle configuration without changing evidence rows.
+
+    SQLite development databases remain fully idempotent on every call. PostgreSQL
+    initialization is cached by database URL after the first successful DDL pass so
+    normal workflow-trace reads do not repeatedly execute CREATE TABLE statements.
+    """
+    if db.is_postgres:
+        key = db.database_url
+        if key in _INITIALIZED_POSTGRES_DATABASES:
+            return
+        with _SCHEMA_LOCK:
+            if key in _INITIALIZED_POSTGRES_DATABASES:
+                return
+            with db.connect() as conn:
+                for statement in [x.strip() for x in POSTGRES_SCHEMA.split(";") if x.strip()]:
+                    conn.execute(statement)
+            _INITIALIZED_POSTGRES_DATABASES.add(key)
+        return
+
     with db.connect() as conn:
-        schema = POSTGRES_SCHEMA if db.is_postgres else SQLITE_SCHEMA
-        if db.is_postgres:
-            for statement in [x.strip() for x in schema.split(";") if x.strip()]:
-                conn.execute(statement)
-        else:
-            conn.executescript(schema)
+        conn.executescript(SQLITE_SCHEMA)
 
 
 def normalize_retention_days(value: int | None) -> int | None:
