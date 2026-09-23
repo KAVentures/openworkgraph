@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from connector.control import set_sharing, status as gateway_status
 from connector.runtime import restart_sync_worker, start_sync_worker, status as worker_status, stop_sync_worker
 from connector.service import disconnect_endpoint, enroll_endpoint
+from shared.lifespan import extend_lifespan
 from .main import CONFIG_PATH, ROOT
 from .secure_app import app
 
@@ -48,15 +49,20 @@ def _combined_status() -> dict[str, Any]:
     return value
 
 
-@app.on_event("startup")
-def start_optional_gateway_worker() -> None:
+def _start_optional_gateway_worker() -> None:
     if not _demo_mode():
         start_sync_worker(CONFIG_PATH)
 
 
-@app.on_event("shutdown")
-def stop_optional_gateway_worker() -> None:
+def _stop_optional_gateway_worker() -> None:
     stop_sync_worker()
+
+
+extend_lifespan(
+    app,
+    startup=_start_optional_gateway_worker,
+    shutdown=_stop_optional_gateway_worker,
+)
 
 
 @app.get("/v1/gateway-status")

@@ -10,7 +10,7 @@ from .hardening import HardeningSettings, PooledGatewayDB
 from .human_access import HumanAccessSettings, install_human_access
 from .settings import GatewaySettings
 
-GATEWAY_VERSION = "0.56.0"
+GATEWAY_VERSION = "0.56.1"
 
 
 def _bearer(value: str | None) -> str:
@@ -76,10 +76,14 @@ def create_human_enterprise_app(
                 "thresholded": True,
                 "minimum_actors": human_access.aggregate_min_actors,
                 "actor_identifiers_returned": False,
+                "window": "complete_utc_iso_weeks",
+                "values_rounded": True,
+                "exact_cohort_size_returned": False,
             },
             "pseudonymous_trace": {
                 "separate_explicit_scope": True,
                 "claimed_anonymous": False,
+                "cursor_pagination": True,
             },
         }
         return payload
@@ -92,6 +96,8 @@ def create_human_enterprise_app(
         payload["human_oidc"] = {
             "enabled": bool(human_access.enabled),
             "aggregate_min_actors": human_access.aggregate_min_actors,
+            "aggregate_window": "complete_utc_iso_weeks",
+            "aggregate_values_rounded": True,
             "pseudonymous_scope_configured": any(
                 "pseudonymous:evidence:read" in scopes
                 for scopes in (human_access.group_scope_map or {}).values()
