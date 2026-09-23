@@ -19,7 +19,7 @@ Customer infrastructure
   REST API / optional MCP adapter
           |
           +--> internal AI
-          +--> Akai/Codos/other authorized integrations
+          +--> authorized automation/context integrations
 ```
 
 The endpoint always writes evidence locally first. Gateway synchronization is a separate worker. If the Gateway, network, or sync worker is unavailable, local capture continues.
@@ -159,7 +159,7 @@ curl -X POST https://openworkgraph.company.internal/v1/admin/integration-tokens 
   -H 'Content-Type: application/json' \
   -d '{
     "organization_id":"acme",
-    "label":"Akai integration",
+    "label":"Automation integration",
     "scopes":["evidence:read","context:read","transfers:read"]
   }'
 ```
@@ -232,4 +232,4 @@ For automated tests and local development the Gateway also supports a SQLite URL
 
 ## Enterprise identity
 
-v0.54 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native Entra/Okta/SCIM/MDM provisioning remains a later enterprise layer; it is not required for the core self-hosted data plane.
+v0.54 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native enterprise SSO/group provisioning can be layered on without changing the core self-hosted data plane.

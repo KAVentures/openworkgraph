@@ -119,8 +119,8 @@ Customer infrastructure
       /            \
    REST             MCP
     |                |
- Akai/Codos      AI/agents
- internal apps
+ internal apps    AI/agents
+ automation/context systems
 ```
 
 The Gateway is open source and self-hostable from this same repository. OpenWorkGraph/Kinvectum does **not** have to store or transit the customer's evidence.
@@ -203,7 +203,7 @@ Use rich raw evidence when accurate reconstruction matters. Derived summaries/ta
 
 ## 2. Local MCP
 
-Local clients such as Claude Desktop and Cursor normally use MCP over **stdio**:
+Local clients such as desktop AI tools and IDE agents normally use MCP over **stdio**:
 
 ```text
 AI application
@@ -296,7 +296,7 @@ context:read
 transfers:read
 ```
 
-For larger deployments the Gateway can sit behind customer-controlled OAuth/OIDC/SSO infrastructure. Native Entra/Okta/SCIM/MDM provisioning is a later enterprise layer rather than a requirement for the core data plane.
+For larger deployments the Gateway can sit behind customer-controlled OAuth/OIDC/SSO infrastructure. Native enterprise identity provisioning is layered separately from the core data plane.
 
 ---
 
@@ -353,7 +353,7 @@ Gateway/PostgreSQL development extras:
 python -m pip install -e ".[gateway,dev]"
 ```
 
-The CI matrix tests Linux, macOS and Windows, browser JavaScript, and builds the self-hosted Gateway container. Pull requests also build the standalone macOS/Windows packages and Claude MCP bundle before merge.
+The CI matrix tests Linux, macOS and Windows, browser JavaScript, and builds the self-hosted Gateway container. Pull requests also build the standalone macOS/Windows packages and local MCP bundle before merge.
 
 ---
 

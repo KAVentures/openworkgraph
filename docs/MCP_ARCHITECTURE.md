@@ -4,10 +4,10 @@ MCP is an interface, not a storage location. OpenWorkGraph can use MCP while all
 
 ## Local MCP today
 
-For Claude Desktop, Cursor, and other clients that can launch a local process, OpenWorkGraph prefers MCP over stdio:
+For AI clients that can launch a local process, OpenWorkGraph prefers MCP over stdio:
 
 ```text
-Claude / Cursor / local AI
+local AI client
           |
           | MCP messages over stdin/stdout
           v
@@ -126,14 +126,14 @@ They are two interfaces to the same data plane:
                              /               \
                        REST/API              MCP
                           |                   |
-                    Akai backend       Claude/agent client
+                  backend service      AI/agent client
 ```
 
 Use REST when software wants a conventional machine-to-machine API, batch retrieval, scheduled processing, or its own reasoning pipeline.
 
 Use MCP when an AI/agent framework wants discoverable tools it can invoke during reasoning.
 
-A company such as Akai does not need to support MCP to integrate with OpenWorkGraph. It can use REST. A Codos-like agent can use MCP if that is a better fit. Both can consume the same evidence semantics.
+An automation backend does not need to support MCP to integrate with OpenWorkGraph; it can use REST. An AI-native organizational context client can use MCP when that is a better fit. Both consume the same evidence semantics.
 
 ## Authentication is not an OpenWorkGraph cloud account
 
