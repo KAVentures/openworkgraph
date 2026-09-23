@@ -5,6 +5,7 @@ This directory contains implementation, privacy, self-hosting and integration no
 ## Current documentation
 
 - [Self-hosting the organization Gateway](SELF_HOSTING.md) — run the optional Gateway/PostgreSQL data plane entirely in customer-controlled infrastructure, enroll endpoints, manage sharing policy, and create scoped integration credentials.
+- [Gateway operational hardening](GATEWAY_HARDENING.md) — opt-in PostgreSQL pooling, credential-scoped rate limiting, non-secret token/device inventory, administrative device revocation, and runtime visibility.
 - [Gateway data lifecycle](DATA_LIFECYCLE.md) — opt-in organization retention, dry-run-first physical cleanup, retroactive actor/device/session/time-scoped evidence purge, audit behavior, and backup caveats.
 - [How MCP works](MCP_ARCHITECTURE.md) — plain-language explanation of local stdio MCP, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
 - [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company brains and other AI platforms.
