@@ -51,6 +51,21 @@ def normalize_range(since: str, until: str) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
+def event_overlaps_range(event: dict[str, Any], since: str, until: str) -> bool:
+    """Return whether an event contributes evidence inside [since, until)."""
+    normalized_since, normalized_until = normalize_range(since, until)
+    range_start = _parse(normalized_since)
+    range_end = _parse(normalized_until)
+    observed = _parse(str(event.get("observed_at") or ""))
+    if range_start is None or range_end is None or observed is None:
+        return False
+    duration = max(0.0, float(event.get("duration_seconds") or 0.0))
+    if duration <= 0:
+        return range_start <= observed < range_end
+    finish = observed + timedelta(seconds=duration)
+    return observed < range_end and finish > range_start
+
+
 def _coalesce(intervals: list[dict[str, Any]]) -> list[dict[str, str]]:
     parsed: list[tuple[datetime, datetime]] = []
     for item in intervals:
