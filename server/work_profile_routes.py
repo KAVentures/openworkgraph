@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from .privacy_pipeline import redact_for_display
 from .secure_app import app
-from .work_profile import SELF_TAG_CATEGORIES, add_self_tag, compute_work_profile
+from .work_profile_service import SELF_TAG_CATEGORIES, add_self_tag, compute_work_profile
 from .main import ROOT
 
 
