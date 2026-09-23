@@ -1,6 +1,6 @@
 # Integrating with OpenWorkGraph
 
-OpenWorkGraph is intended to be an upstream work-evidence/context layer for automation systems, company brains, internal agents, and other AI platforms. Integrations should consume observed evidence rather than assume OpenWorkGraph's current inferred task labels are complete.
+OpenWorkGraph is intended to be an upstream work-evidence/context layer for automation systems, company-context systems, internal agents, and other AI platforms. Integrations should consume observed evidence rather than assume OpenWorkGraph's current inferred task labels are complete.
 
 ## Recommended integration hierarchy
 
@@ -60,7 +60,7 @@ Returns observed copy/cut/paste linkage grouped by transfer ID. Clipboard conten
 
 ## Example: automation discovery platform
 
-A platform such as Akai can use OpenWorkGraph as the discovery/evidence layer before a deliberate workflow recording or automation build:
+An automation platform can use OpenWorkGraph as the discovery/evidence layer before a deliberate workflow recording or automation build:
 
 ```text
 continuous work evidence
@@ -80,9 +80,9 @@ build/record/test automation
 
 OpenWorkGraph can also provide evidence about the human work surrounding exceptions after automation deployment. The integration should keep evidence provenance (`event_id`s) so recommendations remain auditable.
 
-## Example: company brain / organizational context platform
+## Example: company-context platform
 
-A platform such as Codos can treat OpenWorkGraph as another organization-owned context source, complementary to documents, email, meetings, CRM, and interviews.
+A company-context or organizational knowledge platform can treat OpenWorkGraph as another organization-owned context source, complementary to documents, email, meetings, CRM, and interviews.
 
 Instead of treating every click as permanent company knowledge, it can query evidence when reasoning about operational questions such as:
 

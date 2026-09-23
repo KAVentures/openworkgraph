@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,25 @@ def _runtime_config() -> dict[str, Any]:
     return cfg
 
 
-app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize local privacy/storage state before the first request.
+
+    This preserves the exact v0.55 initialization order while using FastAPI's
+    supported lifespan interface instead of the deprecated startup decorator.
+    """
+    initialize_privacy_state()
+    init_db()
+    # v0.46 storage hardening is idempotent and repairs legacy rows before any
+    # API response can expose them.
+    harden_existing_sensitive_identifiers_v46()
+    # Idempotent local migration: remove legacy URL secrets and retroactively
+    # apply browser exclusions before any API response can expose old rows.
+    harden_existing_browser_events(_runtime_config())
+    yield
+
+
+app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION, lifespan=lifespan)
 # Host validation closes DNS-rebinding requests whose Host header is not the
 # loopback endpoint. testserver is retained solely for FastAPI/Starlette tests.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
@@ -183,18 +202,6 @@ class BrowserHeartbeat(BaseModel):
     browser_session_id: str = ""
     work_session_id: str = ""
     page: BrowserPage = Field(default_factory=BrowserPage)
-
-
-@app.on_event("startup")
-def startup() -> None:
-    initialize_privacy_state()
-    init_db()
-    # v0.46 storage hardening is idempotent and repairs legacy rows before any
-    # API response can expose them.
-    harden_existing_sensitive_identifiers_v46()
-    # Idempotent local migration: remove legacy URL secrets and retroactively
-    # apply browser exclusions before any API response can expose old rows.
-    harden_existing_browser_events(_runtime_config())
 
 
 @app.get("/health")

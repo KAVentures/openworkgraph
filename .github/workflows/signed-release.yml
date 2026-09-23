@@ -1,0 +1,133 @@
+name: signed-installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-signed-installer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Apple signing credentials
+        env:
+          CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for value in CERT_B64 CERT_PASSWORD INSTALLER_IDENTITY APPLE_ID APP_PASSWORD TEAM_ID; do
+            test -n "${!value:-}" || { echo "Missing required Apple signing secret: $value" >&2; exit 2; }
+          done
+
+      - name: Build existing macOS payload
+        run: bash scripts/build_macos_release.sh
+
+      - name: Import Developer ID Installer certificate
+        env:
+          CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/openworkgraph-installer.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/openworkgraph-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          printf '%s' "$CERT_B64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CERT_PASSWORD" -T /usr/bin/productsign -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+          echo "OWG_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Sign, notarize and staple macOS installer
+        env:
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/build_macos_signed_pkg.sh
+
+      - name: Upload signed macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorkGraph-macOS-Signed
+          path: |
+            dist/OpenWorkGraph-macOS-v*.pkg
+            dist/OpenWorkGraph-macOS-v*.pkg.sha256
+          if-no-files-found: error
+
+      - name: Remove temporary keychain
+        if: always()
+        run: |
+          if [[ -n "${OWG_SIGNING_KEYCHAIN:-}" && -f "${OWG_SIGNING_KEYCHAIN}" ]]; then
+            security delete-keychain "${OWG_SIGNING_KEYCHAIN}" || true
+          fi
+
+  windows-signed-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Windows signing credentials
+        shell: powershell
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT_B64)) { throw "Missing WINDOWS_SIGNING_PFX_BASE64" }
+          if ([string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)) { throw "Missing WINDOWS_SIGNING_PFX_PASSWORD" }
+
+      - name: Build existing Windows payload
+        shell: powershell
+        run: ./scripts/build_windows_release.ps1
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: powershell
+        run: ./scripts/build_windows_installer.ps1
+
+      - name: Sign and verify Windows installer
+        shell: powershell
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $Installer = "dist\OpenWorkGraph-Windows-Setup-v$Version.exe"
+          $Pfx = Join-Path $env:RUNNER_TEMP "openworkgraph-signing.pfx"
+          [IO.File]::WriteAllBytes($Pfx, [Convert]::FromBase64String($env:CERT_B64))
+
+          $Signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName |
+            Select-Object -Last 1 -ExpandProperty FullName
+          if (-not $Signtool) { throw "signtool.exe not found" }
+
+          & $Signtool sign /f $Pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $Installer
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
+          & $Signtool verify /pa /all /v $Installer
+          if ($LASTEXITCODE -ne 0) { throw "signtool verify failed" }
+
+          Remove-Item $Pfx -Force
+          $Hash = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
+          "$Hash  $(Split-Path $Installer -Leaf)" | Set-Content "$Installer.sha256" -Encoding ascii
+
+      - name: Upload signed Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorkGraph-Windows-Signed
+          path: |
+            dist/OpenWorkGraph-Windows-Setup-v*.exe
+            dist/OpenWorkGraph-Windows-Setup-v*.exe.sha256
+          if-no-files-found: error
