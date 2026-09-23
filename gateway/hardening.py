@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import threading
@@ -67,15 +68,16 @@ class HardeningSettings:
 
 
 class SlidingWindowRateLimiter:
-    """Small in-process overload guard.
+    """Small bounded in-process overload guard.
 
     A zero limit disables a bucket. This intentionally does not pretend to be a
     distributed DDoS/WAF control: multi-replica deployments should also enforce
     organization-wide limits at their customer-controlled proxy/load balancer.
     """
 
-    def __init__(self, *, window_seconds: float = 60.0) -> None:
+    def __init__(self, *, window_seconds: float = 60.0, max_keys: int = 10_000) -> None:
         self.window_seconds = max(1.0, float(window_seconds))
+        self.max_keys = max(100, min(int(max_keys), 100_000))
         self._events: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -84,16 +86,25 @@ class SlidingWindowRateLimiter:
             return True, 0
         current = time.monotonic() if now is None else float(now)
         cutoff = current - self.window_seconds
+        normalized = str(key)
         with self._lock:
-            bucket = self._events.setdefault(str(key), deque())
+            bucket = self._events.get(normalized)
+            if bucket is None:
+                if len(self._events) >= self.max_keys:
+                    # Dicts preserve insertion order. Evicting the oldest key
+                    # bounds memory even if unauthenticated callers rotate
+                    # arbitrary bearer strings before the auth layer rejects them.
+                    oldest = next(iter(self._events), None)
+                    if oldest is not None:
+                        self._events.pop(oldest, None)
+                bucket = deque()
+                self._events[normalized] = bucket
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
             if len(bucket) >= int(limit):
                 retry_after = max(1, int(math.ceil(bucket[0] + self.window_seconds - current)))
                 return False, retry_after
             bucket.append(current)
-            if not bucket:
-                self._events.pop(str(key), None)
         return True, 0
 
 
@@ -202,8 +213,6 @@ class PooledGatewayDB(GatewayDB):
             rows = cur.fetchall()
             columns = [d[0] for d in cur.description] if cur.description else None
         result: list[dict[str, Any]] = []
-        import json
-
         for row in rows:
             data = self._row(row, columns)
             try:
