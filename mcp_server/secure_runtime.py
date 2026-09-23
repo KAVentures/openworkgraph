@@ -92,4 +92,25 @@ def audit_tool(tool_name: str, result: dict[str, Any]) -> None:
 core._get = secure_get
 core._authorize_tool = authorize_tool
 core._audit_tool = audit_tool
+
+
+@core.mcp.tool()
+def get_work_profile(scope: str = "current") -> dict[str, Any]:
+    """Return locally derived workflow signals for AI analysis.
+
+    The profile contains fragmentation, linked manual transfers, timing/rhythm,
+    AI-surface usage, communication-action counts, navigation/hunting candidates,
+    and voluntary self-tags. These are regeneratable workflow signals, not
+    productivity scores. Use get_workflow_trace when supporting evidence is needed.
+    """
+    if scope not in {"current", "week", "all"}:
+        raise ToolError("scope must be current, week, or all")
+    name = "get_work_profile"
+    core._begin(name)
+    result = secure_get("/v1/work-profile", {"scope": scope})
+    result["evidence_tool"] = "get_workflow_trace"
+    result["needs_human_interpretation"] = True
+    return core._finish(name, result)
+
+
 mcp = core.mcp
