@@ -50,6 +50,9 @@
   }
 
   function install() {
+    const version=document.querySelector('#versionLabel');
+    if (version) version.textContent='v0.57.0';
+
     const panel=document.querySelector('#panel-evidence .card');
     const table=document.querySelector('#evidenceTableView');
     if (!panel || !table || document.querySelector('#evidenceDeleteControls')) return;
