@@ -23,6 +23,7 @@ def main() -> None:
     # Registration imports: these modules extend, rather than replace, secure_app.
     import server.enterprise_app  # noqa: F401
     import server.evidence_delete_routes  # noqa: F401
+    import server.v0571_polish  # noqa: F401
 
     uvicorn.run(SECURE_APP, host=args.host, port=args.port)
 
