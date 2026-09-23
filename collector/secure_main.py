@@ -30,14 +30,7 @@ def _terminate(process: subprocess.Popen | None) -> None:
 
 
 def run_supervisor(config_path: Path) -> int:
-    """Keep the local API/dashboard alive while capture can pause or stop.
-
-    The actual OS sensors run only in `collector.secure_worker` while capture state
-    is `recording`. Pausing/stopping terminates that child so Accessibility/Input
-    Monitoring hooks are not left running. Resuming/start-new-run launches a fresh
-    worker/session. Persist-time control checks in the worker and API provide a
-    second boundary against races and queued evidence.
-    """
+    """Keep dashboard/API alive while the OS-sensor worker can pause or stop."""
     global _STOP
     _STOP = False
     signal.signal(signal.SIGINT, _stop)
@@ -48,6 +41,7 @@ def run_supervisor(config_path: Path) -> int:
     last_generation = -1
     last_state = ""
     restart_not_before = 0.0
+    cooperative_stop_started = 0.0
 
     try:
         while not _STOP:
@@ -56,9 +50,8 @@ def run_supervisor(config_path: Path) -> int:
             generation = int(control.get("generation") or 1)
 
             if state == "recording":
-                if worker is None or worker.poll() is not None or generation != last_generation:
-                    if worker is not None and worker.poll() is None:
-                        _terminate(worker)
+                cooperative_stop_started = 0.0
+                if worker is None or worker.poll() is not None:
                     now = time.monotonic()
                     if now >= restart_not_before:
                         worker = subprocess.Popen(
@@ -68,10 +61,27 @@ def run_supervisor(config_path: Path) -> int:
                         )
                         last_generation = generation
                         restart_not_before = now + 1.0
+                elif generation != last_generation:
+                    # The worker's own control monitor sees this generation change
+                    # and exits through collector.main's clean shutdown path.
+                    if cooperative_stop_started <= 0:
+                        cooperative_stop_started = time.monotonic()
+                    elif time.monotonic() - cooperative_stop_started > 5.0:
+                        _terminate(worker)
+                        worker = None
             else:
                 if worker is not None and worker.poll() is None:
-                    _terminate(worker)
-                worker = None
+                    # Do not hard-kill immediately. secure_worker notices the
+                    # capture state within ~100 ms and sets collector.main.STOP so
+                    # focus span/outbox cleanup is identical on macOS/Windows/Linux.
+                    if cooperative_stop_started <= 0:
+                        cooperative_stop_started = time.monotonic()
+                    elif time.monotonic() - cooperative_stop_started > 5.0:
+                        _terminate(worker)
+                        worker = None
+                else:
+                    worker = None
+                    cooperative_stop_started = 0.0
 
             if state != last_state:
                 print(f"OpenWorkGraph capture state: {state}")
