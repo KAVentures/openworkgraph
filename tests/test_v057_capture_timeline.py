@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from shared import capture_control
@@ -53,10 +51,10 @@ def test_stop_and_start_new_run_keep_old_stop_interval_tombstoned(tmp_path, monk
 
 def test_authenticated_local_capture_routes_suppress_paused_and_late_browser_evidence(tmp_path):
     code = r'''
-import os
 from fastapi.testclient import TestClient
 from server.local_auth import ensure_api_token
 from server.enterprise_app import app
+from server import main as main_module
 
 headers={"Authorization": f"Bearer {ensure_api_token()}"}
 base={
@@ -85,20 +83,19 @@ with TestClient(app) as client:
     r2=client.post('/v1/events',headers=headers,json={'events':[desktop]})
     assert r2.status_code==200 and r2.json()['inserted']==0, r2.text
 
-    browser={
-      'event_id':'paused-browser','observed_at':during,'sensor_id':'browser:test','sensor_version':'',
-      'browser_session_id':'b1','work_session_id':'s1','action':'click',
-      'page':{'hostname':'example.test','pathname':'/work','title':'Work'},
-      'target':{'tag':'button','role':'button','label':'Save'},'metadata':{}
-    }
-    r3=client.post('/v1/browser-events',headers=headers,json=browser)
-    assert r3.status_code==200 and r3.json()['inserted']==0, r3.text
+    browser=main_module.BrowserEvent(
+      event_id='paused-browser',observed_at=during,sensor_id='browser:test',sensor_version='',
+      browser_session_id='b1',work_session_id='s1',action='click',
+      page=main_module.BrowserPage(hostname='example.test',pathname='/work',title='Work'),
+      target=main_module.BrowserTarget(tag='button',role='button',label='Save'),metadata={}
+    )
+    assert main_module.browser_event(browser)['inserted']==0
 
     resumed=client.post('/v1/capture/resume',headers=headers)
     assert resumed.status_code==200 and resumed.json()['state']=='recording', resumed.text
-    # A browser event from the old paused timestamp stays suppressed even after resume.
-    r4=client.post('/v1/browser-events',headers=headers,json={**browser,'event_id':'late-browser'})
-    assert r4.status_code==200 and r4.json()['inserted']==0, r4.text
+    # Late delivery from the old paused interval stays suppressed after resume.
+    late=browser.model_copy(update={'event_id':'late-browser'})
+    assert main_module.browser_event(late)['inserted']==0
 
     stopped=client.post('/v1/capture/stop',headers=headers)
     assert stopped.status_code==200 and stopped.json()['state']=='stopped', stopped.text
@@ -119,7 +116,6 @@ with TestClient(app) as client:
 
 def test_demo_timeline_and_pattern_endpoints_reuse_existing_inference(tmp_path):
     code = r'''
-import os
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from demo_data import build_demo_events
