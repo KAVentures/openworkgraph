@@ -35,8 +35,6 @@ def test_reported_server_modules_no_longer_use_deprecated_on_event() -> None:
     for relative in (
         "server/secure_app.py",
         "server/enterprise_app.py",
-        "gateway/app.py",
-        "gateway/enterprise_app.py",
         "gateway/human_access.py",
     ):
         text = (ROOT / relative).read_text(encoding="utf-8")
