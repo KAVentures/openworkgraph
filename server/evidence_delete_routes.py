@@ -3,7 +3,8 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from collector.outbox import EventOutbox
@@ -13,7 +14,7 @@ from shared.evidence_deletion import add_tombstone, audit_deletion, normalize_ra
 from . import analytics
 from .db import DATA_DIR
 from .evidence_delete import delete_database_range, remove_local_screenshots, rewrite_jsonl_range
-from .main import CONFIG_PATH
+from .main import CONFIG_PATH, ROOT
 from .secure_app import app
 
 _DELETE_LOCK = threading.RLock()
@@ -115,3 +116,33 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
                 "automatically recalled."
             ),
         }
+
+
+@app.get("/evidence-delete.js")
+def evidence_delete_script() -> Response:
+    path = ROOT / "dashboard" / "evidence_delete.js"
+    return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@app.middleware("http")
+async def inject_evidence_delete_controls(request: Request, call_next):
+    response = await call_next(request)
+    if request.method.upper() != "GET" or request.url.path != "/" or response.status_code != 200:
+        return response
+    if "text/html" not in str(response.headers.get("content-type") or ""):
+        return response
+    try:
+        if hasattr(response, "body_iterator"):
+            chunks = [chunk async for chunk in response.body_iterator]
+            body = b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8") for chunk in chunks)
+        else:
+            body = bytes(getattr(response, "body", b""))
+        text = body.decode("utf-8")
+    except Exception:
+        return response
+    marker = '<script src="/evidence-delete.js"></script>'
+    if marker not in text:
+        text = text.replace("</body>", marker + "\n</body>")
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return HTMLResponse(text, status_code=response.status_code, headers=headers)
