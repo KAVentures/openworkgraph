@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .evidence_deletion import prepare_recordable_event as prepare_not_deleted
+
 _LOCK = threading.RLock()
 _MAX_INTERVALS = 500
 _VALID_STATES = {"recording", "paused", "stopped"}
@@ -188,12 +190,16 @@ def timestamp_is_skipped(observed_at: str | None, *, state: dict[str, Any] | Non
 
 
 def prepare_recordable_event(event: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Drop events inside skip intervals and clip spans at the first skip boundary.
+    """Apply permanent deletion tombstones, then capture pause/stop boundaries.
 
-    Clipping protects against a collector process that is shutting down just after
-    the user presses Pause/Stop: the flushed focus span may finish after the
-    control boundary, but no duration after that boundary is persisted.
+    Deleted time ranges are checked first so late queued evidence cannot recreate
+    locally deleted work. Capture-state clipping then protects against a collector
+    process that is shutting down just after Pause/Stop.
     """
+    deletion_safe = prepare_not_deleted(event)
+    if deletion_safe is None:
+        return None
+    event = deletion_safe
     value = state or read_state()
     start = _parse(str(event.get("observed_at") or ""))
     if start is None:

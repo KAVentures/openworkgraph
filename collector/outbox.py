@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sensitive_identifiers import sanitize_event_identifiers
+from shared.evidence_deletion import event_overlaps_range
 
 
 class EventOutbox:
@@ -91,6 +92,29 @@ class EventOutbox:
         placeholders = ",".join("?" for _ in ids)
         with self._lock, self._connect() as conn:
             conn.execute(f"DELETE FROM pending_events WHERE event_id IN ({placeholders})", tuple(ids))
+
+    def prune_range(self, since: str, until: str) -> int:
+        """Remove queued evidence that overlaps a durable local deletion range."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT event_id, payload_json FROM pending_events").fetchall()
+            delete_ids: list[str] = []
+            for row in rows:
+                try:
+                    event = json.loads(row["payload_json"])
+                except Exception:
+                    continue
+                if isinstance(event, dict) and event_overlaps_range(event, since, until):
+                    delete_ids.append(str(row["event_id"]))
+            if not delete_ids:
+                return 0
+            for offset in range(0, len(delete_ids), 500):
+                chunk = delete_ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                conn.execute(
+                    f"DELETE FROM pending_events WHERE event_id IN ({placeholders})",
+                    tuple(chunk),
+                )
+            return len(delete_ids)
 
     def mark_failed(self, event_ids: list[str], error: str) -> None:
         ids = [str(x) for x in event_ids if x]
