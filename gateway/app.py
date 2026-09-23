@@ -12,6 +12,7 @@ from shared.time_utils import normalize_timestamp
 from .auth import ALLOWED_INTEGRATION_SCOPES, DEVICE_SCOPES, Principal, env_token_matches, issue_token, normalize_scopes
 from .db import GatewayDB
 from .enrollment import active_device_exists, consume_enrollment_grant, create_enrollment_grant, init_enrollment_schema
+from .lifecycle import get_retention_policy, init_lifecycle_schema, set_retention_policy
 from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .settings import GatewaySettings
@@ -38,6 +39,10 @@ class IntegrationTokenRequest(BaseModel):
 
 class PolicyRequest(BaseModel):
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetentionPolicyRequest(BaseModel):
+    retention_days: int | None = Field(default=None, ge=1, le=36500)
 
 
 class EvidenceBatch(BaseModel):
@@ -80,7 +85,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     db = db or GatewayDB(settings.database_url)
     app = FastAPI(
         title="OpenWorkGraph Gateway",
-        version="0.53.1",
+        version="0.54.0",
         description="Self-hosted organization evidence gateway. Raw privacy-hardened evidence is canonical; inferred tasks are not treated as ground truth.",
     )
     app.state.settings = settings
@@ -90,6 +95,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     def startup() -> None:
         db.init()
         init_enrollment_schema(db)
+        init_lifecycle_schema(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -136,7 +142,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         return {
             "status": "ok",
             "server": "OpenWorkGraph Gateway",
-            "version": "0.53.1",
+            "version": "0.54.0",
             "storage": "postgresql" if db.is_postgres else "sqlite-development",
             "self_hosted": True,
         }
@@ -153,6 +159,13 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "max_batch_bytes": settings.max_batch_bytes,
             "preferred_enrollment": "single_use_organization_bound_grants",
             "legacy_shared_enrollment_supported": True,
+            "evidence_lifecycle": {
+                "organization_retention": "opt_in_default_disabled",
+                "canonical_trace_retention_enforced": True,
+                "current_context_retention_enforced": True,
+                "physical_cleanup": "explicit_or_scheduled",
+                "manual_purge_cli": True,
+            },
         }
 
     @app.post("/v1/admin/enrollment-codes")
@@ -322,6 +335,39 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         db.audit(organization_id=organization_id, principal_id="gateway-admin", action="policy.updated", details={"policy": policy})
         return {"organization_id": organization_id, "policy": policy}
 
+    @app.get("/v1/admin/retention/{organization_id}")
+    def retention_policy(organization_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(authorization)
+        return get_retention_policy(db, organization_id)
+
+    @app.put("/v1/admin/retention/{organization_id}")
+    def update_retention_policy(
+        organization_id: str,
+        request: RetentionPolicyRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if not organization_id.strip() or len(organization_id.strip()) > 512:
+            raise HTTPException(status_code=400, detail="organization_id must be 1-512 characters")
+        previous = get_retention_policy(db, organization_id)
+        try:
+            policy = set_retention_policy(db, organization_id, request.retention_days)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.audit(
+            organization_id=organization_id,
+            principal_id="gateway-admin",
+            action="lifecycle.retention.updated",
+            details={
+                "previous_retention_days": previous.get("retention_days"),
+                "retention_days": policy.get("retention_days"),
+            },
+        )
+        return {
+            **policy,
+            "note": "Retention is opt-in and non-destructive to configure. Use the lifecycle CLI to preview/apply physical cleanup.",
+        }
+
     @app.get("/v1/admin/audit/{organization_id}")
     def audit_log(organization_id: str, limit: int = 100, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
@@ -449,6 +495,16 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         require(p, "context:read")
         actor_id = effective_actor(p, actor_id)
         recent = db.recent_rows(organization_id=p.organization_id, actor_id=actor_id, device_id=device_id, limit=limit)
+        cutoff = get_retention_policy(db, p.organization_id).get("cutoff")
+        if cutoff:
+            retained: list[dict[str, Any]] = []
+            for row in recent:
+                try:
+                    if normalize_timestamp(str(row.get("observed_at") or "")) >= cutoff:
+                        retained.append(row)
+                except ValueError:
+                    continue
+            recent = retained
         rows = [rich_evidence_row(row, include_identity=True) for row in recent]
         db.audit(
             organization_id=p.organization_id,

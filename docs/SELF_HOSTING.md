@@ -109,7 +109,7 @@ python -m connector.control status
 python -m connector.control resume
 ```
 
-In v0.53.1, pause has privacy semantics rather than queue semantics:
+Since v0.53.1, pause has privacy semantics rather than queue semantics:
 
 - evidence captured before the pause can finish synchronizing normally;
 - evidence captured while paused stays in the local canonical database;
@@ -182,6 +182,8 @@ GET  /v1/workflow-trace
 POST /v1/search
 GET  /v1/context/current
 GET  /v1/transfers
+GET  /v1/admin/retention/{organization_id}
+PUT  /v1/admin/retention/{organization_id}
 ```
 
 `/v1/workflow-trace` is the canonical organization evidence interface. Results are chronological, bounded, and cursor-paginated. Each row retains the privacy-hardened event metadata plus its `event_id`, while also exposing useful flat indexes such as page/target, timing, tab context, semantic-action hints, and transfer IDs.
@@ -189,6 +191,29 @@ GET  /v1/transfers
 Invalid cursors and invalid timestamp bounds return a client error instead of an internal-server error. `/v1/transfers` searches transfer-bearing evidence rather than consuming its result limit on unrelated focus/click rows.
 
 OpenWorkGraph does not require a deterministic task label before an AI can inspect this evidence.
+
+## Retention and evidence lifecycle
+
+v0.54 adds **opt-in** organization retention for synchronized Gateway evidence. Existing installations remain unchanged unless an administrator configures a retention period.
+
+Setting retention changes what the Gateway can return immediately, but does not silently delete database rows. Physical cleanup is a separate dry-run-first operation that can be scheduled in customer-controlled infrastructure.
+
+Example:
+
+```bash
+curl -X PUT https://openworkgraph.company.internal/v1/admin/retention/acme \
+  -H 'Authorization: Bearer <admin token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"retention_days":30}'
+
+python -m gateway.lifecycle apply-retention --organization acme
+python -m gateway.lifecycle apply-retention \
+  --organization acme \
+  --execute \
+  --confirm 'APPLY acme'
+```
+
+Retroactive Gateway purge supports organization-scoped time, actor, device, session, and event-type selectors. It never reaches back into the endpoint's local SQLite source of truth. See [Gateway data lifecycle](DATA_LIFECYCLE.md) for the full safety model, purge examples, audit behavior, and backup caveats.
 
 ## Data ownership and storage
 
@@ -199,9 +224,7 @@ In the self-hosted deployment:
 - customer-controlled integrations query the customer's Gateway;
 - no workflow evidence has to transit or be stored in infrastructure operated by OpenWorkGraph/Kinvectum.
 
-The customer is responsible for production database backups, encryption, retention, access controls, TLS, identity-provider integration, and applicable legal/compliance requirements for its deployment.
-
-> Retention/erasure controls are still a separate enterprise-hardening milestone. Do not represent v0.53.1 as providing a complete organization retention or data-subject erasure system.
+The customer is responsible for production database backups, encryption, retention choices, access controls, TLS, identity-provider integration, and applicable legal/compliance requirements for its deployment. Live-row deletion does not by itself remove customer-managed backups, snapshots, replicas, exports, or downstream copies.
 
 ## Development mode
 
@@ -209,4 +232,4 @@ For automated tests and local development the Gateway also supports a SQLite URL
 
 ## Enterprise identity
 
-v0.53.1 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native Entra/Okta/SCIM/MDM provisioning remains a later enterprise layer; it is not required for the core self-hosted data plane.
+v0.54 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native Entra/Okta/SCIM/MDM provisioning remains a later enterprise layer; it is not required for the core self-hosted data plane.

@@ -87,6 +87,9 @@ jobs:
               with urllib.request.urlopen(req, timeout=10) as response:
                   return json.loads(response.read().decode())
 
+          health = request("GET", "/health")
+          assert health["version"] == "0.54.0", health
+
           device = request("POST", "/v1/devices/enroll", {
               "organization_id": "ci-acme",
               "actor_id": "ci-alice",
@@ -121,6 +124,22 @@ jobs:
               "label": "CI integration",
               "scopes": ["evidence:read", "context:read", "transfers:read"],
           }, "test-admin-token")
+
+          retention = request(
+              "PUT",
+              "/v1/admin/retention/ci-acme",
+              {"retention_days": 365},
+              "test-admin-token",
+          )
+          assert retention["enabled"] is True, retention
+          assert retention["retention_days"] == 365, retention
+          retention_readback = request(
+              "GET",
+              "/v1/admin/retention/ci-acme",
+              token="test-admin-token",
+          )
+          assert retention_readback["retention_days"] == 365, retention_readback
+
           trace = request("GET", "/v1/workflow-trace?limit=10", token=service["token"])
           assert trace["returned"] == 1, trace
           row = trace["rows"][0]
@@ -130,7 +149,7 @@ jobs:
           assert row["metadata"]["tab_context_id"] == "runtime:ci-tab", row
           assert row["clipboard_transfer_id"] == "ci-transfer", row
           assert trace["derived_task_inference_authoritative"] is False
-          print("Gateway/PostgreSQL integration test passed")
+          print("Gateway/PostgreSQL integration + lifecycle test passed")
           PY
       - name: Show Gateway logs on failure
         if: failure()

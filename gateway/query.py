@@ -8,6 +8,7 @@ from typing import Any
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
 from shared.time_utils import normalize_optional_timestamp, normalize_timestamp
 from .db import GatewayDB
+from .lifecycle import effective_since
 
 
 def _encode_cursor(value: dict[str, Any]) -> str:
@@ -80,6 +81,12 @@ def workflow_trace(
     if state:
         since = normalize_optional_timestamp(since)
         until = normalize_optional_timestamp(until)
+
+    # Retention is a server-side visibility floor, not caller-controlled state.
+    # Re-apply it on every page so a policy tightened during pagination cannot be
+    # bypassed by an older cursor. With retention disabled this is a no-op and
+    # preserves the v0.53.1 query contract exactly.
+    since = effective_since(db, organization_id, since)
 
     rows = db.trace_rows(
         organization_id=organization_id,
