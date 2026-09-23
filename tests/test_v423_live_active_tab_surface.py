@@ -124,7 +124,9 @@ def test_existing_resolved_surface_is_never_overwritten():
     assert result["recent_evidence"][0]["browser_hostname"] == "mail.google.com"
 
 
-def test_dashboard_prefers_work_surface_suffix():
+def test_dashboard_prefers_resolved_work_surface_over_browser_container():
     root = Path(__file__).resolve().parents[1]
     html = (root / "dashboard" / "index.html").read_text(encoding="utf-8")
-    assert "const src=x.work_surface||(x.source==='browser'?'browser':'desktop');" in html
+    assert "x.work_surface||x.hostname||x.app" in html
+    assert "function surfaceName(value)" in html
+    assert "Google Chrome" in html

@@ -63,10 +63,12 @@ def test_chatgpt_context_persists_during_long_current_run_dwell(monkeypatch):
     assert desktop["browser_context_age_seconds"] == 300.0
 
 
-def test_dashboard_uses_resolved_surface_instead_of_desktop_suffix():
+def test_dashboard_uses_resolved_surface_in_unified_evidence_view():
     html = (Path(__file__).parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
-    assert "const src=x.work_surface||(x.source==='browser'?'browser':'desktop');" in html
-    assert "${esc(page)} · ${esc(src)}" in html
+    assert "x.work_surface||x.hostname||x.app" in html
+    assert "surfaceName(x.work_surface||x.hostname||x.app)" in html
+    assert "Google Chrome" in html
+    assert "id=\"evidenceTable\"" in html
 
 
 def test_long_lived_context_does_not_relabel_different_chrome_tab(monkeypatch):
@@ -113,8 +115,6 @@ def test_all_history_summary_keeps_legacy_short_window(monkeypatch):
     ]
     monkeypatch.setattr(analytics, "_event_rows", lambda limit=10000, since=None: sample)
 
-    # No `since` means this is not a current-run view. Without explicit session
-    # identity on the summary rows, do not carry browser identity for minutes.
     out = analytics.summary()
     desktop = next(item for item in out["recent_evidence"] if item["source"] == "desktop")
 

@@ -75,7 +75,7 @@ def test_mcp_is_compact_rich_evidence_first_and_keeps_security_boundary():
     assert "openworkgraph://ai-guide" in source
     assert "AI_DATA_DICTIONARY_MD" in source
     assert "rich_ai_context_compact" in source
-    assert "raw_local_evidence" not in source  # no duplicated raw bundle in default tool output
+    assert "raw_local_evidence" not in source
     assert "protect_observed_payload" in source
     assert "mcp_bearer_matches" in _read("mcp_server/http_app.py")
     secure = _read("mcp_server/secure_runtime.py")
@@ -84,24 +84,25 @@ def test_mcp_is_compact_rich_evidence_first_and_keeps_security_boundary():
     assert '"status": "denied"' in secure
 
 
-def test_dashboard_keeps_existing_observer_sections_and_adds_top_actions():
+def test_dashboard_data_first_layout_keeps_required_observer_controls():
     html = _read("dashboard/index.html")
     for element_id in (
-        "events", "engaged", "idle", "keys", "interactions", "browserActions",
-        "taskCandidates", "apps", "appsTable", "transitionsTable", "taskTable",
-        "patternTable", "browserTable", "seqTable", "interactionTable",
-        "includeRaw", "privacyResetStatus",
+        "engaged", "idle", "keys", "surfaceCount", "completedRuns",
+        "evidenceTable", "transitionsTable", "seqTable", "patternList",
+        "includeRaw", "privacyResetStatus", "aiAccessPanel", "gatewayPanel",
     ):
         assert f'id="{element_id}"' in html
+    for panel in ("overview", "evidence", "connect", "organization", "export"):
+        assert f'data-panel="{panel}"' in html
     assert "Reset learned person aliases" in html
-    assert "Export captured session" in html
-    assert 'id="includeRawTop"' in html
-    assert "Connect your AI" in html
-    assert "Quick help" in html
+    assert "Export this run" in html
+    assert 'id="includeRawTop"' not in html
+    assert "Connect AI" in html
     assert "Add to Cursor" in html
     assert "Connect Claude" in html
     assert "Set up ChatGPT" in html
     assert "Other MCP app" in html
+    assert "See how work actually happens" not in html
 
 
 def test_cursor_and_claude_connections_use_stdio_and_chatgpt_http_is_on_demand():
@@ -114,13 +115,16 @@ def test_cursor_and_claude_connections_use_stdio_and_chatgpt_http_is_on_demand()
     assert "httpMcp('start')" in secure
     assert "Secure MCP Tunnel" in secure
     assert "help.openai.com/en/articles/12584461" in secure
-    assert "support.claude.com/en/articles/10949351" in html
+    assert "support.claude.com/en/articles/10949351" in secure
     assert "AI access" in secure
     assert "Recent AI activity" in secure
+    assert "Connect Claude" in html
 
 
-def test_raw_export_toggle_is_synchronized_top_and_bottom():
+def test_raw_export_toggle_is_single_source_in_export_tab():
     html = _read("dashboard/index.html")
     assert "function syncRawToggle(source)" in html
     assert "function rawEnabled()" in html
     assert "include_raw=${raw}" in html
+    assert html.count('id="includeRaw"') == 1
+    assert 'id="includeRawTop"' not in html
