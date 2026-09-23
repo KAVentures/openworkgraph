@@ -5,7 +5,7 @@ OpenWorkGraph Gateway supports two deliberately separate access models:
 1. **Machine/service access** — existing device and integration tokens. These remain backward-compatible.
 2. **Human access** — optional OIDC/SSO tokens whose effective permissions are derived from verified identity claims and configured IdP group mappings.
 
-OIDC is disabled by default. Leaving the OIDC environment variables empty preserves the v0.55 service-token behavior.
+OIDC is disabled by default. Leaving the OIDC environment variables empty preserves the existing service-token behavior.
 
 ## Required OIDC configuration
 
@@ -73,25 +73,32 @@ An actor must be assigned to `engineering` before a principal with `team:enginee
 
 ## Aggregate-only access
 
-`GET /v1/human/aggregate/patterns` returns deterministic aggregate patterns grouped by event type and application.
+`GET /v1/human/aggregate/patterns` returns privacy-reduced organization patterns grouped by event type and application.
+
+To reduce differencing attacks, v0.56.1 no longer evaluates arbitrary timestamp windows literally. Requested `since`/`until` bounds are reduced to **complete UTC ISO weeks fully contained inside the requested interval**. The current partial week is never returned. Organization retention is applied before the window is snapped, so bucketing can never broaden retention.
 
 Privacy properties:
 
 - actor IDs are never returned;
+- exact cohort size is not returned;
 - the entire response is suppressed when fewer than `k` distinct actors contributed;
 - every returned pattern must itself have contributions from at least `k` actors;
 - the configured minimum cannot be lowered by a caller;
-- organization retention policy still applies.
+- event/actor counts are coarsened and durations are rounded;
+- organization retention policy still applies;
+- responses report their effective bucketed time boundaries so consumers do not mistake them for the exact requested timestamps.
 
-`OWG_GATEWAY_AGGREGATE_MIN_ACTORS` defaults to `5` and cannot be configured below `3`.
+`OWG_GATEWAY_AGGREGATE_MIN_ACTORS` defaults to `5` and cannot be configured below `3`. For employee deployments, a higher threshold is preferable where cohort size permits it.
 
-Thresholding reduces disclosure risk. It is not formal differential privacy and OpenWorkGraph does not describe these results as anonymous.
+Thresholding, fixed windows and rounding reduce disclosure risk. They are not formal differential privacy and OpenWorkGraph does not describe these results as anonymous. Repeated-query attacks are still part of the deployment threat model; especially sensitive deployments should additionally restrict who receives `aggregate:read` and consider a query budget or differential-privacy layer.
 
 ## Pseudonymous access
 
 `GET /v1/human/pseudonymous/workflow-trace` requires `pseudonymous:evidence:read` and a stable `OWG_GATEWAY_PSEUDONYM_KEY` of at least 32 characters.
 
 Actor, device and session identifiers are replaced with deterministic organization-scoped HMAC pseudonyms. Rotating the key intentionally changes those pseudonyms.
+
+The endpoint uses the same opaque cursor pagination model as the normal workflow trace. Supply the returned `next_cursor` as `cursor` to retrieve the next page; page boundaries do not expose raw actor/device/session identifiers.
 
 Pseudonymized workflow evidence can still be personal data because application/window/page context may identify a person indirectly. Use the aggregate-only scope when individual traces are unnecessary.
 
@@ -101,6 +108,6 @@ Human reads are written to the Gateway audit log. The raw OIDC subject is not st
 
 ## Service-token compatibility
 
-Existing integration-token endpoints and scopes are unchanged in v0.56. Human OIDC JWTs are accepted only by `/v1/human/*` routes. Existing Gateway integration tokens continue to use the existing machine REST/MCP routes.
+Existing integration-token endpoints and scopes are unchanged. Human OIDC JWTs are accepted only by `/v1/human/*` routes. Existing Gateway integration tokens continue to use the existing machine REST/MCP routes.
 
 For new enterprise deployments, prefer human OIDC for interactive access and narrowly scoped service tokens for machine integrations. Avoid issuing broad organization-wide integration tokens unless the integration genuinely needs individual-level evidence.
