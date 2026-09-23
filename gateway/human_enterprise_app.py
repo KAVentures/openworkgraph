@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 
 from .auth import env_token_matches
 from .enterprise_app import _take_get_endpoint, create_enterprise_app
@@ -53,6 +53,7 @@ def create_human_enterprise_app(
 
     previous_health = _take_get_endpoint(app, "/health")
     previous_capabilities = _take_get_endpoint(app, "/v1/capabilities")
+    previous_runtime = _take_get_endpoint(app, "/v1/admin/runtime")
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -80,6 +81,21 @@ def create_human_enterprise_app(
                 "separate_explicit_scope": True,
                 "claimed_anonymous": False,
             },
+        }
+        return payload
+
+    @app.get("/v1/admin/runtime")
+    def runtime(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(authorization)
+        payload = dict(previous_runtime(authorization) if previous_runtime else {})
+        payload["version"] = GATEWAY_VERSION
+        payload["human_oidc"] = {
+            "enabled": bool(human_access.enabled),
+            "aggregate_min_actors": human_access.aggregate_min_actors,
+            "pseudonymous_scope_configured": any(
+                "pseudonymous:evidence:read" in scopes
+                for scopes in (human_access.group_scope_map or {}).values()
+            ),
         }
         return payload
 
