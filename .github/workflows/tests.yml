@@ -101,11 +101,12 @@ jobs:
           assert capabilities["human_access"]["aggregate_read"]["actor_identifiers_returned"] is False, capabilities
 
           runtime = request("GET", "/v1/admin/runtime", token="test-admin-token")
-          assert runtime["version"] == "0.55.0", runtime
+          assert runtime["version"] == "0.56.0", runtime
           assert runtime["database_pooling"]["enabled"] is True, runtime
           assert runtime["database_pooling"]["min_size"] == 1, runtime
           assert runtime["database_pooling"]["max_size"] == 4, runtime
           assert runtime["secrets_exposed"] is False, runtime
+          assert runtime["human_oidc"]["enabled"] is False, runtime
 
           device = request("POST", "/v1/devices/enroll", {
               "organization_id": "ci-acme",
