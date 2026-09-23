@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from shared.lifespan import extend_lifespan
 from .local_auth import (
     bearer_matches,
     browser_server_proof,
@@ -277,11 +278,9 @@ async def local_capability_guard(request: Request, call_next):
     path = request.url.path
     origin = str(request.headers.get("origin") or "")
 
-    # This check must run before any route handled directly by this middleware.
     if not _request_host_allowed(request):
         return _json_error("untrusted Host header", 400)
 
-    # The shipped app does not need FastAPI's interactive schema/docs surface.
     if path in BLOCKED_DEV_PATHS or path.startswith("/docs"):
         return _json_error("not found", 404)
 
@@ -467,13 +466,15 @@ async def change_mcp_http(request: Request):
     return _json_error("action must be start, stop, or status", 400)
 
 
-@app.on_event("shutdown")
 def stop_optional_http_mcp() -> None:
     try:
         from .mcp_http_control import stop_http_mcp
         stop_http_mcp()
     except Exception:
         pass
+
+
+extend_lifespan(app, shutdown=stop_optional_http_mcp)
 
 
 __all__ = ["app"]
