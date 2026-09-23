@@ -154,8 +154,6 @@
     removeDeveloperNotes();
     polishTimeline();
     restyleVisibleSurfaces();
-    const version=document.querySelector('#versionLabel');
-    if (version && /v0\.56\.1|v0\.57\.0/.test(version.textContent||'')) version.textContent='v0.57.1';
   }
 
   const observer=new MutationObserver(()=>polish());
