@@ -61,6 +61,31 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
     parts = [surface, action, title, resource_locator, target_label]
     context_text = " | ".join(x for x in parts if x)
 
+    context_metadata: dict[str, Any] = {
+        "event_type": str(e.get("event_type") or "unknown"),
+        "duration_seconds": float(e.get("duration_seconds") or 0),
+        "activity": dict(meta.get("activity") or {}) if isinstance(meta.get("activity"), dict) else {},
+        "privacy": {
+            "typed_values": False,
+            "clipboard_contents": False,
+            "url_query": False,
+            "url_fragment": False,
+            "raw_evidence_separate": True,
+        },
+    }
+    # Clipboard linkage is structural metadata only. These identifiers are
+    # random/event IDs produced by OWG; no clipboard payload or selected text is
+    # read or copied into the context layer.
+    if str(e.get("event_type") or "").startswith("clipboard_"):
+        for key in (
+            "clipboard_transfer_id",
+            "linked_copy_event_id",
+            "clipboard_link_age_seconds",
+            "clipboard_contents_captured",
+        ):
+            if key in meta:
+                context_metadata[key] = meta[key]
+
     return {
         "event_id": str(e.get("event_id") or ""),
         "observed_at": str(e.get("observed_at") or ""),
@@ -77,16 +102,5 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
         "resource_locator": resource_locator,
         "target_label": target_label,
         "context_text": context_text,
-        "metadata": {
-            "event_type": str(e.get("event_type") or "unknown"),
-            "duration_seconds": float(e.get("duration_seconds") or 0),
-            "activity": dict(meta.get("activity") or {}) if isinstance(meta.get("activity"), dict) else {},
-            "privacy": {
-                "typed_values": False,
-                "clipboard_contents": False,
-                "url_query": False,
-                "url_fragment": False,
-                "raw_evidence_separate": True,
-            },
-        },
+        "metadata": context_metadata,
     }
