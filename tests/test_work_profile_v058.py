@@ -40,7 +40,7 @@ def _event(*, at, app, event_type="focus_span", duration=120, metadata=None, ses
 
 def test_work_profile_derives_existing_evidence_without_new_sensor_data(monkeypatch):
     from server.db import init_db, insert_events
-    from server.work_profile import add_self_tag, compute_work_profile
+    from server.work_profile_service import add_self_tag, compute_work_profile
 
     init_db()
     base = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -55,11 +55,10 @@ def test_work_profile_derives_existing_evidence_without_new_sensor_data(monkeypa
         _event(at=base + timedelta(seconds=120), app="ChatGPT", duration=180),
         _event(
             at=base + timedelta(seconds=200), app="ChatGPT", event_type="clipboard_paste", duration=0,
-            metadata={"source":"desktop","action":"paste","clipboard_transfer_id":transfer_id,"linked_copy_event_id":events_copy_id if False else "copy-link","clipboard_contents_captured":False,"privacy":{"key_identities":False,"typed_values":False,"clipboard_contents":False}},
+            metadata={"source":"desktop","action":"paste","clipboard_transfer_id":transfer_id,"clipboard_contents_captured":False,"privacy":{"key_identities":False,"typed_values":False,"clipboard_contents":False}},
         ),
         _event(at=base + timedelta(seconds=300), app="Google Sheets", duration=160),
     ]
-    # Link the paste to the actual copy event while preserving the same transfer id.
     events[3]["metadata"]["linked_copy_event_id"] = events[1]["event_id"]
     assert insert_events(events) == len(events)
 
@@ -83,6 +82,15 @@ def test_work_profile_derives_existing_evidence_without_new_sensor_data(monkeypa
     assert transfer["example_transfer_ids"] == [transfer_id]
     assert any(item["surface"] == "ChatGPT" and item["engaged_seconds"] > 0 for item in profile["ai_tool_usage"])
     assert profile["self_tags"][0]["category"] == "Blocked"
+
+    # The context layer may retain only OWG-generated structural clipboard links,
+    # never the clipboard payload itself.
+    from server.db import connect
+    with connect() as conn:
+        context_meta = json.loads(conn.execute("SELECT metadata_json FROM context_events WHERE event_id = ?", (events[1]["event_id"],)).fetchone()[0])
+    assert context_meta["clipboard_transfer_id"] == transfer_id
+    assert context_meta["clipboard_contents_captured"] is False
+    assert "clipboard_contents" not in context_meta
 
 
 def test_work_profile_is_in_json_csv_and_xlsx_exports(monkeypatch):
