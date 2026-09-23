@@ -6,11 +6,12 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from shared.evidence import rich_evidence_row
 from shared.time_utils import normalize_timestamp
 from .db import GatewayDB
 from .lifecycle import effective_since
@@ -34,6 +35,10 @@ CREATE TABLE IF NOT EXISTS gateway_actor_teams (
 CREATE INDEX IF NOT EXISTS idx_gateway_actor_teams_team ON gateway_actor_teams(organization_id, team_id, actor_id);
 """
 _POSTGRES_SCHEMA = _SQLITE_SCHEMA
+
+
+class TeamAssignment(BaseModel):
+    teams: list[str] = Field(default_factory=list)
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -141,11 +146,7 @@ class HumanPrincipal:
 
 
 class OIDCVerifier:
-    """Verify externally issued OIDC JWTs without changing service-token auth.
-
-    PyJWT is imported lazily so local-only and SQLite development installs do not
-    need the optional Gateway identity dependency unless OIDC is configured.
-    """
+    """Verify OIDC JWTs without changing the existing service-token model."""
 
     def __init__(self, settings: HumanAccessSettings) -> None:
         self.settings = settings
@@ -199,9 +200,7 @@ def principal_from_claims(settings: HumanAccessSettings, payload: dict[str, Any]
         raise ValueError("OIDC token must resolve subject, organization and actor identity")
     if max(len(subject), len(organization_id), len(actor_id)) > 512:
         raise ValueError("OIDC identity claims exceed 512 characters")
-    scopes: set[str] = set()
-    if settings.self_read_enabled:
-        scopes.add("self:evidence:read")
+    scopes: set[str] = {"self:evidence:read"} if settings.self_read_enabled else set()
     for group in groups:
         scopes.update((settings.group_scope_map or {}).get(group, frozenset()))
     return HumanPrincipal(
@@ -232,13 +231,14 @@ def set_actor_teams(db: GatewayDB, organization_id: str, actor_id: str, teams: l
     invalid = [team for team in normalized if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", team)]
     if invalid:
         raise ValueError(f"invalid team identifiers: {invalid}")
+    now = normalize_timestamp(datetime.now(timezone.utc).isoformat())
     with db.connect() as conn:
         db._execute(conn, "DELETE FROM gateway_actor_teams WHERE organization_id = ? AND actor_id = ?", (org, actor))
         for team in normalized:
             db._execute(
                 conn,
                 "INSERT INTO gateway_actor_teams(organization_id, actor_id, team_id, updated_at) VALUES (?, ?, ?, ?)",
-                (org, actor, team, normalize_timestamp(__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat())),
+                (org, actor, team, now),
             )
     return normalized
 
@@ -295,11 +295,7 @@ def _aggregate_patterns(
         params.append(normalize_timestamp(until))
     where = " AND ".join(clauses)
     with db.connect() as conn:
-        cur = db._execute(
-            conn,
-            f"SELECT COUNT(DISTINCT actor_id) AS actors FROM evidence_events WHERE {where}",
-            tuple(params),
-        )
+        cur = db._execute(conn, f"SELECT COUNT(DISTINCT actor_id) AS actors FROM evidence_events WHERE {where}", tuple(params))
         cohort_row = cur.fetchone()
         cohort = int(cohort_row[0] if cohort_row else 0)
         if cohort < min_actors:
@@ -309,6 +305,7 @@ def _aggregate_patterns(
                 "cohort_actor_count": cohort,
                 "suppressed": True,
                 "patterns": [],
+                "actor_identifiers_returned": False,
             }
         params2 = list(params) + [min_actors, max(1, min(int(limit), 200))]
         cur2 = db._execute(
@@ -327,13 +324,12 @@ def _aggregate_patterns(
         )
         rows = cur2.fetchall()
         columns = [d[0] for d in cur2.description] if cur2.description else None
-    patterns = [db._row(row, columns) for row in rows]
     return {
         "organization_id": organization_id,
         "minimum_actors": min_actors,
         "cohort_actor_count": cohort,
         "suppressed": False,
-        "patterns": patterns,
+        "patterns": [db._row(row, columns) for row in rows],
         "actor_identifiers_returned": False,
         "note": "Thresholded aggregation reduces disclosure risk but is not a claim of anonymization.",
     }
@@ -364,13 +360,11 @@ def install_human_access(
         try:
             claims = app.state.human_oidc_verifier.verify(token)
             return principal_from_claims(settings, claims)
-        except HTTPException:
-            raise
         except Exception as exc:
             raise HTTPException(status_code=401, detail="valid OIDC bearer token required") from exc
 
     @app.get("/v1/human/me")
-    def human_me(p: HumanPrincipal = __import__("fastapi").Depends(human)) -> dict[str, Any]:
+    def human_me(p: HumanPrincipal = Depends(human)) -> dict[str, Any]:
         return {
             "organization_id": p.organization_id,
             "actor_id": p.actor_id,
@@ -384,12 +378,12 @@ def install_human_access(
     def admin_set_actor_teams(
         organization_id: str,
         actor_id: str,
-        teams: list[str],
+        request: TeamAssignment,
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
         try:
-            values = set_actor_teams(db, organization_id, actor_id, teams)
+            values = set_actor_teams(db, organization_id, actor_id, request.teams)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.audit(
@@ -407,17 +401,22 @@ def install_human_access(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        values = sorted(actor_teams(db, organization_id, actor_id))
-        return {"organization_id": organization_id, "actor_id": actor_id, "teams": values}
+        return {
+            "organization_id": organization_id,
+            "actor_id": actor_id,
+            "teams": sorted(actor_teams(db, organization_id, actor_id)),
+        }
 
-    @app.get("/v1/human/workflow-trace")
-    def human_trace(
-        actor_id: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
-        cursor: str | None = None,
-        limit: int = Query(default=200, ge=1, le=1000),
-        p: HumanPrincipal = __import__("fastapi").Depends(human),
+    def actor_trace(
+        p: HumanPrincipal,
+        *,
+        actor_id: str | None,
+        since: str | None,
+        until: str | None,
+        cursor: str | None,
+        query: str | None,
+        limit: int,
+        action: str,
     ) -> dict[str, Any]:
         try:
             target, mode = _authorize_actor(db, p, actor_id)
@@ -428,6 +427,7 @@ def install_human_access(
                 since=since,
                 until=until,
                 cursor=cursor,
+                query=query,
                 limit=limit,
             )
         except PermissionError as exc:
@@ -437,18 +437,59 @@ def install_human_access(
         db.audit(
             organization_id=p.organization_id,
             principal_id=p.audit_id,
-            action="human_access.trace.read",
+            action=action,
             details={"actor_id": target, "access_mode": mode, "returned": payload.get("returned", 0)},
         )
         payload["human_access_mode"] = mode
         return payload
 
+    @app.get("/v1/human/workflow-trace")
+    def human_trace(
+        actor_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(default=200, ge=1, le=500),
+        p: HumanPrincipal = Depends(human),
+    ) -> dict[str, Any]:
+        return actor_trace(
+            p,
+            actor_id=actor_id,
+            since=since,
+            until=until,
+            cursor=cursor,
+            query=None,
+            limit=limit,
+            action="human_access.trace.read",
+        )
+
+    @app.get("/v1/human/search")
+    def human_search(
+        query: str = Query(min_length=1, max_length=500),
+        actor_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+        p: HumanPrincipal = Depends(human),
+    ) -> dict[str, Any]:
+        return actor_trace(
+            p,
+            actor_id=actor_id,
+            since=since,
+            until=until,
+            cursor=cursor,
+            query=query,
+            limit=limit,
+            action="human_access.search.read",
+        )
+
     @app.get("/v1/human/pseudonymous/workflow-trace")
     def pseudonymous_trace(
         since: str | None = None,
         until: str | None = None,
-        limit: int = Query(default=200, ge=1, le=1000),
-        p: HumanPrincipal = __import__("fastapi").Depends(human),
+        limit: int = Query(default=200, ge=1, le=500),
+        p: HumanPrincipal = Depends(human),
     ) -> dict[str, Any]:
         if "pseudonymous:evidence:read" not in p.scopes:
             raise HTTPException(status_code=403, detail="missing required scope: pseudonymous:evidence:read")
@@ -484,7 +525,7 @@ def install_human_access(
         until: str | None = None,
         min_actors: int | None = Query(default=None, ge=3, le=1000),
         limit: int = Query(default=50, ge=1, le=200),
-        p: HumanPrincipal = __import__("fastapi").Depends(human),
+        p: HumanPrincipal = Depends(human),
     ) -> dict[str, Any]:
         if "aggregate:read" not in p.scopes:
             raise HTTPException(status_code=403, detail="missing required scope: aggregate:read")
