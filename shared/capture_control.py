@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -158,7 +159,7 @@ def set_state(action: str, *, at: str | None = None) -> dict[str, Any]:
                         break
             value["state"] = "stopped"
             value["state_changed_at"] = changed
-        else:  # start a new run without restarting the local API
+        else:
             _close_open_interval(value, changed)
             value["state"] = "recording"
             value["run_started_at"] = changed
@@ -186,7 +187,70 @@ def timestamp_is_skipped(observed_at: str | None, *, state: dict[str, Any] | Non
     return False
 
 
+def prepare_recordable_event(event: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Drop events inside skip intervals and clip spans at the first skip boundary.
+
+    Clipping protects against a collector process that is shutting down just after
+    the user presses Pause/Stop: the flushed focus span may finish after the
+    control boundary, but no duration after that boundary is persisted.
+    """
+    value = state or read_state()
+    start = _parse(str(event.get("observed_at") or ""))
+    if start is None:
+        return dict(event)
+    if timestamp_is_skipped(str(event.get("observed_at") or ""), state=value):
+        return None
+
+    duration = max(0.0, float(event.get("duration_seconds") or 0.0))
+    if duration <= 0:
+        return dict(event)
+    end = start + timedelta(seconds=duration)
+    first_boundary: datetime | None = None
+    for interval in value.get("skip_intervals") or []:
+        if not isinstance(interval, dict):
+            continue
+        boundary = _parse(str(interval.get("since") or ""))
+        if boundary is None or boundary <= start or boundary >= end:
+            continue
+        if first_boundary is None or boundary < first_boundary:
+            first_boundary = boundary
+    if first_boundary is None:
+        return dict(event)
+
+    clipped = copy.deepcopy(event)
+    clipped["duration_seconds"] = max(0.0, (first_boundary - start).total_seconds())
+    metadata = clipped.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        clipped["metadata"] = metadata
+    metadata["capture_control_clipped"] = True
+    metadata["capture_control_original_duration_seconds"] = duration
+    return clipped if clipped["duration_seconds"] > 0 else None
+
+
 def filter_recordable(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     state = read_state()
-    kept = [event for event in events if not timestamp_is_skipped(str(event.get("observed_at") or ""), state=state)]
-    return kept, len(events) - len(kept)
+    kept: list[dict[str, Any]] = []
+    suppressed = 0
+    for event in events:
+        prepared = prepare_recordable_event(event, state=state)
+        if prepared is None:
+            suppressed += 1
+        else:
+            kept.append(prepared)
+    return kept, suppressed
+
+
+def public_status(*, engaged_seconds: float = 0.0) -> dict[str, Any]:
+    value = read_state()
+    start = _parse(str(value.get("run_started_at") or ""))
+    now = datetime.now(timezone.utc)
+    return {
+        "state": value.get("state", "recording"),
+        "run_started_at": value.get("run_started_at"),
+        "state_changed_at": value.get("state_changed_at"),
+        "generation": int(value.get("generation") or 1),
+        "run_elapsed_seconds": max(0.0, (now - start).total_seconds()) if start else 0.0,
+        "elapsed_engaged_seconds": max(0.0, float(engaged_seconds or 0.0)),
+        "paused_intervals": sum(1 for item in value.get("skip_intervals") or [] if str(item.get("reason") or "").startswith("capture_paused")),
+    }
