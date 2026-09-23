@@ -8,11 +8,9 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Gateway operational hardening](GATEWAY_HARDENING.md) — opt-in PostgreSQL pooling, credential-scoped rate limiting, non-secret token/device inventory, administrative device revocation, and runtime visibility.
 - [Gateway data lifecycle](DATA_LIFECYCLE.md) — opt-in organization retention, dry-run-first physical cleanup, retroactive actor/device/session/time-scoped evidence purge, audit behavior, and backup caveats.
 - [How MCP works](MCP_ARCHITECTURE.md) — plain-language explanation of local stdio MCP, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
-- [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company-context systems and other AI platforms.
+- [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company brains and other AI platforms.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
-- [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended workflow for AI analysis.
-- [Swedish / EU deployment pack](compliance/sweden/README.md) — DPIA, employee notice, MBL/co-determination, purpose limitation/data minimization and deployment checklist templates. These are implementation aids, not legal advice.
-- [Signed release path](SIGNED_RELEASES.md) — credential-gated macOS signed/notarized installer and Windows Authenticode-signed installer workflow, including current macOS TCC packaging limitations.
+- [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for ChatGPT/Claude.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.
 - [Standalone macOS launcher](STANDALONE_MAC_LAUNCHER.md) — packaging/launcher implementation notes.
 - [Nontechnical testing guide](../NONTECHNICAL_TESTING.md) — practical end-to-end checks for the current release.
