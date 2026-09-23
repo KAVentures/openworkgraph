@@ -6,12 +6,13 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from shared.lifespan import extend_lifespan
 from shared.time_utils import normalize_timestamp
 from .db import GatewayDB
 from .lifecycle import effective_since
@@ -275,6 +276,71 @@ def _authorize_actor(db: GatewayDB, principal: HumanPrincipal, requested_actor: 
     raise PermissionError("human principal is not authorized to read this actor")
 
 
+def _utc_datetime(value: str) -> datetime:
+    normalized = normalize_timestamp(value)
+    return datetime.strptime(normalized, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+
+
+def _week_start(value: datetime) -> datetime:
+    midnight = value.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight - timedelta(days=midnight.weekday())
+
+
+def _ceil_week_start(value: datetime) -> datetime:
+    start = _week_start(value)
+    return start if value == start else start + timedelta(days=7)
+
+
+def _floor_complete_week_end(value: datetime) -> datetime:
+    start = _week_start(value)
+    end = start + timedelta(days=7) - timedelta(microseconds=1)
+    return end if value >= end else start - timedelta(microseconds=1)
+
+
+def _canonical(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _coarse_count(value: int, *, minimum: int = 0, step: int = 5) -> int:
+    if value <= 0:
+        return 0
+    if value < step:
+        return max(1, minimum)
+    rounded = int(round(value / step) * step)
+    return max(step, minimum, rounded)
+
+
+def _coarse_duration(value: float) -> float:
+    if value <= 0:
+        return 0.0
+    step = 900.0
+    return float(max(step, round(value / step) * step))
+
+
+def _aggregate_window(
+    db: GatewayDB,
+    organization_id: str,
+    since: str | None,
+    until: str | None,
+) -> tuple[str | None, str | None]:
+    """Return only complete UTC ISO-week boundaries fully inside the request.
+
+    Retention is applied before snapping so aggregation can never broaden the
+    organization's retention window. The current partial week is never exposed.
+    """
+    effective = effective_since(db, organization_id, since)
+    lower = _ceil_week_start(_utc_datetime(effective)) if effective else None
+    now = datetime.now(timezone.utc)
+    last_complete_end = _week_start(now) - timedelta(microseconds=1)
+    if until:
+        upper = min(_floor_complete_week_end(_utc_datetime(until)), last_complete_end)
+    else:
+        upper = last_complete_end
+    if lower is not None and lower > upper:
+        return _canonical(lower), _canonical(upper)
+    return (_canonical(lower) if lower else None), _canonical(upper)
+
+
 def _aggregate_patterns(
     db: GatewayDB,
     *,
@@ -284,30 +350,50 @@ def _aggregate_patterns(
     min_actors: int,
     limit: int,
 ) -> dict[str, Any]:
-    effective = effective_since(db, organization_id, since)
-    clauses = ["organization_id = ?", "actor_id <> ''"]
-    params: list[Any] = [organization_id]
-    if effective:
+    snapped_since, snapped_until = _aggregate_window(db, organization_id, since, until)
+    if snapped_since and snapped_until and snapped_since > snapped_until:
+        return {
+            "organization_id": organization_id,
+            "minimum_actors": min_actors,
+            "cohort_meets_minimum": False,
+            "suppressed": True,
+            "suppression_reason": "no_complete_utc_week_in_requested_window",
+            "patterns": [],
+            "actor_identifiers_returned": False,
+            "aggregate_window": "complete_utc_iso_weeks",
+            "effective_since": snapped_since,
+            "effective_until": snapped_until,
+            "values_rounded": True,
+        }
+
+    clauses = ["organization_id = ?", "actor_id <> ''", "observed_at <= ?"]
+    params: list[Any] = [organization_id, snapped_until]
+    if snapped_since:
         clauses.append("observed_at >= ?")
-        params.append(normalize_timestamp(effective))
-    if until:
-        clauses.append("observed_at <= ?")
-        params.append(normalize_timestamp(until))
+        params.append(snapped_since)
     where = " AND ".join(clauses)
     with db.connect() as conn:
-        cur = db._execute(conn, f"SELECT COUNT(DISTINCT actor_id) AS actors FROM evidence_events WHERE {where}", tuple(params))
+        cur = db._execute(
+            conn,
+            f"SELECT COUNT(DISTINCT actor_id) AS actors FROM evidence_events WHERE {where}",
+            tuple(params),
+        )
         cohort_row = cur.fetchone()
         cohort = int(cohort_row[0] if cohort_row else 0)
         if cohort < min_actors:
             return {
                 "organization_id": organization_id,
                 "minimum_actors": min_actors,
-                "cohort_actor_count": cohort,
+                "cohort_meets_minimum": False,
                 "suppressed": True,
                 "patterns": [],
                 "actor_identifiers_returned": False,
+                "aggregate_window": "complete_utc_iso_weeks",
+                "effective_since": snapped_since,
+                "effective_until": snapped_until,
+                "values_rounded": True,
             }
-        params2 = list(params) + [min_actors, max(1, min(int(limit), 200))]
+        params2 = list(params) + [min_actors]
         cur2 = db._execute(
             conn,
             f"""SELECT event_type, COALESCE(app, '') AS app,
@@ -317,21 +403,34 @@ def _aggregate_patterns(
                 FROM evidence_events
                 WHERE {where}
                 GROUP BY event_type, COALESCE(app, '')
-                HAVING COUNT(DISTINCT actor_id) >= ?
-                ORDER BY actors DESC, events DESC, event_type ASC
-                LIMIT ?""",
+                HAVING COUNT(DISTINCT actor_id) >= ?""",
             tuple(params2),
         )
         rows = cur2.fetchall()
         columns = [d[0] for d in cur2.description] if cur2.description else None
+
+    patterns: list[dict[str, Any]] = []
+    for row in rows:
+        item = db._row(row, columns)
+        item["actors"] = _coarse_count(int(item.get("actors") or 0), minimum=min_actors)
+        item["events"] = _coarse_count(int(item.get("events") or 0), minimum=5)
+        item["duration_seconds"] = _coarse_duration(float(item.get("duration_seconds") or 0))
+        patterns.append(item)
+    patterns.sort(key=lambda x: (-int(x.get("actors") or 0), -int(x.get("events") or 0), str(x.get("event_type") or ""), str(x.get("app") or "")))
+    patterns = patterns[: max(1, min(int(limit), 200))]
     return {
         "organization_id": organization_id,
         "minimum_actors": min_actors,
-        "cohort_actor_count": cohort,
+        "cohort_meets_minimum": True,
         "suppressed": False,
-        "patterns": [db._row(row, columns) for row in rows],
+        "patterns": patterns,
         "actor_identifiers_returned": False,
-        "note": "Thresholded aggregation reduces disclosure risk but is not a claim of anonymization.",
+        "aggregate_window": "complete_utc_iso_weeks",
+        "effective_since": snapped_since,
+        "effective_until": snapped_until,
+        "values_rounded": True,
+        "rounding": {"counts_to_nearest": 5, "duration_seconds_to_nearest": 900},
+        "note": "Thresholded, bucketed aggregation reduces disclosure risk but is not a claim of anonymization or differential privacy.",
     }
 
 
@@ -345,10 +444,7 @@ def install_human_access(
 ) -> None:
     app.state.human_access_settings = settings
     app.state.human_oidc_verifier = verifier or OIDCVerifier(settings)
-
-    @app.on_event("startup")
-    def init_access_schema() -> None:
-        init_human_access_schema(db)
+    extend_lifespan(app, startup=lambda: init_human_access_schema(db))
 
     def human(authorization: str | None = Header(default=None)) -> HumanPrincipal:
         if not settings.enabled:
@@ -488,6 +584,7 @@ def install_human_access(
     def pseudonymous_trace(
         since: str | None = None,
         until: str | None = None,
+        cursor: str | None = None,
         limit: int = Query(default=200, ge=1, le=500),
         p: HumanPrincipal = Depends(human),
     ) -> dict[str, Any]:
@@ -501,6 +598,7 @@ def install_human_access(
                 organization_id=p.organization_id,
                 since=since,
                 until=until,
+                cursor=cursor,
                 limit=limit,
             )
         except ValueError as exc:
@@ -545,6 +643,11 @@ def install_human_access(
             organization_id=p.organization_id,
             principal_id=p.audit_id,
             action="human_access.aggregate.read",
-            details={"minimum_actors": k, "patterns": len(payload.get("patterns") or []), "suppressed": payload.get("suppressed")},
+            details={
+                "minimum_actors": k,
+                "patterns": len(payload.get("patterns") or []),
+                "suppressed": payload.get("suppressed"),
+                "aggregate_window": payload.get("aggregate_window"),
+            },
         )
         return payload
