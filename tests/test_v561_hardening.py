@@ -17,10 +17,15 @@ def test_pytest_storage_is_isolated_from_repository_data() -> None:
     local_data = Path(os.environ["WORKFLOW_OBSERVER_DATA"]).resolve()
     auth_data = Path(os.environ["WORKFLOW_OBSERVER_AUTH_DIR"]).resolve()
     gateway_url = os.environ["OWG_GATEWAY_DATABASE_URL"]
+    active_db = server_db.DB_PATH.resolve()
 
     assert ROOT.resolve() not in local_data.parents
     assert ROOT.resolve() not in auth_data.parents
-    assert server_db.DB_PATH.parent.resolve() == local_data
+    # Some existing tests deliberately redirect DB_PATH again to pytest's own
+    # tmp_path. That is stronger isolation and must remain valid; the invariant
+    # is that no active test DB ever points back into the repository data tree.
+    assert ROOT.resolve() not in active_db.parents
+    assert active_db != (ROOT / "data" / "workflow_observer.db").resolve()
     assert "owg-test-" in str(local_data)
     assert "owg-test-" in gateway_url
     assert str(ROOT / "data") not in gateway_url
@@ -30,6 +35,8 @@ def test_reported_server_modules_no_longer_use_deprecated_on_event() -> None:
     for relative in (
         "server/secure_app.py",
         "server/enterprise_app.py",
+        "gateway/app.py",
+        "gateway/enterprise_app.py",
         "gateway/human_access.py",
     ):
         text = (ROOT / relative).read_text(encoding="utf-8")
