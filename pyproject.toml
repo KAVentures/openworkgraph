@@ -1,6 +1,6 @@
 [project]
 name = "workflow-observer"
-version = "0.56.1"
+version = "0.57.0"
 description = "Local-first work evidence, self-hosted organizational context gateway, REST API, and MCP access."
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -38,5 +38,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["collector*", "server*", "mcp_server*", "connector*", "gateway*", "shared*"]
-exclude = ["tests*", "dashboard*", "data*"]
