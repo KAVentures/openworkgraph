@@ -190,8 +190,16 @@ def test_aggregate_scope_enforces_k_and_never_returns_actor_ids(tmp_path):
     app = _app(tmp_path)
     with TestClient(app) as client:
         _seed(app, ["alice", "bob", "carol"])
-        response = client.get(
+
+        # A caller cannot request a threshold below the hard API floor.
+        too_low = client.get(
             "/v1/human/aggregate/patterns?min_actors=2",
+            headers=_headers("aggregate"),
+        )
+        assert too_low.status_code == 422
+
+        response = client.get(
+            "/v1/human/aggregate/patterns",
             headers=_headers("aggregate"),
         )
         assert response.status_code == 200
