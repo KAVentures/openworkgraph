@@ -49,14 +49,14 @@ for i in range(50000):
     text=f'{surface} | {action} | {locator}'
     rows.append((f'evt-{i}',observed,'run1','browser_extension',surface,action,f'Title {i}',locator,action,text,'{"event_type":"browser_action"}'))
 with db.connect() as conn:
-    conn.executemany('''INSERT INTO context_events(
+    conn.executemany("""INSERT INTO context_events(
         event_id,observed_at,session_id,source,surface,action,resource_title,
         resource_locator,target_label,context_text,metadata_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)''', rows)
-    conn.execute('''INSERT INTO context_events(
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", rows)
+    conn.execute("""INSERT INTO context_events(
         event_id,observed_at,session_id,source,surface,action,resource_title,
         resource_locator,target_label,context_text,metadata_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)''',(
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(
         'old-event','2026-09-22T08:00:00+00:00','old','desktop','Gmail','Open','Old','mail.google.com/old','Open','Gmail | Open | Old','{}'
     ))
 
@@ -95,10 +95,10 @@ except ValueError:
 # A new event arriving above page one does not disturb the continuation encoded
 # by an existing page-one cursor.
 with db.connect() as conn:
-    conn.execute('''INSERT INTO context_events(
+    conn.execute("""INSERT INTO context_events(
         event_id,observed_at,session_id,source,surface,action,resource_title,
         resource_locator,target_label,context_text,metadata_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)''',(
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(
         'new-latest','2026-09-25T08:00:00+00:00','run1','desktop','Gmail','Send','New','mail.google.com/new','Send','Gmail | Send | New','{}'
     ))
 second_after=query_evidence(scope='current',since='2026-09-23T08:00:00+00:00',limit=100,cursor=first['next_cursor'])
