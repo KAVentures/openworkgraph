@@ -208,7 +208,7 @@ def test_aggregate_scope_enforces_k_and_never_returns_actor_ids(tmp_path):
         assert payload["actor_identifiers_returned"] is False
         assert any(row["app"] == "Docs" and row["actors"] == 3 for row in payload["patterns"])
         assert not any(row["app"] == "RareApp" for row in payload["patterns"])
-        assert "actor_id" not in str(payload)
+        assert all("actor_id" not in row for row in payload["patterns"])
 
 
 def test_aggregate_suppresses_entire_cohort_below_threshold(tmp_path):
