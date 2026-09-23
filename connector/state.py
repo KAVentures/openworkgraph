@@ -87,6 +87,28 @@ class SyncState:
                 (start, end, str(reason)[:120]),
             )
 
+    def add_skip_ids(self, local_ids: list[int], reason: str) -> int:
+        """Persist a compact set of local IDs that must never be uploaded."""
+        ids = sorted({int(value) for value in local_ids if int(value) > 0})
+        if not ids:
+            return 0
+        ranges: list[tuple[int, int]] = []
+        start = previous = ids[0]
+        for value in ids[1:]:
+            if value == previous + 1:
+                previous = value
+                continue
+            ranges.append((start, previous))
+            start = previous = value
+        ranges.append((start, previous))
+        with self._connect() as conn:
+            for range_start, range_end in ranges:
+                conn.execute(
+                    "INSERT INTO skip_ranges(start_id, end_id, reason) VALUES (?, ?, ?)",
+                    (range_start, range_end, str(reason)[:120]),
+                )
+        return len(ids)
+
     def skipped(self, local_id: int) -> bool:
         with self._connect() as conn:
             row = conn.execute(
