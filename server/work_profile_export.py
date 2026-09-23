@@ -7,7 +7,6 @@ import zipfile
 from typing import Any
 from xml.etree import ElementTree as ET
 
-
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -34,7 +33,7 @@ def _flatten(prefix: str, value: Any, out: list[dict[str, Any]]) -> None:
 
 def profile_tables(profile: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     summary: list[dict[str, Any]] = []
-    for key in ("fragmentation", "communication_actions", "privacy", "interpretation"):
+    for key in ("fragmentation", "communication_actions", "privacy", "interpretation", "browser_signal_settings"):
         _flatten(key, profile.get(key) or {}, summary)
     summary.extend([
         {"metric": "scope", "value": profile.get("scope")},
@@ -48,6 +47,10 @@ def profile_tables(profile: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         "AI tool usage": list(profile.get("ai_tool_usage") or []),
         "Daily rhythm": list((profile.get("daily_rhythm") or {}).get("days") or []),
         "Hunting candidates": list(profile.get("navigation_hunting_candidates") or []),
+        "Rapid click candidates": list(profile.get("rapid_click_candidates") or []),
+        "Auth flow candidates": list(profile.get("auth_flow_candidates") or []),
+        "Tool waiting": list(profile.get("tool_waiting") or []),
+        "File upload categories": list(profile.get("file_upload_categories") or []),
         "Self tags": list(profile.get("self_tags") or []),
     }
 
@@ -101,62 +104,39 @@ def _sheet_xml(records: list[dict[str, Any]]) -> bytes:
 
 
 def append_profile_sheets(xlsx_bytes: bytes, profile: dict[str, Any]) -> bytes:
-    """Append derived work-profile worksheets without changing existing workbook sheets."""
     source = io.BytesIO(xlsx_bytes)
     with zipfile.ZipFile(source, "r") as zin:
         files = {name: zin.read(name) for name in zin.namelist()}
-
     workbook = ET.fromstring(files["xl/workbook.xml"])
     rels = ET.fromstring(files["xl/_rels/workbook.xml.rels"])
     content_types = ET.fromstring(files["[Content_Types].xml"])
     sheets = workbook.find(f"{{{MAIN_NS}}}sheets")
     if sheets is None:
         raise ValueError("workbook has no sheets collection")
-
     max_sheet_id = max([int(sheet.attrib.get("sheetId", "0")) for sheet in list(sheets)] or [0])
     relation_numbers = []
     for rel in list(rels):
         match = re.fullmatch(r"rId(\d+)", str(rel.attrib.get("Id") or ""))
-        if match:
-            relation_numbers.append(int(match.group(1)))
+        if match: relation_numbers.append(int(match.group(1)))
     next_rel = max(relation_numbers or [0]) + 1
     sheet_numbers = []
     for name in files:
         match = re.fullmatch(r"xl/worksheets/sheet(\d+)\.xml", name)
-        if match:
-            sheet_numbers.append(int(match.group(1)))
+        if match: sheet_numbers.append(int(match.group(1)))
     next_sheet_file = max(sheet_numbers or [0]) + 1
-
     for table_name, records in profile_tables(profile).items():
         safe_name = table_name[:31]
         max_sheet_id += 1
-        rel_id = f"rId{next_rel}"
-        next_rel += 1
-        target = f"worksheets/sheet{next_sheet_file}.xml"
-        part_name = f"/xl/{target}"
+        rel_id = f"rId{next_rel}"; next_rel += 1
+        target = f"worksheets/sheet{next_sheet_file}.xml"; next_sheet_file += 1
         files[f"xl/{target}"] = _sheet_xml(records)
-        next_sheet_file += 1
-        ET.SubElement(sheets, f"{{{MAIN_NS}}}sheet", {
-            "name": safe_name,
-            "sheetId": str(max_sheet_id),
-            f"{{{DOC_REL_NS}}}id": rel_id,
-        })
-        ET.SubElement(rels, f"{{{PKG_REL_NS}}}Relationship", {
-            "Id": rel_id,
-            "Type": WORKSHEET_REL_TYPE,
-            "Target": target,
-        })
-        ET.SubElement(content_types, f"{{{CT_NS}}}Override", {
-            "PartName": part_name,
-            "ContentType": WORKSHEET_CONTENT_TYPE,
-        })
-
+        ET.SubElement(sheets, f"{{{MAIN_NS}}}sheet", {"name": safe_name, "sheetId": str(max_sheet_id), f"{{{DOC_REL_NS}}}id": rel_id})
+        ET.SubElement(rels, f"{{{PKG_REL_NS}}}Relationship", {"Id": rel_id, "Type": WORKSHEET_REL_TYPE, "Target": target})
+        ET.SubElement(content_types, f"{{{CT_NS}}}Override", {"PartName": f"/xl/{target}", "ContentType": WORKSHEET_CONTENT_TYPE})
     files["xl/workbook.xml"] = ET.tostring(workbook, encoding="utf-8", xml_declaration=True)
     files["xl/_rels/workbook.xml.rels"] = ET.tostring(rels, encoding="utf-8", xml_declaration=True)
     files["[Content_Types].xml"] = ET.tostring(content_types, encoding="utf-8", xml_declaration=True)
-
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-        for name, data in files.items():
-            zout.writestr(name, data)
+        for name, data in files.items(): zout.writestr(name, data)
     return out.getvalue()
