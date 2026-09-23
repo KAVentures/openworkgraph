@@ -1,6 +1,6 @@
 [project]
 name = "workflow-observer"
-version = "0.55.0"
+version = "0.56.0"
 description = "Local-first work evidence, self-hosted organizational context gateway, REST API, and MCP access."
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -23,7 +23,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
-gateway = ["psycopg[binary]>=3.2,<4", "psycopg-pool>=3.2,<4"]
+gateway = [
+  "psycopg[binary]>=3.2,<4",
+  "psycopg-pool>=3.2,<4",
+  "PyJWT[crypto]>=2.10,<3",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
