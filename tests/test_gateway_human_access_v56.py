@@ -76,7 +76,8 @@ def _seed(app, actors: list[str]) -> None:
         events = [
             {
                 "event_id": f"common-{actor}",
-                "observed_at": f"2026-09-22T10:{index:02d}:00+00:00",
+                # Previous completed ISO week relative to the v0.56.1 test date.
+                "observed_at": f"2026-09-15T10:{index:02d}:00+00:00",
                 "event_type": "app_focus",
                 "app": "Docs",
                 "session_id": f"session-{actor}",
@@ -88,7 +89,7 @@ def _seed(app, actors: list[str]) -> None:
             events.append(
                 {
                     "event_id": f"rare-{actor}",
-                    "observed_at": f"2026-09-22T11:{index:02d}:00+00:00",
+                    "observed_at": f"2026-09-15T11:{index:02d}:00+00:00",
                     "event_type": "app_focus",
                     "app": "RareApp",
                     "session_id": f"session-{actor}",
@@ -186,12 +187,11 @@ def test_self_team_and_org_scopes_are_enforced(tmp_path):
         assert org.json()["human_access_mode"] == "organization"
 
 
-def test_aggregate_scope_enforces_k_and_never_returns_actor_ids(tmp_path):
+def test_aggregate_scope_uses_complete_week_buckets_rounding_and_no_exact_cohort_size(tmp_path):
     app = _app(tmp_path)
     with TestClient(app) as client:
         _seed(app, ["alice", "bob", "carol"])
 
-        # A caller cannot request a threshold below the hard API floor.
         too_low = client.get(
             "/v1/human/aggregate/patterns?min_actors=2",
             headers=_headers("aggregate"),
@@ -199,19 +199,28 @@ def test_aggregate_scope_enforces_k_and_never_returns_actor_ids(tmp_path):
         assert too_low.status_code == 422
 
         response = client.get(
-            "/v1/human/aggregate/patterns",
+            "/v1/human/aggregate/patterns?since=2026-09-13T12:00:00Z&until=2026-09-21T12:00:00Z",
             headers=_headers("aggregate"),
         )
         assert response.status_code == 200
         payload = response.json()
         assert payload["minimum_actors"] == 3
         assert payload["actor_identifiers_returned"] is False
-        assert any(row["app"] == "Docs" and row["actors"] == 3 for row in payload["patterns"])
+        assert payload["aggregate_window"] == "complete_utc_iso_weeks"
+        assert payload["effective_since"].startswith("2026-09-14T00:00:00")
+        assert payload["effective_until"].startswith("2026-09-20T23:59:59")
+        assert payload["values_rounded"] is True
+        assert "cohort_actor_count" not in payload
+        assert payload["cohort_meets_minimum"] is True
+        docs = next(row for row in payload["patterns"] if row["app"] == "Docs")
+        assert docs["actors"] == 3
+        assert docs["events"] == 5
+        assert docs["duration_seconds"] == 900.0
         assert not any(row["app"] == "RareApp" for row in payload["patterns"])
         assert all("actor_id" not in row for row in payload["patterns"])
 
 
-def test_aggregate_suppresses_entire_cohort_below_threshold(tmp_path):
+def test_aggregate_suppresses_entire_cohort_without_revealing_exact_size(tmp_path):
     app = _app(tmp_path)
     with TestClient(app) as client:
         _seed(app, ["alice", "bob"])
@@ -220,27 +229,41 @@ def test_aggregate_suppresses_entire_cohort_below_threshold(tmp_path):
         payload = response.json()
         assert payload["suppressed"] is True
         assert payload["patterns"] == []
-        assert payload["cohort_actor_count"] == 2
+        assert payload["cohort_meets_minimum"] is False
+        assert "cohort_actor_count" not in payload
 
 
-def test_pseudonymous_scope_replaces_identity_fields_but_does_not_claim_anonymity(tmp_path):
+def test_pseudonymous_scope_replaces_identity_fields_and_paginates(tmp_path):
     app = _app(tmp_path)
     with TestClient(app) as client:
         _seed(app, ["alice", "bob", "carol"])
-        first = client.get("/v1/human/pseudonymous/workflow-trace", headers=_headers("pseudo"))
-        second = client.get("/v1/human/pseudonymous/workflow-trace", headers=_headers("pseudo"))
+        first = client.get(
+            "/v1/human/pseudonymous/workflow-trace?limit=2",
+            headers=_headers("pseudo"),
+        )
         assert first.status_code == 200
-        assert second.status_code == 200
-        payload = first.json()
-        assert payload["pseudonymized"] is True
-        assert payload["pseudonymization_is_anonymization"] is False
-        assert payload["rows"]
-        for row in payload["rows"]:
+        first_payload = first.json()
+        assert first_payload["pseudonymized"] is True
+        assert first_payload["pseudonymization_is_anonymization"] is False
+        assert first_payload["rows"]
+        assert first_payload.get("next_cursor")
+        for row in first_payload["rows"]:
             assert row["actor_id"].startswith("actor_")
             assert row["device_id"].startswith("device_")
             assert row["session_id"].startswith("session_")
             assert row["actor_id"] not in {"alice", "bob", "carol"}
-        assert [row["actor_id"] for row in first.json()["rows"]] == [row["actor_id"] for row in second.json()["rows"]]
+
+        second = client.get(
+            "/v1/human/pseudonymous/workflow-trace",
+            params={"limit": 2, "cursor": first_payload["next_cursor"]},
+            headers=_headers("pseudo"),
+        )
+        assert second.status_code == 200
+        second_payload = second.json()
+        first_ids = {row["event_id"] for row in first_payload["rows"]}
+        second_ids = {row["event_id"] for row in second_payload["rows"]}
+        assert first_ids.isdisjoint(second_ids)
+        assert all(row["actor_id"].startswith("actor_") for row in second_payload["rows"])
 
 
 def test_human_me_exposes_effective_scope_not_raw_oidc_subject(tmp_path):
