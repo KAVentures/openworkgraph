@@ -76,7 +76,6 @@ def _seed(app, actors: list[str]) -> None:
         events = [
             {
                 "event_id": f"common-{actor}",
-                # Previous completed ISO week relative to the v0.56.1 test date.
                 "observed_at": f"2026-09-15T10:{index:02d}:00+00:00",
                 "event_type": "app_focus",
                 "app": "Docs",
@@ -127,7 +126,7 @@ def test_human_access_is_optional_and_does_not_replace_service_auth(tmp_path):
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["version"] == "0.56.0"
+        assert health.json()["version"] == "0.56.1"
         assert health.json()["human_oidc_enabled"] is False
 
         human = client.get("/v1/human/me", headers=_headers("anything"))
