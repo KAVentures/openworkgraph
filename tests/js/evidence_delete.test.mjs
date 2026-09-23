@@ -21,3 +21,8 @@ test('evidence deletion uses inline confirmation and authenticated local endpoin
   assert.match(source,/already synchronized to an organization Gateway is not automatically recalled/);
   assert.doesNotMatch(source,/window\.confirm\(/);
 });
+
+test('v0.57 release label is applied by the final dashboard layer',()=>{
+  assert.match(source,/versionLabel/);
+  assert.match(source,/v0\.57\.0/);
+});
