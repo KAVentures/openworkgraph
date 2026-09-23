@@ -76,9 +76,9 @@ with TestClient(app) as client:
     assert paused.status_code==200 and paused.json()['state']=='paused', paused.text
     pause_at=paused.json()['state_changed_at']
 
-    from datetime import datetime, timedelta
-    p=datetime.fromisoformat(pause_at.replace('Z','+00:00'))
-    during=(p+timedelta(seconds=1)).isoformat()
+    # The exact pause boundary is deterministically inside the skip interval,
+    # even if the test resumes immediately afterwards.
+    during=pause_at
     desktop=dict(base,event_id='paused-desktop',observed_at=during)
     r2=client.post('/v1/events',headers=headers,json={'events':[desktop]})
     assert r2.status_code==200 and r2.json()['inserted']==0, r2.text
@@ -93,7 +93,7 @@ with TestClient(app) as client:
 
     resumed=client.post('/v1/capture/resume',headers=headers)
     assert resumed.status_code==200 and resumed.json()['state']=='recording', resumed.text
-    # Late delivery from the old paused interval stays suppressed after resume.
+    # Late delivery from the exact old pause boundary stays suppressed after resume.
     late=browser.model_copy(update={'event_id':'late-browser'})
     assert main_module.browser_event(late)['inserted']==0
 
