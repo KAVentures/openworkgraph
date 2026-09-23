@@ -52,6 +52,9 @@ jobs:
       OWG_GATEWAY_ADMIN_TOKEN: test-admin-token
       OWG_GATEWAY_ENROLLMENT_TOKEN: test-enrollment-token
       OWG_GATEWAY_PORT: "8790"
+      OWG_GATEWAY_DB_POOL_MIN_SIZE: "1"
+      OWG_GATEWAY_DB_POOL_MAX_SIZE: "4"
+      OWG_GATEWAY_DB_POOL_TIMEOUT_SECONDS: "10"
     steps:
       - uses: actions/checkout@v4
       - name: Validate self-host compose configuration
@@ -88,7 +91,15 @@ jobs:
                   return json.loads(response.read().decode())
 
           health = request("GET", "/health")
-          assert health["version"] == "0.54.0", health
+          assert health["version"] == "0.55.0", health
+          assert health["database_pooling"] is True, health
+
+          runtime = request("GET", "/v1/admin/runtime", token="test-admin-token")
+          assert runtime["version"] == "0.55.0", runtime
+          assert runtime["database_pooling"]["enabled"] is True, runtime
+          assert runtime["database_pooling"]["min_size"] == 1, runtime
+          assert runtime["database_pooling"]["max_size"] == 4, runtime
+          assert runtime["secrets_exposed"] is False, runtime
 
           device = request("POST", "/v1/devices/enroll", {
               "organization_id": "ci-acme",
@@ -125,6 +136,23 @@ jobs:
               "scopes": ["evidence:read", "context:read", "transfers:read"],
           }, "test-admin-token")
 
+          inventory = request(
+              "GET",
+              "/v1/admin/tokens/ci-acme?include_revoked=true",
+              token="test-admin-token",
+          )
+          assert inventory["returned"] == 2, inventory
+          assert inventory["secrets_exposed"] is False, inventory
+          for item in inventory["items"]:
+              assert "token" not in item, item
+              assert "token_hash" not in item, item
+              assert "scopes_json" not in item, item
+
+          devices = request("GET", "/v1/admin/devices/ci-acme", token="test-admin-token")
+          assert devices["returned"] == 1, devices
+          assert devices["items"][0]["device_id"] == "ci-device", devices
+          assert devices["items"][0]["active"] is True, devices
+
           retention = request(
               "PUT",
               "/v1/admin/retention/ci-acme",
@@ -149,7 +177,7 @@ jobs:
           assert row["metadata"]["tab_context_id"] == "runtime:ci-tab", row
           assert row["clipboard_transfer_id"] == "ci-transfer", row
           assert trace["derived_task_inference_authoritative"] is False
-          print("Gateway/PostgreSQL integration + lifecycle test passed")
+          print("Gateway/PostgreSQL pooled integration + lifecycle/admin test passed")
           PY
       - name: Show Gateway logs on failure
         if: failure()
