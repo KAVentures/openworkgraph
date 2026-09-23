@@ -51,9 +51,6 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
     action = _clean(meta.get("action") or e.get("event_type"), 120)
     target_label = _safe_target_label(target)
 
-    # Query strings/fragments are absent from browser telemetry. Keep hostname +
-    # pathname because they are often the only useful key for finding a prior
-    # ticket/repository/document workflow. This layer stays customer-controlled.
     resource_locator = ""
     if hostname:
         resource_locator = hostname + (pathname or "/")
@@ -73,10 +70,8 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
             "raw_evidence_separate": True,
         },
     }
-    # Clipboard linkage is structural metadata only. These identifiers are
-    # random/event IDs produced by OWG; no clipboard payload or selected text is
-    # read or copied into the context layer.
-    if str(e.get("event_type") or "").startswith("clipboard_"):
+    event_type = str(e.get("event_type") or "")
+    if event_type.startswith("clipboard_"):
         for key in (
             "clipboard_transfer_id",
             "linked_copy_event_id",
@@ -85,6 +80,39 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
         ):
             if key in meta:
                 context_metadata[key] = meta[key]
+
+    if event_type == "browser_performance_timing":
+        for key in ("response_wait_ms", "dom_ready_ms", "load_complete_ms", "rounded_to_ms"):
+            try:
+                if key in meta:
+                    context_metadata[key] = max(0, min(float(meta[key]), 10 * 60 * 1000))
+            except Exception:
+                pass
+        context_metadata["resource_urls_captured"] = False
+        context_metadata["page_contents_captured"] = False
+
+    if event_type == "browser_file_upload_category":
+        categories = meta.get("categories") if isinstance(meta.get("categories"), dict) else {}
+        safe_categories = {}
+        allowed = {"image", "video", "audio", "archive", "spreadsheet", "structured-data", "document", "other", "unknown"}
+        for key, value in categories.items():
+            if str(key) not in allowed:
+                continue
+            try:
+                safe_categories[str(key)] = max(0, min(int(value), 1000))
+            except Exception:
+                continue
+        context_metadata["categories"] = safe_categories
+        try:
+            context_metadata["file_count"] = max(0, min(int(meta.get("file_count") or 0), 1000))
+        except Exception:
+            context_metadata["file_count"] = 0
+        context_metadata.update({
+            "filename_captured": False,
+            "path_captured": False,
+            "exact_size_captured": False,
+            "file_contents_captured": False,
+        })
 
     return {
         "event_id": str(e.get("event_id") or ""),
