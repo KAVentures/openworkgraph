@@ -16,7 +16,7 @@ OpenWorkGraph stores structural facts such as:
 - success/failure status;
 - duration;
 - model identifier when safely available;
-- approval outcome when a supported native event exposes it;
+- approval outcome only when native evidence establishes its provenance;
 - trace/run relationships.
 
 The adapters deliberately do **not** persist:
@@ -51,6 +51,8 @@ StopFailure
 ```
 
 Content-heavy events such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, and `Stop` are intentionally not registered.
+
+`PermissionRequest` is represented as `human_approval_requested` because the hook fires as Claude Code is about to ask the user for permission and the OpenWorkGraph hook itself never supplies a decision. `PermissionDenied` is different: current Claude Code emits it for an automatic permission denial in auto mode, so OpenWorkGraph records it as a denied execution/error rather than falsely claiming that a human denied the action.
 
 ### Generate the settings fragment
 
@@ -96,7 +98,7 @@ codex.tool_result         -> tool_call
 codex.api_request         -> model_call
 ```
 
-The parser also understands `codex.tool_decision` if a compatible relay explicitly sends such a record, but the default configuration below does not enable Codex log export merely to obtain approval events.
+The parser also understands `codex.tool_decision` if a compatible relay explicitly sends such a record, but the default configuration below does not enable Codex log export merely to obtain approval events. A tool decision is represented as `human_approval_received` only when Codex explicitly marks its decision source as `user`; decisions resolved by an automated reviewer, or records with no decision provenance, are ignored rather than attributed to a person.
 
 ### Generate a safe trace-exporter snippet
 
