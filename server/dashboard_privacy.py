@@ -7,10 +7,16 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
 from .analytics import summary
-from .dashboard_privacy_policy import safe_browser_status, safe_collector_status
+from .dashboard_privacy_policy import (
+    dashboard_safe_patterns,
+    dashboard_safe_summary,
+    safe_browser_status,
+    safe_collector_status,
+)
 from .main import BROWSER_STATUS, COLLECTOR_STATUS, ROOT, VERSION
 from .privacy_pipeline import redact_for_display
 from .secure_app import app
+from .v0571_polish import corrected_patterns
 
 
 DASHBOARD_PRIVACY_JS = r"""
@@ -61,7 +67,7 @@ def dashboard_summary(limit: int = 25000, scope: str = "current") -> dict[str, A
     if scope not in {"current", "all"}:
         raise HTTPException(status_code=400, detail="scope must be current or all")
     since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
-    result = summary(limit=limit, since=since, operational=True)
+    result = dashboard_safe_summary(summary(limit=limit, since=since, operational=True))
     result["mode"] = os.getenv("WORKFLOW_OBSERVER_MODE", "observe")
     result["scope"] = scope
     result["run_started_at"] = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT")
@@ -73,6 +79,12 @@ def dashboard_summary(limit: int = 25000, scope: str = "current") -> dict[str, A
     )
     result["dashboard_data_layer"] = "operational_normalized"
     return redact_for_display(result)
+
+
+@app.get("/v1/dashboard-patterns")
+def dashboard_patterns(scope: str = "current") -> dict[str, Any]:
+    """Repeated workflows projected onto the same human-safe label boundary."""
+    return redact_for_display(dashboard_safe_patterns(corrected_patterns(scope=scope)))
 
 
 @app.get("/dashboard-privacy.js")
@@ -108,4 +120,4 @@ async def inject_dashboard_privacy(request: Request, call_next):
     return HTMLResponse(content=text, status_code=response.status_code, headers=headers)
 
 
-__all__ = ["app", "dashboard_summary"]
+__all__ = ["app", "dashboard_summary", "dashboard_patterns"]
