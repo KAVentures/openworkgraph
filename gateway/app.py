@@ -15,7 +15,7 @@ from .enrollment import active_device_exists, consume_enrollment_grant, create_e
 from .lifecycle import get_retention_policy, init_lifecycle_schema, set_retention_policy
 from .policy import privacy_contract_violation
 from .query import workflow_trace
-from .settings import GatewaySettings
+from .settings import PRODUCT_VERSION, GatewaySettings
 
 
 class EnrollmentRequest(BaseModel):
@@ -85,7 +85,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     db = db or GatewayDB(settings.database_url)
     app = FastAPI(
         title="OpenWorkGraph Gateway",
-        version="0.54.0",
+        version=PRODUCT_VERSION,
         description="Self-hosted organization evidence gateway. Raw privacy-hardened evidence is canonical; inferred tasks are not treated as ground truth.",
     )
     app.state.settings = settings
@@ -142,7 +142,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         return {
             "status": "ok",
             "server": "OpenWorkGraph Gateway",
-            "version": "0.54.0",
+            "version": PRODUCT_VERSION,
             "storage": "postgresql" if db.is_postgres else "sqlite-development",
             "self_hosted": True,
         }
