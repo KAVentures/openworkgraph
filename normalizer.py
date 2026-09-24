@@ -160,6 +160,50 @@ def _safe_target(target: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _safe_agent_structure(meta: dict[str, Any]) -> dict[str, Any]:
+    if str(meta.get("source") or "") != "agent" and str(meta.get("actor_kind") or "") != "agent":
+        return {}
+    out: dict[str, Any] = {"actor_kind": "agent"}
+    for key in ("operation", "status", "observation_level"):
+        value = _clean(meta.get(key), 120)
+        if value:
+            out[key] = value
+
+    agent_raw = meta.get("agent") if isinstance(meta.get("agent"), dict) else {}
+    agent = {k: _clean(agent_raw.get(k), 200) for k in ("name", "provider", "framework", "model")}
+    out["agent"] = {k: v for k, v in agent.items() if v}
+
+    trace_raw = meta.get("trace") if isinstance(meta.get("trace"), dict) else {}
+    trace = {k: _clean(trace_raw.get(k), 240) for k in (
+        "run_id", "trace_id", "span_id", "parent_span_id", "workflow_id", "trigger_event_id"
+    )}
+    out["trace"] = {k: v for k, v in trace.items() if v}
+
+    tool_raw = meta.get("tool") if isinstance(meta.get("tool"), dict) else {}
+    tool = {"name": _clean(tool_raw.get("name"), 200), "category": _clean(tool_raw.get("category"), 120)}
+    out["tool"] = {k: v for k, v in tool.items() if v}
+
+    usage_raw = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+    usage: dict[str, int] = {}
+    for key in ("input_tokens", "output_tokens", "cached_input_tokens", "total_tokens"):
+        try:
+            value = int(usage_raw.get(key))
+        except Exception:
+            continue
+        if 0 <= value <= 1_000_000_000:
+            usage[key] = value
+    if usage:
+        out["usage"] = usage
+
+    privacy_raw = meta.get("privacy") if isinstance(meta.get("privacy"), dict) else {}
+    privacy_keys = (
+        "prompt_content_captured", "model_response_content_captured", "tool_arguments_captured",
+        "tool_result_content_captured", "chain_of_thought_captured", "raw_native_payload_captured",
+    )
+    out["agent_privacy"] = {key: bool(privacy_raw.get(key)) for key in privacy_keys}
+    return out
+
+
 def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     e = dict(event)
     meta = dict(e.get("metadata") or {})
@@ -184,6 +228,12 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
             "full_url_paths": False,
         },
     }
+    agent_structure = _safe_agent_structure(meta)
+    if agent_structure:
+        normalized_meta.update(agent_structure)
+        if agent_structure.get("operation"):
+            normalized_meta["action"] = agent_structure["operation"]
+
     if isinstance(meta.get("activity"), dict):
         normalized_meta["activity"] = {
             k: v for k, v in meta["activity"].items()
