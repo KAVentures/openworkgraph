@@ -15,7 +15,7 @@ from gateway.lifecycle import (
     set_retention_policy,
 )
 from gateway.query import workflow_trace
-from gateway.settings import GatewaySettings
+from gateway.settings import PRODUCT_VERSION, GatewaySettings
 
 
 def _db(tmp_path) -> GatewayDB:
@@ -176,7 +176,7 @@ def test_gateway_retention_admin_api_is_non_destructive_and_versioned(tmp_path):
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["version"] == "0.54.0"
+        assert health.json()["version"] == PRODUCT_VERSION
 
         before = count_evidence(db, "acme")
         response = client.put(

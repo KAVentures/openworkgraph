@@ -8,9 +8,9 @@ from .auth import env_token_matches
 from .enterprise_app import _take_get_endpoint, create_enterprise_app
 from .hardening import HardeningSettings, PooledGatewayDB
 from .human_access import HumanAccessSettings, install_human_access
-from .settings import GatewaySettings
+from .settings import PRODUCT_VERSION, GatewaySettings
 
-GATEWAY_VERSION = "0.56.1"
+GATEWAY_VERSION = PRODUCT_VERSION
 
 
 def _bearer(value: str | None) -> str:

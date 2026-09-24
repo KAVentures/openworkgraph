@@ -8,7 +8,7 @@ from gateway.auth import Principal
 from gateway.hardening import HardeningSettings
 from gateway.human_access import HumanAccessSettings
 from gateway.human_enterprise_app import create_human_enterprise_app
-from gateway.settings import GatewaySettings
+from gateway.settings import PRODUCT_VERSION, GatewaySettings
 
 
 class FakeVerifier:
@@ -126,7 +126,7 @@ def test_human_access_is_optional_and_does_not_replace_service_auth(tmp_path):
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["version"] == "0.56.1"
+        assert health.json()["version"] == PRODUCT_VERSION
         assert health.json()["human_oidc_enabled"] is False
 
         human = client.get("/v1/human/me", headers=_headers("anything"))

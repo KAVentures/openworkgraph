@@ -13,9 +13,9 @@ from .hardening import (
     SlidingWindowRateLimiter,
     bearer_fingerprint,
 )
-from .settings import GatewaySettings
+from .settings import PRODUCT_VERSION, GatewaySettings
 
-GATEWAY_VERSION = "0.55.0"
+GATEWAY_VERSION = PRODUCT_VERSION
 
 
 def _take_get_endpoint(app: FastAPI, path: str) -> Callable[..., Any] | None:

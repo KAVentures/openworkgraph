@@ -19,3 +19,6 @@ browser_extension/pairing.json
 # OS / logs
 .DS_Store
 *.log
+
+# Local build artifacts
+dist/
