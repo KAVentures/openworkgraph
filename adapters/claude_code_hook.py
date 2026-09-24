@@ -29,10 +29,16 @@ SUPPORTED_EVENTS = [
 
 
 def settings_fragment(command: str | None = None) -> dict:
-    command = command or f"{sys.executable} -m adapters.claude_code_hook"
+    executable = command or sys.executable
+    handler = {
+        "type": "command",
+        "command": executable,
+        "args": ["-m", "adapters.claude_code_hook"],
+        "timeout": 2,
+    }
     return {
         "hooks": {
-            event: [{"hooks": [{"type": "command", "command": command, "timeout": 2}]}]
+            event: [{"hooks": [dict(handler)]}]
             for event in SUPPORTED_EVENTS
         }
     }
