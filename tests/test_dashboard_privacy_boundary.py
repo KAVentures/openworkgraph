@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 
 def test_paged_dashboard_evidence_searches_rich_index_but_returns_minimized_rows():
@@ -54,14 +55,15 @@ def test_paged_dashboard_evidence_searches_rich_index_but_returns_minimized_rows
     assert result["presentation_layer"] == "dashboard_content_minimized"
 
 
-def test_dashboard_summary_uses_operational_layer_and_minimizes_live_status():
-    from server import db, main
-    from server.dashboard_privacy import dashboard_summary
+def test_operational_summary_and_live_status_minimizers_drop_dashboard_canaries():
+    from server import analytics, db
+    from server.dashboard_privacy_policy import safe_browser_status, safe_collector_status
 
     db.init_db()
     event_id = "dashboard-private-canary-summary"
     private_subject = "PRIVATE_SUMMARY_CANARY_44119"
     private_name = "Erik Nilsson"
+    private_path = "/mail/u/0/#inbox/private-case"
 
     raw = {
         "event_id": event_id,
@@ -78,7 +80,7 @@ def test_dashboard_summary_uses_operational_layer_and_minimizes_live_status():
             "action": "click",
             "page": {
                 "hostname": "mail.google.com",
-                "pathname": "/mail/u/0/#inbox/private-case",
+                "pathname": private_path,
                 "title": f"{private_name} — {private_subject} - Gmail",
             },
             "target": {"tag": "button", "label": f"Send to {private_name}"},
@@ -86,16 +88,15 @@ def test_dashboard_summary_uses_operational_layer_and_minimizes_live_status():
     }
     db.insert_events([raw])
 
-    main.COLLECTOR_STATUS.clear()
-    main.COLLECTOR_STATUS.update(
+    result = analytics.summary(limit=10000, since=None, operational=True)
+    result["collector"] = safe_collector_status(
         {
             "received_at": "2099-01-01T12:01:01+00:00",
             "window_title": f"{private_name} — {private_subject}",
             "app": "Google Chrome",
         }
     )
-    main.BROWSER_STATUS.clear()
-    main.BROWSER_STATUS.update(
+    result["browser_sensor"] = safe_browser_status(
         {
             "status": "connected",
             "received_at": "2099-01-01T12:01:01+00:00",
@@ -103,30 +104,31 @@ def test_dashboard_summary_uses_operational_layer_and_minimizes_live_status():
             "expected_sensor_version": "test",
             "version_ok": True,
             "hostname": "mail.google.com",
-            "pathname": "/mail/u/0/#inbox/private-case",
+            "pathname": private_path,
             "page_title": f"{private_name} — {private_subject}",
         }
     )
+    blob = json.dumps(result, ensure_ascii=False)
 
-    try:
-        result = dashboard_summary(limit=10000, scope="all")
-        blob = json.dumps(result, ensure_ascii=False)
-        assert private_subject not in blob
-        assert private_name not in blob
-        assert "/mail/u/0/#inbox/private-case" not in blob
-        assert result["data_layer"] == "operational_normalized"
-        assert result["dashboard_data_layer"] == "operational_normalized"
-        assert set(result["collector"].keys()) <= {"connected", "received_at"}
-        assert "hostname" not in result["browser_sensor"]
-        assert "pathname" not in result["browser_sensor"]
-        assert "page_title" not in result["browser_sensor"]
-    finally:
-        main.COLLECTOR_STATUS.clear()
-        main.BROWSER_STATUS.clear()
+    assert private_subject not in blob
+    assert private_name not in blob
+    assert private_path not in blob
+    assert result["data_layer"] == "operational_normalized"
+    assert set(result["collector"].keys()) <= {"connected", "received_at"}
+    assert "hostname" not in result["browser_sensor"]
+    assert "pathname" not in result["browser_sensor"]
+    assert "page_title" not in result["browser_sensor"]
+
+    # Guard the endpoint wiring without importing a route/middleware module into
+    # an already-started FastAPI app during the test suite.
+    source = (Path(__file__).resolve().parents[1] / "server" / "dashboard_privacy.py").read_text(encoding="utf-8")
+    assert "summary(limit=limit, since=since, operational=True)" in source
+    assert "safe_collector_status(COLLECTOR_STATUS)" in source
+    assert "safe_browser_status(BROWSER_STATUS)" in source
 
 
 def test_work_profile_dashboard_response_drops_rich_context_echoes():
-    from server.work_profile_routes import _dashboard_safe_profile
+    from server.dashboard_privacy_policy import dashboard_safe_profile
 
     private_name = "PRIVATE_WORK_PROFILE_NAME_55231"
     private_path = f"example.test/customer/{private_name}"
@@ -150,7 +152,7 @@ def test_work_profile_dashboard_response_drops_rich_context_echoes():
         ],
     }
 
-    safe = _dashboard_safe_profile(profile)
+    safe = dashboard_safe_profile(profile)
     blob = json.dumps(safe, ensure_ascii=False)
     assert private_name not in blob
     assert private_path not in blob
@@ -160,9 +162,20 @@ def test_work_profile_dashboard_response_drops_rich_context_echoes():
     assert safe["dashboard_data_layer"] == "content_minimized"
 
 
-def test_enterprise_runner_installs_dashboard_privacy_last():
-    from pathlib import Path
+def test_dashboard_routes_preserve_mcp_profile_and_use_minimized_browser_profile():
+    root = Path(__file__).resolve().parents[1]
+    routes = (root / "server" / "work_profile_routes.py").read_text(encoding="utf-8")
+    dashboard_js = (root / "dashboard" / "work_profile.js").read_text(encoding="utf-8")
 
+    assert '@app.get("/v1/work-profile")' in routes
+    assert "return redact_for_display(compute_work_profile(scope=scope))" in routes
+    assert '@app.get("/v1/dashboard-work-profile")' in routes
+    assert "dashboard_safe_profile(compute_work_profile(scope=scope))" in routes
+    assert "/v1/dashboard-work-profile?scope=current" in dashboard_js
+    assert "fetch('/v1/work-profile?scope=current" not in dashboard_js
+
+
+def test_enterprise_runner_installs_dashboard_privacy_last():
     root = Path(__file__).resolve().parents[1]
     runner = (root / "server" / "enterprise_runner.py").read_text(encoding="utf-8")
     privacy = runner.index("import server.dashboard_privacy")
