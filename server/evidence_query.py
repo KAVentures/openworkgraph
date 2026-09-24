@@ -88,17 +88,22 @@ def _where(
     query: str,
     include_surface: bool = True,
 ) -> tuple[list[str], list[Any]]:
+    """Build filters only over the content-minimized operational layer."""
     clauses: list[str] = []
     params: list[Any] = []
     if since:
         clauses.append("observed_at >= ?")
         params.append(str(since))
     if include_surface and surface:
-        clauses.append("LOWER(surface) = LOWER(?)")
+        clauses.append("LOWER(app) = LOWER(?)")
         params.append(surface)
     if query:
-        clauses.append("LOWER(context_text) LIKE ? ESCAPE '\\'")
-        params.append("%" + _escape_like(query.casefold()) + "%")
+        like = "%" + _escape_like(query.casefold()) + "%"
+        clauses.append(
+            "(LOWER(app) LIKE ? ESCAPE '\\' OR LOWER(window_title) LIKE ? ESCAPE '\\' "
+            "OR LOWER(metadata_json) LIKE ? ESCAPE '\\')"
+        )
+        params.extend([like, like, like])
     return clauses, params
 
 
@@ -107,19 +112,39 @@ def _sql_where(clauses: list[str]) -> str:
 
 
 def _row_item(row: Any) -> dict[str, Any]:
+    """Return only fields that are already safe in normalized_events.
+
+    Arbitrary resource titles, URL paths and target labels intentionally never
+    cross the localhost dashboard boundary. Rich context remains available in
+    context_events for explicitly authorized AI workflows.
+    """
     value = dict(row)
     try:
         metadata = json.loads(value.get("metadata_json") or "{}")
     except Exception:
         metadata = {}
-    event_type = str(metadata.get("event_type") or "") if isinstance(metadata, dict) else ""
-    action = str(value.get("target_label") or value.get("action") or event_type or "")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    target = metadata.get("target") if isinstance(metadata.get("target"), dict) else {}
+    page = metadata.get("page") if isinstance(metadata.get("page"), dict) else {}
+
+    surface = str(value.get("app") or value.get("window_title") or page.get("surface") or "Unknown")
+    event_type = str(value.get("event_type") or "")
+    action = str(
+        target.get("label")
+        or target.get("title")
+        or metadata.get("action")
+        or event_type.replace("browser_", "").replace("screen_", "").replace("_", " ")
+        or ""
+    )
+    page_label = str(page.get("surface") or page.get("title") or surface)
+
     return {
         "event_id": str(value.get("event_id") or ""),
         "observed_at": str(value.get("observed_at") or ""),
-        "surface": str(value.get("surface") or "Unknown"),
-        "page": str(value.get("resource_locator") or value.get("resource_title") or ""),
-        "resource_title": str(value.get("resource_title") or ""),
+        "surface": surface,
+        "page": page_label,
+        "resource_title": "",
         "action": action,
         "source": str(value.get("source") or ""),
         "event_type": event_type,
@@ -135,6 +160,12 @@ def query_evidence(
     surface: str | None = None,
     q: str | None = None,
 ) -> dict[str, Any]:
+    """Page human-facing evidence from normalized_events only.
+
+    The localhost dashboard is intentionally stricter than customer-authorized
+    context retrieval: it preserves work surfaces and semantic/structural actions
+    while excluding arbitrary names, subjects, document titles and URL paths.
+    """
     if scope not in {"current", "all"}:
         raise ValueError("scope must be current or all")
     page_limit = max(1, min(int(limit), _MAX_LIMIT))
@@ -160,8 +191,8 @@ def query_evidence(
         page_params.extend([cursor_ts, cursor_ts, cursor_id])
 
     select_sql = (
-        "SELECT id, event_id, observed_at, source, surface, action, resource_title, "
-        "resource_locator, target_label, metadata_json FROM context_events"
+        "SELECT id, event_id, observed_at, source, app, window_title, event_type, metadata_json "
+        "FROM normalized_events"
         + _sql_where(page_clauses)
         + " ORDER BY observed_at DESC, id DESC LIMIT ?"
     )
@@ -176,13 +207,13 @@ def query_evidence(
     with db.connect() as conn:
         rows = conn.execute(select_sql, (*page_params, page_limit + 1)).fetchall()
         total_row = conn.execute(
-            "SELECT COUNT(*) AS n FROM context_events" + _sql_where(base_clauses),
+            "SELECT COUNT(*) AS n FROM normalized_events" + _sql_where(base_clauses),
             tuple(base_params),
         ).fetchone()
         facet_rows = conn.execute(
-            "SELECT surface, COUNT(*) AS n FROM context_events"
+            "SELECT app AS surface, COUNT(*) AS n FROM normalized_events"
             + _sql_where(facet_clauses)
-            + " GROUP BY surface ORDER BY n DESC, surface ASC LIMIT 50",
+            + " GROUP BY app ORDER BY n DESC, surface ASC LIMIT 50",
             tuple(facet_params),
         ).fetchall()
 
@@ -219,5 +250,5 @@ def query_evidence(
             for row in facet_rows
         ],
         "cursor_kind": "observed_at_id_keyset_v1",
-        "source_layer": "privacy_hardened_context_events",
+        "source_layer": "operational_normalized",
     }
