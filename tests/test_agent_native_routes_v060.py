@@ -62,9 +62,8 @@ def test_codex_route_requires_write_only_agent_token_and_persists_safe_evidence(
         assert client.post(AGENT_CODEX_OTEL_PATH, json=payload).status_code == 401
         assert client.post(AGENT_CODEX_OTEL_PATH, json=payload, headers=api_headers).status_code == 401
         accepted = client.post(AGENT_CODEX_OTEL_PATH, json=payload, headers=agent_headers)
-        assert accepted.status_code == 200, accepted.text
-        assert accepted.json()["projected"] == 1
-        assert accepted.json()["inserted"] == 1
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.content == b""
 
         # The write-only telemetry credential cannot use the workflow read API.
         assert client.get("/v1/agent-workflows", headers=agent_headers).status_code == 401
@@ -100,7 +99,6 @@ def test_codex_route_ignores_unsupported_sensitive_records_instead_of_storing_th
     headers = {"Authorization": f"Bearer {ensure_agent_ingest_token()}"}
     with TestClient(_app()) as client:
         response = client.post(AGENT_CODEX_OTEL_PATH, json=payload, headers=headers)
-        assert response.status_code == 200
-        assert response.json()["projected"] == 0
-        assert response.json()["inserted"] == 0
+        assert response.status_code == 202
+        assert response.content == b""
     assert server_db.rows("SELECT * FROM events WHERE session_id = ?", ("codex-secret-prompt",)) == []
