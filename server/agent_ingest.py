@@ -43,7 +43,9 @@ def ingest_otel_payload(
     *,
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, int]:
-    _bounded_json_size(payload)
+    # The advertised request bound covers both the OTLP spans and the optional
+    # OpenWorkGraph defaults. Do not let large defaults bypass the same limit.
+    _bounded_json_size({"payload": payload, "defaults": defaults or {}})
     projected, stats = otel_payload_to_agent_events(
         payload,
         defaults=defaults,
