@@ -25,6 +25,7 @@ def main() -> None:
     import server.evidence_delete_routes  # noqa: F401
     import server.v0571_polish  # noqa: F401
     import server.evidence_paging  # noqa: F401
+    import server.work_profile_routes  # noqa: F401
 
     uvicorn.run(SECURE_APP, host=args.host, port=args.port)
 
