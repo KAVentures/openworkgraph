@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from gateway.enterprise_app import create_enterprise_app
 from gateway.hardening import HardeningSettings, PooledGatewayDB, SlidingWindowRateLimiter
-from gateway.settings import GatewaySettings
+from gateway.settings import PRODUCT_VERSION, GatewaySettings
 
 
 def _settings(tmp_path) -> GatewaySettings:
@@ -54,7 +54,7 @@ def test_admin_inventory_never_exposes_secrets_and_device_revoke_keeps_evidence(
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["version"] == "0.55.0"
+        assert health.json()["version"] == PRODUCT_VERSION
         assert health.json()["database_pooling"] is False
 
         enrolled = client.post(
