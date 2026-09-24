@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
+from .dashboard_privacy_policy import dashboard_safe_profile
 from .privacy_pipeline import redact_for_display
 from .secure_app import app
 from .work_profile_service import SELF_TAG_CATEGORIES, add_self_tag, compute_work_profile
@@ -14,8 +15,18 @@ from .main import ROOT
 
 @app.get("/v1/work-profile")
 def work_profile(scope: str = "current") -> dict[str, Any]:
+    """Existing API/MCP profile; keep its authorized context contract unchanged."""
     try:
         return redact_for_display(compute_work_profile(scope=scope))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/dashboard-work-profile")
+def dashboard_work_profile(scope: str = "current") -> dict[str, Any]:
+    """Content-minimized Work Profile for the human localhost dashboard."""
+    try:
+        return redact_for_display(dashboard_safe_profile(compute_work_profile(scope=scope)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

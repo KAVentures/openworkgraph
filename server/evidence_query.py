@@ -5,6 +5,7 @@ import hashlib
 import json
 from typing import Any
 
+from normalizer import safe_action_label
 from . import db
 
 _CURSOR_VERSION = 1
@@ -106,20 +107,40 @@ def _sql_where(clauses: list[str]) -> str:
     return " WHERE " + " AND ".join(clauses) if clauses else ""
 
 
+def _safe_event_action(event_type: str) -> str:
+    value = str(event_type or "").strip()
+    for prefix in ("browser_", "screen_", "clipboard_"):
+        if value.startswith(prefix):
+            return value[len(prefix):].replace("_", " ")
+    return "Observed action" if value else ""
+
+
 def _row_item(row: Any) -> dict[str, Any]:
+    """Minimize rich context before it crosses the human dashboard boundary.
+
+    Context rows remain useful locally for server-side search and explicitly
+    authorized AI retrieval. The browser receives only a safe surface plus an
+    allowlisted semantic action (or structural event type), never arbitrary
+    resource titles, URL paths or target labels.
+    """
     value = dict(row)
     try:
         metadata = json.loads(value.get("metadata_json") or "{}")
     except Exception:
         metadata = {}
     event_type = str(metadata.get("event_type") or "") if isinstance(metadata, dict) else ""
-    action = str(value.get("target_label") or value.get("action") or event_type or "")
+    semantic_action = (
+        safe_action_label({"label": value.get("target_label")})
+        or safe_action_label({"label": value.get("action")})
+    )
+    action = semantic_action or _safe_event_action(event_type)
+    surface = str(value.get("surface") or "Unknown")
     return {
         "event_id": str(value.get("event_id") or ""),
         "observed_at": str(value.get("observed_at") or ""),
-        "surface": str(value.get("surface") or "Unknown"),
-        "page": str(value.get("resource_locator") or value.get("resource_title") or ""),
-        "resource_title": str(value.get("resource_title") or ""),
+        "surface": surface,
+        "page": surface,
+        "resource_title": "",
         "action": action,
         "source": str(value.get("source") or ""),
         "event_type": event_type,
@@ -220,4 +241,5 @@ def query_evidence(
         ],
         "cursor_kind": "observed_at_id_keyset_v1",
         "source_layer": "privacy_hardened_context_events",
+        "presentation_layer": "dashboard_content_minimized",
     }
