@@ -6,6 +6,11 @@ const background = fs.readFileSync('browser_extension/browser_signal_enrichment.
 const manifest = JSON.parse(fs.readFileSync('browser_extension/manifest.json','utf8'));
 const ui = fs.readFileSync('dashboard/browser_signals.js','utf8');
 
+// Parse every new JavaScript surface in CI, in addition to inspecting its privacy contract.
+assert.doesNotThrow(() => new Function(content));
+assert.doesNotThrow(() => new Function(background));
+assert.doesNotThrow(() => new Function(ui));
+
 // No permission expansion: the sensor remains on the pre-v0.58 permission set.
 assert.deepEqual(manifest.permissions, ['tabs','webNavigation','storage','alarms']);
 assert.equal(manifest.permissions.includes('downloads'), false);
