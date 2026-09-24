@@ -13,6 +13,12 @@ from .local_auth import bearer_matches
 
 router = APIRouter()
 
+# Agent write ingress deliberately sits outside /v1/. The secure local server's
+# /v1/* namespace accepts the broader API/dashboard credential, while these
+# exact write endpoints authenticate only the least-privilege agent token.
+AGENT_EVENT_PATH = "/agent-ingest/v1/events"
+AGENT_OTEL_PATH = "/agent-ingest/v1/otel"
+
 
 class AgentEventBatch(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
@@ -41,7 +47,7 @@ def _require_api_read_bearer(request: Request) -> None:
         raise HTTPException(status_code=401, detail="API authentication required")
 
 
-@router.post("/v1/agent-events")
+@router.post(AGENT_EVENT_PATH)
 def ingest_agent_events(batch: AgentEventBatch, request: Request) -> dict[str, int | str]:
     _require_agent_write_bearer(request)
     try:
@@ -51,7 +57,7 @@ def ingest_agent_events(batch: AgentEventBatch, request: Request) -> dict[str, i
     return {**result, "status": "ok"}
 
 
-@router.post("/v1/agent-events/otel")
+@router.post(AGENT_OTEL_PATH)
 async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
     _require_agent_write_bearer(request)
     try:
