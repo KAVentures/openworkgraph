@@ -120,11 +120,28 @@ def _ensure_identity_columns(conn: sqlite3.Connection, table: str) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
+def _decoded_metadata(value: Any) -> dict[str, Any]:
+    """Decode legacy metadata defensively without mutating stored raw evidence."""
+    try:
+        parsed = json.loads(value or "{}") if isinstance(value, str) else value
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        return {}
+    metadata = dict(parsed)
+    # Older/custom producers can supply scalar values here. Analytics expects
+    # mapping-shaped page/target objects, so invalid shapes degrade to no detail.
+    for key in ("page", "target"):
+        if key in metadata and not isinstance(metadata.get(key), dict):
+            metadata[key] = {}
+    return metadata
+
+
 def _row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d.pop("id", None)
     if "metadata_json" in d:
-        d["metadata"] = json.loads(d.pop("metadata_json") or "{}")
+        d["metadata"] = _decoded_metadata(d.pop("metadata_json"))
     return d
 
 
@@ -345,7 +362,7 @@ def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         for row in conn.execute(query, params).fetchall():
             d = dict(row)
             if "metadata_json" in d:
-                d["metadata"] = json.loads(d.pop("metadata_json") or "{}")
+                d["metadata"] = _decoded_metadata(d.pop("metadata_json"))
             result.append(d)
         return result
 
