@@ -24,6 +24,7 @@ _SUPPORTED_EVENTS = frozenset({
     "SubagentStop",
     "StopFailure",
 })
+_SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]{0,159}$")
 
 
 def _now_iso() -> str:
@@ -36,10 +37,9 @@ def _text(value: Any, limit: int = 200) -> str:
 
 def _safe_label(value: Any, *, default: str, limit: int = 100) -> str:
     raw = _text(value, limit=limit)
-    if not raw:
+    if not raw or not _SAFE_LABEL.fullmatch(raw):
         return default
-    cleaned = re.sub(r"[^A-Za-z0-9._:/ -]+", "-", raw).strip(" -")
-    return cleaned[:limit] or default
+    return raw
 
 
 def _event_id(*parts: Any) -> str:
