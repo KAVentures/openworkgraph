@@ -6,7 +6,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "server" / "secure_app.py"
+SOURCES = (
+    ROOT / "server" / "secure_app.py",
+    ROOT / "server" / "secure_app_base.py",
+)
 FUNCTIONS = {"_bootstrap_script", "_connection_override_script"}
 
 
@@ -18,14 +21,17 @@ def constant_return(fn: ast.FunctionDef) -> str:
 
 
 def main() -> None:
-    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     scripts: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
-            value = constant_return(node).strip()
-            if not (value.startswith("<script>") and value.endswith("</script>")):
-                raise RuntimeError(f"{node.name} did not return a <script> block")
-            scripts[node.name] = value[len("<script>") : -len("</script>")]
+    for source in SOURCES:
+        if not source.exists():
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
+                value = constant_return(node).strip()
+                if not (value.startswith("<script>") and value.endswith("</script>")):
+                    raise RuntimeError(f"{node.name} did not return a <script> block")
+                scripts[node.name] = value[len("<script>") : -len("</script>")]
     missing = FUNCTIONS - scripts.keys()
     if missing:
         raise RuntimeError(f"missing injected dashboard script functions: {sorted(missing)}")
