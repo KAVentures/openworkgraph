@@ -188,7 +188,7 @@
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if (active!=='overview') return;
     try {
-      const [timeline,patterns]=await Promise.all([gwCall('/v1/timeline?scope=current'),gwCall('/v1/patterns?scope=current')]);
+      const [timeline,patterns]=await Promise.all([gwCall('/v1/timeline?scope=current'),gwCall('/v1/dashboard-patterns?scope=current')]);
       renderTimeline(timeline); renderRichPatterns(patterns);
     } catch (_) {}
   }
