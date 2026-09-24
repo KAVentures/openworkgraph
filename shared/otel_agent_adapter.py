@@ -3,8 +3,8 @@ from __future__ import annotations
 """Translate OpenTelemetry GenAI spans into OpenWorkGraph structural agent events.
 
 Only a small allowlist of structural attributes is read. Prompt/message contents,
-tool arguments/results, native events and arbitrary span attributes are never
-copied into OpenWorkGraph evidence.
+tool arguments/results, native events, arbitrary span attributes, and arbitrary
+span names are never copied into OpenWorkGraph evidence.
 """
 
 from datetime import datetime, timezone
@@ -165,7 +165,6 @@ def _base_payload(
         or "OTel Agent",
         160,
     )
-    tool_name = _text(attrs.get("gen_ai.tool.name") or attrs.get("gen_ai.tool.call.name"), 200)
     conversation_id = _text(attrs.get("gen_ai.conversation.id"), 240)
     run_id = _text(attrs.get("openworkgraph.run.id") or defaults.get("run_id") or trace_id, 240)
     workflow_id = _text(attrs.get("openworkgraph.workflow.id") or defaults.get("workflow_id"), 240)
@@ -267,7 +266,10 @@ def otel_payload_to_agent_events(
 
         if operation in _TOOL_OPERATIONS:
             attrs = _attrs(span.get("attributes"))
-            tool_name = _text(attrs.get("gen_ai.tool.name") or attrs.get("gen_ai.tool.call.name") or span.get("name"), 200)
+            # Never use span.name as a tool-name fallback: unlike the structured
+            # GenAI tool-name attributes, some runtimes put user/data fragments
+            # into arbitrary span names.
+            tool_name = _text(attrs.get("gen_ai.tool.name") or attrs.get("gen_ai.tool.call.name"), 200)
             events.append({
                 **base,
                 "event_id": prefix,
