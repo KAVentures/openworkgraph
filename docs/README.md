@@ -11,6 +11,7 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [How MCP works](MCP_ARCHITECTURE.md) — plain-language explanation of local stdio MCP, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
 - [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company brains and other AI platforms.
 - [Agent evidence contract](AGENT_EVIDENCE.md) — vendor-neutral structural telemetry for agent runs, tool calls, trace/span relationships, human approvals, observation depth, cross-actor workflow correlation, and privacy-safe adapter design.
+- [Native agent adapters](NATIVE_AGENT_ADAPTERS.md) — opt-in Claude Code lifecycle hooks and Codex OTLP trace ingestion, least-privilege credentials, fail-open behavior and privacy boundaries.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for AI analysis.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.
