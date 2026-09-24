@@ -58,7 +58,9 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
         ({"session_id": "s", "hook_event_name": "SessionStart"}, "run_started", "running"),
         ({"session_id": "s", "hook_event_name": "SessionEnd"}, "run_finished", "unknown"),
         ({"session_id": "s", "hook_event_name": "PermissionRequest", "tool_use_id": "t", "tool_name": "Edit"}, "human_approval_requested", "running"),
-        ({"session_id": "s", "hook_event_name": "PermissionDenied", "tool_use_id": "t", "tool_name": "Edit"}, "human_approval_received", "denied"),
+        # PermissionDenied is an auto-mode policy denial in current Claude Code,
+        # so it must not be mislabeled as a human decision.
+        ({"session_id": "s", "hook_event_name": "PermissionDenied", "tool_use_id": "t", "tool_name": "Edit"}, "error", "denied"),
         ({"session_id": "s", "hook_event_name": "StopFailure", "prompt_id": "p", "error": "private failure details"}, "error", "error"),
     ]
     for payload, operation, status in cases:
@@ -102,12 +104,15 @@ def test_retry_of_same_hook_event_is_idempotent():
 
 
 def test_settings_fragment_registers_only_safe_supported_hooks():
-    fragment = claude_code_hook.settings_fragment("python -m adapters.claude_code_hook")
+    fragment = claude_code_hook.settings_fragment("python")
     hooks = fragment["hooks"]
     assert set(hooks) == set(claude_code_hook.SUPPORTED_EVENTS)
     assert "UserPromptSubmit" not in hooks
     assert "PreToolUse" not in hooks
-    assert hooks["PostToolUse"][0]["hooks"][0]["timeout"] == 2
+    handler = hooks["PostToolUse"][0]["hooks"][0]
+    assert handler["command"] == "python"
+    assert handler["args"] == ["-m", "adapters.claude_code_hook"]
+    assert handler["timeout"] == 2
 
 
 def test_hook_cli_fails_open_without_printing_native_exception(monkeypatch, capsys):
