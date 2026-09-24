@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from shared.agent_evidence import AgentEvidenceError
 from .agent_auth import agent_bearer_matches
-from .agent_ingest import ingest_agent_payloads, ingest_otel_payload
+from .agent_ingest import ingest_agent_payloads, ingest_codex_otel_payload, ingest_otel_payload
 from .agent_workflows import agent_workflow_view
 from .local_auth import bearer_matches
 
@@ -18,6 +18,7 @@ router = APIRouter()
 # exact write endpoints authenticate only the least-privilege agent token.
 AGENT_EVENT_PATH = "/agent-ingest/v1/events"
 AGENT_OTEL_PATH = "/agent-ingest/v1/otel"
+AGENT_CODEX_OTEL_PATH = "/agent-ingest/v1/codex-otel"
 
 
 class AgentEventBatch(BaseModel):
@@ -71,6 +72,27 @@ async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
     try:
         defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
         result = ingest_otel_payload(payload, defaults=defaults)
+    except (AgentEvidenceError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**result, "status": "ok"}
+
+
+@router.post(AGENT_CODEX_OTEL_PATH)
+async def ingest_codex_otel(request: Request) -> dict[str, int | str]:
+    _require_agent_write_bearer(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid Codex OpenTelemetry JSON payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Codex OpenTelemetry payload must be an object")
+
+    # Codex sends standard OTLP JSON. Optional OpenWorkGraph defaults are useful
+    # for custom relays/tests, but normal Codex exporters need no OWG-specific body.
+    defaults_raw = payload.pop("openworkgraph", {})
+    try:
+        defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
+        result = ingest_codex_otel_payload(payload, defaults=defaults)
     except (AgentEvidenceError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**result, "status": "ok"}
