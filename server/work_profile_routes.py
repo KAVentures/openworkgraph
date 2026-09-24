@@ -12,10 +12,25 @@ from .work_profile_service import SELF_TAG_CATEGORIES, add_self_tag, compute_wor
 from .main import ROOT
 
 
+def _dashboard_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Remove rich context echoes that the human localhost dashboard does not need."""
+    out = dict(profile)
+    out["navigation_hunting_candidates"] = [
+        {k: v for k, v in dict(item).items() if k not in {"resource_locator"}}
+        for item in (profile.get("navigation_hunting_candidates") or [])
+    ]
+    out["rapid_click_candidates"] = [
+        {k: v for k, v in dict(item).items() if k not in {"resource_locator", "target_label"}}
+        for item in (profile.get("rapid_click_candidates") or [])
+    ]
+    out["dashboard_data_layer"] = "content_minimized"
+    return out
+
+
 @app.get("/v1/work-profile")
 def work_profile(scope: str = "current") -> dict[str, Any]:
     try:
-        return redact_for_display(compute_work_profile(scope=scope))
+        return redact_for_display(_dashboard_safe_profile(compute_work_profile(scope=scope)))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
