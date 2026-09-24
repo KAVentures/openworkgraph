@@ -87,8 +87,10 @@ jobs:
           python - <<'PY'
           import json
           import urllib.request
+          from pathlib import Path
 
           BASE = "http://127.0.0.1:8790"
+          EXPECTED_VERSION = Path("VERSION").read_text(encoding="utf-8").strip()
 
           def request(method, path, body=None, token=None):
               data = None if body is None else json.dumps(body).encode()
@@ -100,7 +102,7 @@ jobs:
                   return json.loads(response.read().decode())
 
           health = request("GET", "/health")
-          assert health["version"] == "0.56.1", health
+          assert health["version"] == EXPECTED_VERSION, health
           assert health["database_pooling"] is True, health
           assert health["human_oidc_enabled"] is False, health
 
@@ -115,7 +117,7 @@ jobs:
           assert capabilities["human_access"]["pseudonymous_trace"]["cursor_pagination"] is True, capabilities
 
           runtime = request("GET", "/v1/admin/runtime", token="test-admin-token")
-          assert runtime["version"] == "0.56.1", runtime
+          assert runtime["version"] == EXPECTED_VERSION, runtime
           assert runtime["database_pooling"]["enabled"] is True, runtime
           assert runtime["database_pooling"]["min_size"] == 1, runtime
           assert runtime["database_pooling"]["max_size"] == 4, runtime
@@ -198,7 +200,7 @@ jobs:
           assert row["metadata"]["tab_context_id"] == "runtime:ci-tab", row
           assert row["clipboard_transfer_id"] == "ci-transfer", row
           assert trace["derived_task_inference_authoritative"] is False
-          print("Gateway/PostgreSQL v0.56.1 compatibility test passed")
+          print(f"Gateway/PostgreSQL {EXPECTED_VERSION} compatibility test passed")
           PY
       - name: Show Gateway logs on failure
         if: failure()
