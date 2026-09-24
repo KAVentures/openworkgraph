@@ -476,5 +476,10 @@ def stop_optional_http_mcp() -> None:
 
 extend_lifespan(app, shutdown=stop_optional_http_mcp)
 
+# Agent execution is an additive machine-evidence source over the same local app.
+# Route-level authentication remains bearer-only inside agent_routes.
+from .agent_routes import router as _agent_router
+app.include_router(_agent_router)
+
 
 __all__ = ["app"]
