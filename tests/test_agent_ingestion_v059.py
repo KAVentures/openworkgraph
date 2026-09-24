@@ -11,7 +11,8 @@ from connector.policy import merge_policies, prepare_event_for_gateway
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 from server import db as server_db
-from server.agent_routes import router as agent_router
+from server.agent_auth import ensure_agent_ingest_token
+from server.agent_routes import AGENT_EVENT_PATH, AGENT_OTEL_PATH, router as agent_router
 from server.agent_workflows import stitch_agent_workflows
 from server.local_auth import ensure_api_token
 from shared.agent_evidence import agent_event_to_evidence
@@ -29,7 +30,11 @@ def _isolated_agent_app() -> FastAPI:
     return isolated
 
 
-def _bearer() -> dict[str, str]:
+def _agent_bearer() -> dict[str, str]:
+    return {"Authorization": f"Bearer {ensure_agent_ingest_token()}"}
+
+
+def _api_bearer() -> dict[str, str]:
     return {"Authorization": f"Bearer {ensure_api_token()}"}
 
 
@@ -119,7 +124,6 @@ def _otel_payload() -> dict:
 
 def test_production_secure_app_adds_agent_router_without_replacing_existing_security_source():
     secure = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
-    # Existing security/dashboard implementation remains in the same file.
     for marker in (
         "/v1/dashboard-session",
         "/v1/export-ticket",
@@ -132,13 +136,23 @@ def test_production_secure_app_adds_agent_router_without_replacing_existing_secu
     assert "app.include_router(_agent_router)" in secure
 
 
-def test_agent_endpoint_requires_machine_bearer_and_persists_all_three_layers():
+def test_agent_write_credential_is_distinct_from_broader_api_credential():
+    with TestClient(_isolated_agent_app()) as client:
+        assert client.post(AGENT_EVENT_PATH, json={"events": [_agent_payload("auth-no-token")]}).status_code == 401
+        assert client.post(AGENT_EVENT_PATH, headers=_api_bearer(), json={"events": [_agent_payload("auth-api-token")]}).status_code == 401
+        accepted = client.post(AGENT_EVENT_PATH, headers=_agent_bearer(), json={"events": [_agent_payload("auth-agent-token")]})
+        assert accepted.status_code == 200, accepted.text
+        # The write-only token cannot read the derived human/agent view.
+        assert client.get("/v1/agent-workflows", headers=_agent_bearer()).status_code == 401
+        assert client.get("/v1/agent-workflows", headers=_api_bearer()).status_code == 200
+
+
+def test_agent_endpoint_persists_all_three_layers():
     payload = _agent_payload()
     with TestClient(_isolated_agent_app()) as client:
-        assert client.post("/v1/agent-events", json={"events": [payload]}).status_code == 401
-        accepted = client.post("/v1/agent-events", json={"events": [payload]}, headers=_bearer())
+        accepted = client.post(AGENT_EVENT_PATH, json={"events": [payload]}, headers=_agent_bearer())
         assert accepted.status_code == 200, accepted.text
-        assert accepted.json()["inserted"] in {0, 1}  # idempotent if test reruns in same worker
+        assert accepted.json()["inserted"] in {0, 1}
 
     raw = server_db.rows("SELECT * FROM events WHERE event_id = ?", (payload["event_id"],))
     normalized = server_db.rows("SELECT * FROM normalized_events WHERE event_id = ?", (payload["event_id"],))
@@ -157,8 +171,8 @@ def test_direct_agent_batch_fails_closed_without_partial_insert():
     good_id = "v059-atomic-good"
     with TestClient(_isolated_agent_app()) as client:
         response = client.post(
-            "/v1/agent-events",
-            headers=_bearer(),
+            AGENT_EVENT_PATH,
+            headers=_agent_bearer(),
             json={"events": [
                 _agent_payload(good_id),
                 _agent_payload("v059-atomic-bad", prompt="must never be accepted"),
@@ -171,12 +185,12 @@ def test_direct_agent_batch_fails_closed_without_partial_insert():
 def test_otel_endpoint_projects_structure_and_drops_sensitive_content():
     payload = _otel_payload()
     with TestClient(_isolated_agent_app()) as client:
-        response = client.post("/v1/agent-events/otel", headers=_bearer(), json=payload)
+        response = client.post(AGENT_OTEL_PATH, headers=_agent_bearer(), json=payload)
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["spans_seen"] == 2
         assert body["spans_ignored"] == 0
-        assert body["projected"] == 3  # run start + run finish + tool call
+        assert body["projected"] == 3
 
     stored = server_db.rows(
         "SELECT * FROM events WHERE session_id = ? ORDER BY observed_at ASC",
@@ -275,7 +289,7 @@ def test_explicit_human_trigger_stitch_is_authoritative_evidence_link_not_infere
     assert links[0]["human_trigger_event_id"] == "human-submit-v059"
     assert links[0]["link_method"] == "explicit_trigger_event"
     assert links[0]["link_confidence"] == 1.0
-    assert links[0]["authoritative"] is False  # assembled workflow view remains derived
+    assert links[0]["authoritative"] is False
 
 
 def test_temporal_stitch_is_conservative_and_far_run_stays_unlinked():
