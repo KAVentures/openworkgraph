@@ -281,3 +281,22 @@ def test_enterprise_runner_installs_dashboard_privacy_last():
     privacy = runner.index("import server.dashboard_privacy")
     assert privacy > runner.index("import server.evidence_paging")
     assert privacy > runner.index("import server.work_profile_routes")
+
+
+def test_formatted_interaction_labels_keep_safe_verbs_without_names():
+    from server.dashboard_privacy_policy import safe_dashboard_action
+
+    assert safe_dashboard_action("click: Send (button)") == "Send"
+    assert safe_dashboard_action("click: Open account (button)") == "Open account"
+    leaked = safe_dashboard_action("click: Open email from Anna Svensson (button)")
+    assert "Anna" not in leaked and leaked == "Open email"
+
+
+def test_dashboard_fetches_privacy_safe_patterns_endpoint():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    dashboard_js = "".join(p.read_text(encoding="utf-8") for p in (root / "dashboard").glob("*.js"))
+    dashboard_js += (root / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert "/v1/dashboard-patterns" in dashboard_js
+    assert "'/v1/patterns" not in dashboard_js and '"/v1/patterns' not in dashboard_js
