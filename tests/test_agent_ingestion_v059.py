@@ -1,19 +1,32 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
+from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from connector.policy import merge_policies, prepare_event_for_gateway
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 from server import db as server_db
+from server.agent_routes import router as agent_router
 from server.agent_workflows import stitch_agent_workflows
 from server.local_auth import ensure_api_token
-from server.secure_app import app
 from shared.agent_evidence import agent_event_to_evidence
 from shared.otel_agent_adapter import otel_payload_to_agent_events
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _isolated_agent_app() -> FastAPI:
+    # Do not import server.secure_app here: it intentionally composes security
+    # middleware onto server.main.app and would contaminate unrelated unit tests.
+    server_db.init_db()
+    isolated = FastAPI()
+    isolated.include_router(agent_router)
+    return isolated
 
 
 def _bearer() -> dict[str, str]:
@@ -104,18 +117,24 @@ def _otel_payload() -> dict:
     }
 
 
-def test_production_secure_app_keeps_existing_routes_and_adds_agent_routes_once():
-    paths = [getattr(route, "path", "") for route in app.routes]
-    for required in ("/health", "/v1/events", "/v1/browser-events", "/v1/mcp-http"):
-        assert required in paths
-    assert paths.count("/v1/agent-events") == 1
-    assert paths.count("/v1/agent-events/otel") == 1
-    assert paths.count("/v1/agent-workflows") == 1
+def test_production_secure_app_adds_agent_router_without_replacing_existing_security_source():
+    secure = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
+    # Existing security/dashboard implementation remains in the same file.
+    for marker in (
+        "/v1/dashboard-session",
+        "/v1/export-ticket",
+        "/v1/mcp-connection-config",
+        "cursor://anysphere.cursor-deeplink/mcp/install",
+        "local_capability_guard",
+    ):
+        assert marker in secure
+    assert "from .agent_routes import router as _agent_router" in secure
+    assert "app.include_router(_agent_router)" in secure
 
 
 def test_agent_endpoint_requires_machine_bearer_and_persists_all_three_layers():
     payload = _agent_payload()
-    with TestClient(app) as client:
+    with TestClient(_isolated_agent_app()) as client:
         assert client.post("/v1/agent-events", json={"events": [payload]}).status_code == 401
         accepted = client.post("/v1/agent-events", json={"events": [payload]}, headers=_bearer())
         assert accepted.status_code == 200, accepted.text
@@ -136,7 +155,7 @@ def test_agent_endpoint_requires_machine_bearer_and_persists_all_three_layers():
 
 def test_direct_agent_batch_fails_closed_without_partial_insert():
     good_id = "v059-atomic-good"
-    with TestClient(app) as client:
+    with TestClient(_isolated_agent_app()) as client:
         response = client.post(
             "/v1/agent-events",
             headers=_bearer(),
@@ -151,7 +170,7 @@ def test_direct_agent_batch_fails_closed_without_partial_insert():
 
 def test_otel_endpoint_projects_structure_and_drops_sensitive_content():
     payload = _otel_payload()
-    with TestClient(app) as client:
+    with TestClient(_isolated_agent_app()) as client:
         response = client.post("/v1/agent-events/otel", headers=_bearer(), json=payload)
         assert response.status_code == 200, response.text
         body = response.json()
@@ -256,7 +275,7 @@ def test_explicit_human_trigger_stitch_is_authoritative_evidence_link_not_infere
     assert links[0]["human_trigger_event_id"] == "human-submit-v059"
     assert links[0]["link_method"] == "explicit_trigger_event"
     assert links[0]["link_confidence"] == 1.0
-    assert links[0]["authoritative"] is False  # the assembled workflow view remains derived
+    assert links[0]["authoritative"] is False  # assembled workflow view remains derived
 
 
 def test_temporal_stitch_is_conservative_and_far_run_stays_unlinked():
