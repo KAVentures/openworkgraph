@@ -2,9 +2,13 @@ from __future__ import annotations
 
 """Minimal OTLP/HTTP JSON example for OpenWorkGraph agent observation.
 
-Set OWG_API_TOKEN to the local OpenWorkGraph collector token, start OpenWorkGraph,
-and run this file. Real agent runtimes should emit equivalent OpenTelemetry GenAI
-spans rather than copying this fixture.
+Start OpenWorkGraph, obtain the dedicated write-only telemetry token with:
+
+    python -m server.agent_auth
+
+Set that value as OWG_AGENT_INGEST_TOKEN, then run this file. Real agent
+runtimes should emit equivalent OpenTelemetry GenAI spans rather than copying
+this fixture.
 """
 
 import json
@@ -12,10 +16,13 @@ import os
 import urllib.request
 from time import time_ns
 
-TOKEN = os.environ.get("OWG_API_TOKEN", "")
-URL = os.environ.get("OWG_AGENT_OTEL_URL", "http://127.0.0.1:8787/v1/agent-events/otel")
+TOKEN = os.environ.get("OWG_AGENT_INGEST_TOKEN", "")
+URL = os.environ.get(
+    "OWG_AGENT_OTEL_URL",
+    "http://127.0.0.1:8787/agent-ingest/v1/otel",
+)
 if not TOKEN:
-    raise SystemExit("OWG_API_TOKEN is required")
+    raise SystemExit("OWG_AGENT_INGEST_TOKEN is required; run: python -m server.agent_auth")
 
 start = time_ns()
 end = start + 250_000_000
