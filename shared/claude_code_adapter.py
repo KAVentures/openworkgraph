@@ -167,16 +167,30 @@ def claude_hook_to_agent_events(
             tool_name=tool_name,
         )]
 
-    if hook in {"PermissionRequest", "PermissionDenied"}:
+    if hook == "PermissionRequest":
         tool_use_id = _text(payload.get("tool_use_id"), 240)
         tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
         return [_base_event(
             payload,
-            operation=(
-                "human_approval_requested" if hook == "PermissionRequest"
-                else "human_approval_received"
-            ),
-            status="running" if hook == "PermissionRequest" else "denied",
+            operation="human_approval_requested",
+            status="running",
+            observed_at=timestamp,
+            run_id=session_id,
+            trace_id=trace_id,
+            span_id=tool_use_id,
+            event_key=hook,
+            tool_name=tool_name,
+        )]
+
+    if hook == "PermissionDenied":
+        # Claude Code emits PermissionDenied in auto mode. Do not mislabel an
+        # automatic policy denial as a human approval/denial decision.
+        tool_use_id = _text(payload.get("tool_use_id"), 240)
+        tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
+        return [_base_event(
+            payload,
+            operation="error",
+            status="denied",
             observed_at=timestamp,
             run_id=session_id,
             trace_id=trace_id,
