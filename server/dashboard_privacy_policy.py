@@ -39,9 +39,14 @@ def safe_dashboard_action(*values: Any, event_type: str = "") -> str:
         text = _clean_action(raw)
         if not text:
             continue
-        label = safe_action_label({"label": text})
-        if label:
-            return label
+        # Interaction strings are often formatted "click: Send (button)"; try the
+        # inner UI label as well as the full string.
+        inner = re.sub(r"^[a-z][a-z ]{0,30}:\s*", "", text, flags=re.IGNORECASE)
+        inner = re.sub(r"\s*\([a-z ]{1,30}\)$", "", inner, flags=re.IGNORECASE)
+        for candidate in (text, inner) if inner != text else (text,):
+            label = safe_action_label({"label": candidate})
+            if label:
+                return label
 
     structural = _clean_action(event_type)
     for prefix in ("browser ", "screen ", "clipboard "):
