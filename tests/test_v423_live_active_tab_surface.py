@@ -11,8 +11,8 @@ def test_browser_heartbeat_source_reports_sanitized_active_tab():
     assert 'ext.tabs.query({active: true, lastFocusedWindow: true})' in background
     assert 'page,' in background
     assert 'safeUrl(tab?.url || "")' in background
-    assert '"version": "1.10.0"' in manifest
-    assert '"version_name": "1.10.0-v52-workflow-links"' in manifest
+    assert '"version": "1.11.0"' in manifest
+    assert '"version_name": "1.11.0-v58-metadata-signals"' in manifest
 
 
 def test_browser_heartbeat_keeps_safe_active_page_and_surface():

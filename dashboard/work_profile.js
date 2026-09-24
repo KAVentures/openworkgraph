@@ -11,6 +11,7 @@
     const h=Math.floor(m/60), mm=m%60;
     return mm?`${h}h ${mm}m`:`${h}h`;
   }
+  function fmtMs(ms){ return fmt(Number(ms||0)/1000); }
 
   function ensureCard(){
     const panel=document.querySelector('#panel-overview');
@@ -22,37 +23,30 @@
     card.id='workProfileCard';
     card.innerHTML=`
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
-        <div><h2 style="margin-bottom:4px">Work profile</h2><div class="muted">Derived locally from evidence you already capture. These are workflow signals, not employee productivity scores.</div></div>
-        <span class="badge">Derived · no new sensor</span>
+        <div><h2 style="margin-bottom:4px">Work profile</h2><div class="muted">Locally derived workflow signals. These are not employee productivity scores.</div></div>
+        <span class="badge">Evidence-backed · review candidates</span>
       </div>
       <div id="workProfileMetrics" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:14px"></div>
       <div class="row" style="margin-top:13px">
-        <div>
-          <h3>Manual transfers</h3><div class="muted">Linked copy/cut → paste actions; clipboard contents are never read.</div>
-          <div id="workProfileTransfers" class="table-wrap"></div>
-        </div>
-        <div>
-          <h3>AI-tool usage</h3><div class="muted">Observed time/actions on AI surfaces only; OWG does not infer prompt content.</div>
-          <div id="workProfileAi" class="table-wrap"></div>
-        </div>
+        <div><h3>Manual transfers</h3><div class="muted">Linked copy/cut → paste actions; clipboard contents are never read.</div><div id="workProfileTransfers" class="table-wrap"></div></div>
+        <div><h3>AI-tool usage</h3><div class="muted">Observed time/actions on AI surfaces only; OWG does not infer prompt content.</div><div id="workProfileAi" class="table-wrap"></div></div>
       </div>
       <div class="row" style="margin-top:10px">
-        <div>
-          <h3>Observed rhythm</h3><div id="workProfileRhythm" class="muted">—</div>
-        </div>
-        <div>
-          <h3>Navigation / hunting candidates</h3><div class="muted">Repeated-resource signals only; these require review and are not automatically classified as waste.</div>
-          <div id="workProfileHunting"></div>
-        </div>
+        <div><h3>Observed rhythm</h3><div id="workProfileRhythm" class="muted">—</div></div>
+        <div><h3>Navigation / hunting candidates</h3><div class="muted">Repeated-resource signals only; review before interpreting them as friction.</div><div id="workProfileHunting"></div></div>
       </div>
+      <div class="row" style="margin-top:10px">
+        <div><h3>Tool waiting</h3><div class="muted">Rounded browser navigation timing. Observed loading time is not automatically wasted time.</div><div id="workProfileWaiting"></div></div>
+        <div><h3>Friction candidates</h3><div class="muted">Derived from existing safe click/navigation evidence; no extra click or login sensor.</div><div id="workProfileFriction"></div></div>
+      </div>
+      <div id="workProfileFileMoves" style="margin-top:10px"></div>
       <div class="note" style="margin-top:13px">
         <strong>Voluntary self-tag</strong>
         <div class="muted" style="margin:3px 0 9px">Add ground truth for recent work. This is user-provided context, not sensed behavior.</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
           <label style="font-size:12px;font-weight:700">Category<br><select id="selfTagCategory" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:7px 9px;background:#fff"><option>Routine admin</option><option>Firefighting</option><option>Blocked</option><option>Deep work</option><option>Customer work</option><option>Other</option></select></label>
           <label style="font-size:12px;font-weight:700">Recent span<br><select id="selfTagMinutes" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:7px 9px;background:#fff"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option></select></label>
-          <button type="button" class="secondary" id="saveSelfTag">Tag recent work</button>
-          <span id="selfTagStatus" class="muted"></span>
+          <button type="button" class="secondary" id="saveSelfTag">Tag recent work</button><span id="selfTagStatus" class="muted"></span>
         </div>
       </div>`;
     const metrics=panel.querySelector('.metrics');
@@ -105,6 +99,28 @@
     if(huntingHost) huntingHost.innerHTML=hunting.length
       ? hunting.map(x=>`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>${esc(x.surface)}</strong> · ${Number(x.visit_count||0)} visits<div class="muted mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.resource_locator||'')}</div></div>`).join('')
       : '<div class="muted" style="margin-top:8px">No repeated-resource candidates yet.</div>';
+
+    const waiting=(profile.tool_waiting||[]).slice(0,5);
+    const waitingHost=document.querySelector('#workProfileWaiting');
+    if(waitingHost) waitingHost.innerHTML=waiting.length
+      ? waiting.map(x=>`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>${esc(x.surface)}</strong> · median load ${esc(fmtMs(x.median_load_ms))}<div class="muted">${Number(x.navigation_count||0)} observed navigations · p95 ${esc(fmtMs(x.p95_load_ms))}</div></div>`).join('')
+      : '<div class="muted" style="margin-top:8px">No browser timing samples yet.</div>';
+
+    const clicks=(profile.rapid_click_candidates||[]).slice(0,3);
+    const auth=(profile.auth_flow_candidates||[]).slice(-3);
+    const frictionHost=document.querySelector('#workProfileFriction');
+    if(frictionHost){
+      const rows=[];
+      for(const x of clicks) rows.push(`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>Rapid-click candidate</strong> · ${esc(x.surface)}<div class="muted">${Number(x.max_clicks_in_1_5s||0)} clicks/1.5s on one safe target · Needs review</div></div>`);
+      for(const x of auth) rows.push(`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>Auth-flow candidate</strong> · ${esc(x.surface)}<div class="muted">Observed ${esc(fmt(x.duration_seconds))} in auth-path sequence · Needs review</div></div>`);
+      frictionHost.innerHTML=rows.join('')||'<div class="muted" style="margin-top:8px">No friction candidates yet.</div>';
+    }
+
+    const uploads=profile.file_upload_categories||[];
+    const uploadHost=document.querySelector('#workProfileFileMoves');
+    if(uploadHost) uploadHost.innerHTML=uploads.length
+      ? `<h3>Optional file-upload categories</h3><div class="muted">Coarse MIME categories only; no filenames, paths, sizes or file contents.</div><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:7px">${uploads.slice(0,12).map(x=>`<span class="pill">${esc(x.surface)} · ${esc(x.category)} ×${Number(x.file_count||0)}</span>`).join('')}</div>`
+      : '';
   }
 
   let loading=false;
@@ -140,11 +156,6 @@
     }catch(e){ if(status) status.textContent=e.message||'Could not save tag.'; }
   }
 
-  function install(){
-    ensureCard();
-    document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(refresh,0));
-    refresh();
-    setInterval(()=>{if(!document.hidden) refresh();},5000);
-  }
+  function install(){ensureCard();document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(refresh,0));refresh();setInterval(()=>{if(!document.hidden) refresh();},5000);}
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',install); else install();
 })();
