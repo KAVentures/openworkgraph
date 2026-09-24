@@ -2,7 +2,7 @@
 
 OpenWorkGraph represents AI agents as first-class participants in the same work graph as humans and systems.
 
-This document defines the vendor-neutral structural contract, the authenticated local ingestion paths, OpenTelemetry mapping, human-to-agent correlation, and the privacy boundary. No AI provider, framework, or agent runtime is authoritative.
+This document defines the vendor-neutral structural contract, authenticated local ingestion, OpenTelemetry mapping, human-to-agent correlation, and the privacy boundary. No AI provider, framework, or agent runtime is authoritative.
 
 ## Design goal
 
@@ -61,14 +61,24 @@ No database migration is required. The existing raw evidence, normalized evidenc
 
 ## Local authenticated ingestion
 
-Two machine-write routes are available on the normal secure local server:
+Two write-only machine endpoints are available on the normal secure local server:
 
 ```text
-POST /v1/agent-events
-POST /v1/agent-events/otel
+POST /agent-ingest/v1/events
+POST /agent-ingest/v1/otel
 ```
 
-Both require the same local collector bearer credential used for trusted machine capture. A browser or dashboard session is not an agent-write credential.
+They intentionally sit outside the ordinary `/v1/` read/API namespace and require a dedicated agent-ingest bearer. The agent credential cannot read work history, exports, summaries, or the derived human-agent workflow view.
+
+Generate/read the installation-local credential explicitly with:
+
+```bash
+python -m server.agent_auth
+```
+
+The token is stored in the same protected local auth directory as the other OpenWorkGraph installation secrets, but in its own `.agent_ingest_token` file. Do not give a third-party agent the broader OpenWorkGraph API token when all it needs is telemetry write access.
+
+Browser and dashboard credentials are not agent-write credentials. Conversely, the normal API bearer is not accepted by the agent-write endpoints.
 
 Direct structural batches use:
 
@@ -133,13 +143,13 @@ trigger_event_id
 
 ## Human-to-agent workflow view
 
-The authenticated read endpoint:
+The authenticated read endpoint remains in the normal API namespace:
 
 ```text
 GET /v1/agent-workflows
 ```
 
-builds a derived index over the canonical evidence. It groups agent events into runs and, when possible, associates them with an earlier observed human agent-submit event.
+It requires the normal OpenWorkGraph API bearer, not the write-only agent token. It builds a derived index over canonical evidence, grouping agent events into runs and, when possible, associating them with an earlier observed human agent-submit event.
 
 Linking rules are deliberately conservative:
 
@@ -208,7 +218,7 @@ Agent events also carry explicit privacy flags recording that prompt/model/tool-
 
 ## OpenTelemetry / GenAI adapter
 
-`POST /v1/agent-events/otel` accepts OTLP/HTTP JSON and maps known GenAI spans into the canonical agent contract.
+`POST /agent-ingest/v1/otel` accepts OTLP/HTTP JSON and maps known GenAI spans into the canonical agent contract.
 
 Supported structural mappings currently include:
 
@@ -249,6 +259,9 @@ agent runtime / trace source
           |
           v
 runtime-specific or OpenTelemetry adapter
+          |
+          v
+write-only agent-ingest endpoint
           |
           v
 shared.agent_evidence.agent_event_to_evidence(...)
