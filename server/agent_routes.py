@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from shared.agent_evidence import AgentEvidenceError
@@ -77,8 +77,8 @@ async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
     return {**result, "status": "ok"}
 
 
-@router.post(AGENT_CODEX_OTEL_PATH)
-async def ingest_codex_otel(request: Request) -> dict[str, int | str]:
+@router.post(AGENT_CODEX_OTEL_PATH, status_code=202)
+async def ingest_codex_otel(request: Request) -> Response:
     _require_agent_write_bearer(request)
     try:
         payload = await request.json()
@@ -92,10 +92,13 @@ async def ingest_codex_otel(request: Request) -> dict[str, int | str]:
     defaults_raw = payload.pop("openworkgraph", {})
     try:
         defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
-        result = ingest_codex_otel_payload(payload, defaults=defaults)
+        ingest_codex_otel_payload(payload, defaults=defaults)
     except (AgentEvidenceError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {**result, "status": "ok"}
+
+    # OTLP clients only need a successful HTTP status. Codex's own exporter tests
+    # accept an empty 202 response, avoiding dependence on non-standard OWG JSON.
+    return Response(status_code=202)
 
 
 @router.get("/v1/agent-workflows")
