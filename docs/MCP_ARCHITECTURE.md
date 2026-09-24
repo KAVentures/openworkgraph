@@ -159,3 +159,15 @@ MCP does not automatically:
 - bypass endpoint/company sharing policy.
 
 It is simply a standardized way for an authorized AI client to ask the evidence service for specific context.
+
+## Running the Gateway MCP adapter
+
+The Gateway MCP adapter (`gateway/mcp.py`) is a separate stdio MCP server that calls a running Gateway's REST API with a service token. It is not started by the Gateway Docker image.
+
+```bash
+export OWG_GATEWAY_URL="https://gateway.example.internal"   # default: http://127.0.0.1:8790
+export OWG_GATEWAY_SERVICE_TOKEN="<integration token with evidence:read>"
+python -m gateway.mcp
+```
+
+Configure your MCP client to launch that command. The adapter only exposes what the token's scopes and actor restriction allow.
