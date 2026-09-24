@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
 from .analytics import summary
+from .dashboard_privacy_policy import safe_browser_status, safe_collector_status
 from .main import BROWSER_STATUS, COLLECTOR_STATUS, ROOT, VERSION
 from .privacy_pipeline import redact_for_display
 from .secure_app import app
@@ -49,28 +50,6 @@ DASHBOARD_PRIVACY_JS = r"""
 """
 
 
-def _safe_collector_status() -> dict[str, Any] | None:
-    if not COLLECTOR_STATUS:
-        return None
-    return {
-        "connected": True,
-        "received_at": COLLECTOR_STATUS.get("received_at"),
-    }
-
-
-def _safe_browser_status() -> dict[str, Any] | None:
-    if not BROWSER_STATUS:
-        return None
-    return {
-        "status": BROWSER_STATUS.get("status"),
-        "received_at": BROWSER_STATUS.get("received_at"),
-        "sensor_version": BROWSER_STATUS.get("sensor_version"),
-        "expected_sensor_version": BROWSER_STATUS.get("expected_sensor_version"),
-        "version_ok": BROWSER_STATUS.get("version_ok"),
-        "excluded": bool(BROWSER_STATUS.get("excluded")),
-    }
-
-
 @app.get("/v1/dashboard-summary")
 def dashboard_summary(limit: int = 25000, scope: str = "current") -> dict[str, Any]:
     """Human-facing summary built exclusively from content-minimized evidence.
@@ -87,8 +66,8 @@ def dashboard_summary(limit: int = 25000, scope: str = "current") -> dict[str, A
     result["scope"] = scope
     result["run_started_at"] = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT")
     result["version"] = VERSION
-    result["collector"] = _safe_collector_status()
-    result["browser_sensor"] = _safe_browser_status()
+    result["collector"] = safe_collector_status(COLLECTOR_STATUS)
+    result["browser_sensor"] = safe_browser_status(BROWSER_STATUS)
     result["expected_browser_sensor_version"] = str(
         (BROWSER_STATUS or {}).get("expected_sensor_version") or ""
     )
