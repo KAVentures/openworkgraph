@@ -125,6 +125,7 @@ def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> s
         discriminator = "tool-decision|" + "|".join([
             _hash_part(attrs.get("call_id")),
             _text(attrs.get("decision"), 80),
+            _text(attrs.get("source"), 80),
         ])
     elif event_name == "codex.api_request":
         request_hash = _hash_part(attrs.get("auth.request_id"))
@@ -293,6 +294,12 @@ def codex_otel_to_agent_events(
             )
 
         elif event_name == "codex.tool_decision":
+            # Codex can resolve approvals through a user OR an automated reviewer.
+            # Only explicit user-sourced decisions are human approval evidence.
+            source = _text(attrs.get("source"), 80).lower()
+            if source != "user":
+                ignored += 1
+                continue
             tool_name = _safe_label(attrs.get("tool_name"), default="unknown-tool", limit=160)
             namespace = _safe_label(attrs.get("tool_namespace"), limit=160)
             decision = _text(attrs.get("decision"), 80).lower()
