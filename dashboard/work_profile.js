@@ -33,7 +33,7 @@
       </div>
       <div class="row" style="margin-top:10px">
         <div><h3>Observed rhythm</h3><div id="workProfileRhythm" class="muted">—</div></div>
-        <div><h3>Navigation / hunting candidates</h3><div class="muted">Repeated-resource signals only; review before interpreting them as friction.</div><div id="workProfileHunting"></div></div>
+        <div><h3>Navigation / hunting candidates</h3><div class="muted">Repeated-resource signals only; the dashboard hides resource names and paths.</div><div id="workProfileHunting"></div></div>
       </div>
       <div class="row" style="margin-top:10px">
         <div><h3>Tool waiting</h3><div class="muted">Rounded browser navigation timing. Observed loading time is not automatically wasted time.</div><div id="workProfileWaiting"></div></div>
@@ -97,7 +97,7 @@
     const hunting=(profile.navigation_hunting_candidates||[]).slice(0,5);
     const huntingHost=document.querySelector('#workProfileHunting');
     if(huntingHost) huntingHost.innerHTML=hunting.length
-      ? hunting.map(x=>`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>${esc(x.surface)}</strong> · ${Number(x.visit_count||0)} visits<div class="muted mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.resource_locator||'')}</div></div>`).join('')
+      ? hunting.map(x=>`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>${esc(x.surface)}</strong> · ${Number(x.visit_count||0)} visits<div class="muted">Repeated-resource candidate · Needs review</div></div>`).join('')
       : '<div class="muted" style="margin-top:8px">No repeated-resource candidates yet.</div>';
 
     const waiting=(profile.tool_waiting||[]).slice(0,5);
@@ -111,7 +111,7 @@
     const frictionHost=document.querySelector('#workProfileFriction');
     if(frictionHost){
       const rows=[];
-      for(const x of clicks) rows.push(`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>Rapid-click candidate</strong> · ${esc(x.surface)}<div class="muted">${Number(x.max_clicks_in_1_5s||0)} clicks/1.5s on one safe target · Needs review</div></div>`);
+      for(const x of clicks) rows.push(`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>Rapid-click candidate</strong> · ${esc(x.surface)}<div class="muted">${Number(x.max_clicks_in_1_5s||0)} clicks/1.5s on one target · Needs review</div></div>`);
       for(const x of auth) rows.push(`<div style="padding:7px 0;border-bottom:1px solid #eceee8"><strong>Auth-flow candidate</strong> · ${esc(x.surface)}<div class="muted">Observed ${esc(fmt(x.duration_seconds))} in auth-path sequence · Needs review</div></div>`);
       frictionHost.innerHTML=rows.join('')||'<div class="muted" style="margin-top:8px">No friction candidates yet.</div>';
     }
@@ -131,7 +131,7 @@
     loading=true;
     try{
       await window.__owgAuthReady;
-      const r=await fetch('/v1/work-profile?scope=current',{cache:'no-store'});
+      const r=await fetch('/v1/dashboard-work-profile?scope=current',{cache:'no-store'});
       if(!r.ok) throw new Error('Could not load work profile');
       render(await r.json());
     }catch(_){
