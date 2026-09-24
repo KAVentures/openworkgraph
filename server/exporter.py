@@ -288,6 +288,26 @@ def _spreadsheet_safe_value(value: Any) -> Any:
     return value
 
 
+def _csv_schema(filename: str) -> list[str]:
+    event_fields = list(_flatten_event({}).keys())
+    schemas = {
+        "effort_by_surface.csv": [
+            "surface", "container_app", "events", "active_seconds", "engaged_seconds",
+            "idle_seconds", "active_input_seconds", "keypress_count", "click_count", "scroll_count",
+        ],
+        "transitions.csv": ["from", "to", "count"],
+        "inferred_tasks.csv": list(_task_row({}).keys()),
+        "repeated_task_families.csv": list(_family_row({}).keys()),
+        "operational_events.csv": event_fields,
+        "raw_local_evidence.csv": event_fields,
+        "semantic_activity.csv": [
+            "observed_at", "session_id", "app", "window_title", "event_type",
+            "label", "page", "target", "source",
+        ],
+    }
+    return list(schemas.get(filename, []))
+
+
 def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
     files: dict[str, list[dict[str, Any]]] = {
         "effort_by_surface.csv": list(payload.get("effort_by_surface") or []),
@@ -320,21 +340,22 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
         )
         for filename, records in files.items():
             buf = io.StringIO(newline="")
-            if records:
-                keys: list[str] = []
-                for record in records:
-                    for key in record.keys():
-                        if key not in keys:
-                            keys.append(key)
-                writer = csv.DictWriter(buf, fieldnames=keys)
-                writer.writeheader()
-                for record in records:
-                    cooked = {}
-                    for key in keys:
-                        value = record.get(key)
-                        value = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
-                        cooked[key] = _spreadsheet_safe_value(value)
-                    writer.writerow(cooked)
+            keys = _csv_schema(filename)
+            for record in records:
+                for key in record.keys():
+                    if key not in keys:
+                        keys.append(key)
+            if not keys:
+                keys = ["status"]
+            writer = csv.DictWriter(buf, fieldnames=keys)
+            writer.writeheader()
+            for record in records:
+                cooked = {}
+                for key in keys:
+                    value = record.get(key)
+                    value = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+                    cooked[key] = _spreadsheet_safe_value(value)
+                writer.writerow(cooked)
             zf.writestr(filename, buf.getvalue().encode("utf-8-sig"))
     return out.getvalue()
 

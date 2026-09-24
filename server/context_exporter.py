@@ -11,7 +11,7 @@ import csv
 import io
 import json
 import zipfile
-from typing import Any
+from typing import Any, Iterable
 
 from . import exporter as base
 from .context_layers import candidate_tasks
@@ -20,6 +20,20 @@ from .work_profile_export import append_profile_sheets, profile_tables
 
 AI_DATA_DICTIONARY_MD = base.AI_DATA_DICTIONARY_MD
 AI_STARTER_PROMPT_MD = base.AI_STARTER_PROMPT_MD
+
+_AGENT_TURN_FIELDS = [
+    "agent_turn_id", "session_id", "submitted_at", "surface", "context_title",
+    "page_host", "page_path", "trigger_action", "turn_kind", "evidence_event_id",
+    "next_agent_turn_at", "next_user_action_at", "next_user_action_event_id",
+    "agent_execution_duration_unknown", "inference",
+]
+_FACTUAL_CONTEXT_FIELDS = [
+    "context_id", "session_id", "started_at", "ended_at", "work_surface",
+    "container_app", "window_title", "page_title", "page_host", "page_path",
+    "foreground_seconds", "engaged_seconds", "idle_seconds", "active_input_seconds",
+    "keypress_count", "click_count", "scroll_count", "semantic_actions",
+    "evidence_event_ids", "evidence_event_count", "evidence_refs_truncated", "inference",
+]
 
 
 def build_export_payload(*, scope: str = "current", include_raw: bool = False) -> dict[str, Any]:
@@ -67,27 +81,31 @@ def _spreadsheet_safe(value: Any) -> Any:
     return value
 
 
-def _csv_bytes(records: list[dict[str, Any]]) -> bytes:
+def _csv_bytes(records: list[dict[str, Any]], fieldnames: Iterable[str] | None = None) -> bytes:
+    """Emit a parseable CSV schema even when the table has zero rows."""
     buf = io.StringIO(newline="")
-    if records:
-        keys: list[str] = []
-        for record in records:
-            for key in record.keys():
-                if key not in keys:
-                    keys.append(key)
-        writer = csv.DictWriter(buf, fieldnames=keys)
-        writer.writeheader()
-        for record in records:
-            cooked: dict[str, Any] = {}
-            for key in keys:
-                value = record.get(key)
-                value = (
-                    json.dumps(value, ensure_ascii=False)
-                    if isinstance(value, (dict, list))
-                    else value
-                )
-                cooked[key] = _spreadsheet_safe(value)
-            writer.writerow(cooked)
+    keys: list[str] = list(fieldnames or [])
+    for record in records:
+        for key in record.keys():
+            if key not in keys:
+                keys.append(key)
+    if not keys:
+        # Unknown extension tables still get a real header row rather than a
+        # zero-byte CSV. No synthetic data row is added.
+        keys = ["status"]
+    writer = csv.DictWriter(buf, fieldnames=keys)
+    writer.writeheader()
+    for record in records:
+        cooked: dict[str, Any] = {}
+        for key in keys:
+            value = record.get(key)
+            value = (
+                json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (dict, list))
+                else value
+            )
+            cooked[key] = _spreadsheet_safe(value)
+        writer.writerow(cooked)
     return buf.getvalue().encode("utf-8-sig")
 
 
@@ -121,15 +139,17 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
     with zipfile.ZipFile(out, "a", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "agent_turns.csv",
-            _csv_bytes(list(payload.get("agent_turns") or [])),
+            _csv_bytes(list(payload.get("agent_turns") or []), _AGENT_TURN_FIELDS),
         )
         zf.writestr(
             "factual_context_timeline.csv",
-            _csv_bytes(list(payload.get("factual_context_timeline") or [])),
+            _csv_bytes(list(payload.get("factual_context_timeline") or []), _FACTUAL_CONTEXT_FIELDS),
         )
+        task_rows = _task_evidence_rows(list(payload.get("inferred_tasks") or []))
+        task_fields = list(_task_evidence_rows([{}])[0].keys())
         zf.writestr(
             "task_evidence.csv",
-            _csv_bytes(_task_evidence_rows(list(payload.get("inferred_tasks") or []))),
+            _csv_bytes(task_rows, task_fields),
         )
         for table_name, records in profile_tables(profile).items():
             filename = table_name.lower().replace(" ", "_") + ".csv"

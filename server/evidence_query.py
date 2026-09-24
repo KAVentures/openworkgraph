@@ -5,8 +5,8 @@ import hashlib
 import json
 from typing import Any
 
-from normalizer import safe_action_label
 from . import db
+from .dashboard_privacy_policy import safe_dashboard_action
 
 _CURSOR_VERSION = 1
 _MAX_LIMIT = 500
@@ -107,20 +107,12 @@ def _sql_where(clauses: list[str]) -> str:
     return " WHERE " + " AND ".join(clauses) if clauses else ""
 
 
-def _safe_event_action(event_type: str) -> str:
-    value = str(event_type or "").strip()
-    for prefix in ("browser_", "screen_", "clipboard_"):
-        if value.startswith(prefix):
-            return value[len(prefix):].replace("_", " ")
-    return "Observed action" if value else ""
-
-
 def _row_item(row: Any) -> dict[str, Any]:
     """Minimize rich context before it crosses the human dashboard boundary.
 
     Context rows remain useful locally for server-side search and explicitly
-    authorized AI retrieval. The browser receives only a safe surface plus an
-    allowlisted semantic action (or structural event type), never arbitrary
+    authorized AI retrieval. The browser receives only a safe surface plus a
+    canonical semantic action (or structural event type), never arbitrary
     resource titles, URL paths or target labels.
     """
     value = dict(row)
@@ -129,11 +121,11 @@ def _row_item(row: Any) -> dict[str, Any]:
     except Exception:
         metadata = {}
     event_type = str(metadata.get("event_type") or "") if isinstance(metadata, dict) else ""
-    semantic_action = (
-        safe_action_label({"label": value.get("target_label")})
-        or safe_action_label({"label": value.get("action")})
+    action = safe_dashboard_action(
+        value.get("target_label"),
+        value.get("action"),
+        event_type=event_type,
     )
-    action = semantic_action or _safe_event_action(event_type)
     surface = str(value.get("surface") or "Unknown")
     return {
         "event_id": str(value.get("event_id") or ""),

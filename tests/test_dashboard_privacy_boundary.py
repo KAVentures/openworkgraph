@@ -55,6 +55,94 @@ def test_paged_dashboard_evidence_searches_rich_index_but_returns_minimized_rows
     assert result["presentation_layer"] == "dashboard_content_minimized"
 
 
+def test_shared_dashboard_action_rule_keeps_semantics_without_private_text():
+    from server.dashboard_privacy_policy import safe_dashboard_action
+
+    private_name = "Anna Svensson"
+    private_email = "anna@example.com"
+    private_id = "CUSTOMER-739201"
+
+    values = [
+        safe_dashboard_action(f"Open email from {private_name}", event_type="browser_click"),
+        safe_dashboard_action(f"Send to {private_email}", event_type="browser_click"),
+        safe_dashboard_action(f"Open account {private_id}", event_type="browser_click"),
+        safe_dashboard_action(f"Update status for {private_id}", event_type="browser_click"),
+    ]
+    assert values == ["Open email", "Send", "Open account", "Update status"]
+    assert safe_dashboard_action(f"{private_name} {private_id}", event_type="browser_click") == "Click"
+    blob = json.dumps(values, ensure_ascii=False)
+    assert private_name not in blob
+    assert private_email not in blob
+    assert private_id not in blob
+
+
+def test_dashboard_pattern_projection_drops_names_email_and_ids_but_keeps_workflow_actions():
+    from server.dashboard_privacy_policy import dashboard_safe_patterns
+
+    private_name = "Anna Svensson"
+    private_email = "anna@example.com"
+    private_id = "CUSTOMER-739201"
+    payload = {
+        "scope": "all",
+        "patterns": [
+            {
+                "signature": f"customer.followup:{private_id}:{private_email}",
+                "task_family": f"followup:{private_name}",
+                "suggested_label": f"Follow up with {private_name}",
+                "name": f"Follow up with {private_name}",
+                "surfaces": ["Gmail", "Salesforce", "Google Sheets", "Gmail"],
+                "action_skeleton": [
+                    f"Open email from {private_name}",
+                    f"Open account {private_id}",
+                    f"Update status for {private_id}",
+                    f"Send to {private_email}",
+                ],
+                "steps": [
+                    {"surface": "Gmail", "action": f"Open email from {private_name}"},
+                    {"surface": "Salesforce", "action": f"Open account {private_id}"},
+                    {"surface": "Google Sheets", "action": f"Update status for {private_id}"},
+                    {"surface": "Gmail", "action": f"Send to {private_email}"},
+                ],
+                "ends_with": f"Send to {private_email}",
+                "runs": [
+                    {
+                        "semantic_actions": [
+                            f"Open email from {private_name}",
+                            f"Open account {private_id}",
+                            f"Update status for {private_id}",
+                            f"Send to {private_email}",
+                        ],
+                        "steps": [
+                            {"surface": "Gmail", "action": f"Open email from {private_name}"},
+                            {"surface": "Salesforce", "action": f"Open account {private_id}"},
+                            {"surface": "Google Sheets", "action": f"Update status for {private_id}"},
+                            {"surface": "Gmail", "action": f"Send to {private_email}"},
+                        ],
+                        "outcomes": [f"Send to {private_email}"],
+                        "ends_with": f"Send to {private_email}",
+                    }
+                ],
+                "observed_count": 2,
+            }
+        ],
+    }
+
+    safe = dashboard_safe_patterns(payload)
+    pattern = safe["patterns"][0]
+    blob = json.dumps(safe, ensure_ascii=False)
+    assert private_name not in blob
+    assert private_email not in blob
+    assert private_id not in blob
+    assert pattern["action_skeleton"] == ["Open email", "Open account", "Update status", "Send"]
+    assert [step["action"] for step in pattern["steps"]] == [
+        "Open email", "Open account", "Update status", "Send"
+    ]
+    assert pattern["ends_with"] == "Send"
+    assert pattern["signature"].startswith("dashboard-")
+    assert pattern["task_family"] == pattern["signature"]
+    assert pattern["dashboard_data_layer"] == "content_minimized"
+
+
 def test_operational_summary_and_live_status_minimizers_drop_dashboard_canaries():
     from server import analytics, db
     from server.dashboard_privacy_policy import safe_browser_status, safe_collector_status
@@ -122,9 +210,11 @@ def test_operational_summary_and_live_status_minimizers_drop_dashboard_canaries(
     # Guard the endpoint wiring without importing a route/middleware module into
     # an already-started FastAPI app during the test suite.
     source = (Path(__file__).resolve().parents[1] / "server" / "dashboard_privacy.py").read_text(encoding="utf-8")
-    assert "summary(limit=limit, since=since, operational=True)" in source
+    assert "dashboard_safe_summary(summary(limit=limit, since=since, operational=True))" in source
     assert "safe_collector_status(COLLECTOR_STATUS)" in source
     assert "safe_browser_status(BROWSER_STATUS)" in source
+    assert '@app.get("/v1/dashboard-patterns")' in source
+    assert "dashboard_safe_patterns(corrected_patterns(scope=scope))" in source
 
 
 def test_work_profile_dashboard_response_drops_rich_context_echoes():
@@ -173,6 +263,16 @@ def test_dashboard_routes_preserve_mcp_profile_and_use_minimized_browser_profile
     assert "dashboard_safe_profile(compute_work_profile(scope=scope))" in routes
     assert "/v1/dashboard-work-profile?scope=current" in dashboard_js
     assert "fetch('/v1/work-profile?scope=current" not in dashboard_js
+
+
+def test_rich_patterns_endpoint_remains_available_for_authorized_local_context():
+    root = Path(__file__).resolve().parents[1]
+    rich = (root / "server" / "v0571_polish.py").read_text(encoding="utf-8")
+    safe = (root / "server" / "dashboard_privacy.py").read_text(encoding="utf-8")
+
+    assert '_replace_route("/v1/patterns", "GET", corrected_patterns)' in rich
+    assert '@app.get("/v1/dashboard-patterns")' in safe
+    assert "dashboard_safe_patterns(corrected_patterns(scope=scope))" in safe
 
 
 def test_enterprise_runner_installs_dashboard_privacy_last():
