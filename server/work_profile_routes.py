@@ -29,6 +29,16 @@ def _dashboard_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/v1/work-profile")
 def work_profile(scope: str = "current") -> dict[str, Any]:
+    """Existing API/MCP profile; keep its authorized context contract unchanged."""
+    try:
+        return redact_for_display(compute_work_profile(scope=scope))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/dashboard-work-profile")
+def dashboard_work_profile(scope: str = "current") -> dict[str, Any]:
+    """Content-minimized Work Profile for the human localhost dashboard."""
     try:
         return redact_for_display(_dashboard_safe_profile(compute_work_profile(scope=scope)))
     except ValueError as exc:
