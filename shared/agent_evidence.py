@@ -188,6 +188,17 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     if not session_id:
         raise AgentEvidenceError("session_id, run_id, or trace_id is required")
 
+    trace = {
+        "run_id": run_id,
+        "trace_id": trace_id,
+        "span_id": _text(payload.get("span_id"), limit=240),
+        "parent_span_id": _text(payload.get("parent_span_id"), limit=240),
+        "workflow_id": _text(payload.get("workflow_id"), limit=240),
+    }
+    trigger_event_id = _text(payload.get("trigger_event_id"), limit=240)
+    if trigger_event_id:
+        trace["trigger_event_id"] = trigger_event_id
+
     metadata: dict[str, Any] = {
         "source": "agent",
         "actor_kind": "agent",
@@ -200,13 +211,7 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
             "framework": _text(payload.get("framework"), limit=160),
             "model": _text(payload.get("model"), limit=200),
         },
-        "trace": {
-            "run_id": run_id,
-            "trace_id": trace_id,
-            "span_id": _text(payload.get("span_id"), limit=240),
-            "parent_span_id": _text(payload.get("parent_span_id"), limit=240),
-            "workflow_id": _text(payload.get("workflow_id"), limit=240),
-        },
+        "trace": trace,
         "tool": {
             "name": _text(payload.get("tool_name"), limit=200),
             "category": tool_category,
