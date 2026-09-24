@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from shared.agent_evidence import AgentEvidenceError
+from .agent_auth import agent_bearer_matches
 from .agent_ingest import ingest_agent_payloads, ingest_otel_payload
 from .agent_workflows import agent_workflow_view
 from .local_auth import bearer_matches
@@ -28,16 +29,21 @@ class OTelDefaults(BaseModel):
     workflow_id: str = ""
 
 
-def _require_agent_bearer(request: Request) -> None:
-    # Agent runtimes are machine writers. Do not allow a dashboard session or a
-    # browser origin to become an implicit write credential.
+def _require_agent_write_bearer(request: Request) -> None:
+    # Agent runtimes receive only this write credential. It is deliberately not
+    # the broader API bearer used to read/export work history.
+    if not agent_bearer_matches(request.headers.get("authorization")):
+        raise HTTPException(status_code=401, detail="agent ingest authentication required")
+
+
+def _require_api_read_bearer(request: Request) -> None:
     if not bearer_matches(request.headers.get("authorization")):
-        raise HTTPException(status_code=401, detail="agent collector authentication required")
+        raise HTTPException(status_code=401, detail="API authentication required")
 
 
 @router.post("/v1/agent-events")
 def ingest_agent_events(batch: AgentEventBatch, request: Request) -> dict[str, int | str]:
-    _require_agent_bearer(request)
+    _require_agent_write_bearer(request)
     try:
         result = ingest_agent_payloads(batch.events)
     except AgentEvidenceError as exc:
@@ -47,7 +53,7 @@ def ingest_agent_events(batch: AgentEventBatch, request: Request) -> dict[str, i
 
 @router.post("/v1/agent-events/otel")
 async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
-    _require_agent_bearer(request)
+    _require_agent_write_bearer(request)
     try:
         payload = await request.json()
     except Exception as exc:
@@ -70,5 +76,7 @@ def get_agent_workflows(
     since: str | None = None,
     limit: int = 5000,
 ) -> dict[str, Any]:
-    _require_agent_bearer(request)
+    # Workflow views can include human trigger surfaces. Do not grant this read
+    # to the write-only agent token.
+    _require_api_read_bearer(request)
     return agent_workflow_view(limit=limit, since=since)
