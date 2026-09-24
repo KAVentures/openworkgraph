@@ -20,6 +20,7 @@ _SUPPORTED_EVENTS = frozenset({
     "codex.tool_decision",
     "codex.api_request",
 })
+_SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]{0,199}$")
 
 
 def _value(value: Any) -> Any:
@@ -87,8 +88,6 @@ def _iso_from_nanos(value: Any) -> str:
 
 
 def _observed_at(attrs: dict[str, Any], native: dict[str, Any]) -> str:
-    # Codex's structural telemetry includes event.timestamp. Prefer that value so
-    # log and trace copies of the same event project to the same chronology.
     timestamp = _text(attrs.get("event.timestamp"), 80)
     if timestamp:
         return timestamp
@@ -100,23 +99,42 @@ def _observed_at(attrs: dict[str, Any], native: dict[str, Any]) -> str:
 
 
 def _safe_label(value: Any, *, default: str = "", limit: int = 160) -> str:
-    raw = _text(value, limit)
-    if not raw:
+    raw = _text(value, min(limit, 200))
+    if not raw or not _SAFE_LABEL.fullmatch(raw):
         return default
-    cleaned = re.sub(r"[^A-Za-z0-9._:/ -]+", "-", raw).strip(" -")
-    return cleaned[:limit] or default
+    return raw[:limit]
+
+
+def _hash_part(value: Any) -> str:
+    raw = _text(value, 400)
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
 def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> str:
-    # Use only structural identifiers. This also deduplicates Codex events that
-    # are exported both as logs and as trace events.
-    discriminator = "|".join([
-        _text(attrs.get("tool_result_seq"), 80),
-        _text(attrs.get("call_id"), 240),
-        _text(attrs.get("attempt"), 40),
-        _text(attrs.get("turn.id"), 240),
-        _text(attrs.get("event.timestamp"), 80),
-    ])
+    """Stable across Codex log + trace copies without exposing native IDs."""
+    if event_name == "codex.conversation_starts":
+        discriminator = "conversation-start"
+    elif event_name == "codex.tool_result":
+        discriminator = "tool-result|" + "|".join([
+            _text(attrs.get("tool_result_seq"), 80),
+            _hash_part(attrs.get("call_id")),
+        ])
+    elif event_name == "codex.tool_decision":
+        discriminator = "tool-decision|" + "|".join([
+            _hash_part(attrs.get("call_id")),
+            _text(attrs.get("decision"), 80),
+        ])
+    elif event_name == "codex.api_request":
+        request_hash = _hash_part(attrs.get("auth.request_id"))
+        discriminator = "api-request|" + "|".join([
+            request_hash,
+            _text(attrs.get("attempt"), 40),
+            "" if request_hash else _text(attrs.get("event.timestamp"), 80),
+        ])
+    else:
+        discriminator = _text(attrs.get("event.timestamp"), 80)
     material = f"{conversation_id}\x1f{event_name}\x1f{discriminator}".encode("utf-8")
     return "codex-otel:" + hashlib.sha256(material).hexdigest()[:40]
 
@@ -141,7 +159,6 @@ def _tool_category(name: str, namespace: str = "") -> str:
 def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
     seen = 0
 
-    # OTLP/HTTP JSON logs.
     for resource_log in payload.get("resourceLogs") or []:
         if not isinstance(resource_log, dict):
             continue
@@ -157,7 +174,7 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
                 yield record, _attrs(record.get("attributes"))
 
     # Codex also emits trace-safe telemetry as span events. Read event attributes,
-    # never arbitrary span attributes or span names.
+    # never arbitrary span attributes, span names, or native event bodies.
     for resource_span in payload.get("resourceSpans") or []:
         if not isinstance(resource_span, dict):
             continue
@@ -167,23 +184,16 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
             for span in scope_span.get("spans") or []:
                 if not isinstance(span, dict):
                     continue
-                trace_id = _text(span.get("traceId") or span.get("trace_id"), 240)
-                parent_span_id = _text(span.get("parentSpanId") or span.get("parent_span_id"), 240)
                 for event in span.get("events") or []:
                     if not isinstance(event, dict):
                         continue
                     seen += 1
                     if seen > max_records:
                         raise ValueError(f"Codex OTLP payload exceeds {max_records} records")
-                    attrs = _attrs(event.get("attributes"))
-                    if trace_id and "_owg_trace_id" not in attrs:
-                        attrs["_owg_trace_id"] = trace_id
-                    if parent_span_id and "_owg_parent_span_id" not in attrs:
-                        attrs["_owg_parent_span_id"] = parent_span_id
                     synthetic = dict(event)
                     if "timeUnixNano" not in synthetic and span.get("endTimeUnixNano"):
                         synthetic["timeUnixNano"] = span.get("endTimeUnixNano")
-                    yield synthetic, attrs
+                    yield synthetic, _attrs(event.get("attributes"))
 
     # Small simplified form for deterministic adapter tests/integrators.
     for record in payload.get("records") or []:
@@ -302,6 +312,7 @@ def codex_otel_to_agent_events(
 
         elif event_name == "codex.api_request":
             status_code = _int(attrs.get("http.response.status_code"))
+            # We only inspect whether an error exists; its text is never copied.
             has_error = bool(_text(attrs.get("error.message"), 1))
             success = status_code is not None and 200 <= status_code <= 299 and not has_error
             projected = _base(
@@ -318,8 +329,6 @@ def codex_otel_to_agent_events(
             continue
         events.append(projected)
 
-    # Log + trace copies use deterministic event IDs. Keep only one projection in
-    # a request before database idempotency handles any cross-request duplicate.
     unique: dict[str, dict[str, Any]] = {}
     for event in events:
         unique.setdefault(str(event["event_id"]), event)
