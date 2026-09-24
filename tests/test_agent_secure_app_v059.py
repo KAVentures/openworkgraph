@@ -101,8 +101,9 @@ def test_production_secure_server_accepts_agent_write_token_but_not_for_history_
         assert httpx.get(base + "/v1/events", headers=write_headers).status_code == 401
         assert httpx.get(base + "/v1/agent-workflows", headers=write_headers).status_code == 401
 
-        # The normal API credential can verify the evidence that was written.
-        readback = httpx.get(base + "/v1/events?query=secure-agent-v059", headers=api_headers)
+        # The normal API credential can search structural run metadata and verify
+        # the exact canonical event that the write-only adapter inserted.
+        readback = httpx.get(base + "/v1/events?query=secure-run-v059", headers=api_headers)
         assert readback.status_code == 200, readback.text
         events = readback.json().get("events", [])
         assert any(event.get("event_id") == "secure-agent-v059" for event in events)
