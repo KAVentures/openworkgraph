@@ -13,6 +13,7 @@ from .procedural_memory import _agent_step, _event_ref
 
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 _EXECUTION_ID_RE = re.compile(r"^execution:[0-9a-f]{16}$")
+_FAILURE_STATUSES = frozenset({"error", "cancelled", "denied"})
 
 
 def _opaque_ref(prefix: str, value: Any) -> str | None:
@@ -33,6 +34,14 @@ def _agent_descriptor(events: list[dict[str, Any]]) -> dict[str, str]:
                 "framework": str(agent.get("framework") or "")[:160],
             }
     return {"name": "Agent", "provider": "", "framework": ""}
+
+
+def _observation_levels(events: list[dict[str, Any]]) -> list[str]:
+    levels: set[str] = set()
+    for event in events:
+        meta, _trace = _meta(event)
+        levels.add(str(meta.get("observation_level") or "unknown"))
+    return sorted(levels)
 
 
 def _safe_usage(meta: dict[str, Any]) -> dict[str, int]:
@@ -110,6 +119,55 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _observed_coverage(
+    projected: list[dict[str, Any]],
+    *,
+    observation_levels: list[str],
+) -> dict[str, Any]:
+    """Describe only which structural signal classes are present in evidence.
+
+    A false value means the signal was not observed in this evidence. It must not
+    be interpreted as proof that the underlying runtime never performed it.
+    """
+    operations = {str(item.get("operation") or "unknown") for item in projected}
+    signals = {
+        "run_start": "run_started" in operations,
+        "run_finish": "run_finished" in operations,
+        "model_call": "model_call" in operations,
+        "tool_call": "tool_call" in operations,
+        "handoff": "handoff" in operations,
+        "human_approval_requested": "human_approval_requested" in operations,
+        "human_approval_received": "human_approval_received" in operations,
+        "error_event": "error" in operations,
+        "failure_status": any(str(item.get("status") or "") in _FAILURE_STATUSES for item in projected),
+        "span_identity": any(bool(item.get("span_ref")) for item in projected),
+        "parent_child_span_linkage": any(bool(item.get("span_ref")) and bool(item.get("parent_span_ref")) for item in projected),
+        "model_identity": any(bool(item.get("model")) for item in projected),
+        "tool_identity": any(
+            isinstance(item.get("tool"), dict)
+            and (bool((item.get("tool") or {}).get("name")) or str((item.get("tool") or {}).get("category") or "none") != "none")
+            for item in projected
+        ),
+        "duration": any(float(item.get("duration_seconds") or 0.0) > 0 for item in projected),
+        "token_usage": any(isinstance(item.get("usage"), dict) and bool(item.get("usage")) for item in projected),
+        "structural_step": any(bool(item.get("structural_step")) for item in projected),
+        "task_context_linkage": any(isinstance(item.get("task_context"), dict) for item in projected),
+        "shadow_enforcement_preview": any(isinstance(item.get("shadow_enforcement"), dict) for item in projected),
+    }
+    return {
+        "observation_levels_observed": observation_levels,
+        "mixed_observation_levels": len(observation_levels) > 1,
+        "coverage_basis": "signals_present_in_canonical_evidence",
+        "signals_observed": signals,
+        "observed_signal_names": sorted(key for key, observed in signals.items() if observed),
+        "unobserved_signal_names": sorted(key for key, observed in signals.items() if not observed),
+        "absence_means": "not_observed_not_proof_of_nonoccurrence",
+        "internal_runtime_completeness_attested": False,
+        "hidden_reasoning_observed": False,
+        "authoritative": False,
+    }
+
+
 def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, Any]:
     base = _one_execution(events)
     projected = [_event_projection(event) for event in events]
@@ -127,6 +185,8 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
     run_start_observed = any(item.get("operation") == "run_started" for item in projected)
     run_finish_observed = any(item.get("operation") == "run_finished" for item in projected)
     bounded_events = projected[:max_events]
+    levels = _observation_levels(events)
+    coverage = _observed_coverage(projected, observation_levels=levels)
 
     return {
         "execution_id": base["execution_id"],
@@ -151,6 +211,7 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
         "approval_request_count": base.get("approval_request_count", 0),
         "approval_received_count": base.get("approval_received_count", 0),
         "task_context_linkage_status": base.get("linkage_status"),
+        "observed_coverage": coverage,
         "events": bounded_events,
         "derived": True,
         "authoritative": False,
@@ -195,6 +256,12 @@ def agent_execution_traces(
         "returned": len(traces),
         "agent_execution_count_considered": considered,
         "max_events_per_execution": event_limit,
+        "coverage_semantics": {
+            "true_means": "at_least_one_matching_structural_signal_was_observed",
+            "false_means": "signal_not_observed_not_proof_the_underlying_action_did_not_occur",
+            "coverage_is_vendor_capability_claim": False,
+            "hidden_reasoning_is_observable": False,
+        },
         "native_run_ids_exposed": False,
         "native_trace_ids_exposed": False,
         "native_span_ids_exposed": False,
