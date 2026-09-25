@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import hashlib
 import os
 import re
+import sys
 import threading
 from typing import Any
 
@@ -63,9 +64,17 @@ def _parse_iso(value: Any) -> datetime | None:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except Exception:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _safe_timestamp(value: Any) -> str:
+    parsed = _parse_iso(value)
+    return parsed.astimezone(timezone.utc).isoformat() if parsed is not None else _now_iso()
 
 
 def _duration_seconds(span: Any) -> float:
@@ -125,7 +134,7 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
 
     def _debug_notice(self) -> None:
         if os.getenv("OWG_AGENT_ADAPTER_DEBUG", "").strip() == "1":
-            print("OpenWorkGraph OpenAI Agents adapter skipped one trace event", file=os.sys.stderr)
+            print("OpenWorkGraph OpenAI Agents adapter skipped one trace event", file=sys.stderr)
 
     def _emit(self, event: dict[str, Any]) -> None:
         try:
@@ -256,7 +265,7 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
             safe_trace = self._safe_trace(raw_trace)
             safe_span = self._safe_span(raw_span)
             parent_span = self._safe_span(raw_parent)
-            observed_at = _text(getattr(span, "ended_at", ""), 100) or _now_iso()
+            observed_at = _safe_timestamp(getattr(span, "ended_at", None))
             status = "error" if getattr(span, "error", None) is not None else "success"
             agent_name = self._nearest_agent(raw_span, raw_parent)
             base: dict[str, Any] = {
