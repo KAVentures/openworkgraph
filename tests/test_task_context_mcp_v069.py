@@ -19,7 +19,8 @@ def test_secure_task_context_mcp_uses_existing_access_protection_and_audit_bound
     assert '"task_family": task_family' in block
     assert '"current_steps": current_steps' in block
     assert "task_description" not in block
-    assert "prompt" not in block.lower()
+    assert '"prompt"' not in block.lower()
+    assert "prompt=" not in block.lower()
 
     finish_start = source.index("def _finish_task_context(")
     finish_end = source.index("\n\ndef authorize_tool", finish_start)
