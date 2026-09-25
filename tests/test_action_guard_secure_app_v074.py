@@ -193,7 +193,9 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
         assert "agent_human_approval_received" in event_types
         serialized = json.dumps(rows).lower()
         assert "very_secret_action_result" not in serialized
-        assert "prompt_content" not in serialized
+        assert '"prompt":' not in serialized
+        assert '"tool_input":' not in serialized
+        assert '"tool_result":' not in serialized
 
         # The advisory/gate never edits the declared policy source.
         assert policy_file.read_bytes() == original_policy
