@@ -1,0 +1,15 @@
+{
+  "gateway": {
+    "enabled": true,
+    "url": "https://gateway.example.com",
+    "verify_tls": true,
+    "declared_policy": {
+      "enabled": true,
+      "organization_id": "example-organization",
+      "refresh_seconds": 60,
+      "trusted_keys": {
+        "example-policy-key-2026": "REPLACE_WITH_BASE64URL_ED25519_PUBLIC_KEY"
+      }
+    }
+  }
+}
