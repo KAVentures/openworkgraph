@@ -33,6 +33,7 @@ _INTERRUPT_DISPOSITIONS = frozenset({
 })
 _EXPLICIT_FAILURES = frozenset({"error", "denied", "cancelled"})
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _fraction(numerator: int, denominator: int) -> float | None:
@@ -42,12 +43,30 @@ def _fraction(numerator: int, denominator: int) -> float | None:
 
 
 def _valid_shadow(value: Any) -> bool:
+    """Defensively validate persisted shadow evidence before aggregation.
+
+    New agent ingress already enforces this contract. Re-checking here prevents
+    malformed manually seeded or legacy rows from entering analytics.
+    """
     if not isinstance(value, dict):
         return False
     if str(value.get("profile_id") or "") != _PROFILE_ID:
         return False
     disposition = str(value.get("candidate_disposition") or "")
     if disposition not in _DISPOSITION_SET:
+        return False
+    available = value.get("available")
+    if not isinstance(available, bool):
+        return False
+    if available and disposition == "indeterminate_policy_unavailable":
+        return False
+    if not available and disposition != "indeterminate_policy_unavailable":
+        return False
+    family = str(value.get("family_key") or "")
+    if not family or not _FAMILY_KEY_RE.fullmatch(family):
+        return False
+    policy_sha = str(value.get("policy_manifest_sha256") or "")
+    if policy_sha and not _SHA256_RE.fullmatch(policy_sha):
         return False
     if value.get("simulated_only") is not True:
         return False
