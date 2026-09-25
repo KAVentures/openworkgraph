@@ -14,6 +14,7 @@ from .context_outcome_routes import router as context_outcome_router
 from .declared_policy_routes import router as declared_policy_router
 from .local_auth import bearer_matches
 from .policy_action_routes import router as policy_action_router
+from .policy_guard_routes import router as policy_guard_router
 from .procedural_memory_routes import router as procedural_memory_router
 from .task_context_routes import router as task_context_router
 
@@ -91,7 +92,7 @@ async def ingest_codex_otel(request: Request) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid Codex OpenTelemetry JSON payload") from exc
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=422, detail="Codex OpenTelemetry payload must be an object")
+        raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
 
     # Codex sends standard OTLP JSON. Optional OpenWorkGraph defaults are useful
     # for custom relays/tests, but normal Codex exporters need no OWG-specific body.
@@ -120,12 +121,15 @@ def get_agent_workflows(
 
 
 # Procedural memory, declared policy, unified task context, context/execution
-# linkage, aggregate context/outcome associations, and policy action advisory are
-# read-only derived/governance views. They inherit secure_app composition through
-# this existing additive router and never receive the write-only agent credential.
+# linkage, aggregate context/outcome associations, and normal policy advisory are
+# read-only derived/governance views protected by the broad API/dashboard bearer.
+# The policy_guard_router is different: it exposes one exact structural advisory
+# outside /v1/ and authenticates with its own narrower read-only capability. The
+# write-only agent token remains write-only and cannot use either read surface.
 router.include_router(procedural_memory_router)
 router.include_router(declared_policy_router)
 router.include_router(task_context_router)
 router.include_router(context_execution_router)
 router.include_router(context_outcome_router)
 router.include_router(policy_action_router)
+router.include_router(policy_guard_router)
