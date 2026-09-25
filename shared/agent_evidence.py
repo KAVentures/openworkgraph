@@ -74,6 +74,16 @@ _FORBIDDEN_CONTENT_KEYS = frozenset({
 })
 
 _ALLOWED_USAGE_KEYS = frozenset({"input_tokens", "output_tokens", "cached_input_tokens", "total_tokens"})
+_ALLOWED_TASK_CONTEXT_KEYS = frozenset({
+    "preflight_attempted",
+    "available",
+    "resolved",
+    "context_sha256",
+    "policy_manifest_sha256",
+    "family_key",
+})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 
 
 class AgentEvidenceError(ValueError):
@@ -126,6 +136,54 @@ def _usage(payload: dict[str, Any]) -> dict[str, int]:
         if amount < 0 or amount > 1_000_000_000:
             raise AgentEvidenceError(f"{key} out of range")
         out[key] = amount
+    return out
+
+
+def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
+    raw = payload.get("task_context")
+    if raw in (None, {}):
+        return {}
+    if operation != "run_started":
+        raise AgentEvidenceError("task_context is only allowed on run_started events")
+    if not isinstance(raw, dict):
+        raise AgentEvidenceError("task_context must be an object")
+    unknown = set(raw) - _ALLOWED_TASK_CONTEXT_KEYS
+    if unknown:
+        raise AgentEvidenceError(f"unsupported task_context fields: {', '.join(sorted(unknown))}")
+    if raw.get("preflight_attempted") is not True:
+        raise AgentEvidenceError("task_context.preflight_attempted must be true")
+    available = raw.get("available")
+    resolved = raw.get("resolved")
+    if not isinstance(available, bool) or not isinstance(resolved, bool):
+        raise AgentEvidenceError("task_context available/resolved must be booleans")
+
+    context_sha = _text(raw.get("context_sha256"), limit=80).lower()
+    policy_sha = _text(raw.get("policy_manifest_sha256"), limit=80).lower()
+    family_key = _text(raw.get("family_key"), limit=200).lower()
+    if context_sha and not _SHA256_RE.fullmatch(context_sha):
+        raise AgentEvidenceError("invalid task_context.context_sha256")
+    if policy_sha and not _SHA256_RE.fullmatch(policy_sha):
+        raise AgentEvidenceError("invalid task_context.policy_manifest_sha256")
+    if family_key and not _FAMILY_KEY_RE.fullmatch(family_key):
+        raise AgentEvidenceError("invalid task_context.family_key")
+
+    if available and not context_sha:
+        raise AgentEvidenceError("available task context requires context_sha256")
+    if not available and (context_sha or policy_sha or family_key or resolved):
+        raise AgentEvidenceError("unavailable task context cannot claim snapshot, policy, family, or resolution")
+    if resolved and not family_key:
+        raise AgentEvidenceError("resolved task context requires family_key")
+
+    out: dict[str, Any] = {
+        "preflight_attempted": True,
+        "available": available,
+        "resolved": resolved,
+        "context_sha256": context_sha,
+        "policy_manifest_sha256": policy_sha,
+        "family_key": family_key,
+        "linkage_assertion_source": "agent_adapter",
+        "context_snapshot_verified_by_server": False,
+    }
     return out
 
 
@@ -228,6 +286,9 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
             "clipboard_contents": False,
         },
     }
+    task_context = _task_context(payload, operation=operation)
+    if task_context:
+        metadata["task_context"] = task_context
 
     return {
         "event_id": _text(payload.get("event_id"), limit=240) or str(uuid.uuid4()),
