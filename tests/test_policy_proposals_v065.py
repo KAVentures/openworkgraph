@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from server import policy_proposals as pp
 from server.policy_proposals import PolicyProposalError
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _manifest(*, version: str = "1", source_ref: str = "file:///private/company-sop.md", forbidden: bool = False) -> dict:
@@ -161,18 +163,38 @@ def test_invalid_candidate_and_invalid_current_manifest_fail_closed(monkeypatch,
         pp.create_policy_proposal(candidate)
 
 
-def test_no_policy_mutation_route_is_exposed(monkeypatch, tmp_path):
-    active, _proposals, _history = _env(monkeypatch, tmp_path)
-    _write(active, _manifest(version="1"))
-    import server.secure_app as secure_app
+def test_policy_mutation_is_not_exposed_as_http_or_mcp_surface():
+    """Static canary: inspect source without importing the auth-composed app.
 
-    client = TestClient(secure_app.app)
-    schema = client.get("/openapi.json").json()
-    policy_paths = {
-        path: set(methods)
-        for path, methods in schema["paths"].items()
-        if "policy" in path or "policies" in path
-    }
-    assert policy_paths
-    for methods in policy_paths.values():
-        assert not ({"post", "put", "patch", "delete"} & methods)
+    Importing secure_app here would mutate process-global auth composition and can
+    contaminate unrelated compatibility tests. This AST check verifies the actual
+    route decorators while keeping the full suite's runtime state untouched.
+    """
+    route_source = (ROOT / "server" / "declared_policy_routes.py").read_text(encoding="utf-8")
+    tree = ast.parse(route_source)
+    policy_routes: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
+                continue
+            if not isinstance(decorator.func.value, ast.Name) or decorator.func.value.id != "router":
+                continue
+            if not decorator.args or not isinstance(decorator.args[0], ast.Constant) or not isinstance(decorator.args[0].value, str):
+                continue
+            path = decorator.args[0].value
+            if "policy" in path or "policies" in path:
+                policy_routes.append((decorator.func.attr.lower(), path))
+
+    assert policy_routes
+    assert all(method == "get" for method, _path in policy_routes)
+
+    proposal_source = (ROOT / "server" / "policy_proposals.py").read_text(encoding="utf-8")
+    admin_source = (ROOT / "server" / "policy_admin.py").read_text(encoding="utf-8")
+    mcp_source = (ROOT / "mcp_server" / "main.py").read_text(encoding="utf-8")
+    assert "APIRouter" not in proposal_source
+    assert "APIRouter" not in admin_source
+    assert "@router." not in proposal_source
+    assert "@router." not in admin_source
+    assert "apply_policy_proposal" not in mcp_source
