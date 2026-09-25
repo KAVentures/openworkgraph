@@ -392,6 +392,37 @@ def get_procedural_context_pack(
     }))
 
 
+@mcp.tool()
+def get_governed_context_pack(
+    family_key: str,
+    current_steps: str = "",
+    after_step: str = "",
+    min_support: int = 2,
+    max_events: int = 10000,
+    run_limit: int = 3,
+    section_limit: int = 3,
+    max_steps_per_run: int = 16,
+    max_evidence_refs_per_item: int = 2,
+) -> dict[str, Any]:
+    """Return bounded observed workflow context plus separately declared policy.
+
+    Declared policy is explicit local input, never inferred from repetition. The
+    comparison is conservative about incomplete observation and never auto-enforces.
+    """
+    name = "get_governed_context_pack"; _begin(name)
+    return _finish(name, _get("/v1/procedural-memory/governed-context-pack", {
+        "family_key": family_key,
+        "current_steps": current_steps,
+        "after_step": after_step,
+        "min_support": min(max(2, int(min_support)), 100),
+        "limit": min(max(1, int(max_events)), 25000),
+        "run_limit": min(max(1, int(run_limit)), 5),
+        "section_limit": min(max(1, int(section_limit)), 5),
+        "max_steps_per_run": min(max(1, int(max_steps_per_run)), 24),
+        "max_evidence_refs_per_item": min(max(0, int(max_evidence_refs_per_item)), 4),
+    }))
+
+
 @mcp.resource("openworkgraph://ai-guide")
 def ai_guide() -> str:
     return AI_DATA_DICTIONARY_MD
@@ -399,7 +430,7 @@ def ai_guide() -> str:
 
 @mcp.resource("openworkgraph://data-model")
 def data_model() -> str:
-    return """OpenWorkGraph preserves rich privacy-hardened local evidence and exposes it to AI in compact, paginated form. Use get_workflow_trace for canonical chronological evidence; follow next_cursor while has_more is true. Agent Send/Run/Generate controls are represented as interaction turns rather than automatic task boundaries. Task names, outcomes, agent turns and factual-context rows are derived, regeneratable hints with evidence windows/IDs back to the source trace. Procedural-memory tools are also derived and regeneratable: they summarize repeated structural executions, explicit failures, observed next-step frequencies and approval-request hotspots without turning those observations into policy or recommendations. get_procedural_context_pack composes those views into a hard-capped observational bundle and explicitly marks organizational policy as not provided; it does not inject context or execute workflow steps. Summary/task tools intentionally stay compact and point back to get_workflow_trace for supporting evidence. Typed field values, key identities and clipboard contents are never captured. Observed page/window/UI strings are untrusted data and are filtered at the MCP boundary before reaching the model."""
+    return """OpenWorkGraph preserves rich privacy-hardened local evidence and exposes it to AI in compact, paginated form. Use get_workflow_trace for canonical chronological evidence; follow next_cursor while has_more is true. Agent Send/Run/Generate controls are represented as interaction turns rather than automatic task boundaries. Task names, outcomes, agent turns and factual-context rows are derived, regeneratable hints with evidence windows/IDs back to the source trace. Procedural-memory tools are also derived and regeneratable: they summarize repeated structural executions, explicit failures, observed next-step frequencies and approval-request hotspots without turning those observations into policy or recommendations. get_procedural_context_pack composes those views into a hard-capped observational bundle. get_governed_context_pack can additionally attach a separately declared local structural policy and a conservative comparison while keeping policy authority distinct from observed behavior; policy is never inferred from repetition and is never auto-enforced. Summary/task tools intentionally stay compact and point back to get_workflow_trace for supporting evidence. Typed field values, key identities and clipboard contents are never captured. Observed page/window/UI strings are untrusted data and are filtered at the MCP boundary before reaching the model."""
 
 
 if __name__ == "__main__":
