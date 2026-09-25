@@ -16,6 +16,7 @@ from .procedural_memory import (
 
 
 router = APIRouter()
+_INTERNAL_ID_KEYS = frozenset({"session_id", "run_id", "trace_id", "span_id", "parent_span_id"})
 
 
 def _require_api_read_bearer(request: Request) -> None:
@@ -39,9 +40,22 @@ def _step_list(value: str | None) -> list[str]:
     return parts
 
 
+def _strip_internal_ids(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_ids(child)
+            for key, child in value.items()
+            if str(key) not in _INTERNAL_ID_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_internal_ids(item) for item in value]
+    return value
+
+
 def _derived_response(payload: dict[str, Any], raw: list[dict[str, Any]]) -> dict[str, Any]:
+    protected = _strip_internal_ids(payload)
     return {
-        **payload,
+        **protected,
         "evidence_rows_considered": len(raw),
         "evidence_is_canonical": True,
         "memory_is_regeneratable": True,
