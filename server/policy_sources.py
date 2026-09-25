@@ -277,7 +277,9 @@ def _read_git_source(source: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         raise PolicySourceError("invalid git commit identity") from exc
     if not _GIT_SHA_RE.fullmatch(commit):
         raise PolicySourceError("invalid git commit identity")
-    raw = _git(repo, "show", f"HEAD:{relative}")
+    # Pin the blob lookup to the exact commit we just resolved. Using HEAD again
+    # would allow a concurrent local ref move to pair content with the wrong SHA.
+    raw = _git(repo, "show", f"{commit}:{relative}")
     if not raw or len(raw) > _MAX_SOURCE_BYTES:
         raise PolicySourceError("committed git policy source must be 1..256 KiB")
     dirty = bool(_git(repo, "status", "--porcelain", "--", relative).strip())
