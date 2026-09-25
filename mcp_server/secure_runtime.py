@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any
@@ -11,6 +12,7 @@ from server.local_auth import ensure_api_token
 from . import main as core
 
 API_URL = os.getenv("WORKFLOW_OBSERVER_API", "http://127.0.0.1:8787").rstrip("/")
+_TASK_CONTEXT_PROVENANCE_KEY = "_openworkgraph_task_context_provenance"
 
 
 def _headers() -> dict[str, str]:
@@ -61,6 +63,47 @@ def _activity_summary(result: dict[str, Any]) -> dict[str, Any]:
         "range_start": timestamps[0] if timestamps else "",
         "range_end": timestamps[-1] if timestamps else "",
     }
+
+
+def _snapshot_sha256(value: dict[str, Any]) -> str:
+    """Hash one JSON object using the same canonicalization as task preflight."""
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _finish_task_context(tool_name: str, source_result: dict[str, Any]) -> dict[str, Any]:
+    """Protect task context, fingerprint both representations, then audit exactly what is returned.
+
+    The source fingerprint identifies the exact local `/v1/task-context` response
+    before the MCP trust-boundary transform. The MCP fingerprint identifies all
+    protected result fields *before* this trusted provenance object is appended.
+    Neither fingerprint attests that a model consumed or used the context.
+    """
+    source_sha256 = _snapshot_sha256(source_result)
+    protected = core.protect_observed_payload(source_result)
+    protected_sha256 = _snapshot_sha256(protected)
+    protected[_TASK_CONTEXT_PROVENANCE_KEY] = {
+        "schema_version": "1.0",
+        "source_api_snapshot_sha256": source_sha256,
+        "mcp_protected_snapshot_sha256": protected_sha256,
+        "mcp_protected_snapshot_fingerprint_scope": (
+            "all MCP-visible fields before _openworkgraph_task_context_provenance is appended"
+        ),
+        "prompt_injection_protection_applied": True,
+        "mcp_tool_result_emitted": True,
+        "mcp_client_receipt_attested": False,
+        "model_context_consumption_attested": False,
+        "model_context_use_attested": False,
+        "automatic_context_injection": False,
+        "source_and_mcp_representation_are_distinct": True,
+    }
+    core._audit_tool(tool_name, protected)
+    return protected
 
 
 def authorize_tool(tool_name: str) -> None:
@@ -134,6 +177,10 @@ def get_task_context(
     structural tokens; arbitrary natural-language task descriptions are not used
     for fuzzy matching. Declared policy remains normative input while repeated
     behavior remains non-authoritative observed evidence.
+
+    The returned MCP copy preserves the normal prompt-injection protection and
+    adds source/protected snapshot fingerprints. These fingerprints establish
+    representation provenance only; they do not attest model consumption or use.
     """
     name = "get_task_context"
     core._begin(name)
@@ -149,7 +196,7 @@ def get_task_context(
         "max_steps_per_run": min(max(1, int(max_steps_per_run)), 24),
         "max_evidence_refs_per_item": min(max(0, int(max_evidence_refs_per_item)), 4),
     })
-    return core._finish(name, result)
+    return _finish_task_context(name, result)
 
 
 @core.mcp.tool()
