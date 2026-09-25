@@ -29,6 +29,11 @@ API_PORT = 8787
 DASHBOARD = f"http://{API_HOST}:{API_PORT}"
 SECURE_API_APP = "server.secure_app:app"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
+BUILD_COMMIT = (
+    (ROOT / "BUILD_COMMIT").read_text(encoding="utf-8").strip()[:12]
+    if (ROOT / "BUILD_COMMIT").exists()
+    else "source-checkout"
+)
 
 
 def ensure_config() -> None:
@@ -127,6 +132,7 @@ def main() -> None:
     system = platform.system()
 
     print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
+    print(f"Build: {BUILD_COMMIT}")
     print("===========================================")
     print("Evidence is captured and stored locally first. It leaves this computer only through an explicit export/AI connection or an explicitly enrolled organization Gateway.")
     print("Raw rich evidence is canonical; inferred tasks and process labels are regeneratable hints rather than ground truth.")

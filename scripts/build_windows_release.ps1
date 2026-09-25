@@ -30,6 +30,14 @@ if ($LASTEXITCODE -ge 8) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }
 
+$BuildCommit = $env:GITHUB_SHA
+if ([string]::IsNullOrWhiteSpace($BuildCommit)) {
+    try { $BuildCommit = (& git -C $Root rev-parse HEAD).Trim() } catch { $BuildCommit = "" }
+}
+if (-not [string]::IsNullOrWhiteSpace($BuildCommit)) {
+    Set-Content -Path (Join-Path $Payload "BUILD_COMMIT") -Value $BuildCommit -Encoding ascii
+}
+
 @'
 @echo off
 setlocal

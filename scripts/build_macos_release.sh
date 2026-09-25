@@ -29,6 +29,14 @@ rsync -a \
   --exclude 'config.json' \
   "$ROOT/" "$STAGE/"
 
+BUILD_SHA="${GITHUB_SHA:-}"
+if [ -z "$BUILD_SHA" ]; then
+  BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+fi
+if [ -n "$BUILD_SHA" ]; then
+  printf '%s\n' "$BUILD_SHA" > "$STAGE/BUILD_COMMIT"
+fi
+
 tar -czf "$PAYLOAD_ARCHIVE" -C "$STAGE" .
 
 cat > "$LAUNCHER" <<'EOF'
