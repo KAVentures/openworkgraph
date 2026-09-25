@@ -113,4 +113,43 @@ def get_work_profile(scope: str = "current") -> dict[str, Any]:
     return core._finish(name, result)
 
 
+@core.mcp.tool()
+def get_task_context(
+    family_key: str = "",
+    task_family: str = "",
+    current_steps: str = "",
+    after_step: str = "",
+    min_support: int = 2,
+    max_events: int = 10_000,
+    run_limit: int = 3,
+    section_limit: int = 3,
+    max_steps_per_run: int = 16,
+    max_evidence_refs_per_item: int = 2,
+) -> dict[str, Any]:
+    """Return one read-only organizational context bundle for a task.
+
+    Prefer an exact procedural ``family_key`` when known. ``task_family`` accepts
+    only canonical human families such as ``email.reply`` or ``github.review``.
+    ``current_steps`` may resolve a family only from OpenWorkGraph-generated
+    structural tokens; arbitrary natural-language task descriptions are not used
+    for fuzzy matching. Declared policy remains normative input while repeated
+    behavior remains non-authoritative observed evidence.
+    """
+    name = "get_task_context"
+    core._begin(name)
+    result = secure_get("/v1/task-context", {
+        "family_key": family_key,
+        "task_family": task_family,
+        "current_steps": current_steps,
+        "after_step": after_step,
+        "min_support": min(max(2, int(min_support)), 100),
+        "limit": min(max(1, int(max_events)), 25_000),
+        "run_limit": min(max(1, int(run_limit)), 5),
+        "section_limit": min(max(1, int(section_limit)), 5),
+        "max_steps_per_run": min(max(1, int(max_steps_per_run)), 24),
+        "max_evidence_refs_per_item": min(max(0, int(max_evidence_refs_per_item)), 4),
+    })
+    return core._finish(name, result)
+
+
 mcp = core.mcp
