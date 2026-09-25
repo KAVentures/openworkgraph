@@ -17,6 +17,7 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Procedural context packs](PROCEDURAL_CONTEXT_PACK.md) — hard-capped observational workflow-memory bundles for agents, with explicit policy/authority separation and no automatic injection or execution.
 - [Declared policy / SOP plane](DECLARED_POLICY.md) — explicit machine-readable local policy manifests, provenance/versioning, conservative policy-vs-observation comparison, and governed context packs that keep normative policy separate from observed behavior.
 - [Controlled policy authoring](POLICY_AUTHORING.md) — immutable local proposals, structural diffs, stale-base detection, interactive activation, atomic replacement, SHA-addressed history and privacy-minimized audit records.
+- [Trusted policy source sync](POLICY_SOURCE_SYNC.md) — allow-listed local files and committed Git policy manifests, privacy-minimized provenance, deterministic proposal creation, dirty-worktree isolation and zero automatic activation.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for AI analysis.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.
