@@ -212,8 +212,8 @@ def test_receipt_expiry_is_fail_safe():
         nonlocal calls
         calls += 1
         approved = "approval_received:success" in (body.get("completed_steps") or [])
-        # Expire only after #65 has completed its own post-approval recheck.
-        if calls == 2:
+        # Receipt is issued after #65's second read; expire it during #66's final read.
+        if calls == 3:
             clock[0] = 1002.0
         return _payload(body, approval_missing=not approved)
 
