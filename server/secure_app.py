@@ -114,11 +114,23 @@ def _bootstrap_script() -> str:
     }
     const response = await nativeFetch(input, {...init, headers});
     if (response.status === 401 && dashboardSession) {
+      window.__owgAuthLost = true;
       dashboardSession = '';
       sessionStorage.removeItem(SESSION_KEY);
     }
     return response;
   };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const nativeToast = window.toast;
+    if (typeof nativeToast !== 'function') return;
+    window.toast = function(message) {
+      if (window.__owgAuthLost && String(message || '') === 'Could not reach the local observer. Is the launcher still running?') {
+        return nativeToast('OpenWorkGraph was restarted. Use the dashboard opened by the current launcher.');
+      }
+      return nativeToast(message);
+    };
+  });
 })();
 </script>
 """
@@ -301,7 +313,7 @@ async def local_capability_guard(request: Request, call_next):
         session = exchange_dashboard_bootstrap(str(payload.get("bootstrap") or ""))
         if not session:
             return _json_error("invalid or already-used dashboard bootstrap", 401)
-        return JSONResponse({"status": "ok", "session": session, "expires_in_seconds": 12 * 60 * 60})
+        return JSONResponse({"status": "ok", "session": session, "lifetime": "process"})
 
     if path == "/v1/browser-challenge" and method == "POST":
         try:
