@@ -28,7 +28,8 @@ _MAX_RULES = 50
 _MAX_DIVERGENCES = 20
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_FAMILY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
+_HASH16_RE = re.compile(r"^[0-9a-f]{16}$")
+_CANON_HUMAN_RE = re.compile(r"^human:(?:email|github)\.[a-z0-9._-]{1,160}$")
 _SOURCE_TYPES = frozenset({"manual_sop", "repository_policy", "external_reference"})
 _STATUSES = frozenset({"active", "draft", "retired"})
 _RULE_TYPES = frozenset({"required_step", "forbidden_step", "required_predecessor"})
@@ -48,26 +49,32 @@ def _hash(prefix: str, value: Any, *, size: int = 16) -> str:
     return f"{prefix}:" + hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:size]
 
 
+def _instruction_like_token(value: str) -> bool:
+    return _looks_instruction_like(re.sub(r"[_:.-]+", " ", value))
+
+
 def _validate_id(value: Any, *, field: str) -> str:
     text = str(value or "").strip().lower()
-    instruction_probe = re.sub(r"[_:.-]+", " ", text)
-    if not _ID_RE.fullmatch(text) or _looks_instruction_like(instruction_probe):
+    if not _ID_RE.fullmatch(text) or _instruction_like_token(text):
         raise DeclaredPolicyError(f"invalid {field}")
     return text
 
 
 def _validate_version(value: Any) -> str:
     text = str(value or "").strip()
-    if not _VERSION_RE.fullmatch(text):
+    if not _VERSION_RE.fullmatch(text) or _instruction_like_token(text.lower()):
         raise DeclaredPolicyError("invalid policy version")
     return text
 
 
 def _validate_family(value: Any) -> str:
     text = str(value or "").strip().lower()
-    if not _FAMILY_RE.fullmatch(text):
-        raise DeclaredPolicyError("invalid family_key")
-    return text
+    if _CANON_HUMAN_RE.fullmatch(text):
+        return text
+    for prefix in ("human:structure:", "agent:workflow:", "agent:structure:"):
+        if text.startswith(prefix) and _HASH16_RE.fullmatch(text[len(prefix):]):
+            return text
+    raise DeclaredPolicyError("invalid family_key")
 
 
 def _validate_step(value: Any, *, field: str) -> str:
@@ -286,6 +293,7 @@ def build_governed_context_pack(
     max_evidence_refs_per_item: int = 2,
     manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    family_key = _validate_family(family_key)
     observed = build_context_pack(
         raw_events,
         family_key=family_key,
