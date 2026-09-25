@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
-_DASHBOARD_SESSIONS: dict[str, float] = {}
+_DASHBOARD_SESSIONS: set[str] = set()
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
 _EXPORT_TICKETS: dict[str, tuple[float, str, str, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
@@ -141,19 +141,21 @@ def dashboard_bootstrap_matches(candidate: str) -> bool:
     return bool(expected and candidate) and hmac.compare_digest(candidate, expected)
 
 
-def create_dashboard_session(ttl_seconds: int = 12 * 60 * 60) -> str:
+def create_dashboard_session() -> str:
+    """Create a dashboard capability valid for this local server process.
+
+    Dashboard sessions intentionally have no wall-clock expiry. They live only in
+    process memory, so stopping or restarting OpenWorkGraph revokes every session
+    automatically while long-running observers remain usable for their full run.
+    """
     token = secrets.token_urlsafe(32)
     with _LOCK:
-        now = time.time()
-        _DASHBOARD_SESSIONS[token] = now + ttl_seconds
-        for key, expiry in list(_DASHBOARD_SESSIONS.items()):
-            if expiry < now:
-                _DASHBOARD_SESSIONS.pop(key, None)
+        _DASHBOARD_SESSIONS.add(token)
     return token
 
 
-def exchange_dashboard_bootstrap(candidate: str, ttl_seconds: int = 12 * 60 * 60) -> str | None:
-    """Consume the launch bootstrap exactly once and return a dashboard session."""
+def exchange_dashboard_bootstrap(candidate: str) -> str | None:
+    """Consume the launch bootstrap exactly once and return a process-scoped session."""
     expected = os.getenv("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", "")
     if not expected or not candidate:
         return None
@@ -163,12 +165,8 @@ def exchange_dashboard_bootstrap(candidate: str, ttl_seconds: int = 12 * 60 * 60
         if not hmac.compare_digest(candidate, expected):
             return None
         token = secrets.token_urlsafe(32)
-        now = time.time()
-        _DASHBOARD_SESSIONS[token] = now + ttl_seconds
+        _DASHBOARD_SESSIONS.add(token)
         _CONSUMED_DASHBOARD_BOOTSTRAPS.add(expected)
-        for key, expiry in list(_DASHBOARD_SESSIONS.items()):
-            if expiry < now:
-                _DASHBOARD_SESSIONS.pop(key, None)
         return token
 
 
@@ -176,11 +174,7 @@ def dashboard_session_valid(token: str | None) -> bool:
     if not token:
         return False
     with _LOCK:
-        expiry = _DASHBOARD_SESSIONS.get(str(token), 0)
-        if expiry < time.time():
-            _DASHBOARD_SESSIONS.pop(str(token), None)
-            return False
-        return True
+        return str(token) in _DASHBOARD_SESSIONS
 
 
 def issue_export_ticket(
