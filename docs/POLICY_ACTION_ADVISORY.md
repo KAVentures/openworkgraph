@@ -54,15 +54,18 @@ This is the rule type that expresses ordering. OpenWorkGraph does not invent ord
 
 A generic required step means only that the declared policy requires that step somewhere in the governed workflow. It has no implicit deadline or ordering semantics.
 
-Therefore it is relevant to action advisory only when the proposed action is that required step itself. It is **not** converted into a prerequisite for unrelated actions.
+Therefore it is relevant to action advisory only when the proposed action is that required step itself. It is **not** converted into a prerequisite for unrelated actions, and the response does not claim the requirement is already satisfied merely because the action has been proposed.
 
 ## Advisory states
 
 `declared_policy_warning`
 : one or more explicit declared constraints are currently unsatisfied or the proposed step is explicitly forbidden.
 
-`matched_constraints_satisfied`
-: the proposed step matches declared constraints and the structural prerequisites supplied by the caller satisfy them.
+`matched_prerequisites_satisfied`
+: the proposed step triggers one or more declared predecessor rules and the supplied completed structural steps satisfy those prerequisites.
+
+`declared_required_step_proposed`
+: the proposed step itself matches a generic declared `required_step`. This is informational; the requirement is not marked completed before the action occurs.
 
 `no_matching_declared_constraint`
 : an active policy exists, but none of its structural rules constrains this proposed step.
@@ -70,7 +73,7 @@ Therefore it is relevant to action advisory only when the proposed action is tha
 `no_active_declared_policy`
 : no active declared policy exists for the supplied family.
 
-Neither of the last two states means that the action is authorized.
+None of these states means that the action is authorized.
 
 ## No authorization semantics
 
