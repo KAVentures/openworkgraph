@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from server import local_auth
-from server.secure_app import _bootstrap_script
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _reset_dashboard_auth_state() -> None:
@@ -41,7 +44,10 @@ def test_dashboard_session_is_revoked_when_process_memory_is_gone(monkeypatch):
 
 
 def test_stale_dashboard_401_is_not_reported_as_observer_unreachable():
-    script = _bootstrap_script()
-    assert "window.__owgAuthLost = true" in script
-    assert "OpenWorkGraph was restarted. Use the dashboard opened by the current launcher." in script
-    assert "Could not reach the local observer. Is the launcher still running?" in script
+    # Do not import server.secure_app here: importing it attaches auth middleware
+    # to server.main.app and would pollute unrelated tests that intentionally
+    # exercise the lower-level unwrapped app.
+    source = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
+    assert "window.__owgAuthLost = true" in source
+    assert "OpenWorkGraph was restarted. Use the dashboard opened by the current launcher." in source
+    assert "Could not reach the local observer. Is the launcher still running?" in source
