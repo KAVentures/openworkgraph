@@ -129,7 +129,7 @@ def test_production_action_advisory_is_read_only_and_api_reader_only(tmp_path):
             timeout=5,
         )
         assert satisfied.status_code == 200
-        assert satisfied.json()["advisory_status"] == "matched_constraints_satisfied"
+        assert satisfied.json()["advisory_status"] == "matched_prerequisites_satisfied"
         assert satisfied.json()["action_allowed"] is None
 
         bad = httpx.post(
