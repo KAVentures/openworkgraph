@@ -51,12 +51,14 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
         "history": tmp_path / "history",
         "sources": tmp_path / "sources.json",
         "state": tmp_path / "source-state.json",
+        "receipts": tmp_path / "source-receipts",
     }
     monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_FILE", str(paths["active"]))
     monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_PROPOSAL_DIR", str(paths["proposals"]))
     monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_HISTORY_DIR", str(paths["history"]))
     monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_SOURCES_FILE", str(paths["sources"]))
     monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_SOURCE_STATE", str(paths["state"]))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_POLICY_SOURCE_RECEIPT_DIR", str(paths["receipts"]))
     return paths
 
 
@@ -83,25 +85,37 @@ def test_local_source_prepares_deterministic_proposal_without_activation(monkeyp
     first = ps.sync_policy_sources()
     assert first["proposal_count"] == 1
     assert first["error_count"] == 0
+    assert first["provenance_receipts_immutable"] is True
     result = first["results"][0]
     assert result["status"] == "proposal_ready"
     assert result["automatic_activation"] is False
     assert result["proposal_id"]
+    assert result["receipt_id"].startswith("receipt-")
     assert paths["active"].read_bytes() == active_before
 
     review = load_policy_proposal(result["proposal_id"])
     assert review["candidate"]["policies"][0]["version"] == "2"
     assert review["candidate"]["policies"][0]["source_ref_present"] is True
 
-    serialized = json.dumps(first) + paths["state"].read_text(encoding="utf-8")
+    receipts = list(paths["receipts"].glob("receipt-*.json"))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["receipt_id"] == result["receipt_id"]
+    assert receipt["proposal_id"] == result["proposal_id"]
+    assert receipt["source_id"] == "email-policy-source"
+    assert receipt["automatic_activation"] is False
+
+    serialized = json.dumps(first) + paths["state"].read_text(encoding="utf-8") + receipts[0].read_text(encoding="utf-8")
     assert str(candidate) not in serialized
     assert "file:///secret/source-policy.json" not in serialized
 
     second = ps.sync_policy_sources()
     second_result = second["results"][0]
     assert second_result["proposal_id"] == result["proposal_id"]
+    assert second_result["receipt_id"] == result["receipt_id"]
     assert second_result["source_changed_since_previous_scan"] is False
     assert second_result["proposal_deduplicated_from_previous_scan"] is True
+    assert len(list(paths["receipts"].glob("receipt-*.json"))) == 1
     assert paths["active"].read_bytes() == active_before
 
 
@@ -118,6 +132,8 @@ def test_semantically_current_source_is_up_to_date_and_creates_no_proposal(monke
     assert outcome["up_to_date_count"] == 1
     assert outcome["results"][0]["status"] == "up_to_date"
     assert outcome["results"][0]["proposal_id"] is None
+    assert outcome["results"][0]["receipt_id"] is None
+    assert not paths["receipts"].exists()
     assert not any(paths["proposals"].glob("*.proposal.json")) if paths["proposals"].exists() else True
 
 
@@ -137,8 +153,6 @@ def test_git_source_reads_committed_head_not_dirty_worktree(monkeypatch, tmp_pat
     _git("commit", "-m", "policy v2", cwd=repo)
     committed_head = _git("rev-parse", "HEAD", cwd=repo).lower()
 
-    # Deliberately dirty the working tree with a different candidate. Sync must
-    # still read HEAD:policies/openworkgraph.json from the local object database.
     _write_json(policy_file, _manifest(version="3", source_ref="repo://dirty/worktree.json", forbidden=True))
     _write_json(paths["sources"], {
         "schema_version": "1.0",
@@ -161,7 +175,10 @@ def test_git_source_reads_committed_head_not_dirty_worktree(monkeypatch, tmp_pat
     review = load_policy_proposal(result["proposal_id"])
     assert review["candidate"]["policies"][0]["version"] == "2"
     assert len(review["candidate"]["policies"][0]["rules"]) == 1
-    blob = json.dumps(outcome) + paths["state"].read_text(encoding="utf-8")
+    receipt = json.loads((paths["receipts"] / f"{result['receipt_id']}.json").read_text(encoding="utf-8"))
+    assert receipt["git_commit_sha"] == committed_head
+    assert receipt["working_tree_differs_from_committed_source"] is True
+    blob = json.dumps(outcome) + paths["state"].read_text(encoding="utf-8") + json.dumps(receipt)
     assert str(repo) not in blob
     assert "repo://dirty/worktree.json" not in blob
 
@@ -205,12 +222,14 @@ def test_fake_or_corrupt_state_cannot_suppress_real_change(monkeypatch, tmp_path
     result = outcome["results"][0]
     assert result["status"] == "proposal_ready"
     assert result["proposal_id"] != "proposal-00000000000000000000"
+    assert result["receipt_id"]
     assert outcome["state_is_authoritative"] is False
 
     paths["state"].write_text("{corrupt", encoding="utf-8")
     again = ps.sync_policy_sources()
     assert again["results"][0]["status"] == "proposal_ready"
     assert again["results"][0]["proposal_id"] == result["proposal_id"]
+    assert again["results"][0]["receipt_id"] == result["receipt_id"]
 
 
 def test_one_bad_source_does_not_block_other_approved_sources(monkeypatch, tmp_path):
@@ -232,7 +251,27 @@ def test_one_bad_source_does_not_block_other_approved_sources(monkeypatch, tmp_p
     assert outcome["error_count"] == 1
     by_id = {item["source_id"]: item for item in outcome["results"]}
     assert by_id["good-source"]["status"] == "proposal_ready"
+    assert by_id["good-source"]["receipt_id"]
     assert by_id["missing-source"]["status"] == "error"
+
+
+def test_receipt_tampering_is_detected_on_repeat_scan(monkeypatch, tmp_path):
+    paths = _env(monkeypatch, tmp_path)
+    _write_json(paths["active"], _manifest(version="1"))
+    source = tmp_path / "candidate.json"
+    _write_json(source, _manifest(version="2"))
+    _write_json(paths["sources"], _local_config("receipt-source", source))
+    first = ps.sync_policy_sources()
+    result = first["results"][0]
+    receipt_path = paths["receipts"] / f"{result['receipt_id']}.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["source_sha256"] = "0" * 64
+    _write_json(receipt_path, payload)
+
+    second = ps.sync_policy_sources()
+    assert second["results"][0]["status"] == "error"
+    assert second["results"][0]["error_type"] == "PolicySourceError"
+    assert paths["active"].read_text(encoding="utf-8") == json.dumps(_manifest(version="1"), indent=2) + "\n"
 
 
 def test_source_sync_has_no_activation_or_network_mutation_surface():
