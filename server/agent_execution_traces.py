@@ -94,6 +94,7 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
         item["usage"] = usage
 
     if task_context:
+        handoff_status = str(task_context.get("handoff_status") or "").strip().lower() or "not_asserted"
         item["task_context"] = {
             "preflight_attempted": task_context.get("preflight_attempted") is True,
             "available": task_context.get("available") is True,
@@ -101,6 +102,11 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
             "family_key": str(task_context.get("family_key") or "") or None,
             "adapter_reported": str(task_context.get("linkage_assertion_source") or "") == "agent_adapter",
             "server_attested": task_context.get("context_snapshot_verified_by_server") is True,
+            "handoff_status": handoff_status,
+            "handoff_adapter_reported": bool(task_context.get("handoff_status"))
+            and str(task_context.get("handoff_assertion_source") or "") == "agent_adapter",
+            "handoff_server_attested": task_context.get("handoff_verified_by_server") is True,
+            "model_context_consumption_attested": task_context.get("model_context_consumption_attested") is True,
         }
 
     if shadow:
@@ -152,6 +158,16 @@ def _observed_coverage(
         "token_usage": any(isinstance(item.get("usage"), dict) and bool(item.get("usage")) for item in projected),
         "structural_step": any(bool(item.get("structural_step")) for item in projected),
         "task_context_linkage": any(isinstance(item.get("task_context"), dict) for item in projected),
+        "context_handoff_assertion": any(
+            isinstance(item.get("task_context"), dict)
+            and str((item.get("task_context") or {}).get("handoff_status") or "not_asserted") != "not_asserted"
+            for item in projected
+        ),
+        "context_handoff_delivered_to_runtime": any(
+            isinstance(item.get("task_context"), dict)
+            and str((item.get("task_context") or {}).get("handoff_status") or "") == "delivered_to_runtime"
+            for item in projected
+        ),
         "shadow_enforcement_preview": any(isinstance(item.get("shadow_enforcement"), dict) for item in projected),
     }
     return {
@@ -261,6 +277,14 @@ def agent_execution_traces(
             "false_means": "signal_not_observed_not_proof_the_underlying_action_did_not_occur",
             "coverage_is_vendor_capability_claim": False,
             "hidden_reasoning_is_observable": False,
+        },
+        "context_handoff_semantics": {
+            "not_asserted": "no adapter assertion about handoff preparation or runtime delivery",
+            "prepared": "the integration reports that the verified handoff envelope was prepared",
+            "delivered_to_runtime": "the integration reports that the verified handoff envelope was passed to the runtime",
+            "delivery_proves_model_read_or_use": False,
+            "delivery_proves_model_compliance": False,
+            "server_attestation_of_delivery": False,
         },
         "native_run_ids_exposed": False,
         "native_trace_ids_exposed": False,
