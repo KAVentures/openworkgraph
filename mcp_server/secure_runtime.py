@@ -152,4 +152,27 @@ def get_task_context(
     return core._finish(name, result)
 
 
+@core.mcp.tool()
+def get_action_policy_advisory(
+    family_key: str,
+    proposed_step: str,
+    completed_steps: str = "",
+) -> dict[str, Any]:
+    """Check explicit declared policy relevant to one proposed structural action.
+
+    This tool is advisory only. It does not authorize, execute, block, or approve
+    the action, and observed workflow behavior is never used as permission. Pass
+    completed OpenWorkGraph structural steps as a comma-separated list.
+    """
+    name = "get_action_policy_advisory"
+    core._begin(name)
+    completed = [item.strip() for item in str(completed_steps or "").split(",") if item.strip()]
+    result = secure_post("/v1/declared-policies/action-advisory", {
+        "family_key": family_key,
+        "proposed_step": proposed_step,
+        "completed_steps": completed,
+    })
+    return core._finish(name, result)
+
+
 mcp = core.mcp
