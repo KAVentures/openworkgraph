@@ -2,17 +2,18 @@ from __future__ import annotations
 
 """Reusable, non-prescriptive client for OpenWorkGraph task-context preflight.
 
-This module is intentionally a *reader*, not an execution policy engine.  It
+This module is intentionally a *reader*, not an execution policy engine. It
 retrieves the read-only /v1/task-context contract and exposes a compact summary
-that agent runtimes can inspect before acting.  It never formats hidden prompt
+that agent runtimes can inspect before acting. It never formats hidden prompt
 instructions, chooses an action, or converts observed behavior into policy.
 
 Unavailable local context can be represented explicitly through try_preflight()
-without making OpenWorkGraph a hard runtime dependency.  Invalid caller input is
+without making OpenWorkGraph a hard runtime dependency. Invalid caller input is
 not treated as observer unavailability and therefore remains an error.
 """
 
 from dataclasses import dataclass
+import hashlib
 import ipaddress
 import json
 import os
@@ -58,6 +59,8 @@ class TaskPreflight:
     next_observed_step_count: int
     automatic_enforcement: bool
     automatic_execution: bool
+    context_sha256: str | None
+    policy_manifest_sha256: str | None
     error_code: str | None
     context: Mapping[str, Any] | None
 
@@ -80,6 +83,8 @@ class TaskPreflight:
             next_observed_step_count=0,
             automatic_enforcement=False,
             automatic_execution=False,
+            context_sha256=None,
+            policy_manifest_sha256=None,
             error_code="observer_unavailable",
             context=None,
         )
@@ -103,6 +108,8 @@ class TaskPreflight:
             "next_observed_step_count": self.next_observed_step_count,
             "automatic_enforcement": self.automatic_enforcement,
             "automatic_execution": self.automatic_execution,
+            "context_sha256": self.context_sha256,
+            "policy_manifest_sha256": self.policy_manifest_sha256,
             "error_code": self.error_code,
             "context": dict(self.context) if self.context is not None else None,
         }
@@ -203,8 +210,6 @@ def _default_fetch(params: dict[str, str | int], *, timeout: float) -> dict[str,
         with urlopen(request, timeout=max(0.05, min(float(timeout), 10.0))) as response:
             raw = response.read(_MAX_RESPONSE_BYTES + 1)
     except HTTPError as exc:
-        # 4xx means the integration request is wrong or unauthorized, not that
-        # the observer is merely unavailable.  Do not silently fail open.
         if 400 <= int(exc.code) < 500:
             raise TaskPreflightError("task-context request rejected") from exc
         raise TaskPreflightUnavailable("task-context service unavailable") from exc
@@ -242,6 +247,16 @@ def _count_comparison_divergences(value: Any) -> int:
     return int(value.get("potential_divergence_count") or 0)
 
 
+def _context_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _parse_preflight(payload: dict[str, Any]) -> TaskPreflight:
     if payload.get("read_only") is not True or payload.get("writes_performed") is not False:
         raise TaskPreflightError("task-context response does not preserve read-only contract")
@@ -273,6 +288,7 @@ def _parse_preflight(payload: dict[str, Any]) -> TaskPreflight:
     approvals = observed.get("approval_patterns") if isinstance(observed.get("approval_patterns"), list) else []
     runs = observed.get("similar_runs") if isinstance(observed.get("similar_runs"), list) else []
     next_steps = observed.get("next_observed_steps") if isinstance(observed.get("next_observed_steps"), list) else []
+    manifest_sha = str(policy.get("manifest_sha256") or "").strip() or None
 
     return TaskPreflight(
         available=True,
@@ -291,6 +307,8 @@ def _parse_preflight(payload: dict[str, Any]) -> TaskPreflight:
         next_observed_step_count=len(next_steps),
         automatic_enforcement=False,
         automatic_execution=False,
+        context_sha256=_context_sha256(payload),
+        policy_manifest_sha256=manifest_sha,
         error_code=None,
         context=payload,
     )
@@ -300,7 +318,7 @@ class TaskPreflightClient:
     """Small transport-independent client for pre-action task-context retrieval.
 
     ``fetcher`` receives the validated query-parameter dictionary and should
-    return the JSON-decoded /v1/task-context payload.  This makes the same client
+    return the JSON-decoded /v1/task-context payload. This makes the same client
     reusable in custom runtimes that already own their authenticated transport.
     """
 
