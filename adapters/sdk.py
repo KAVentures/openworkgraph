@@ -88,15 +88,23 @@ class BufferedAgentEventSink:
             return False
 
         self._ensure_worker()
-        try:
-            self._queue.put_nowait(dict(event))
-        except queue.Full:
-            with self._lock:
+        with self._lock:
+            # Synchronize the final acceptance decision with shutdown so an
+            # event cannot enter the queue after shutdown has stopped admission.
+            if self._stop.is_set():
                 self._dropped += 1
+                return False
+            try:
+                self._queue.put_nowait(dict(event))
+            except queue.Full:
+                self._dropped += 1
+                full = True
+            else:
+                self._accepted += 1
+                full = False
+        if full:
             self._debug_notice("telemetry queue full; event dropped")
             return False
-        with self._lock:
-            self._accepted += 1
         return True
 
     def _take_batch(self) -> list[dict]:
@@ -141,9 +149,10 @@ class BufferedAgentEventSink:
         return self._queue.unfinished_tasks == 0
 
     def shutdown(self, *, timeout: float = 2.0) -> None:
-        # Reject new events first, then let the existing worker drain what was
-        # already accepted. Shutdown remains bounded even if the sender hangs.
-        self._stop.set()
+        # Admission and shutdown use the same lock, making "accepted before
+        # shutdown" versus "rejected after shutdown" deterministic.
+        with self._lock:
+            self._stop.set()
         self.force_flush(timeout=timeout)
         thread = self._thread
         if thread is not None and thread.is_alive():
