@@ -78,7 +78,7 @@ def test_missing_approval_predecessor_is_advisory_warning_and_can_be_satisfied()
         completed_steps=[SEARCH, "approval_received:success"],
         manifest=manifest,
     )
-    assert satisfied["advisory_status"] == "matched_constraints_satisfied"
+    assert satisfied["advisory_status"] == "matched_prerequisites_satisfied"
     assert satisfied["warning_count"] == 0
     assert satisfied["approval_prerequisite_missing"] is False
     assert satisfied["relevant_rules"][0]["advisory"] == "prerequisite_satisfied"
@@ -101,7 +101,7 @@ def test_generic_required_step_is_not_reinterpreted_as_ordering_constraint():
     assert result["action_allowed"] is None
 
 
-def test_proposing_a_declared_required_step_is_informational_not_permission():
+def test_proposing_a_declared_required_step_is_informational_not_completion_or_permission():
     result = action_policy_advisory(
         family_key=FAMILY,
         proposed_step="approval_request",
@@ -109,8 +109,11 @@ def test_proposing_a_declared_required_step_is_informational_not_permission():
             {"rule_id": "must-request-approval", "type": "required_step", "step": "approval_request"},
         ]),
     )
-    assert result["advisory_status"] == "matched_constraints_satisfied"
-    assert result["relevant_rules"][0]["advisory"] == "declared_required_step_is_proposed"
+    assert result["advisory_status"] == "declared_required_step_proposed"
+    rule = result["relevant_rules"][0]
+    assert rule["advisory"] == "declared_required_step_is_proposed"
+    assert rule["constraint_satisfied"] is None
+    assert rule["proposed_step_matches_requirement"] is True
     assert result["action_allowed"] is None
 
 
