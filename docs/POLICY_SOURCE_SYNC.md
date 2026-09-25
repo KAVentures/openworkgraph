@@ -103,6 +103,7 @@ The sync-state file records privacy-minimized operational metadata such as:
 - source content SHA-256;
 - candidate manifest SHA-256;
 - proposal ID;
+- immutable provenance receipt ID;
 - source type;
 - hashed source location;
 - Git commit SHA where applicable;
@@ -124,6 +125,34 @@ Override it with:
 WORKFLOW_OBSERVER_POLICY_SOURCE_STATE=/path/to/policy_source_state.json
 ```
 
+## Immutable provenance receipts
+
+When a source produces a proposal, OpenWorkGraph also writes a deterministic privacy-minimized receipt tying together:
+
+- `source_id`;
+- proposal ID;
+- source content SHA-256;
+- candidate manifest SHA-256;
+- hashed source location;
+- Git commit SHA where applicable;
+- whether the working-tree file differed from committed content at scan time.
+
+Receipt IDs are derived from the receipt content. Repeated scans reuse the same receipt. If an existing receipt with the same ID has different contents, the source scan fails that source rather than silently accepting the altered provenance.
+
+Default receipt directory:
+
+```text
+<data-dir>/policy_source_receipts/
+```
+
+Override it with:
+
+```text
+WORKFLOW_OBSERVER_POLICY_SOURCE_RECEIPT_DIR=/path/to/policy_source_receipts
+```
+
+Receipts are audit material only. They do not grant activation authority and are not consulted to decide whether a source change should be proposed.
+
 ## Scheduling
 
 `sync-sources` is non-interactive and safe to invoke repeatedly from an external scheduler if desired. OpenWorkGraph does not install a scheduler or background watcher in this release, so existing runtime behavior is unchanged unless an operator explicitly runs or schedules the command.
@@ -138,6 +167,6 @@ Invalid configuration itself fails closed, because a malformed source allow-list
 
 ## Threat-model boundary
 
-This feature prevents OpenWorkGraph agents, REST clients, MCP clients, and the sync process itself from activating policy. It does not attempt to sandbox a process that already has unrestricted same-user filesystem access to the configured source, proposal, or active-policy directories.
+This feature prevents OpenWorkGraph agents, REST clients, MCP clients, and the sync process itself from activating policy. It does not attempt to sandbox a process that already has unrestricted same-user filesystem access to the configured source, proposal, receipt, or active-policy directories.
 
 For stronger enterprise separation, those paths should ultimately be owned and writable only by a dedicated administrative identity/process.
