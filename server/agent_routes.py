@@ -9,6 +9,7 @@ from shared.agent_evidence import AgentEvidenceError
 from .agent_auth import agent_bearer_matches
 from .agent_ingest import ingest_agent_payloads, ingest_codex_otel_payload, ingest_otel_payload
 from .agent_workflows import agent_workflow_view
+from .agent_execution_trace_routes import router as agent_execution_trace_router
 from .context_execution_routes import router as context_execution_router
 from .context_outcome_routes import router as context_outcome_router
 from .declared_policy_routes import router as declared_policy_router
@@ -132,6 +133,7 @@ router.include_router(procedural_memory_router)
 router.include_router(declared_policy_router)
 router.include_router(task_context_router)
 router.include_router(context_execution_router)
+router.include_router(agent_execution_trace_router)
 router.include_router(context_outcome_router)
 router.include_router(shadow_enforcement_router)
 router.include_router(policy_action_router)
