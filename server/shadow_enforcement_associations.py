@@ -116,11 +116,25 @@ def _preview_records(raw_events: list[dict[str, Any]]) -> tuple[list[dict[str, A
 
 
 def _dedupe_runs(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate preview records while preserving run-level structural facts.
+
+    One run may contain different shadow dispositions. Outcome and observation
+    metadata are run-level and therefore identical for records derived from the
+    canonical path, while approval/policy flags are merged with OR so a later
+    preview cannot make an earlier first-record choice hide a fact about the run.
+    """
     by_run: dict[str, dict[str, Any]] = {}
     for record in records:
         key = str(record.get("_run_key") or "")
-        if key and key not in by_run:
-            by_run[key] = record
+        if not key:
+            continue
+        current = by_run.get(key)
+        if current is None:
+            by_run[key] = dict(record)
+            continue
+        current["approval_requested"] = bool(current.get("approval_requested")) or bool(record.get("approval_requested"))
+        current["approval_received"] = bool(current.get("approval_received")) or bool(record.get("approval_received"))
+        current["policy_manifest_reported"] = bool(current.get("policy_manifest_reported")) or bool(record.get("policy_manifest_reported"))
     return list(by_run.values())
 
 
