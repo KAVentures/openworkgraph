@@ -151,24 +151,17 @@ def _policy_compare_shape(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _policy_label(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: item.get(key)
-        for key in ("policy_id", "version", "status", "family_key", "source_type")
-    }
-
-
 def proposal_diff(current: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     before = {_policy_key(item): item for item in current.get("policies") or []}
     after = {_policy_key(item): item for item in candidate.get("policies") or []}
-    added = [_policy_label(after[key]) for key in sorted(after.keys() - before.keys())]
-    removed = [_policy_label(before[key]) for key in sorted(before.keys() - after.keys())]
+    added = [_policy_compare_shape(after[key]) for key in sorted(after.keys() - before.keys())]
+    removed = [_policy_compare_shape(before[key]) for key in sorted(before.keys() - after.keys())]
     modified = [
         {
             "policy_id": key[0],
             "version": key[1],
-            "before": _policy_label(before[key]),
-            "after": _policy_label(after[key]),
+            "before": _policy_compare_shape(before[key]),
+            "after": _policy_compare_shape(after[key]),
         }
         for key in sorted(before.keys() & after.keys())
         if _policy_compare_shape(before[key]) != _policy_compare_shape(after[key])
@@ -181,6 +174,7 @@ def proposal_diff(current: dict[str, Any], candidate: dict[str, Any]) -> dict[st
         "modified": modified,
         "change_count": len(added) + len(removed) + len(modified),
         "requires_human_review": True,
+        "privacy": "source references are represented only by source_ref_hash",
     }
 
 
@@ -199,7 +193,7 @@ def create_policy_proposal(candidate_source: Path) -> dict[str, Any]:
     source = Path(candidate_source).expanduser()
     canonical = _canonical_manifest_bytes(source)
     candidate_sha = _sha256(canonical)
-    base_sha, _current_public = _current_manifest_state()
+    base_sha, current_public = _current_manifest_state()
     proposal_id = _proposal_id_for(base_sha, candidate_sha)
     meta_path, candidate_path = _proposal_paths(proposal_id)
 
@@ -215,6 +209,9 @@ def create_policy_proposal(candidate_source: Path) -> dict[str, Any]:
         candidate_public = _candidate_public(candidate_path)
         if candidate_public.get("manifest_sha256") != candidate_sha:
             raise PolicyProposalError("candidate manifest digest mismatch after validation")
+        initial_diff = proposal_diff(current_public, candidate_public)
+        if initial_diff["change_count"] == 0:
+            raise PolicyProposalError("candidate manifest has no policy changes")
         metadata = {
             "schema_version": _PROPOSAL_SCHEMA,
             "proposal_id": proposal_id,
