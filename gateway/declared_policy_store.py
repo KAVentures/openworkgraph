@@ -14,31 +14,41 @@ from .db import GatewayDB
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS organization_declared_policy_bundles (
   organization_id TEXT NOT NULL,
-  policy_revision INTEGER NOT NULL,
   bundle_sha256 TEXT NOT NULL,
+  policy_revision INTEGER NOT NULL,
   manifest_sha256 TEXT NOT NULL,
   key_id TEXT NOT NULL,
   bundle_json TEXT NOT NULL,
   published_at TEXT NOT NULL,
-  PRIMARY KEY (organization_id, policy_revision)
+  PRIMARY KEY (organization_id, bundle_sha256)
 );
-CREATE INDEX IF NOT EXISTS idx_gateway_declared_policy_latest
-  ON organization_declared_policy_bundles(organization_id, policy_revision DESC);
+CREATE INDEX IF NOT EXISTS idx_gateway_declared_policy_history
+  ON organization_declared_policy_bundles(organization_id, published_at DESC);
+CREATE TABLE IF NOT EXISTS organization_declared_policy_current (
+  organization_id TEXT PRIMARY KEY,
+  bundle_sha256 TEXT NOT NULL,
+  selected_at TEXT NOT NULL
+);
 """
 
 _POSTGRES_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS organization_declared_policy_bundles (
       organization_id TEXT NOT NULL,
-      policy_revision BIGINT NOT NULL,
       bundle_sha256 TEXT NOT NULL,
+      policy_revision BIGINT NOT NULL,
       manifest_sha256 TEXT NOT NULL,
       key_id TEXT NOT NULL,
       bundle_json TEXT NOT NULL,
       published_at TEXT NOT NULL,
-      PRIMARY KEY (organization_id, policy_revision)
+      PRIMARY KEY (organization_id, bundle_sha256)
     )""",
-    """CREATE INDEX IF NOT EXISTS idx_gateway_declared_policy_latest
-      ON organization_declared_policy_bundles(organization_id, policy_revision DESC)""",
+    """CREATE INDEX IF NOT EXISTS idx_gateway_declared_policy_history
+      ON organization_declared_policy_bundles(organization_id, published_at DESC)""",
+    """CREATE TABLE IF NOT EXISTS organization_declared_policy_current (
+      organization_id TEXT PRIMARY KEY,
+      bundle_sha256 TEXT NOT NULL,
+      selected_at TEXT NOT NULL
+    )""",
 )
 
 
@@ -72,6 +82,7 @@ def _decode_row(db: GatewayDB, row: Any, columns: list[str] | None) -> dict[str,
         "manifest_sha256": str(data.get("manifest_sha256") or ""),
         "key_id": str(data.get("key_id") or ""),
         "published_at": str(data.get("published_at") or ""),
+        "selected_at": str(data.get("selected_at") or ""),
         "bundle": bundle,
     }
 
@@ -80,10 +91,12 @@ def latest_declared_policy_bundle(db: GatewayDB, organization_id: str) -> dict[s
     with db.connect() as conn:
         cur = db._execute(
             conn,
-            """SELECT organization_id, policy_revision, bundle_sha256, manifest_sha256, key_id, bundle_json, published_at
-               FROM organization_declared_policy_bundles
-               WHERE organization_id = ?
-               ORDER BY policy_revision DESC
+            """SELECT b.organization_id, b.policy_revision, b.bundle_sha256, b.manifest_sha256,
+                      b.key_id, b.bundle_json, b.published_at, c.selected_at
+               FROM organization_declared_policy_current c
+               JOIN organization_declared_policy_bundles b
+                 ON b.organization_id = c.organization_id AND b.bundle_sha256 = c.bundle_sha256
+               WHERE c.organization_id = ?
                LIMIT 1""",
             (organization_id,),
         )
@@ -98,16 +111,15 @@ def publish_declared_policy_bundle(
     organization_id: str,
     bundle: dict[str, Any],
 ) -> dict[str, Any]:
-    """Store an envelope after structural validation; endpoints verify authenticity.
+    """Store/select a structurally valid signed envelope for device distribution.
 
-    The Gateway intentionally does not possess the private signing key. Publication
-    therefore establishes distribution state, not authenticity. Endpoint signature
-    verification is the authority boundary.
+    The Gateway deliberately does not decide signature authenticity or rollback.
+    A compromised Gateway admin can disrupt distribution but cannot create a bundle
+    that a correctly pinned endpoint will accept as organizational policy. Keeping
+    the Gateway as a current-pointer transport also allows recovery by republishing
+    a valid signed bundle after an invalid/poisoned publication.
     """
-    try:
-        inspected = inspect_policy_bundle(bundle)
-    except PolicyBundleError:
-        raise
+    inspected = inspect_policy_bundle(bundle)
     if inspected["organization_id"] != organization_id:
         raise PolicyBundleError("policy bundle belongs to another organization")
 
@@ -117,45 +129,39 @@ def publish_declared_policy_bundle(
     manifest_sha = str(inspected["manifest_sha256"])
     key_id = str(inspected["key_id"])
     payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    previous = latest_declared_policy_bundle(db, organization_id)
+    idempotent = bool(previous and previous["bundle_sha256"] == bundle_sha)
+    now = _now()
 
-    latest = latest_declared_policy_bundle(db, organization_id)
-    if latest is not None:
-        current_revision = int(latest["policy_revision"])
-        if revision < current_revision:
-            raise PolicyBundleError("policy revision rollback rejected")
-        if revision == current_revision:
-            if bundle_sha != latest["bundle_sha256"]:
-                raise PolicyBundleError("policy revision already exists with different signed content")
-            return {**latest, "idempotent": True, "signature_verified_by_gateway": False}
+    with db.connect() as conn:
+        db._execute(
+            conn,
+            """INSERT INTO organization_declared_policy_bundles(
+                 organization_id, bundle_sha256, policy_revision, manifest_sha256, key_id, bundle_json, published_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(organization_id, bundle_sha256) DO NOTHING""",
+            (organization_id, bundle_sha, revision, manifest_sha, key_id, payload, now),
+        )
+        if db.is_postgres:
+            current_sql = """INSERT INTO organization_declared_policy_current(organization_id, bundle_sha256, selected_at)
+                             VALUES (?, ?, ?)
+                             ON CONFLICT(organization_id) DO UPDATE
+                             SET bundle_sha256 = EXCLUDED.bundle_sha256, selected_at = EXCLUDED.selected_at"""
+        else:
+            current_sql = """INSERT INTO organization_declared_policy_current(organization_id, bundle_sha256, selected_at)
+                             VALUES (?, ?, ?)
+                             ON CONFLICT(organization_id) DO UPDATE
+                             SET bundle_sha256 = excluded.bundle_sha256, selected_at = excluded.selected_at"""
+        db._execute(conn, current_sql, (organization_id, bundle_sha, now))
 
-    published_at = _now()
-    try:
-        with db.connect() as conn:
-            db._execute(
-                conn,
-                """INSERT INTO organization_declared_policy_bundles(
-                     organization_id, policy_revision, bundle_sha256, manifest_sha256, key_id, bundle_json, published_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (organization_id, revision, bundle_sha, manifest_sha, key_id, payload, published_at),
-            )
-    except Exception:
-        # A concurrent writer may have inserted the same revision. Re-read and
-        # accept only byte-identical idempotence; never hide revision equivocation.
-        current = latest_declared_policy_bundle(db, organization_id)
-        if current and int(current["policy_revision"]) == revision and current["bundle_sha256"] == bundle_sha:
-            return {**current, "idempotent": True, "signature_verified_by_gateway": False}
-        raise
-
+    selected = latest_declared_policy_bundle(db, organization_id)
+    if selected is None or selected["bundle_sha256"] != bundle_sha:
+        raise RuntimeError("unable to select published declared-policy bundle")
     return {
-        "organization_id": organization_id,
-        "policy_revision": revision,
-        "bundle_sha256": bundle_sha,
-        "manifest_sha256": manifest_sha,
-        "key_id": key_id,
-        "published_at": published_at,
-        "bundle": normalized,
-        "idempotent": False,
+        **selected,
+        "idempotent": idempotent,
         "signature_verified_by_gateway": False,
+        "rollback_enforced_by_gateway": False,
     }
 
 
@@ -164,10 +170,11 @@ def declared_policy_history(db: GatewayDB, organization_id: str, *, limit: int =
     with db.connect() as conn:
         cur = db._execute(
             conn,
-            """SELECT organization_id, policy_revision, bundle_sha256, manifest_sha256, key_id, bundle_json, published_at
+            """SELECT organization_id, policy_revision, bundle_sha256, manifest_sha256, key_id,
+                      bundle_json, published_at, '' AS selected_at
                FROM organization_declared_policy_bundles
                WHERE organization_id = ?
-               ORDER BY policy_revision DESC
+               ORDER BY published_at DESC, bundle_sha256 DESC
                LIMIT ?""",
             (organization_id, cap),
         )
