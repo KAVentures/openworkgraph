@@ -15,7 +15,7 @@ from shared.policy_bundle import (
     canonical_policy_manifest_bytes,
     verify_policy_bundle,
 )
-from server.declared_policy import DeclaredPolicyError, load_declared_policy_manifest
+from server.declared_policy import DeclaredPolicyError, load_declared_policy_manifest, policy_manifest_path
 
 from .config import GatewaySyncSettings
 from .state import SyncState
@@ -72,10 +72,10 @@ def _atomic_write(path: Path, raw: bytes) -> None:
 
 
 def _target_file(settings: GatewaySyncSettings, *, data_dir: Path) -> Path:
+    del data_dir  # The server policy resolver is the single source of truth.
     if settings.managed_declared_policy_target_file is not None:
         return settings.managed_declared_policy_target_file
-    configured = str(os.getenv("WORKFLOW_OBSERVER_POLICY_FILE", "")).strip()
-    return Path(configured).expanduser() if configured else data_dir / "declared_policies.json"
+    return policy_manifest_path()
 
 
 def _validate_manifest_bytes(raw: bytes, *, target: Path) -> None:
