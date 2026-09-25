@@ -77,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "diff": proposal["current_diff"],
                 "activation": proposal["activation"],
             })
-            _print_json(apply_policy_proposal(args.proposal_id, interactive=True))
+            _print_json(apply_policy_proposal(args.proposal_id))
             return 0
     except PolicyProposalError as exc:
         print(f"policy admin error: {exc}", file=sys.stderr)
