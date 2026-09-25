@@ -104,6 +104,18 @@ def _consumer_contract() -> dict[str, Any]:
     }
 
 
+def _serialize_envelope(envelope: dict[str, Any]) -> str:
+    value = json.dumps(
+        envelope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(value.encode("utf-8")) > _MAX_HANDOFF_BYTES:
+        raise TaskPreflightError("task-context handoff exceeds safety limit")
+    return value
+
+
 @dataclass(frozen=True)
 class AgentContextHandoff:
     """One bounded contextual-data envelope plus matching run-start linkage."""
@@ -113,22 +125,29 @@ class AgentContextHandoff:
     family_key: str | None
     context_sha256: str | None
     policy_manifest_sha256: str | None
-    envelope: Mapping[str, Any]
-    run_start_linkage: Mapping[str, Any]
+    _serialized_envelope: str
+    _serialized_linkage: str
 
     def as_dict(self) -> dict[str, Any]:
-        return copy.deepcopy(dict(self.envelope))
+        value = json.loads(self._serialized_envelope)
+        if not isinstance(value, dict):
+            raise TaskPreflightError("invalid stored task-context handoff")
+        return value
 
     def linkage_dict(self) -> dict[str, Any]:
-        return copy.deepcopy(dict(self.run_start_linkage))
+        value = json.loads(self._serialized_linkage)
+        if not isinstance(value, dict):
+            raise TaskPreflightError("invalid stored task-context linkage")
+        return value
 
     def to_json(self, *, indent: int | None = None) -> str:
+        if indent is None:
+            return self._serialized_envelope
         value = json.dumps(
             self.as_dict(),
             ensure_ascii=False,
             sort_keys=True,
             indent=indent,
-            separators=None if indent is not None else (",", ":"),
         )
         if len(value.encode("utf-8")) > _MAX_HANDOFF_BYTES:
             raise TaskPreflightError("task-context handoff exceeds safety limit")
@@ -163,14 +182,16 @@ def build_context_handoff(preflight: TaskPreflight) -> AgentContextHandoff:
             "run_start_linkage": dict(linkage),
             "context": None,
         }
+        serialized = _serialize_envelope(envelope)
+        serialized_linkage = json.dumps(linkage, sort_keys=True, separators=(",", ":"))
         return AgentContextHandoff(
             available=False,
             context_resolved=False,
             family_key=None,
             context_sha256=None,
             policy_manifest_sha256=None,
-            envelope=envelope,
-            run_start_linkage=dict(linkage),
+            _serialized_envelope=serialized,
+            _serialized_linkage=serialized_linkage,
         )
 
     if not isinstance(preflight.context, Mapping):
@@ -190,14 +211,8 @@ def build_context_handoff(preflight: TaskPreflight) -> AgentContextHandoff:
         "run_start_linkage": dict(linkage),
         "context": context,
     }
-    compact = json.dumps(
-        envelope,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    if len(compact) > _MAX_HANDOFF_BYTES:
-        raise TaskPreflightError("task-context handoff exceeds safety limit")
+    serialized = _serialize_envelope(envelope)
+    serialized_linkage = json.dumps(linkage, sort_keys=True, separators=(",", ":"))
 
     return AgentContextHandoff(
         available=True,
@@ -205,6 +220,6 @@ def build_context_handoff(preflight: TaskPreflight) -> AgentContextHandoff:
         family_key=preflight.family_key,
         context_sha256=preflight.context_sha256,
         policy_manifest_sha256=preflight.policy_manifest_sha256,
-        envelope=envelope,
-        run_start_linkage=dict(linkage),
+        _serialized_envelope=serialized,
+        _serialized_linkage=serialized_linkage,
     )
