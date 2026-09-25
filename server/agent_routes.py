@@ -16,6 +16,7 @@ from .local_auth import bearer_matches
 from .policy_action_routes import router as policy_action_router
 from .policy_guard_routes import router as policy_guard_router
 from .procedural_memory_routes import router as procedural_memory_router
+from .shadow_enforcement_routes import router as shadow_enforcement_router
 from .task_context_routes import router as task_context_router
 
 router = APIRouter()
@@ -121,15 +122,17 @@ def get_agent_workflows(
 
 
 # Procedural memory, declared policy, unified task context, context/execution
-# linkage, aggregate context/outcome associations, and normal policy advisory are
-# read-only derived/governance views protected by the broad API/dashboard bearer.
-# The policy_guard_router is different: it exposes one exact structural advisory
-# outside /v1/ and authenticates with its own narrower read-only capability. The
-# write-only agent token remains write-only and cannot use either read surface.
+# linkage, aggregate context/outcome associations, shadow-enforcement/outcome
+# associations, and normal policy advisory are read-only derived/governance views
+# protected by the broad API/dashboard bearer. The policy_guard_router is
+# different: it exposes one exact structural advisory outside /v1/ and
+# authenticates with its own narrower read-only capability. The write-only agent
+# token remains write-only and cannot use either read surface.
 router.include_router(procedural_memory_router)
 router.include_router(declared_policy_router)
 router.include_router(task_context_router)
 router.include_router(context_execution_router)
 router.include_router(context_outcome_router)
+router.include_router(shadow_enforcement_router)
 router.include_router(policy_action_router)
 router.include_router(policy_guard_router)

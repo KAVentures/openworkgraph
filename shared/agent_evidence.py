@@ -82,6 +82,26 @@ _ALLOWED_TASK_CONTEXT_KEYS = frozenset({
     "policy_manifest_sha256",
     "family_key",
 })
+_ALLOWED_SHADOW_ENFORCEMENT_KEYS = frozenset({
+    "profile_id",
+    "available",
+    "candidate_disposition",
+    "family_key",
+    "policy_manifest_sha256",
+    "simulated_only",
+    "actual_enforcement_enabled",
+    "actual_blocking",
+})
+_SHADOW_PROFILE_ID = "declared-policy-shadow-v1"
+_SHADOW_DISPOSITIONS = frozenset({
+    "candidate_deny",
+    "candidate_pause_for_human_approval",
+    "candidate_pause_for_prerequisite",
+    "candidate_warn",
+    "no_declared_enforcement_decision",
+    "no_blocking_condition_observed",
+    "indeterminate_policy_unavailable",
+})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 
@@ -187,6 +207,68 @@ def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
     return out
 
 
+def _shadow_enforcement(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
+    """Validate an optional shadow-enforcement assertion on a tool-call event.
+
+    The assertion is intentionally tiny. It records only the fixed preview
+    profile, candidate disposition, structural workflow family, optional policy
+    manifest hash and explicit simulation flags. It never carries policy text,
+    rule text, action arguments/results, a human identity, or an authorization
+    decision.
+    """
+    raw = payload.get("shadow_enforcement")
+    if raw in (None, {}):
+        return {}
+    if operation != "tool_call":
+        raise AgentEvidenceError("shadow_enforcement is only allowed on tool_call events")
+    if not isinstance(raw, dict):
+        raise AgentEvidenceError("shadow_enforcement must be an object")
+    unknown = set(raw) - _ALLOWED_SHADOW_ENFORCEMENT_KEYS
+    if unknown:
+        raise AgentEvidenceError(f"unsupported shadow_enforcement fields: {', '.join(sorted(unknown))}")
+
+    profile_id = _text(raw.get("profile_id"), limit=120).lower()
+    if profile_id != _SHADOW_PROFILE_ID:
+        raise AgentEvidenceError("invalid shadow_enforcement.profile_id")
+    available = raw.get("available")
+    if not isinstance(available, bool):
+        raise AgentEvidenceError("shadow_enforcement.available must be boolean")
+    disposition = _text(raw.get("candidate_disposition"), limit=120).lower()
+    if disposition not in _SHADOW_DISPOSITIONS:
+        raise AgentEvidenceError("invalid shadow_enforcement.candidate_disposition")
+    if available and disposition == "indeterminate_policy_unavailable":
+        raise AgentEvidenceError("available shadow preview cannot be indeterminate_policy_unavailable")
+    if not available and disposition != "indeterminate_policy_unavailable":
+        raise AgentEvidenceError("unavailable shadow preview must be indeterminate_policy_unavailable")
+
+    family_key = _text(raw.get("family_key"), limit=200).lower()
+    if not family_key or not _FAMILY_KEY_RE.fullmatch(family_key):
+        raise AgentEvidenceError("invalid shadow_enforcement.family_key")
+    policy_sha = _text(raw.get("policy_manifest_sha256"), limit=80).lower()
+    if policy_sha and not _SHA256_RE.fullmatch(policy_sha):
+        raise AgentEvidenceError("invalid shadow_enforcement.policy_manifest_sha256")
+
+    if raw.get("simulated_only") is not True:
+        raise AgentEvidenceError("shadow_enforcement.simulated_only must be true")
+    if raw.get("actual_enforcement_enabled") is not False:
+        raise AgentEvidenceError("shadow_enforcement.actual_enforcement_enabled must be false")
+    if raw.get("actual_blocking") is not False:
+        raise AgentEvidenceError("shadow_enforcement.actual_blocking must be false")
+
+    return {
+        "profile_id": _SHADOW_PROFILE_ID,
+        "available": available,
+        "candidate_disposition": disposition,
+        "family_key": family_key,
+        "policy_manifest_sha256": policy_sha,
+        "simulated_only": True,
+        "actual_enforcement_enabled": False,
+        "actual_blocking": False,
+        "preview_assertion_source": "agent_adapter",
+        "preview_verified_by_server": False,
+    }
+
+
 def _assert_no_content_fields(value: Any, *, path: str = "event") -> None:
     """Fail closed if an adapter tries to send content-bearing fields.
 
@@ -289,6 +371,9 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     task_context = _task_context(payload, operation=operation)
     if task_context:
         metadata["task_context"] = task_context
+    shadow_enforcement = _shadow_enforcement(payload, operation=operation)
+    if shadow_enforcement:
+        metadata["shadow_enforcement"] = shadow_enforcement
 
     return {
         "event_id": _text(payload.get("event_id"), limit=240) or str(uuid.uuid4()),
