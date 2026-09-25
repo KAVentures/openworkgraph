@@ -16,6 +16,7 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Procedural memory](PROCEDURAL_MEMORY.md) — read-only evidence-backed workflow families, similar runs, explicit failure patterns, observed next steps and approval hotspots across humans and agents.
 - [Procedural context packs](PROCEDURAL_CONTEXT_PACK.md) — hard-capped observational workflow-memory bundles for agents, with explicit policy/authority separation and no automatic injection or execution.
 - [Declared policy / SOP plane](DECLARED_POLICY.md) — explicit machine-readable local policy manifests, provenance/versioning, conservative policy-vs-observation comparison, and governed context packs that keep normative policy separate from observed behavior.
+- [Controlled policy authoring](POLICY_AUTHORING.md) — immutable local proposals, structural diffs, stale-base detection, interactive activation, atomic replacement, SHA-addressed history and privacy-minimized audit records.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for AI analysis.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.
