@@ -12,6 +12,7 @@ from .agent_workflows import agent_workflow_view
 from .declared_policy_routes import router as declared_policy_router
 from .local_auth import bearer_matches
 from .procedural_memory_routes import router as procedural_memory_router
+from .task_context_routes import router as task_context_router
 
 router = APIRouter()
 
@@ -115,7 +116,9 @@ def get_agent_workflows(
     return agent_workflow_view(limit=limit, since=since)
 
 
-# Procedural memory and declared policy are read-only derived/governance views.
-# Both inherit secure_app composition through this existing additive router.
+# Procedural memory, declared policy, and unified task context are read-only
+# derived/governance views. They inherit secure_app composition through this
+# existing additive router and never receive the write-only agent credential.
 router.include_router(procedural_memory_router)
 router.include_router(declared_policy_router)
+router.include_router(task_context_router)
