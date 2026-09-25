@@ -95,8 +95,9 @@ def test_stale_proposal_refuses_activation(monkeypatch, tmp_path):
     _write(active, _manifest(version="3"))
     review = pp.load_policy_proposal(proposal["proposal_id"])
     assert review["stale"] is True
+    monkeypatch.setattr(pp, "_local_tty_available", lambda: True)
     with pytest.raises(PolicyProposalError, match="stale"):
-        pp.apply_policy_proposal(proposal["proposal_id"], interactive=True, prompt=lambda _msg: "anything")
+        pp.apply_policy_proposal(proposal["proposal_id"], prompt=lambda _msg: "anything")
 
 
 def test_noninteractive_or_wrong_confirmation_never_changes_policy(monkeypatch, tmp_path):
@@ -107,12 +108,14 @@ def test_noninteractive_or_wrong_confirmation_never_changes_policy(monkeypatch, 
     _write(candidate, _manifest(version="2"))
     proposal = pp.create_policy_proposal(candidate)
 
+    monkeypatch.setattr(pp, "_local_tty_available", lambda: False)
     with pytest.raises(PolicyProposalError, match="interactive local terminal"):
-        pp.apply_policy_proposal(proposal["proposal_id"], interactive=False)
+        pp.apply_policy_proposal(proposal["proposal_id"])
     assert active.read_bytes() == before
 
+    monkeypatch.setattr(pp, "_local_tty_available", lambda: True)
     with pytest.raises(PolicyProposalError, match="confirmation did not match"):
-        pp.apply_policy_proposal(proposal["proposal_id"], interactive=True, prompt=lambda _msg: "APPLY something-else")
+        pp.apply_policy_proposal(proposal["proposal_id"], prompt=lambda _msg: "APPLY something-else")
     assert active.read_bytes() == before
 
 
@@ -125,10 +128,10 @@ def test_interactive_apply_is_atomic_archived_and_audited_without_source_refs(mo
     _write(candidate, _manifest(version="2", source_ref="file:///secret/future.md", forbidden=True))
     proposal = pp.create_policy_proposal(candidate)
     expected = pp._confirmation_text(proposal)
+    monkeypatch.setattr(pp, "_local_tty_available", lambda: True)
 
     result = pp.apply_policy_proposal(
         proposal["proposal_id"],
-        interactive=True,
         prompt=lambda _msg: expected,
     )
     assert result["status"] == "applied"
