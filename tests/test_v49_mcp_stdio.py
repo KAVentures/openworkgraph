@@ -101,12 +101,13 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                     "get_procedural_context_pack",
                     "get_governed_context_pack",
                     "get_task_context",
+                    "get_action_policy_advisory",
                 }
                 assert "get_workflow_trace" in names
                 assert "automation_candidates" in names
                 assert "get_work_profile" in names
                 assert expected_procedural <= names
-                assert len(names) == 21
+                assert len(names) == 22
 
                 denied = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert denied.is_error is True
@@ -167,6 +168,22 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert task_structured.get("writes_performed") is False
                 assert (task_structured.get("authority_model") or {}).get("observed_behavior_becomes_policy") is False
 
+                advisory = await session.call_tool(
+                    "get_action_policy_advisory",
+                    {
+                        "family_key": "human:github.create_issue",
+                        "proposed_step": "tool:deployment:tool:aaaaaaaaaaaa",
+                    },
+                )
+                assert advisory.is_error is False
+                advisory_structured = advisory.structured_content or {}
+                assert advisory_structured.get("advisory_status") == "no_active_declared_policy"
+                assert advisory_structured.get("authorization_decision") == "not_made"
+                assert advisory_structured.get("action_allowed") is None
+                assert advisory_structured.get("automatic_enforcement") is False
+                assert advisory_structured.get("execution_performed") is False
+                assert advisory_structured.get("writes_performed") is False
+
                 resources = await session.list_resources()
                 uris = {str(r.uri) for r in resources.resources}
                 assert "openworkgraph://ai-guide" in uris
@@ -180,5 +197,6 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         assert any(x["tool"] == "get_procedural_context_pack" and x["status"] == "ok" for x in activity)
         assert any(x["tool"] == "get_governed_context_pack" and x["status"] == "ok" for x in activity)
         assert any(x["tool"] == "get_task_context" and x["status"] == "ok" for x in activity)
+        assert any(x["tool"] == "get_action_policy_advisory" and x["status"] == "ok" for x in activity)
     finally:
         _stop(api)
