@@ -12,6 +12,7 @@ from .declared_policy import (
     load_declared_policy_manifest,
 )
 from .local_auth import bearer_matches
+from .policy_source_drift import PolicySourceDriftError, policy_source_drift_status
 from .procedural_memory import load_recent_evidence
 
 
@@ -50,6 +51,15 @@ def _steps(value: str | None) -> list[str]:
 def get_declared_policies(request: Request) -> dict[str, Any]:
     _require_api_read_bearer(request)
     return _load_manifest()
+
+
+@router.get("/v1/declared-policies/source-drift")
+def get_declared_policy_source_drift(request: Request) -> dict[str, Any]:
+    _require_api_read_bearer(request)
+    try:
+        return policy_source_drift_status()
+    except PolicySourceDriftError as exc:
+        raise HTTPException(status_code=422, detail="unable to assess declared-policy source drift") from exc
 
 
 @router.get("/v1/declared-policies/compare")
