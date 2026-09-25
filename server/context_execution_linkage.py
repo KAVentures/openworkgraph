@@ -100,10 +100,8 @@ def _one_execution(events: list[dict[str, Any]]) -> dict[str, Any]:
         elif operation == "human_approval_received":
             approval_received_count += 1
         step = _agent_step(event)
-        if step and (not steps or steps[-1] != step):
+        if step and len(steps) < 48 and (not steps or steps[-1] != step):
             steps.append(step)
-        if len(steps) >= 48:
-            break
 
     observed_family = ""
     observed_family_basis = ""
