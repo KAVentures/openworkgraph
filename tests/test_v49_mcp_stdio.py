@@ -92,10 +92,18 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 await session.initialize()
                 listed = await session.list_tools()
                 names = {tool.name for tool in listed.tools}
+                expected_procedural = {
+                    "get_procedural_memory",
+                    "get_similar_runs",
+                    "get_failure_patterns",
+                    "get_next_likely_steps",
+                    "get_approval_patterns",
+                }
                 assert "get_workflow_trace" in names
                 assert "automation_candidates" in names
                 assert "get_work_profile" in names
-                assert len(names) == 13
+                assert expected_procedural <= names
+                assert len(names) == 18
 
                 denied = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert denied.is_error is True
@@ -112,6 +120,13 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert rows and "Northwind Industries AB" in rows[0]["window_title"]
                 assert rows[0]["target_label"] == "Attestera faktura"
 
+                memory = await session.call_tool("get_procedural_memory", {"max_events": 100})
+                assert memory.is_error is False
+                memory_structured = memory.structured_content or {}
+                assert memory_structured.get("derived") is True
+                assert memory_structured.get("authoritative") is False
+                assert memory_structured.get("memory_is_regeneratable") is True
+
                 resources = await session.list_resources()
                 uris = {str(r.uri) for r in resources.resources}
                 assert "openworkgraph://ai-guide" in uris
@@ -121,5 +136,6 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         activity = httpx.get(base + "/v1/mcp-activity", headers=headers).json()["items"]
         assert any(x["tool"] == "get_workflow_trace" and x["status"] == "ok" for x in activity)
         assert any(x["tool"] == "get_workflow_trace" and x["status"] == "denied" for x in activity)
+        assert any(x["tool"] == "get_procedural_memory" and x["status"] == "ok" for x in activity)
     finally:
         _stop(api)
