@@ -107,7 +107,7 @@ def test_legacy_task_context_without_delivery_status_remains_valid():
 
     assert "handoff_status" not in stored
     assert "handoff_assertion_source" not in stored
-    assert stored["model_context_consumption_attested"] is False
+    assert "model_context_consumption_attested" not in stored
 
     trace = agent_execution_traces([evidence])["executions"][0]
     projected = trace["events"][0]["task_context"]
