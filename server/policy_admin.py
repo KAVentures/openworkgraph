@@ -3,7 +3,8 @@ from __future__ import annotations
 """Local interactive administration for declared-policy proposals.
 
 There is intentionally no network equivalent of the `apply` command. Source sync
-may prepare immutable proposals, but it can never activate them.
+may prepare immutable proposals, but it can never activate them. Drift inspection
+is read-only.
 """
 
 import argparse
@@ -19,6 +20,7 @@ from .policy_proposals import (
     list_policy_proposals,
     load_policy_proposal,
 )
+from .policy_source_drift import PolicySourceDriftError, policy_source_drift_status
 from .policy_sources import PolicySourceError, policy_source_status, sync_policy_sources
 
 
@@ -39,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("list", help="list local policy proposals")
     sub.add_parser("sync-sources", help="scan approved local policy sources and prepare proposals without activation")
     sub.add_parser("source-status", help="show privacy-minimized policy source sync status")
+    sub.add_parser("drift-status", help="compare active policy with current approved sources without mutation")
 
     apply = sub.add_parser("apply", help="interactively activate one non-stale proposal")
     apply.add_argument("proposal_id")
@@ -72,6 +75,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "source-status":
             _print_json(policy_source_status())
             return 0
+        if args.command == "drift-status":
+            _print_json(policy_source_drift_status())
+            return 0
         if args.command == "apply":
             interactive = bool(sys.stdin.isatty() and sys.stdout.isatty())
             if not interactive:
@@ -89,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             })
             _print_json(apply_policy_proposal(args.proposal_id))
             return 0
-    except (PolicyProposalError, PolicySourceError) as exc:
+    except (PolicyProposalError, PolicySourceError, PolicySourceDriftError) as exc:
         print(f"policy admin error: {exc}", file=sys.stderr)
         return 2
     return 2
