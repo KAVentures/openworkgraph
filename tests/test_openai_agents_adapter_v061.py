@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from adapters.openai_agents import OpenWorkGraphTracingProcessor
 
@@ -244,3 +245,81 @@ def test_processor_flush_and_shutdown_delegate_without_exposing_runtime_state():
     processor.shutdown()
     assert sink.flushes == 1
     assert sink.shutdowns == 1
+
+
+def test_trace_processor_never_reads_trace_name_group_metadata_or_export():
+    class PoisonTrace:
+        trace_id = "trace_0123456789abcdef0123456789abcdef"
+
+        @property
+        def name(self):
+            raise AssertionError("trace name must never be read")
+
+        @property
+        def group_id(self):
+            raise AssertionError("trace group_id must never be read")
+
+        @property
+        def metadata(self):
+            raise AssertionError("trace metadata must never be read")
+
+        def export(self):
+            raise AssertionError("native trace export must never be called")
+
+    sink = CaptureSink()
+    processor = OpenWorkGraphTracingProcessor(sink=sink)
+    trace = PoisonTrace()
+    processor.on_trace_start(trace)
+    processor.on_trace_end(trace)
+    assert [event["operation"] for event in sink.events] == ["run_started", "run_finished"]
+
+
+def test_function_processor_never_reads_input_output_or_export():
+    class PoisonFunctionData:
+        type = "function"
+        name = "safe_tool"
+        mcp_data = None
+
+        @property
+        def input(self):
+            raise AssertionError("function input must never be read")
+
+        @property
+        def output(self):
+            raise AssertionError("function output must never be read")
+
+        def export(self):
+            raise AssertionError("native span-data export must never be called")
+
+    sink = CaptureSink()
+    processor = OpenWorkGraphTracingProcessor(sink=sink)
+    span = FakeSpan(
+        span_id="span_safe",
+        trace_id="trace_0123456789abcdef0123456789abcdef",
+        data=PoisonFunctionData(),
+    )
+    span.export = lambda: (_ for _ in ()).throw(AssertionError("native span export must never be called"))
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+    [event] = sink.events
+    assert event["tool_name"] == "safe_tool"
+    assert event["operation"] == "tool_call"
+
+
+def test_malformed_timestamp_cannot_become_stored_content():
+    sink = CaptureSink()
+    processor = OpenWorkGraphTracingProcessor(sink=sink)
+    span = FakeSpan(
+        span_id="span_timestamp",
+        trace_id="trace_0123456789abcdef0123456789abcdef",
+        data=FakeData("function", name="safe_tool", mcp_data=None),
+        started_at="patient@example.com SUPERSECRET start",
+        ended_at="patient@example.com SUPERSECRET end",
+    )
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+    [event] = sink.events
+    assert event["duration_seconds"] == 0.0
+    assert "SUPERSECRET" not in event["observed_at"]
+    assert "patient@example.com" not in event["observed_at"]
+    datetime.fromisoformat(event["observed_at"])
