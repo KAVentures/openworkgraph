@@ -24,10 +24,12 @@ from .policy_proposals import PolicyProposalError, create_policy_proposal
 
 _SOURCE_SCHEMA = "1.0"
 _STATE_SCHEMA = "1.0"
+_RECEIPT_SCHEMA = "1.0"
 _MAX_CONFIG_BYTES = 128 * 1024
 _MAX_SOURCE_BYTES = 256 * 1024
 _MAX_SOURCES = 32
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_PROPOSAL_ID_RE = re.compile(r"^proposal-[0-9a-f]{20}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 _GIT_PATH_PART_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _SOURCE_TYPES = frozenset({"local_file", "git_file"})
@@ -45,6 +47,11 @@ def policy_sources_config_path() -> Path:
 def policy_source_state_path() -> Path:
     configured = str(os.getenv("WORKFLOW_OBSERVER_POLICY_SOURCE_STATE", "")).strip()
     return Path(configured).expanduser() if configured else DATA_DIR / "policy_source_state.json"
+
+
+def policy_source_receipt_dir() -> Path:
+    configured = str(os.getenv("WORKFLOW_OBSERVER_POLICY_SOURCE_RECEIPT_DIR", "")).strip()
+    return Path(configured).expanduser() if configured else DATA_DIR / "policy_source_receipts"
 
 
 def _sha256(raw: bytes) -> str:
@@ -296,7 +303,6 @@ def _load_state() -> dict[str, Any]:
     try:
         payload = _read_json_file(path, max_bytes=_MAX_CONFIG_BYTES, label="policy source state")
     except PolicySourceError:
-        # State is deliberately non-authoritative. Corruption must not suppress a scan.
         return {"schema_version": _STATE_SCHEMA, "sources": {}, "state_recovered_from_invalid_file": True}
     if payload.get("schema_version") != _STATE_SCHEMA or not isinstance(payload.get("sources"), dict):
         return {"schema_version": _STATE_SCHEMA, "sources": {}, "state_recovered_from_invalid_file": True}
@@ -312,6 +318,46 @@ def _write_state(state: dict[str, Any]) -> None:
     if len(raw) > _MAX_CONFIG_BYTES:
         raise PolicySourceError("policy source state exceeds 128 KiB")
     _atomic_write(policy_source_state_path(), raw)
+
+
+def _receipt_core(*, source_id: str, proposal_id: str, source_sha: str, candidate_sha: str, provenance: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": _RECEIPT_SCHEMA,
+        "source_id": source_id,
+        "proposal_id": proposal_id,
+        "source_sha256": source_sha,
+        "candidate_manifest_sha256": candidate_sha,
+        "source_type": provenance.get("source_type"),
+        "source_location_hash": provenance.get("source_location_hash"),
+        "git_commit_sha": provenance.get("git_commit_sha"),
+        "working_tree_differs_from_committed_source": provenance.get("working_tree_differs_from_committed_source"),
+        "committed_content_only": provenance.get("committed_content_only"),
+        "automatic_activation": False,
+    }
+
+
+def _write_source_receipt(*, source_id: str, proposal_id: str, source_sha: str, candidate_sha: str, provenance: dict[str, Any]) -> str:
+    if not _PROPOSAL_ID_RE.fullmatch(str(proposal_id or "")):
+        raise PolicySourceError("invalid proposal identity for source receipt")
+    core = _receipt_core(
+        source_id=source_id,
+        proposal_id=proposal_id,
+        source_sha=source_sha,
+        candidate_sha=candidate_sha,
+        provenance=provenance,
+    )
+    canonical = json.dumps(core, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    receipt_id = "receipt-" + hashlib.sha256(canonical).hexdigest()[:20]
+    path = policy_source_receipt_dir() / f"{receipt_id}.json"
+    payload = {**core, "receipt_id": receipt_id}
+    raw = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    if path.exists():
+        existing = _read_json_file(path, max_bytes=_MAX_CONFIG_BYTES, label="policy source receipt")
+        if existing != payload:
+            raise PolicySourceError("policy source receipt integrity mismatch")
+        return receipt_id
+    _atomic_write(path, raw)
+    return receipt_id
 
 
 def _proposal_from_bytes(canonical: bytes) -> dict[str, Any]:
@@ -334,11 +380,7 @@ def _proposal_from_bytes(canonical: bytes) -> dict[str, Any]:
 
 
 def sync_policy_sources(path: Path | None = None) -> dict[str, Any]:
-    """Scan every approved local source and prepare proposals for real changes.
-
-    Source-state is used only to report whether content changed since the previous
-    scan. It never controls whether source bytes are re-read, validated, or proposed.
-    """
+    """Scan approved sources and prepare proposals; never activate policy."""
     config = load_policy_sources_config(path)
     previous_state = _load_state()
     previous_sources = previous_state.get("sources") if isinstance(previous_state.get("sources"), dict) else {}
@@ -355,12 +397,20 @@ def sync_policy_sources(path: Path | None = None) -> dict[str, Any]:
             candidate_sha = _sha256(canonical)
             source_changed = prior.get("source_sha256") != source_sha
             deduplicated = prior.get("candidate_manifest_sha256") == candidate_sha and bool(prior.get("proposal_id"))
+            receipt_id: str | None = None
             try:
                 proposal = _proposal_from_bytes(canonical)
                 status = "proposal_ready"
-                proposal_id = proposal.get("proposal_id")
-                candidate_manifest_sha = proposal.get("candidate_manifest_sha256")
+                proposal_id = str(proposal.get("proposal_id") or "")
+                candidate_manifest_sha = str(proposal.get("candidate_manifest_sha256") or "")
                 base_manifest_sha = proposal.get("base_manifest_sha256")
+                receipt_id = _write_source_receipt(
+                    source_id=source_id,
+                    proposal_id=proposal_id,
+                    source_sha=source_sha,
+                    candidate_sha=candidate_manifest_sha,
+                    provenance=provenance,
+                )
             except PolicyProposalError as exc:
                 if "no policy changes" not in str(exc).lower():
                     raise
@@ -374,6 +424,7 @@ def sync_policy_sources(path: Path | None = None) -> dict[str, Any]:
                 "source_sha256": source_sha,
                 "candidate_manifest_sha256": candidate_manifest_sha,
                 "proposal_id": proposal_id,
+                "receipt_id": receipt_id,
                 "status": status,
                 "provenance": provenance,
             }
@@ -388,6 +439,7 @@ def sync_policy_sources(path: Path | None = None) -> dict[str, Any]:
                 "candidate_manifest_sha256": candidate_manifest_sha,
                 "base_manifest_sha256": base_manifest_sha,
                 "proposal_id": proposal_id,
+                "receipt_id": receipt_id,
                 "provenance": provenance,
                 "automatic_activation": False,
             })
@@ -416,6 +468,7 @@ def sync_policy_sources(path: Path | None = None) -> dict[str, Any]:
         "remote_fetch_performed": False,
         "automatic_activation": False,
         "state_is_authoritative": False,
+        "provenance_receipts_immutable": True,
     }
 
 
@@ -433,6 +486,7 @@ def policy_source_status(path: Path | None = None) -> dict[str, Any]:
             "last_source_sha256": stored.get("source_sha256"),
             "last_candidate_manifest_sha256": stored.get("candidate_manifest_sha256"),
             "last_proposal_id": stored.get("proposal_id"),
+            "last_receipt_id": stored.get("receipt_id"),
             "provenance": stored.get("provenance"),
         })
     return {
@@ -443,4 +497,5 @@ def policy_source_status(path: Path | None = None) -> dict[str, Any]:
         "remote_fetch_available": False,
         "automatic_activation": False,
         "state_is_authoritative": False,
+        "provenance_receipts_immutable": True,
     }
