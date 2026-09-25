@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mcp_server.security import _looks_instruction_like
+
 from .db import DATA_DIR
 from .procedural_context_pack import _generated_structural_step, build_context_pack
 from .procedural_memory import derive_executions
@@ -48,7 +50,8 @@ def _hash(prefix: str, value: Any, *, size: int = 16) -> str:
 
 def _validate_id(value: Any, *, field: str) -> str:
     text = str(value or "").strip().lower()
-    if not _ID_RE.fullmatch(text):
+    instruction_probe = re.sub(r"[_:.-]+", " ", text)
+    if not _ID_RE.fullmatch(text) or _looks_instruction_like(instruction_probe):
         raise DeclaredPolicyError(f"invalid {field}")
     return text
 
@@ -297,6 +300,13 @@ def build_governed_context_pack(
     loaded = manifest if manifest is not None else load_declared_policy_manifest()
     policy = active_policy_for_family(loaded, family_key)
     comparison = compare_policy_to_observations(raw_events, policy=policy) if policy else None
+    if policy:
+        observed_authority = observed.get("authority") if isinstance(observed.get("authority"), dict) else {}
+        observed["authority"] = {
+            **observed_authority,
+            "policy_status": "separate_declared_policy_attached",
+            "policy_inferred": False,
+        }
     return {
         "family_key": family_key,
         "declared_policy_status": "active" if policy else "not_declared",
