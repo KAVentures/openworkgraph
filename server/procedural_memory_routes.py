@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .local_auth import bearer_matches
+from .procedural_context_pack import build_context_pack
 from .procedural_memory import (
     approval_patterns,
     failure_patterns,
@@ -153,4 +154,43 @@ def get_approval_patterns(
         payload = approval_patterns(raw, family_key=family_key, min_support=min_support)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="invalid procedural-memory query") from exc
+    return _derived_response(payload, raw)
+
+
+@router.get("/v1/procedural-memory/context-pack")
+def get_procedural_context_pack(
+    request: Request,
+    family_key: str,
+    current_steps: str = "",
+    after_step: str = "",
+    since: str | None = None,
+    limit: int = 10_000,
+    min_support: int = 2,
+    run_limit: int = 3,
+    section_limit: int = 3,
+    max_steps_per_run: int = 16,
+    max_evidence_refs_per_item: int = 2,
+) -> dict[str, Any]:
+    """Return a small observational workflow-memory pack for one family.
+
+    The pack is intentionally read-only, non-prescriptive, and contains no
+    organizational policy. Repeated behavior remains evidence rather than rules.
+    """
+    _require_api_read_bearer(request)
+    bounded_limit = max(1, min(int(limit), 25_000))
+    raw = _raw(bounded_limit, since)
+    try:
+        payload = build_context_pack(
+            raw,
+            family_key=family_key,
+            current_steps=_step_list(current_steps),
+            after_step=after_step,
+            min_support=min_support,
+            run_limit=run_limit,
+            section_limit=section_limit,
+            max_steps_per_run=max_steps_per_run,
+            max_evidence_refs_per_item=max_evidence_refs_per_item,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid procedural-context-pack query") from exc
     return _derived_response(payload, raw)

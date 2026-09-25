@@ -17,6 +17,7 @@ def test_all_procedural_memory_mcp_tools_use_existing_security_boundary():
         "get_failure_patterns",
         "get_next_likely_steps",
         "get_approval_patterns",
+        "get_procedural_context_pack",
     )
     for tool_name in tools:
         start = source.index(f"def {tool_name}(")
