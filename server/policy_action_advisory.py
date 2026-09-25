@@ -127,21 +127,26 @@ def action_policy_advisory(
 
         # A generic required_step has no deadline/order semantics. It is relevant
         # only when the proposed action is that required step itself; it must not
-        # be reinterpreted as a prerequisite for unrelated actions.
+        # be reinterpreted as a prerequisite for unrelated actions. Because the
+        # action is only proposed, this also cannot claim the requirement has
+        # already been satisfied.
         if rule_type == "required_step" and rule.get("step") == proposed:
             relevant.append({
                 "rule_id": rule.get("rule_id"),
                 "type": rule_type,
                 "advisory": "declared_required_step_is_proposed",
                 "warning": False,
-                "constraint_satisfied": True,
+                "constraint_satisfied": None,
+                "proposed_step_matches_requirement": True,
                 "step": proposed,
             })
 
     if warning_count:
         status = "declared_policy_warning"
-    elif relevant:
-        status = "matched_constraints_satisfied"
+    elif any(item.get("type") == "required_predecessor" for item in relevant):
+        status = "matched_prerequisites_satisfied"
+    elif any(item.get("advisory") == "declared_required_step_is_proposed" for item in relevant):
+        status = "declared_required_step_proposed"
     else:
         status = "no_matching_declared_constraint"
 
