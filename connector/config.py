@@ -36,6 +36,14 @@ def _trusted_keys(value: Any) -> dict[str, str]:
     return result
 
 
+def _target_path(config_path: Path, value: str) -> Path | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    target = Path(text).expanduser()
+    return target if target.is_absolute() else config_path.resolve().parent / target
+
+
 def load_gateway_settings(config_path: Path, *, auth_dir: Path) -> GatewaySyncSettings:
     try:
         root = json.loads(config_path.read_text(encoding="utf-8"))
@@ -58,7 +66,7 @@ def load_gateway_settings(config_path: Path, *, auth_dir: Path) -> GatewaySyncSe
         managed_declared_policy_organization_id=str(declared.get("organization_id") or "").strip(),
         managed_declared_policy_trusted_keys=_trusted_keys(declared.get("trusted_keys")),
         managed_declared_policy_refresh_seconds=max(5.0, float(declared.get("refresh_seconds", 60))),
-        managed_declared_policy_target_file=Path(target_value).expanduser() if target_value else None,
+        managed_declared_policy_target_file=_target_path(config_path, target_value),
     )
 
 
