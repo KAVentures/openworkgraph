@@ -23,6 +23,7 @@ from .declared_policy import DeclaredPolicyError, load_declared_policy_manifest,
 
 _PROPOSAL_SCHEMA = "1.0"
 _MAX_CANDIDATE_BYTES = 256 * 1024
+_MAX_AUDIT_BYTES = 4 * 1024 * 1024
 _PROPOSAL_ID_RE = re.compile(r"^proposal-[0-9a-f]{20}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -65,6 +66,20 @@ def _secure_mode(path: Path) -> None:
         pass
 
 
+def _fsync_directory(directory: Path) -> None:
+    try:
+        dir_fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+    finally:
+        os.close(dir_fd)
+
+
 def _atomic_write(path: Path, raw: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -77,17 +92,7 @@ def _atomic_write(path: Path, raw: bytes) -> None:
         _secure_mode(tmp)
         os.replace(tmp, path)
         _secure_mode(path)
-        try:
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            except OSError:
-                pass
-            finally:
-                os.close(dir_fd)
+        _fsync_directory(path.parent)
     finally:
         if tmp.exists():
             try:
@@ -336,15 +341,27 @@ def _archive_manifest(raw: bytes) -> Path:
 def _append_audit(record: dict[str, Any]) -> None:
     path = policy_history_dir() / "policy_admin_audit.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = b""
+    if path.exists():
+        try:
+            existing = path.read_bytes()
+        except OSError as exc:
+            raise PolicyProposalError("unable to read policy administration audit") from exc
+        if len(existing) > _MAX_AUDIT_BYTES:
+            raise PolicyProposalError("policy administration audit exceeds 4 MiB")
+        try:
+            text = existing.decode("utf-8")
+            for line in text.splitlines():
+                if line.strip() and not isinstance(json.loads(line), dict):
+                    raise PolicyProposalError("invalid policy administration audit record")
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PolicyProposalError("invalid policy administration audit") from exc
     line = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        with os.fdopen(fd, "ab", closefd=True) as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
-    finally:
-        _secure_mode(path)
+    if len(existing) + len(line) > _MAX_AUDIT_BYTES:
+        raise PolicyProposalError("policy administration audit exceeds 4 MiB")
+    # Rewriting the logical append atomically ensures a failed audit write leaves
+    # the previous audit intact, which lets activation safely roll back as a unit.
+    _atomic_write(path, existing + line)
 
 
 def _confirmation_text(proposal: dict[str, Any]) -> str:
@@ -357,6 +374,25 @@ def _local_tty_available() -> bool:
         return bool(sys.stdin.isatty() and sys.stdout.isatty())
     except Exception:
         return False
+
+
+def _rollback_candidate_if_unchanged(active_path: Path, previous_raw: bytes | None, candidate_sha: str) -> None:
+    if not active_path.exists():
+        raise PolicyProposalError("active manifest disappeared before rollback")
+    try:
+        current_raw = active_path.read_bytes()
+    except OSError as exc:
+        raise PolicyProposalError("unable to read active manifest during rollback") from exc
+    if _sha256(current_raw) != candidate_sha:
+        raise PolicyProposalError("active manifest changed externally; refusing to overwrite it during rollback")
+    if previous_raw is None:
+        try:
+            active_path.unlink()
+        except OSError as exc:
+            raise PolicyProposalError("unable to remove failed first policy activation") from exc
+        _fsync_directory(active_path.parent)
+    else:
+        _atomic_write(active_path, previous_raw)
 
 
 def apply_policy_proposal(
@@ -411,11 +447,6 @@ def apply_policy_proposal(
     elif active_path.exists():
         raise PolicyProposalError("active manifest appeared immediately before activation")
 
-    _atomic_write(active_path, candidate_raw)
-    activated = _validate_manifest_file(active_path)
-    if activated.get("manifest_sha256") != candidate_sha:
-        raise PolicyProposalError("activated policy manifest digest mismatch")
-
     audit = {
         "event": "policy_proposal_applied",
         "at": _utc_now(),
@@ -425,7 +456,27 @@ def apply_policy_proposal(
         "network_activation": False,
         "interactive_local_confirmation": True,
     }
-    _append_audit(audit)
+    replaced = False
+    try:
+        _atomic_write(active_path, candidate_raw)
+        replaced = True
+        activated = _validate_manifest_file(active_path)
+        if activated.get("manifest_sha256") != candidate_sha:
+            raise PolicyProposalError("activated policy manifest digest mismatch")
+        _append_audit(audit)
+    except Exception as exc:
+        if not replaced:
+            if isinstance(exc, PolicyProposalError):
+                raise
+            raise PolicyProposalError("policy activation failed before replacement") from exc
+        try:
+            _rollback_candidate_if_unchanged(active_path, previous_raw, candidate_sha)
+        except Exception as rollback_exc:
+            raise PolicyProposalError(
+                "policy activation failed after replacement and automatic rollback could not be completed"
+            ) from rollback_exc
+        raise PolicyProposalError("policy activation failed after replacement; previous policy restored") from exc
+
     return {
         "status": "applied",
         "proposal_id": proposal_id,
