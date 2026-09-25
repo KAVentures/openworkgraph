@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
-_DASHBOARD_SESSIONS: set[str] = set()
+_DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
 _EXPORT_TICKETS: dict[str, tuple[float, str, str, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
@@ -141,21 +141,24 @@ def dashboard_bootstrap_matches(candidate: str) -> bool:
     return bool(expected and candidate) and hmac.compare_digest(candidate, expected)
 
 
-def create_dashboard_session() -> str:
+def create_dashboard_session(ttl_seconds: int | None = None) -> str:
     """Create a dashboard capability valid for this local server process.
 
     Dashboard sessions intentionally have no wall-clock expiry. They live only in
     process memory, so stopping or restarting OpenWorkGraph revokes every session
     automatically while long-running observers remain usable for their full run.
+    ``ttl_seconds`` is retained only for compatibility with older internal callers.
     """
+    _ = ttl_seconds
     token = secrets.token_urlsafe(32)
     with _LOCK:
-        _DASHBOARD_SESSIONS.add(token)
+        _DASHBOARD_SESSIONS[token] = None
     return token
 
 
-def exchange_dashboard_bootstrap(candidate: str) -> str | None:
+def exchange_dashboard_bootstrap(candidate: str, ttl_seconds: int | None = None) -> str | None:
     """Consume the launch bootstrap exactly once and return a process-scoped session."""
+    _ = ttl_seconds
     expected = os.getenv("WORKFLOW_OBSERVER_DASHBOARD_BOOTSTRAP", "")
     if not expected or not candidate:
         return None
@@ -165,7 +168,7 @@ def exchange_dashboard_bootstrap(candidate: str) -> str | None:
         if not hmac.compare_digest(candidate, expected):
             return None
         token = secrets.token_urlsafe(32)
-        _DASHBOARD_SESSIONS.add(token)
+        _DASHBOARD_SESSIONS[token] = None
         _CONSUMED_DASHBOARD_BOOTSTRAPS.add(expected)
         return token
 
