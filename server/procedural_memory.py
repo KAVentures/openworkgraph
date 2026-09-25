@@ -14,6 +14,8 @@ import hashlib
 import re
 from typing import Any, Iterable
 
+from mcp_server.security import _looks_instruction_like
+
 from . import analytics
 from .context_layers import candidate_tasks
 from .db import rows
@@ -73,7 +75,10 @@ _KNOWN_SURFACES = {
     "codex": "codex",
     "openworkgraph": "openworkgraph",
 }
-_SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_.:-]{0,79}$")
+_KNOWN_FRAMEWORKS = frozenset({
+    "openai-agents-python", "claude-code", "codex", "openclaw", "langgraph",
+    "langchain", "semantic-kernel", "autogen",
+})
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 _URL_RE = re.compile(r"(?:https?://|www\.)", re.I)
 _LONG_ID_RE = re.compile(r"(?:\b\d{7,}\b|\b[0-9a-f]{16,}\b)", re.I)
@@ -100,21 +105,28 @@ def _meta(event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _safe_name(value: Any, *, fallback_prefix: str) -> str:
-    """Keep static-looking structural names; hash obvious dynamic/content labels."""
-    raw = str(value or "").strip()
+    """Return a stable privacy-minimized structural name.
+
+    Tool names are always hashed because custom runtimes may put customer names,
+    paths, IDs, or instructions into otherwise syntactically valid tool labels.
+    A tiny allowlist of well-known framework names remains readable.
+    """
+    raw = re.sub(r"\s+", " ", str(value or "")).strip()
     low = raw.lower()
-    if (
+    instruction_probe = re.sub(r"[_:.-]+", " ", raw)
+    unsafe = (
         not raw
-        or len(raw) > 80
-        or _EMAIL_RE.search(raw)
-        or _URL_RE.search(raw)
-        or _LONG_ID_RE.search(raw)
+        or len(raw) > 120
+        or bool(_EMAIL_RE.search(raw))
+        or bool(_URL_RE.search(raw))
+        or bool(_LONG_ID_RE.search(raw))
         or "/" in raw
         or "\\" in raw
-        or not _SAFE_NAME_RE.fullmatch(low)
-    ):
-        return _hash(fallback_prefix, raw or "unknown", size=12)
-    return low
+        or _looks_instruction_like(instruction_probe)
+    )
+    if fallback_prefix == "framework" and not unsafe and low in _KNOWN_FRAMEWORKS:
+        return low
+    return _hash(fallback_prefix, raw or "unknown", size=12)
 
 
 def _surface_key(value: Any) -> str:
@@ -177,10 +189,7 @@ def _coarse_human_action(event: dict[str, Any]) -> str:
     return _SAFE_HUMAN_ACTIONS.get(action, "")
 
 
-def _human_steps(
-    task: dict[str, Any],
-    session_events: list[dict[str, Any]],
-) -> list[str]:
+def _human_steps(task: dict[str, Any], session_events: list[dict[str, Any]]) -> list[str]:
     start = _ts(task.get("started_at"))
     end = _ts(task.get("ended_at"))
     if start is None or end is None:
@@ -249,8 +258,7 @@ def _agent_outcome(events: list[dict[str, Any]]) -> tuple[str, str]:
         if status in _EXPLICIT_FAILURES and operation in {"run_finished", "error", "tool_call"}:
             explicit_failures.append(status)
     if finished:
-        value = finished[-1]
-        return value, "explicit_run_terminal_status"
+        return finished[-1], "explicit_run_terminal_status"
     if explicit_failures:
         return explicit_failures[-1], "explicit_failure_evidence"
     return "unknown", "no_terminal_outcome_observed"
@@ -274,6 +282,15 @@ def _approval_points(events: list[dict[str, Any]]) -> list[dict[str, str]]:
         if step and operation not in {"human_approval_requested", "human_approval_received"}:
             last_structural = step
     return points
+
+
+def _time_window(task: dict[str, Any]) -> dict[str, Any]:
+    """Expose only temporal evidence bounds, never raw task/session identifiers."""
+    window = task.get("evidence_window") if isinstance(task.get("evidence_window"), dict) else {}
+    return {
+        "started_at": window.get("started_at") or task.get("started_at"),
+        "ended_at": window.get("ended_at") or task.get("ended_at"),
+    }
 
 
 def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -308,7 +325,7 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "steps": steps[:_MAX_STEPS],
             "observation_level": "human_observed",
             "evidence_refs": [_event_ref(value) for value in list(task.get("anchor_event_ids") or [])[:12]],
-            "evidence_window": dict(task.get("evidence_window") or {}),
+            "evidence_window": _time_window(task),
             "derived": True,
             "authoritative": False,
             "needs_review": True,
@@ -409,10 +426,7 @@ def _family_summary(family_key: str, executions: list[dict[str, Any]]) -> dict[s
     if sequence_counts:
         dominant, dominant_support = sequence_counts.most_common(1)[0]
     basis = Counter(str(item.get("family_basis") or "unknown") for item in executions).most_common(1)[0][0]
-    if len(positive) >= 5 and basis in {"canonical_task_family", "explicit_workflow_id"}:
-        confidence = "medium"
-    else:
-        confidence = "low"
+    confidence = "medium" if len(positive) >= 5 and basis in {"canonical_task_family", "explicit_workflow_id"} else "low"
     return {
         "family_key": family_key,
         "actor_kind": executions[0].get("actor_kind") if executions else "unknown",
