@@ -9,6 +9,7 @@ from shared.agent_evidence import AgentEvidenceError
 from .agent_auth import agent_bearer_matches
 from .agent_ingest import ingest_agent_payloads, ingest_codex_otel_payload, ingest_otel_payload
 from .agent_workflows import agent_workflow_view
+from .declared_policy_routes import router as declared_policy_router
 from .local_auth import bearer_matches
 from .procedural_memory_routes import router as procedural_memory_router
 
@@ -114,6 +115,7 @@ def get_agent_workflows(
     return agent_workflow_view(limit=limit, since=since)
 
 
-# Procedural memory is a read-only, derived view over the same canonical evidence.
-# It inherits secure_app composition through this existing additive router.
+# Procedural memory and declared policy are read-only derived/governance views.
+# Both inherit secure_app composition through this existing additive router.
 router.include_router(procedural_memory_router)
+router.include_router(declared_policy_router)

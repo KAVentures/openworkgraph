@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "policies": [
+    {
+      "policy_id": "approval-policy",
+      "version": "2026.09",
+      "status": "active",
+      "family_key": "agent:workflow:0123456789abcdef",
+      "source_type": "manual_sop",
+      "source_ref": "operations-handbook#approval-policy",
+      "rules": [
+        {
+          "rule_id": "approval-required",
+          "type": "required_step",
+          "step": "approval_request"
+        },
+        {
+          "rule_id": "approval-before-submit",
+          "type": "required_predecessor",
+          "required_before": "approval_received:success",
+          "trigger_step": "action:submit"
+        }
+      ]
+    }
+  ]
+}
