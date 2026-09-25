@@ -8,6 +8,7 @@ payload suitable for an agent context window while preserving the evidence and
 authority semantics established by procedural_memory.
 """
 
+import re
 from typing import Any, Iterable
 
 from .procedural_memory import (
@@ -23,10 +24,62 @@ _MAX_RUNS = 5
 _MAX_SECTION_ITEMS = 5
 _MAX_STEPS_PER_RUN = 24
 _MAX_EVIDENCE_REFS = 4
+_HASH12_RE = re.compile(r"^[0-9a-f]{12}$")
+_KNOWN_SURFACE_TOKENS = frozenset({
+    "gmail", "outlook", "github", "slack", "jira", "linear", "notion",
+    "google-docs", "google-sheets", "google-drive", "figma", "terminal",
+    "vscode", "browser", "chrome", "safari", "edge", "firefox", "chatgpt",
+    "claude", "codex", "openworkgraph",
+})
+_HUMAN_ACTION_TOKENS = frozenset({
+    "edit", "change", "copy", "paste", "submit", "click", "right_click",
+})
+_TOOL_CATEGORIES = frozenset({
+    "filesystem", "shell", "browser", "code", "search", "network", "database",
+    "messaging", "issue_tracker", "deployment", "mcp", "other", "none",
+})
+_FAILURE_STATUSES = frozenset({"error", "denied", "cancelled"})
 
 
 def _bounded_int(value: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(int(value), maximum))
+
+
+def _generated_structural_step(value: str) -> bool:
+    """Accept only tokens OpenWorkGraph itself can emit into procedural memory."""
+    step = str(value or "").strip().lower()
+    if not step or len(step) > 200:
+        return False
+    if step.startswith("surface:"):
+        suffix = step.split(":", 1)[1]
+        return suffix in _KNOWN_SURFACE_TOKENS or bool(_HASH12_RE.fullmatch(suffix))
+    if step.startswith("action:"):
+        return step.split(":", 1)[1] in _HUMAN_ACTION_TOKENS
+    if step in {"model_call", "handoff", "approval_request"}:
+        return True
+    if step.startswith("approval_received:"):
+        return step.split(":", 1)[1] in {"success", "denied", "cancelled", "observed"}
+    if step.startswith("error:"):
+        return step.split(":", 1)[1] in _FAILURE_STATUSES
+    if step.startswith("tool:"):
+        parts = step.split(":")
+        if len(parts) not in {4, 5}:
+            return False
+        _tool, category, marker, digest, *status = parts
+        if category not in _TOOL_CATEGORIES or marker != "tool" or not _HASH12_RE.fullmatch(digest):
+            return False
+        return not status or status[0] in _FAILURE_STATUSES
+    return False
+
+
+def _validated_steps(current_steps: Iterable[str], after_step: str) -> tuple[list[str], str]:
+    normalized = [str(step).strip().lower() for step in current_steps if str(step).strip()]
+    if len(normalized) > 48 or any(not _generated_structural_step(step) for step in normalized):
+        raise ValueError("invalid current structural steps")
+    after = str(after_step or "").strip().lower()
+    if after and not _generated_structural_step(after):
+        raise ValueError("invalid after_step")
+    return normalized, after
 
 
 def _slim_family(item: dict[str, Any], *, max_steps: int) -> dict[str, Any]:
@@ -155,7 +208,7 @@ def build_context_pack(
     steps_cap = _bounded_int(max_steps_per_run, minimum=1, maximum=_MAX_STEPS_PER_RUN)
     refs_cap = _bounded_int(max_evidence_refs_per_item, minimum=0, maximum=_MAX_EVIDENCE_REFS)
     support = _bounded_int(min_support, minimum=2, maximum=100)
-    normalized_steps = [str(step).strip().lower() for step in current_steps if str(step).strip()]
+    normalized_steps, normalized_after = _validated_steps(current_steps, after_step)
 
     overview = procedural_overview(raw_events, min_support=1)
     family = next(
@@ -174,7 +227,7 @@ def build_context_pack(
         raw_events,
         family_key=family_key,
         prefix=normalized_steps,
-        after_step=after_step,
+        after_step=normalized_after,
         min_support=support,
     )
     approvals = approval_patterns(raw_events, family_key=family_key, min_support=support)
