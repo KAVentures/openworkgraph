@@ -100,12 +100,13 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                     "get_approval_patterns",
                     "get_procedural_context_pack",
                     "get_governed_context_pack",
+                    "get_task_context",
                 }
                 assert "get_workflow_trace" in names
                 assert "automation_candidates" in names
                 assert "get_work_profile" in names
                 assert expected_procedural <= names
-                assert len(names) == 20
+                assert len(names) == 21
 
                 denied = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert denied.is_error is True
@@ -154,6 +155,18 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert authority.get("policy_inferred_from_behavior") is False
                 assert authority.get("automatic_enforcement") is False
 
+                task_context = await session.call_tool(
+                    "get_task_context",
+                    {"task_family": "github.create_issue", "max_events": 100},
+                )
+                assert task_context.is_error is False
+                task_structured = task_context.structured_content or {}
+                assert (task_structured.get("resolution") or {}).get("status") == "resolved"
+                assert (task_structured.get("resolution") or {}).get("family_key") == "human:github.create_issue"
+                assert task_structured.get("read_only") is True
+                assert task_structured.get("writes_performed") is False
+                assert (task_structured.get("authority_model") or {}).get("observed_behavior_becomes_policy") is False
+
                 resources = await session.list_resources()
                 uris = {str(r.uri) for r in resources.resources}
                 assert "openworkgraph://ai-guide" in uris
@@ -166,5 +179,6 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         assert any(x["tool"] == "get_procedural_memory" and x["status"] == "ok" for x in activity)
         assert any(x["tool"] == "get_procedural_context_pack" and x["status"] == "ok" for x in activity)
         assert any(x["tool"] == "get_governed_context_pack" and x["status"] == "ok" for x in activity)
+        assert any(x["tool"] == "get_task_context" and x["status"] == "ok" for x in activity)
     finally:
         _stop(api)
