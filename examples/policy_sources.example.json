@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "sources": [
+    {
+      "source_id": "local-sop",
+      "type": "local_file",
+      "path": "~/company-policy/openworkgraph-policy.json"
+    },
+    {
+      "source_id": "repo-sop",
+      "type": "git_file",
+      "repo_root": "~/company-policy-repo",
+      "relative_path": "policies/openworkgraph.json"
+    }
+  ]
+}
