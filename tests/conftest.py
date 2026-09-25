@@ -22,13 +22,17 @@ os.environ["OWG_GATEWAY_DATABASE_URL"] = f"sqlite:///{_GATEWAY_DATA / 'openworkg
 
 @pytest.fixture(autouse=True)
 def _isolate_agent_ingestion_database(request):
-    """Keep new agent-ingestion persistence tests from polluting legacy analytics tests.
+    """Keep agent-ingestion persistence tests from polluting legacy analytics tests.
 
     The established test suite shares one temporary DB within a pytest process.
-    Agent-ingestion tests intentionally write canonical rows, so give only that
-    module its own DB and clear the append-only analytics cache at both boundaries.
+    Agent-ingestion tests intentionally write canonical rows, so give only those
+    modules their own DB and clear the append-only analytics cache at both boundaries.
     """
-    if Path(str(request.fspath)).name != "test_agent_ingestion_v059.py":
+    isolated_modules = {
+        "test_agent_ingestion_v059.py",
+        "test_agent_native_routes_v060.py",
+    }
+    if Path(str(request.fspath)).name not in isolated_modules:
         yield
         return
 

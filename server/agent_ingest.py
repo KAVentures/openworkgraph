@@ -6,12 +6,14 @@ import json
 from typing import Any
 
 from shared.agent_evidence import AgentEvidenceError, agent_event_to_evidence
+from shared.codex_otel_adapter import codex_otel_to_agent_events
 from shared.otel_agent_adapter import otel_payload_to_agent_events
 from .db import insert_events
 
 MAX_AGENT_EVENTS = 500
 MAX_AGENT_BATCH_BYTES = 2_000_000
 MAX_OTEL_SPANS = 1000
+MAX_CODEX_OTEL_RECORDS = 1000
 
 
 def _bounded_json_size(value: Any, *, maximum: int = MAX_AGENT_BATCH_BYTES) -> None:
@@ -58,6 +60,30 @@ def ingest_otel_payload(
     return {
         "spans_seen": int(stats.get("spans_seen") or 0),
         "spans_ignored": int(stats.get("spans_ignored") or 0),
+        "projected": len(events),
+        "inserted": inserted,
+    }
+
+
+def ingest_codex_otel_payload(
+    payload: dict[str, Any],
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Ingest Codex OTLP JSON without persisting native diagnostic content."""
+    _bounded_json_size({"payload": payload, "defaults": defaults or {}})
+    projected, stats = codex_otel_to_agent_events(
+        payload,
+        defaults=defaults,
+        max_records=MAX_CODEX_OTEL_RECORDS,
+    )
+    if len(projected) > MAX_AGENT_EVENTS * 2:
+        raise AgentEvidenceError("Codex OpenTelemetry projection produced too many agent events")
+    events = [agent_event_to_evidence(item) for item in projected]
+    inserted = insert_events(events) if events else 0
+    return {
+        "records_seen": int(stats.get("records_seen") or 0),
+        "records_ignored": int(stats.get("records_ignored") or 0),
         "projected": len(events),
         "inserted": inserted,
     }

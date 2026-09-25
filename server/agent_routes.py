@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from shared.agent_evidence import AgentEvidenceError
 from .agent_auth import agent_bearer_matches
-from .agent_ingest import ingest_agent_payloads, ingest_otel_payload
+from .agent_ingest import ingest_agent_payloads, ingest_codex_otel_payload, ingest_otel_payload
 from .agent_workflows import agent_workflow_view
 from .local_auth import bearer_matches
 
@@ -18,6 +18,7 @@ router = APIRouter()
 # exact write endpoints authenticate only the least-privilege agent token.
 AGENT_EVENT_PATH = "/agent-ingest/v1/events"
 AGENT_OTEL_PATH = "/agent-ingest/v1/otel"
+AGENT_CODEX_OTEL_PATH = "/agent-ingest/v1/codex-otel"
 
 
 class AgentEventBatch(BaseModel):
@@ -74,6 +75,30 @@ async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
     except (AgentEvidenceError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**result, "status": "ok"}
+
+
+@router.post(AGENT_CODEX_OTEL_PATH, status_code=202)
+async def ingest_codex_otel(request: Request) -> Response:
+    _require_agent_write_bearer(request)
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid Codex OpenTelemetry JSON payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Codex OpenTelemetry payload must be an object")
+
+    # Codex sends standard OTLP JSON. Optional OpenWorkGraph defaults are useful
+    # for custom relays/tests, but normal Codex exporters need no OWG-specific body.
+    defaults_raw = payload.pop("openworkgraph", {})
+    try:
+        defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
+        ingest_codex_otel_payload(payload, defaults=defaults)
+    except (AgentEvidenceError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # OTLP clients only need a successful HTTP status. Codex's own exporter tests
+    # accept an empty 202 response, avoiding dependence on non-standard OWG JSON.
+    return Response(status_code=202)
 
 
 @router.get("/v1/agent-workflows")
