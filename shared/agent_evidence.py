@@ -81,6 +81,7 @@ _ALLOWED_TASK_CONTEXT_KEYS = frozenset({
     "context_sha256",
     "policy_manifest_sha256",
     "family_key",
+    "handoff_status",
 })
 _ALLOWED_SHADOW_ENFORCEMENT_KEYS = frozenset({
     "profile_id",
@@ -104,6 +105,7 @@ _SHADOW_DISPOSITIONS = frozenset({
 })
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
+_HANDOFF_STATUSES = frozenset({"prepared", "delivered_to_runtime"})
 
 
 class AgentEvidenceError(ValueError):
@@ -180,12 +182,15 @@ def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
     context_sha = _text(raw.get("context_sha256"), limit=80).lower()
     policy_sha = _text(raw.get("policy_manifest_sha256"), limit=80).lower()
     family_key = _text(raw.get("family_key"), limit=200).lower()
+    handoff_status = _text(raw.get("handoff_status"), limit=80).lower()
     if context_sha and not _SHA256_RE.fullmatch(context_sha):
         raise AgentEvidenceError("invalid task_context.context_sha256")
     if policy_sha and not _SHA256_RE.fullmatch(policy_sha):
         raise AgentEvidenceError("invalid task_context.policy_manifest_sha256")
     if family_key and not _FAMILY_KEY_RE.fullmatch(family_key):
         raise AgentEvidenceError("invalid task_context.family_key")
+    if handoff_status and handoff_status not in _HANDOFF_STATUSES:
+        raise AgentEvidenceError("invalid task_context.handoff_status")
 
     if available and not context_sha:
         raise AgentEvidenceError("available task context requires context_sha256")
@@ -193,6 +198,8 @@ def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
         raise AgentEvidenceError("unavailable task context cannot claim snapshot, policy, family, or resolution")
     if resolved and not family_key:
         raise AgentEvidenceError("resolved task context requires family_key")
+    if handoff_status and not available:
+        raise AgentEvidenceError("task-context handoff status requires available context")
 
     out: dict[str, Any] = {
         "preflight_attempted": True,
@@ -204,6 +211,11 @@ def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
         "linkage_assertion_source": "agent_adapter",
         "context_snapshot_verified_by_server": False,
     }
+    if handoff_status:
+        out["handoff_status"] = handoff_status
+        out["handoff_assertion_source"] = "agent_adapter"
+        out["handoff_verified_by_server"] = False
+        out["model_context_consumption_attested"] = False
     return out
 
 
