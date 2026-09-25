@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -351,18 +352,24 @@ def _confirmation_text(proposal: dict[str, Any]) -> str:
     return f"APPLY {proposal['proposal_id']} {digest[:12]}"
 
 
+def _local_tty_available() -> bool:
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
 def apply_policy_proposal(
     proposal_id: str,
     *,
-    interactive: bool,
     prompt: Callable[[str], str] = input,
 ) -> dict[str, Any]:
-    """Activate one proposal after local interactive confirmation.
+    """Activate one proposal only from a real local interactive terminal.
 
-    `interactive` must be supplied by the CLI after checking that stdin/stdout are
-    attached to a TTY. There is intentionally no force/noninteractive bypass.
+    The TTY check lives inside this trust boundary. There is intentionally no
+    caller-supplied `interactive=True`, force flag, or noninteractive bypass.
     """
-    if not interactive:
+    if not _local_tty_available():
         raise PolicyProposalError("policy activation requires an interactive local terminal")
     proposal = load_policy_proposal(proposal_id)
     if proposal.get("stale"):
@@ -397,6 +404,13 @@ def apply_policy_proposal(
         raise PolicyProposalError("proposal became stale before activation")
 
     _archive_manifest(candidate_raw)
+    # One final optimistic-concurrency read immediately before replacement.
+    if previous_sha is not None:
+        if not active_path.exists() or _sha256(active_path.read_bytes()) != previous_sha:
+            raise PolicyProposalError("active manifest changed immediately before activation")
+    elif active_path.exists():
+        raise PolicyProposalError("active manifest appeared immediately before activation")
+
     _atomic_write(active_path, candidate_raw)
     activated = _validate_manifest_file(active_path)
     if activated.get("manifest_sha256") != candidate_sha:
