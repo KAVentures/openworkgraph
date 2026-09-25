@@ -11,6 +11,7 @@ unavailable observer drops telemetry rather than delaying or failing the agent.
 from dataclasses import dataclass
 import os
 import queue
+import sys
 import threading
 import time
 from typing import Callable
@@ -55,7 +56,7 @@ class BufferedAgentEventSink:
         if os.getenv("OWG_AGENT_ADAPTER_DEBUG", "").strip() == "1":
             # Never include the exception or native event in diagnostics: either
             # can contain URLs, paths, headers, or runtime content.
-            print(f"OpenWorkGraph agent adapter: {message}", file=os.sys.stderr)
+            print(f"OpenWorkGraph agent adapter: {message}", file=sys.stderr)
 
     def _ensure_worker(self) -> None:
         with self._lock:
@@ -140,8 +141,10 @@ class BufferedAgentEventSink:
         return self._queue.unfinished_tasks == 0
 
     def shutdown(self, *, timeout: float = 2.0) -> None:
-        self.force_flush(timeout=timeout)
+        # Reject new events first, then let the existing worker drain what was
+        # already accepted. Shutdown remains bounded even if the sender hangs.
         self._stop.set()
+        self.force_flush(timeout=timeout)
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=max(0.0, min(float(timeout), 10.0)))
