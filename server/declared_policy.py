@@ -33,7 +33,6 @@ _CANON_HUMAN_RE = re.compile(r"^human:(?:email|github)\.[a-z0-9._-]{1,160}$")
 _SOURCE_TYPES = frozenset({"manual_sop", "repository_policy", "external_reference"})
 _STATUSES = frozenset({"active", "draft", "retired"})
 _RULE_TYPES = frozenset({"required_step", "forbidden_step", "required_predecessor"})
-_STRONG_NEGATIVE_COVERAGE = frozenset({"native_trace", "instrumented_tools"})
 
 
 class DeclaredPolicyError(ValueError):
@@ -195,24 +194,38 @@ def active_policy_for_family(manifest: dict[str, Any], family_key: str) -> dict[
     return None
 
 
-def _strong_negative_coverage(execution: dict[str, Any]) -> bool:
-    return str(execution.get("observation_level") or "") in _STRONG_NEGATIVE_COVERAGE
+def _negative_coverage_for(execution: dict[str, Any], *policy_steps: str) -> bool:
+    """Return whether absence is meaningful for these exact policy steps.
+
+    Native traces can support negative evidence for any structural step. A tool-only
+    instrumentation surface can support absence only when every relevant policy
+    step is itself a tool step; it cannot prove that approvals/model/handoffs were
+    absent merely because they were not in the tool stream.
+    """
+    level = str(execution.get("observation_level") or "")
+    if level == "native_trace":
+        return True
+    if level == "instrumented_tools" and policy_steps:
+        return all(str(step).startswith("tool:") for step in policy_steps)
+    return False
 
 
 def _evaluate_rule(execution: dict[str, Any], rule: dict[str, Any]) -> str:
     steps = list(execution.get("steps") or [])
-    strong = _strong_negative_coverage(execution)
     rule_type = rule["type"]
     if rule_type == "required_step":
-        if rule["step"] in steps:
+        required = rule["step"]
+        if required in steps:
             return "compliant"
-        return "potential_divergence" if strong else "insufficient_observation"
+        return "potential_divergence" if _negative_coverage_for(execution, required) else "insufficient_observation"
     if rule_type == "forbidden_step":
-        if rule["step"] in steps:
+        forbidden = rule["step"]
+        if forbidden in steps:
             return "potential_divergence"
-        return "compliant" if strong else "insufficient_observation"
+        return "compliant" if _negative_coverage_for(execution, forbidden) else "insufficient_observation"
     trigger = rule["trigger_step"]
     required = rule["required_before"]
+    strong = _negative_coverage_for(execution, required, trigger)
     if trigger not in steps:
         return "not_applicable" if strong else "insufficient_observation"
     first_trigger = steps.index(trigger)
@@ -276,6 +289,7 @@ def compare_policy_to_observations(
         "observed_work_is_non_authoritative": True,
         "policy_inferred_from_behavior": False,
         "negative_evidence_requires_strong_observation": True,
+        "negative_evidence_coverage_rule": "native_trace:any_structural_step; instrumented_tools:tool_steps_only",
         "derived": True,
     }
 
