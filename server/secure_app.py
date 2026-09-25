@@ -114,9 +114,13 @@ def _bootstrap_script() -> str:
     }
     const response = await nativeFetch(input, {...init, headers});
     if (response.status === 401 && dashboardSession) {
-      window.__owgAuthLost = true;
-      dashboardSession = '';
-      sessionStorage.removeItem(SESSION_KEY);
+      let detail = '';
+      try { detail = String((await response.clone().json())?.detail || ''); } catch (_) {}
+      if (detail === 'authentication required') {
+        window.__owgAuthLost = true;
+        dashboardSession = '';
+        sessionStorage.removeItem(SESSION_KEY);
+      }
     }
     return response;
   };
