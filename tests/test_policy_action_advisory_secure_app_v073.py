@@ -97,6 +97,7 @@ def test_production_action_advisory_is_read_only_and_api_reader_only(tmp_path):
     base = f"http://127.0.0.1:{port}"
     _wait(base + "/health", process)
     endpoint = base + "/v1/declared-policies/action-advisory"
+    trace_endpoint = base + "/v1/workflow-trace?limit=10&scope=all"
     body = {
         "family_key": FAMILY,
         "proposed_step": DEPLOY,
@@ -105,6 +106,15 @@ def test_production_action_advisory_is_read_only_and_api_reader_only(tmp_path):
     api_headers = {"Authorization": f"Bearer {api_token}"}
     agent_headers = {"Authorization": f"Bearer {agent_token}"}
     try:
+        # secure_app normally initializes its local SQLite store on startup. The
+        # advisory's read-only guarantee is therefore tested against canonical
+        # evidence state, not against the physical existence of the DB file.
+        before_trace = httpx.get(trace_endpoint, headers=api_headers, timeout=5)
+        assert before_trace.status_code == 200, before_trace.text
+        before_payload = before_trace.json()
+        assert before_payload.get("returned") == 0
+        assert before_payload.get("rows") == []
+
         assert httpx.post(endpoint, json=body, timeout=5).status_code == 401
         assert httpx.post(endpoint, json=body, headers=agent_headers, timeout=5).status_code == 401
 
@@ -141,7 +151,11 @@ def test_production_action_advisory_is_read_only_and_api_reader_only(tmp_path):
         assert bad.status_code == 422
         assert "ignore_previous" not in bad.text.lower()
 
+        after_trace = httpx.get(trace_endpoint, headers=api_headers, timeout=5)
+        assert after_trace.status_code == 200, after_trace.text
+        after_payload = after_trace.json()
+        assert after_payload.get("returned") == before_payload.get("returned") == 0
+        assert after_payload.get("rows") == before_payload.get("rows") == []
         assert policy_file.read_bytes() == original
-        assert not (data / "workflow_observer.db").exists()
     finally:
         _stop(process)
