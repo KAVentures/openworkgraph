@@ -23,6 +23,7 @@ from .declared_policy import DeclaredPolicyError, load_declared_policy_manifest,
 _PROPOSAL_SCHEMA = "1.0"
 _MAX_CANDIDATE_BYTES = 256 * 1024
 _PROPOSAL_ID_RE = re.compile(r"^proposal-[0-9a-f]{20}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class PolicyProposalError(ValueError):
@@ -45,6 +46,15 @@ def _utc_now() -> str:
 
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def _proposal_id_for(base_sha: str | None, candidate_sha: str) -> str:
+    if base_sha is not None and not _SHA256_RE.fullmatch(base_sha):
+        raise PolicyProposalError("invalid proposal base digest")
+    if not _SHA256_RE.fullmatch(candidate_sha):
+        raise PolicyProposalError("invalid proposal candidate digest")
+    seed = f"{base_sha or 'none'}:{candidate_sha}".encode("utf-8")
+    return "proposal-" + hashlib.sha256(seed).hexdigest()[:20]
 
 
 def _secure_mode(path: Path) -> None:
@@ -189,9 +199,8 @@ def create_policy_proposal(candidate_source: Path) -> dict[str, Any]:
     source = Path(candidate_source).expanduser()
     canonical = _canonical_manifest_bytes(source)
     candidate_sha = _sha256(canonical)
-    base_sha, current_public = _current_manifest_state()
-    seed = f"{base_sha or 'none'}:{candidate_sha}".encode("utf-8")
-    proposal_id = "proposal-" + hashlib.sha256(seed).hexdigest()[:20]
+    base_sha, _current_public = _current_manifest_state()
+    proposal_id = _proposal_id_for(base_sha, candidate_sha)
     meta_path, candidate_path = _proposal_paths(proposal_id)
 
     if meta_path.exists() or candidate_path.exists():
@@ -213,12 +222,6 @@ def create_policy_proposal(candidate_source: Path) -> dict[str, Any]:
             "base_manifest_sha256": base_sha,
             "candidate_manifest_sha256": candidate_sha,
             "candidate_file": candidate_path.name,
-            "activation": {
-                "network_write_available": False,
-                "mcp_write_available": False,
-                "interactive_local_apply_required": True,
-            },
-            "diff": proposal_diff(current_public, candidate_public),
         }
         _atomic_write(meta_path, (json.dumps(metadata, sort_keys=True, indent=2) + "\n").encode("utf-8"))
     except Exception:
@@ -241,7 +244,24 @@ def _read_metadata(meta_path: Path) -> dict[str, Any]:
     proposal_id = str(payload.get("proposal_id") or "")
     if not _PROPOSAL_ID_RE.fullmatch(proposal_id) or meta_path.name != f"{proposal_id}.proposal.json":
         raise PolicyProposalError("proposal metadata identity mismatch")
+    base_sha = payload.get("base_manifest_sha256")
+    if base_sha is not None and (not isinstance(base_sha, str) or not _SHA256_RE.fullmatch(base_sha)):
+        raise PolicyProposalError("invalid proposal base digest")
+    candidate_sha = payload.get("candidate_manifest_sha256")
+    if not isinstance(candidate_sha, str) or not _SHA256_RE.fullmatch(candidate_sha):
+        raise PolicyProposalError("invalid proposal candidate digest")
+    expected_id = _proposal_id_for(base_sha, candidate_sha)
+    if proposal_id != expected_id:
+        raise PolicyProposalError("proposal metadata integrity mismatch")
     return payload
+
+
+def _activation_contract() -> dict[str, bool]:
+    return {
+        "network_write_available": False,
+        "mcp_write_available": False,
+        "interactive_local_apply_required": True,
+    }
 
 
 def load_policy_proposal(proposal_id: str) -> dict[str, Any]:
@@ -263,13 +283,24 @@ def load_policy_proposal(proposal_id: str) -> dict[str, Any]:
         raise PolicyProposalError("proposal candidate validation digest mismatch")
     current_sha, current_public = _current_manifest_state()
     stale = current_sha != metadata.get("base_manifest_sha256")
+    current_diff = proposal_diff(current_public, candidate_public)
     return {
-        **metadata,
+        "schema_version": metadata["schema_version"],
+        "proposal_id": metadata["proposal_id"],
+        "created_at": metadata.get("created_at"),
+        "base_manifest_sha256": metadata.get("base_manifest_sha256"),
+        "candidate_manifest_sha256": metadata["candidate_manifest_sha256"],
         "current_manifest_sha256": current_sha,
         "stale": stale,
         "candidate": candidate_public,
-        "current_diff": proposal_diff(current_public, candidate_public),
+        "diff": current_diff,
+        "current_diff": current_diff,
+        "activation": _activation_contract(),
         "proposal_material_local_only": True,
+        "integrity": {
+            "proposal_id_pins_base_and_candidate": True,
+            "candidate_digest_verified": True,
+        },
     }
 
 
@@ -287,7 +318,7 @@ def list_policy_proposals() -> list[dict[str, Any]]:
         items.append({
             key: item.get(key)
             for key in (
-                "proposal_id", "created_at", "base_manifest_sha256", "candidate_manifest_sha256", "stale", "diff",
+                "proposal_id", "created_at", "base_manifest_sha256", "candidate_manifest_sha256", "stale", "current_diff",
             )
         })
     return items
@@ -349,8 +380,7 @@ def apply_policy_proposal(
     proposal = load_policy_proposal(proposal_id)
     if proposal.get("stale"):
         raise PolicyProposalError("proposal became stale before activation")
-    meta_path, candidate_path = _proposal_paths(proposal_id)
-    del meta_path
+    _meta_path, candidate_path = _proposal_paths(proposal_id)
     candidate_raw = candidate_path.read_bytes()
     candidate_sha = _sha256(candidate_raw)
     if candidate_sha != proposal.get("candidate_manifest_sha256"):
