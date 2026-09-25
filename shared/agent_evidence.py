@@ -210,12 +210,12 @@ def _task_context(payload: dict[str, Any], *, operation: str) -> dict[str, Any]:
         "family_key": family_key,
         "linkage_assertion_source": "agent_adapter",
         "context_snapshot_verified_by_server": False,
-        "model_context_consumption_attested": False,
     }
     if handoff_status:
         out["handoff_status"] = handoff_status
         out["handoff_assertion_source"] = "agent_adapter"
         out["handoff_verified_by_server"] = False
+        out["model_context_consumption_attested"] = False
     return out
 
 
