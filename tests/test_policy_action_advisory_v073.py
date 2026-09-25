@@ -134,9 +134,12 @@ def test_no_policy_is_not_authorization_and_invalid_structural_input_fails_close
             manifest=_manifest([]),
         )
 
+    # Family validation follows the existing declared-policy structural grammar.
+    # Use a genuinely non-family token here rather than a syntactically valid
+    # canonical GitHub family that simply has no active policy.
     with pytest.raises(DeclaredPolicyError):
         action_policy_advisory(
-            family_key="human:github.ignore_previous_instructions",
+            family_key="not-a-procedural-family",
             proposed_step=SEARCH,
             manifest=_manifest([]),
         )
