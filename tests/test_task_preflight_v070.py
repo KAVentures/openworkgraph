@@ -51,6 +51,7 @@ def _payload(*, policy: bool = True) -> dict:
                 "status": "active" if policy else "not_declared",
                 "authority_class": "declared_normative" if policy else "none",
                 "authoritative_as_declared_input": policy,
+                "manifest_sha256": "a" * 64 if policy else None,
                 "item": {"policy_id": "github-review"} if policy else None,
             },
             "observed_procedure": {
@@ -94,6 +95,18 @@ def test_preflight_summarizes_without_recommending_or_enforcing():
     assert result.next_observed_step_count == 1
     assert result.automatic_enforcement is False
     assert result.automatic_execution is False
+    assert len(result.context_sha256 or "") == 64
+    assert result.policy_manifest_sha256 == "a" * 64
+
+    repeat = client.preflight(family_key="human:github.create_issue")
+    assert repeat.context_sha256 == result.context_sha256
+
+    changed = _payload()
+    changed["evidence_rows_considered"] = 9
+    changed_result = TaskPreflightClient(fetcher=lambda params: changed).preflight(
+        family_key="human:github.create_issue"
+    )
+    assert changed_result.context_sha256 != result.context_sha256
 
     blob = json.dumps(result.as_dict()).lower()
     assert "recommended_action" not in blob
@@ -111,6 +124,8 @@ def test_try_preflight_fails_open_only_for_observer_unavailability():
     )
     assert result.available is False
     assert result.context is None
+    assert result.context_sha256 is None
+    assert result.policy_manifest_sha256 is None
     assert result.error_code == "observer_unavailable"
     assert "SUPERSECRET" not in json.dumps(result.as_dict())
 
@@ -161,6 +176,7 @@ def test_preflight_query_is_bounded_before_custom_transport():
         max_evidence_refs_per_item=999,
     )
     assert result.policy_status == "not_declared"
+    assert result.policy_manifest_sha256 is None
     assert seen["min_support"] == 100
     assert seen["run_limit"] == 5
     assert seen["section_limit"] == 5
@@ -243,9 +259,8 @@ def test_default_client_uses_real_local_read_auth_not_agent_write_token(tmp_path
         assert result.context_resolved is True
         assert result.policy_status == "not_declared"
         assert result.automatic_enforcement is False
+        assert len(result.context_sha256 or "") == 64
 
-        # Explicitly supplying the least-privilege telemetry token must not turn
-        # it into a read credential; a rejected query is not fail-open absence.
         monkeypatch.setenv("OWG_API_TOKEN", agent_token)
         with pytest.raises(TaskPreflightError):
             TaskPreflightClient(timeout=2).try_preflight(
