@@ -90,12 +90,18 @@ def _one_execution(events: list[dict[str, Any]]) -> dict[str, Any]:
     execution_id = _execution_id("agent", f"{actor}|{native_run}", started_at)
 
     steps: list[str] = []
+    approval_request_count = 0
+    approval_received_count = 0
     for event in events:
+        metadata, _trace = _meta(event)
+        operation = str(metadata.get("operation") or "").strip().lower()
+        if operation == "human_approval_requested":
+            approval_request_count += 1
+        elif operation == "human_approval_received":
+            approval_received_count += 1
         step = _agent_step(event)
-        if step and (not steps or steps[-1] != step):
+        if step and len(steps) < 48 and (not steps or steps[-1] != step):
             steps.append(step)
-        if len(steps) >= 48:
-            break
 
     observed_family = ""
     observed_family_basis = ""
@@ -122,6 +128,10 @@ def _one_execution(events: list[dict[str, Any]]) -> dict[str, Any]:
         "preflight_family_key": preflight_family or None,
         "family_consistent": family_consistent,
         "structural_step_count": len(steps),
+        "approval_request_count": approval_request_count,
+        "approval_received_count": approval_received_count,
+        "approval_requested": approval_request_count > 0,
+        "approval_received": approval_received_count > 0,
         "linkage_status": link_status,
         "preflight_attempted": link is not None or link_status == "conflicting_assertions",
         "context_available": bool((link or {}).get("available")),
@@ -136,6 +146,15 @@ def _one_execution(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def derive_context_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Derive privacy-safe agent execution/linkage records from canonical evidence.
+
+    This is intentionally an internal-data primitive for read-only views. It
+    returns no native run/session/trace/span identifiers and performs no writes.
+    """
+    return [_one_execution(events) for events in _agent_groups(raw_events) if events]
+
+
 def context_execution_linkage(
     raw_events: list[dict[str, Any]],
     *,
@@ -148,7 +167,7 @@ def context_execution_linkage(
     if family and not _FAMILY_KEY_RE.fullmatch(family):
         raise ValueError("invalid family_key")
 
-    executions = [_one_execution(events) for events in _agent_groups(raw_events) if events]
+    executions = derive_context_executions(raw_events)
     if family:
         executions = [
             item for item in executions
