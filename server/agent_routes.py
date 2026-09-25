@@ -13,6 +13,7 @@ from .context_execution_routes import router as context_execution_router
 from .context_outcome_routes import router as context_outcome_router
 from .declared_policy_routes import router as declared_policy_router
 from .local_auth import bearer_matches
+from .policy_action_routes import router as policy_action_router
 from .procedural_memory_routes import router as procedural_memory_router
 from .task_context_routes import router as task_context_router
 
@@ -119,11 +120,12 @@ def get_agent_workflows(
 
 
 # Procedural memory, declared policy, unified task context, context/execution
-# linkage, and aggregate context/outcome associations are read-only derived/
-# governance views. They inherit secure_app composition through this existing
-# additive router and never receive the write-only agent credential.
+# linkage, aggregate context/outcome associations, and policy action advisory are
+# read-only derived/governance views. They inherit secure_app composition through
+# this existing additive router and never receive the write-only agent credential.
 router.include_router(procedural_memory_router)
 router.include_router(declared_policy_router)
 router.include_router(task_context_router)
 router.include_router(context_execution_router)
 router.include_router(context_outcome_router)
+router.include_router(policy_action_router)
