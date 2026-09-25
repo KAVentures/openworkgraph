@@ -10,6 +10,7 @@ uncertainty as unknown rather than as evidence of freshness or drift.
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -49,9 +50,10 @@ def _candidate_public(canonical: bytes) -> dict[str, Any]:
     fd, tmp_name = tempfile.mkstemp(prefix="openworkgraph-policy-drift-", suffix=".json")
     tmp = Path(tmp_name)
     try:
-        with open(fd, "wb", closefd=True) as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(canonical)
             handle.flush()
+            os.fsync(handle.fileno())
         try:
             return load_declared_policy_manifest(tmp)
         except DeclaredPolicyError as exc:
