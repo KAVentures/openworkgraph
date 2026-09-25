@@ -16,6 +16,7 @@ dependencies = [
   "pillow>=11,<12",
   "psutil>=6,<8",
   "mcp[cli]>=2,<3",
+  "cryptography>=45,<52",
   "pynput>=1.8,<2; platform_system == 'Darwin' or platform_system == 'Windows'",
   "pyobjc-framework-ApplicationServices>=11,<13; platform_system == 'Darwin'",
   "uiautomation==2.0.29; platform_system == 'Windows'",

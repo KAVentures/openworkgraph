@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .app import create_app as create_core_app
 from .auth import env_token_matches
+from .declared_policy_distribution import install_declared_policy_distribution
 from .hardening import (
     HardeningSettings,
     PooledGatewayDB,
@@ -53,6 +54,7 @@ def create_enterprise_app(
     app.version = GATEWAY_VERSION
     app.state.hardening_settings = hardening
     app.state.rate_limiter = SlidingWindowRateLimiter(window_seconds=60)
+    install_declared_policy_distribution(app, db=db, settings=settings)
 
     core_health = _take_get_endpoint(app, "/health")
     core_capabilities = _take_get_endpoint(app, "/v1/capabilities")
@@ -76,6 +78,14 @@ def create_enterprise_app(
             "rate_limiting": "opt_in_default_disabled",
             "postgres_connection_pooling": "opt_in_default_disabled",
             "distributed_edge_rate_limit_required_for_multi_replica": True,
+        }
+        payload["enterprise_declared_policy"] = {
+            "signed_bundle_distribution": True,
+            "signature_algorithm": "Ed25519",
+            "gateway_private_signing_key_required": False,
+            "gateway_signature_authority": False,
+            "endpoint_signature_verification_required": True,
+            "revision_history": True,
         }
         return payload
 

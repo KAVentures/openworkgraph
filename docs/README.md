@@ -19,6 +19,7 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Controlled policy authoring](POLICY_AUTHORING.md) — immutable local proposals, structural diffs, stale-base detection, interactive activation, atomic replacement, SHA-addressed history and privacy-minimized audit records.
 - [Trusted policy source sync](POLICY_SOURCE_SYNC.md) — allow-listed local files and committed Git policy manifests, privacy-minimized provenance, deterministic proposal creation, dirty-worktree isolation and zero automatic activation.
 - [Policy source drift and provenance](POLICY_SOURCE_DRIFT.md) — read-only semantic/source freshness, active-policy origin receipts, Git commit drift, proposal availability, and conservative unknown states when source evidence is unavailable.
+- [Enterprise policy signing and distribution](ENTERPRISE_POLICY_SIGNING.md) — offline Ed25519 signing authority, Gateway transport, endpoint public-key pinning, key rotation, software-local rollback protection, and opt-in managed activation.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for AI analysis.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.

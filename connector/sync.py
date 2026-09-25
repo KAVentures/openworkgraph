@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from .config import load_device_token, load_gateway_settings
+from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
 from .state import SyncState
 
@@ -104,13 +105,48 @@ def _push_batch_resilient(
         return left_ok | right_ok, left_bad | right_bad
 
 
+def _refresh_managed_policy_if_due(
+    client: httpx.Client,
+    *,
+    settings,
+    state: SyncState,
+    data_dir: Path,
+    fetched_at: float,
+    now: float,
+) -> float:
+    """Refresh managed policy without coupling failure to evidence upload."""
+    if not settings.managed_declared_policy_enabled:
+        return fetched_at
+    if now - fetched_at < settings.managed_declared_policy_refresh_seconds:
+        return fetched_at
+    try:
+        refresh_managed_declared_policy(
+            client,
+            settings.url,
+            settings=settings,
+            state=state,
+            data_dir=data_dir,
+        )
+        state.set("managed_declared_policy_refreshed_at", _now())
+        state.set("managed_declared_policy_last_error", "")
+    except Exception as exc:
+        # Managed SOP verification is a separate concern from evidence sharing.
+        # Keep the last verified policy, record the problem, and continue normal
+        # local capture/Gateway evidence synchronization.
+        state.set("managed_declared_policy_status", "error")
+        state.set("managed_declared_policy_last_error", str(exc)[:500])
+        print(f"OpenWorkGraph managed declared policy refresh failed: {str(exc)[:500]}")
+    return now
+
+
 def run(config_path: Path, *, once: bool = False) -> int:
     """Synchronize privacy-approved local evidence to an optional company Gateway.
 
     Local capture never depends on this worker. The cursor advances only after a
     complete Gateway acknowledgement, explicit policy/pause exclusion, or local
     quarantine of a terminally invalid event. Network/auth/server failures remain
-    retryable and never advance the cursor.
+    retryable and never advance the cursor. Managed declared-policy refresh is
+    separately opt-in and cannot make evidence synchronization fail.
     """
     global STOP
     STOP = False
@@ -132,11 +168,22 @@ def run(config_path: Path, *, once: bool = False) -> int:
     headers = {"Authorization": f"Bearer {token}"}
     policy: dict[str, Any] = merge_policies(settings.local_policy, {})
     policy_fetched_at = 0.0
+    managed_policy_fetched_at = 0.0
     delay = settings.poll_seconds
     state.set("gateway_url", settings.url)
 
     with httpx.Client(headers=headers, timeout=10, verify=settings.verify_tls) as client:
         while not STOP:
+            now = time.monotonic()
+            managed_policy_fetched_at = _refresh_managed_policy_if_due(
+                client,
+                settings=settings,
+                state=state,
+                data_dir=data_dir,
+                fetched_at=managed_policy_fetched_at,
+                now=now,
+            )
+
             if state.get_bool("sharing_paused", False):
                 state.set("status", "paused")
                 state.set("last_error", "")
