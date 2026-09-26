@@ -15,16 +15,19 @@ from normalizer import safe_surface
 
 
 def minimize_browser_title_at_rest(event: dict[str, Any]) -> dict[str, Any]:
-    """Replace arbitrary browser titles with the already-known safe work surface.
+    """Replace browser-container titles with the known privacy-safe work surface.
 
-    This is intentionally idempotent. Non-browser desktop events and agent events
-    are returned unchanged. For browser-extension evidence the raw page title may
-    be used once to classify Jira/Confluence/etc., then it is discarded.
+    This is intentionally idempotent. Non-browser desktop/business-app evidence
+    and agent evidence are returned unchanged. The raw page title may be used once
+    to classify Jira/Confluence/etc., then it is discarded before persistence.
     """
     e = copy.deepcopy(event)
-    event_type = str(e.get("event_type") or "")
     app = str(e.get("app") or "")
-    if not event_type.startswith("browser_") and not is_browser_app(app):
+    # Actual extension ingestion normalizes its app to Browser/Chrome/etc., and OS
+    # tab-title leakage likewise arrives through a browser-container app. Do not
+    # strip rich titles from synthetic/direct events whose app is already a native
+    # business surface such as Fortnox; that would lose useful non-browser context.
+    if not is_browser_app(app):
         return e
 
     meta = e.get("metadata") if isinstance(e.get("metadata"), dict) else {}
