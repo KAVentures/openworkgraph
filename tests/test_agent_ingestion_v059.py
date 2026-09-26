@@ -237,10 +237,13 @@ def test_normalizer_and_contextualizer_keep_structure_but_not_content_surfaces()
     assert raw["window_title"] is None and normalized["screenshot_path"] is None
 
 
-def test_gateway_policy_accepts_agent_evidence_without_special_case():
+def test_gateway_policy_requires_explicit_agent_sharing_opt_in():
     event = agent_event_to_evidence(_agent_payload("v059-gateway"))
-    policy = merge_policies({}, {})
-    prepared = prepare_event_for_gateway(event, policy)
+    denied = merge_policies({}, {})
+    assert prepare_event_for_gateway(event, denied) is None
+
+    allowed = merge_policies({"allow_agent_events": True}, {})
+    prepared = prepare_event_for_gateway(event, allowed)
     assert prepared is not None
     assert prepared["source"] == "agent"
     assert prepared["metadata"]["trace"]["run_id"] == "run-v059"
