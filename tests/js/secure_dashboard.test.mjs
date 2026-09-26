@@ -29,9 +29,9 @@ test('dashboard exports use short-lived server tickets rather than cookie naviga
   assert.doesNotMatch(override, /location\.href/);
 });
 
-test('local AI connectors use authenticated stdio while HTTP bearer is on demand only', () => {
+test('local AI connectors use compact authenticated stdio while HTTP bearer is on demand only', () => {
   assert.match(source, /\/v1\/mcp-connection-config/);
-  assert.match(source, /mcp_server\.secure_stdio/);
+  assert.match(source, /mcp_server\.compact_stdio/);
   assert.match(source, /cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install/);
   const cursorBlock = source.split('window.connectCursor', 2)[1].split('window.showBrowserPairingCode', 1)[0];
   assert.doesNotMatch(cursorBlock, /Bearer/);
