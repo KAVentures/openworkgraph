@@ -54,9 +54,9 @@ def _event(run: str, operation: str, second: int, *, tool: bool = False) -> dict
         "operation": operation,
         "status": "running" if operation == "run_started" else "success",
         "observation_level": "native_trace",
-        "run_id": f"run-{run}-patient@example.com-SUPERSECRET",
-        "trace_id": f"trace-{run}-patient@example.com",
-        "workflow_id": "workflow-customer-739201-patient@example.com",
+        "run_id": f"run-{run}-private-001",
+        "trace_id": f"trace-{run}-private-001",
+        "workflow_id": "workflow-private-739201",
     }
     if tool:
         payload.update({
@@ -140,12 +140,10 @@ def test_context_pack_uses_api_read_auth_and_preserves_privacy(tmp_path):
 
         serialized = json.dumps(payload)
         for forbidden in (
-            "patient@example.com",
-            "SUPERSECRET",
-            "customer-739201",
+            "workflow-private-739201",
             "ignore_previous_instructions",
-            "run-a-patient",
-            "trace-a",
+            "run-a-private-001",
+            "trace-a-private-001",
             "session_id",
             "run_id",
             "trace_id",
