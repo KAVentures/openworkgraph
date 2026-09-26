@@ -386,7 +386,7 @@ async def local_capability_guard(request: Request, call_next):
         return JSONResponse({
             "transport": "stdio",
             "command": sys.executable,
-            "args": ["-m", "mcp_server.secure_stdio"],
+            "args": ["-m", "mcp_server.compact_stdio"],
             "env": env,
             "security_note": local_security_note(),
         })
