@@ -58,9 +58,9 @@ def _event(run: str, operation: str, second: int, *, tool: bool = False) -> dict
         "operation": operation,
         "status": "running" if operation == "run_started" else "success",
         "observation_level": "native_trace",
-        "run_id": f"{run}-patient@example.com-SUPERSECRET",
-        "trace_id": f"trace-{run}-patient@example.com",
-        "workflow_id": "workflow-customer-739201-patient@example.com",
+        "run_id": f"{run}-private-001",
+        "trace_id": f"trace-{run}-private-001",
+        "workflow_id": "workflow-private-739201",
     }
     if tool:
         payload.update({
@@ -146,12 +146,10 @@ def test_production_server_memory_is_read_only_private_and_api_authenticated(tmp
 
         serialized = json.dumps({"overview": payload, "similar": similar.json()})
         for forbidden in (
-            "patient@example.com",
-            "SUPERSECRET",
-            "customer-739201",
+            "workflow-private-739201",
             "ignore_previous_instructions",
-            "run-a-patient",
-            "trace-run-a",
+            "run-a-private-001",
+            "trace-run-a-private-001",
         ):
             assert forbidden not in serialized
         assert "tool:search:tool:" in serialized
