@@ -16,7 +16,7 @@ DEFAULT_LOCAL_POLICY: dict[str, Any] = {
 def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     result = dict(DEFAULT_LOCAL_POLICY)
-    for key in ("share_excluded", "share_window_titles", "share_metadata"):
+    for key in ("share_excluded", "share_window_titles", "share_metadata", "allow_agent_events"):
         if key in source:
             result[key] = bool(source[key])
     for key in ("allowed_event_types", "strip_metadata_keys"):
@@ -43,6 +43,25 @@ def _restrict_allowlist(local: list[str], remote: list[str]) -> tuple[list[str],
     return sorted(a or b), False
 
 
+def _effective_agent_sharing(
+    local_policy: dict[str, Any] | None,
+    organization_policy: dict[str, Any] | None,
+) -> bool:
+    """Return the restrictive effective agent-sharing choice.
+
+    The normal connector configuration always supplies the endpoint-local key and
+    defaults it to False. Missing keys here are treated as permissive only for
+    compatibility with legacy/internal callers that construct policy dictionaries
+    directly rather than loading endpoint configuration. An explicit local False
+    always wins, and an organization may further narrow an endpoint opt-in.
+    """
+    local_source = local_policy if isinstance(local_policy, dict) else {}
+    remote_source = organization_policy if isinstance(organization_policy, dict) else {}
+    local_allows = bool(local_source.get("allow_agent_events", True))
+    remote_allows = bool(remote_source.get("allow_agent_events", True))
+    return local_allows and remote_allows
+
+
 def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dict[str, Any] | None) -> dict[str, Any]:
     """Combine policies so a remote organization can never broaden the local floor."""
     local = normalize_policy(local_policy)
@@ -54,6 +73,7 @@ def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dic
         "share_excluded": bool(local["share_excluded"] and remote["share_excluded"]),
         "share_window_titles": bool(local["share_window_titles"] and remote["share_window_titles"]),
         "share_metadata": bool(local["share_metadata"] and remote["share_metadata"]),
+        "allow_agent_events": _effective_agent_sharing(local_policy, organization_policy),
         "allowed_event_types": allowed_event_types,
         "_deny_all_event_types": deny_all_event_types,
         "strip_metadata_keys": sorted(set(local["strip_metadata_keys"]) | set(remote["strip_metadata_keys"])),
@@ -72,6 +92,8 @@ def prepare_event_for_gateway(event: dict[str, Any], policy: dict[str, Any]) -> 
     metadata = event.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    if str(event.get("source") or "") == "agent" and policy.get("allow_agent_events") is not True:
+        return None
     if bool(metadata.get("excluded")) and not policy.get("share_excluded", False):
         return None
     if policy.get("_deny_all_event_types", False):
