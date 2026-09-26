@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.87.3"
+EXPECTED_VERSION = "0.88.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -33,6 +33,8 @@ def test_release_notes_are_current_and_version_driven():
     assert "legacy 24-tool" in workflow
     assert "Readable procedural feedback" in workflow
     assert "stable structural identity layer" in workflow
+    assert "Agent setup control plane" in workflow
+    assert "telemetry actually observed" in workflow
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
