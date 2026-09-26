@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 
 from adapters import claude_code_hook
@@ -110,10 +111,35 @@ def test_settings_fragment_registers_only_safe_supported_hooks():
     assert "UserPromptSubmit" not in hooks
     assert "PreToolUse" not in hooks
     handler = hooks["PostToolUse"][0]["hooks"][0]
-    assert handler["command"] == "python"
-    assert handler["args"] == ["-m", "adapters.claude_code_hook"]
+    assert handler["command"] == claude_code_hook.hook_command("python")
+    assert "args" not in handler
     assert handler["async"] is True
     assert handler["timeout"] == 2
+
+
+def test_hook_command_resolves_adapters_package_from_any_working_directory(tmp_path):
+    # Claude Code runs hooks from the session's project directory, and the
+    # adapters package is not installed into the venv, so the generated command
+    # must cd into the OpenWorkGraph root before running ``-m``. Paths with
+    # spaces (e.g. "Application Support") must be quoted for the host shell.
+    import subprocess
+
+    command = claude_code_hook.hook_command(sys.executable)
+    assert command.startswith("cd ")
+    assert command.endswith(" -m adapters.claude_code_hook")
+    if os.name == "nt":
+        assert command.startswith("cd /d ")
+
+    # Exercise the generated shell command itself from an unrelated cwd. Using
+    # the module's own no-network print mode avoids nested shell quoting that
+    # would otherwise make this regression test shell-specific.
+    result = subprocess.run(
+        command + " --print-settings",
+        shell=True, cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    parsed = json.loads(result.stdout)
+    assert "hooks" in parsed
 
 
 def test_hook_cli_fails_open_without_printing_native_exception(monkeypatch, capsys):

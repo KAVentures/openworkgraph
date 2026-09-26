@@ -10,6 +10,8 @@ payloads, secrets, prompts, arguments, or tool results.
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 
 from adapters._agent_client import post_agent_events
@@ -28,12 +30,38 @@ SUPPORTED_EVENTS = [
 ]
 
 
-def settings_fragment(command: str | None = None) -> dict:
+# Repository root that contains the ``adapters`` package. The package is not
+# installed into the venv, so ``-m adapters.claude_code_hook`` only resolves when
+# the working directory is this root. Claude Code runs hooks from the session's
+# project directory, so the generated command must ``cd`` here first.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _shell_quote(value: str) -> str:
+    """Quote one command argument for the host platform's default shell."""
+    if os.name == "nt":
+        return subprocess.list2cmdline([value])
+    return shlex.quote(value)
+
+
+def hook_command(command: str | None = None) -> str:
     executable = command or sys.executable
+    root = _shell_quote(PROJECT_ROOT)
+    python = _shell_quote(executable)
+    if os.name == "nt":
+        # ``/d`` lets cmd.exe change both directory and drive. Single-quote
+        # POSIX escaping is invalid in cmd.exe, so use Windows command-line
+        # quoting via ``subprocess.list2cmdline`` above.
+        return f"cd /d {root} && {python} -m adapters.claude_code_hook"
+    return f"cd {root} && {python} -m adapters.claude_code_hook"
+
+
+def settings_fragment(command: str | None = None) -> dict:
     handler = {
         "type": "command",
-        "command": executable,
-        "args": ["-m", "adapters.claude_code_hook"],
+        # Single shell command string: platform-native quoting survives spaces
+        # (e.g. "Application Support") without relying on a separate args field.
+        "command": hook_command(command),
         # OpenWorkGraph is observational and never returns a Claude Code control
         # decision. Run the bridge in the background so local telemetry cannot
         # add latency to the triggering tool/lifecycle event.
