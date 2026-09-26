@@ -30,7 +30,7 @@ The adapters deliberately do **not** persist:
 - account email/account IDs;
 - arbitrary OpenTelemetry attributes or log bodies.
 
-Both native integrations reuse the dedicated write-only `.agent_ingest_token`. That token can submit agent evidence but cannot read `/v1/events`, exports, summaries, or `/v1/agent-workflows`.
+Native integrations reuse the dedicated write-only `.agent_ingest_token`. That token can submit agent evidence but cannot read `/v1/events`, exports, summaries, `/v1/agent-workflows`, or agent execution reports.
 
 ## Claude Code
 
@@ -72,11 +72,11 @@ for your local user, or the relevant project `.claude/settings.json` if you inte
 
 OpenWorkGraph does **not** edit Claude Code settings automatically.
 
-The generated hook uses separate `command` and `args` fields, so interpreter paths containing spaces do not need shell-quoting tricks.
+The generated hook uses separate `command` and `args` fields, so interpreter paths containing spaces do not need shell-quoting tricks. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
 
 ### Failure behavior
 
-The hook bridge is fail-open by design. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, timeout, or an unexpected adapter exception all result in exit code `0` with no hook decision. OpenWorkGraph observation therefore cannot block or approve Claude Code tool execution.
+The hook bridge is fail-open by design. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, or an unexpected adapter exception cannot block or approve Claude Code tool execution. Because the generated command hook is asynchronous, Claude Code proceeds without waiting for the OpenWorkGraph bridge to finish.
 
 Set:
 
@@ -142,6 +142,30 @@ It accepts OTLP/HTTP JSON under the same 2 MB request bound as the generic agent
 
 The adapter uses an allowlist. OTLP `body`, prompt content, tool arguments/output, account identifiers, arbitrary span attributes, and arbitrary span names are ignored. Stable native request/call identifiers may be hashed solely to make repeated log/trace copies idempotent; the original identifiers are not added as content fields.
 
+## Generic OpenTelemetry trace export
+
+For runtimes that expose ordinary OTLP traces rather than a dedicated OpenWorkGraph adapter, the generic structural endpoint is:
+
+```text
+POST /agent-ingest/v1/otel
+```
+
+It currently accepts **OTLP/HTTP JSON only**. It does not accept protobuf bodies and OpenWorkGraph does not currently expose the conventional `/v1/traces` alias.
+
+For an OpenTelemetry SDK/exporter that supports `http/json`, use the signal-specific standard variables so the endpoint path is used exactly as written:
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:8787/agent-ingest/v1/otel"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/json"
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer WRITE_ONLY_AGENT_TOKEN"
+```
+
+Use the actual local `.agent_ingest_token` value in place of `WRITE_ONLY_AGENT_TOKEN`.
+
+Do **not** set only `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787`: standard OTLP/HTTP exporters construct a signal path such as `/v1/traces` from the generic base endpoint, and that route is not an OpenWorkGraph ingest route. The trace-specific endpoint above is used as-is by compliant exporters.
+
+`http/json` support is optional across OpenTelemetry SDKs. If a particular runtime supports only `http/protobuf` or gRPC, do not send that binary payload to this JSON endpoint; use a JSON-capable exporter/relay or a native adapter instead.
+
 ## Local-first boundary
 
 The Claude bridge defaults to:
@@ -153,6 +177,8 @@ http://127.0.0.1:8787
 and refuses a non-loopback OpenWorkGraph API URL unless `OWG_AGENT_ALLOW_REMOTE=1` is explicitly set. It can only call `/agent-ingest/*` write routes.
 
 The normal OpenWorkGraph launcher binds the local API to `127.0.0.1`, so the native integrations remain local by default.
+
+When organization Gateway synchronization is enabled, agent evidence remains local unless the endpoint owner separately opts in with `gateway.local_policy.allow_agent_events: true`; see `docs/AGENT_GATEWAY_SHARING.md`.
 
 ## What this does not do
 
