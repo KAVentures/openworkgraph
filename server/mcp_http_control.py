@@ -101,7 +101,7 @@ def start_http_mcp() -> dict[str, Any]:
             env["WORKFLOW_OBSERVER_MCP_INSTANCE_NONCE"] = nonce
             env["WORKFLOW_OBSERVER_MCP_BRIDGE_TOKEN"] = token
             process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "mcp_server.http_app:app", "--host", HOST, "--port", str(port)],
+                [sys.executable, "-m", "uvicorn", "mcp_server.compact_http_app:app", "--host", HOST, "--port", str(port)],
                 cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             deadline = time.time() + 4.0
