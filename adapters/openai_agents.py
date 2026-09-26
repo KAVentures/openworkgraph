@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - exercised when the optional SDK is absen
 
 _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]{0,199}$")
 _USAGE_KEYS = frozenset({"input_tokens", "output_tokens", "cached_input_tokens", "total_tokens"})
+_SENSOR_ID = "agent:openai-agents"
 
 
 def _now_iso() -> str:
@@ -86,19 +87,32 @@ def _duration_seconds(span: Any) -> float:
 
 
 def _usage(value: Any) -> dict[str, int]:
-    if not isinstance(value, dict):
+    """Read only numeric token counters from dict- or object-shaped SDK usage."""
+    if value is None:
         return {}
     out: dict[str, int] = {}
     for key in _USAGE_KEYS:
-        if key not in value:
+        if isinstance(value, dict):
+            raw = value.get(key)
+        else:
+            raw = getattr(value, key, None)
+        if raw is None:
             continue
         try:
-            amount = int(value[key])
+            amount = int(raw)
         except Exception:
             continue
         if 0 <= amount <= 1_000_000_000:
             out[key] = amount
+    if "total_tokens" not in out and ("input_tokens" in out or "output_tokens" in out):
+        out["total_tokens"] = out.get("input_tokens", 0) + out.get("output_tokens", 0)
     return out
+
+
+def _response_model(data: Any) -> str:
+    """Read only the response model identifier, never response content."""
+    response = getattr(data, "response", None)
+    return _safe_label(getattr(response, "model", ""), limit=200) if response is not None else ""
 
 
 def _tool_category(name: str, *, is_mcp: bool = False) -> str:
@@ -212,6 +226,7 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
             self._emit({
                 "event_id": _event_id("trace-start", raw_trace),
                 "observed_at": _now_iso(),
+                "sensor_id": _SENSOR_ID,
                 "agent_name": "OpenAI-Agents-SDK",
                 "provider": "openai",
                 "framework": "openai-agents-python",
@@ -232,6 +247,7 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
                 self._emit({
                     "event_id": _event_id("trace-end", raw_trace),
                     "observed_at": _now_iso(),
+                    "sensor_id": _SENSOR_ID,
                     "agent_name": "OpenAI-Agents-SDK",
                     "provider": "openai",
                     "framework": "openai-agents-python",
@@ -271,6 +287,7 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
             base: dict[str, Any] = {
                 "event_id": _event_id(span_type, raw_trace, raw_span),
                 "observed_at": observed_at,
+                "sensor_id": _SENSOR_ID,
                 "agent_name": agent_name,
                 "provider": "openai",
                 "framework": "openai-agents-python",
@@ -285,10 +302,21 @@ class OpenWorkGraphTracingProcessor(_TracingProcessor):
 
             if span_type in {"generation", "response", "transcription", "speech"}:
                 base["operation"] = "model_call"
-                if span_type != "response":
-                    base["model"] = _safe_label(getattr(data, "model", ""), limit=200)
-                if span_type == "generation":
-                    base["usage"] = _usage(getattr(data, "usage", None))
+                if span_type == "response":
+                    model = _response_model(data)
+                    if model:
+                        base["model"] = model
+                    usage = _usage(getattr(data, "usage", None))
+                    if usage:
+                        base["usage"] = usage
+                else:
+                    model = _safe_label(getattr(data, "model", ""), limit=200)
+                    if model:
+                        base["model"] = model
+                    if span_type == "generation":
+                        usage = _usage(getattr(data, "usage", None))
+                        if usage:
+                            base["usage"] = usage
                 self._emit(base)
                 return
 
