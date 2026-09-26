@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .agent_execution_traces import agent_execution_traces
+from .agent_observability import enrich_agent_execution_payload
 from .agent_read_auth import agent_read_authorized
 from .procedural_memory import load_recent_evidence
 
@@ -41,6 +42,7 @@ def get_agent_execution_traces(
             limit=limit,
             max_events_per_execution=max_events_per_execution,
         )
+        payload = enrich_agent_execution_payload(payload, raw)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="invalid agent-execution-trace query") from exc
     return {

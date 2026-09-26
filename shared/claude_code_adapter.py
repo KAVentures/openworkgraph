@@ -59,7 +59,7 @@ def _duration_seconds(payload: dict[str, Any]) -> float:
 
 def _tool_category(name: str) -> str:
     low = name.lower()
-    if low.startswith("mcp__"):
+    if low.startswith("mcp__") or low == "mcp_tool":
         return "mcp"
     if low in {"bash", "shell", "terminal", "computer"} or any(
         token in low for token in ("exec", "command", "powershell")
@@ -76,6 +76,21 @@ def _tool_category(name: str) -> str:
     return "other" if name else "none"
 
 
+def _prompt_run_id(payload: dict[str, Any], session_id: str) -> str:
+    # Claude Code v2.1.196+ gives every within-turn hook the same prompt_id used
+    # by its OTel prompt.id. Prefer it so hook evidence and OTel evidence land in
+    # one execution. Older versions safely fall back to the session boundary.
+    return _text(payload.get("prompt_id"), 128) or session_id
+
+
+def _hook_agent_name(payload: dict[str, Any]) -> str:
+    agent_id = _text(payload.get("agent_id"), 128)
+    if not agent_id:
+        return "Claude Code"
+    agent_type = _safe_label(payload.get("agent_type"), default="subagent", limit=80)
+    return f"Claude Code/{agent_type}"
+
+
 def _base_event(
     payload: dict[str, Any],
     *,
@@ -87,20 +102,26 @@ def _base_event(
     event_key: str,
     agent_name: str = "Claude Code",
     span_id: str = "",
+    parent_span_id: str = "",
     tool_name: str = "",
+    model: str = "",
 ) -> dict[str, Any]:
     return {
-        "event_id": _event_id(trace_id, event_key, span_id, run_id),
+        "event_id": _event_id(trace_id, event_key, span_id, run_id, agent_name),
         "observed_at": observed_at,
+        "sensor_id": "agent:claude-code-hook",
+        "session_id": trace_id,
         "agent_name": agent_name,
         "provider": "anthropic",
         "framework": "claude-code",
+        "model": model,
         "operation": operation,
         "status": status,
         "observation_level": "native_trace",
         "run_id": run_id,
         "trace_id": trace_id,
         "span_id": span_id,
+        "parent_span_id": parent_span_id,
         "tool_name": tool_name,
         "tool_category": _tool_category(tool_name),
         "duration_seconds": _duration_seconds(payload),
@@ -112,11 +133,11 @@ def claude_hook_to_agent_events(
     *,
     observed_at: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Project one Claude Code hook invocation into zero or one safe events.
+    """Project one Claude Code hook invocation into privacy-safe structural events.
 
-    Hooks that expose content but do not add reliable structural workflow signal
-    (for example UserPromptSubmit, PreToolUse, MessageDisplay, and Stop) are
-    intentionally ignored. Tool calls are recorded only after success/failure.
+    Content-bearing hooks remain ignored. Within-turn events prefer prompt_id, so
+    they correlate with Claude Code OTel without exposing prompt content. A
+    SubagentStart produces both the parent handoff and a child-run boundary.
     """
     if not isinstance(payload, dict):
         return []
@@ -124,11 +145,13 @@ def claude_hook_to_agent_events(
     if hook not in _SUPPORTED_EVENTS:
         return []
 
-    session_id = _text(payload.get("session_id"), 240)
+    session_id = _text(payload.get("session_id"), 128)
     if not session_id:
         return []
     timestamp = _text(observed_at, 80) or _now_iso()
     trace_id = session_id
+    prompt_run_id = _prompt_run_id(payload, session_id)
+    agent_name = _hook_agent_name(payload)
 
     if hook == "SessionStart":
         return [_base_event(
@@ -139,6 +162,7 @@ def claude_hook_to_agent_events(
             run_id=session_id,
             trace_id=trace_id,
             event_key=hook,
+            model=_safe_label(payload.get("model"), limit=160),
         )]
 
     if hook == "SessionEnd":
@@ -153,81 +177,118 @@ def claude_hook_to_agent_events(
         )]
 
     if hook in {"PostToolUse", "PostToolUseFailure"}:
-        tool_use_id = _text(payload.get("tool_use_id"), 240)
+        tool_use_id = _text(payload.get("tool_use_id"), 128)
         tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
         return [_base_event(
             payload,
             operation="tool_call",
             status="success" if hook == "PostToolUse" else "error",
             observed_at=timestamp,
-            run_id=session_id,
+            run_id=prompt_run_id,
             trace_id=trace_id,
             span_id=tool_use_id,
             event_key=hook,
             tool_name=tool_name,
+            agent_name=agent_name,
         )]
 
     if hook == "PermissionRequest":
-        tool_use_id = _text(payload.get("tool_use_id"), 240)
+        tool_use_id = _text(payload.get("tool_use_id"), 128)
         tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
         return [_base_event(
             payload,
             operation="human_approval_requested",
             status="running",
             observed_at=timestamp,
-            run_id=session_id,
+            run_id=prompt_run_id,
             trace_id=trace_id,
             span_id=tool_use_id,
             event_key=hook,
             tool_name=tool_name,
+            agent_name=agent_name,
         )]
 
     if hook == "PermissionDenied":
-        # Claude Code emits PermissionDenied in auto mode. Do not mislabel an
-        # automatic policy denial as a human approval/denial decision.
-        tool_use_id = _text(payload.get("tool_use_id"), 240)
+        # PermissionDenied can be an automatic policy denial. Do not turn it into
+        # a human decision; Claude's tool_decision OTel event identifies the
+        # actual decision source when richer telemetry is connected.
+        tool_use_id = _text(payload.get("tool_use_id"), 128)
         tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
         return [_base_event(
             payload,
             operation="error",
             status="denied",
             observed_at=timestamp,
-            run_id=session_id,
+            run_id=prompt_run_id,
             trace_id=trace_id,
             span_id=tool_use_id,
             event_key=hook,
             tool_name=tool_name,
+            agent_name=agent_name,
         )]
 
-    if hook in {"SubagentStart", "SubagentStop"}:
-        agent_id = _text(payload.get("agent_id"), 240)
-        if not agent_id:
+    if hook == "SubagentStart":
+        child_id = _text(payload.get("agent_id"), 128)
+        if not child_id:
             return []
-        agent_type = _safe_label(payload.get("agent_type"), default="subagent", limit=80)
-        sub_run_id = f"{session_id}:{agent_id}"
+        child_type = _safe_label(payload.get("agent_type"), default="subagent", limit=80)
+        child_name = f"Claude Code/{child_type}"
+        # One event belongs to the parent execution and records the delegation;
+        # the other opens the child execution under the same prompt correlation.
+        return [
+            _base_event(
+                payload,
+                operation="handoff",
+                status="running",
+                observed_at=timestamp,
+                run_id=prompt_run_id,
+                trace_id=trace_id,
+                span_id=child_id,
+                event_key="SubagentHandoff",
+                tool_name=f"subagent:{child_type}",
+                agent_name="Claude Code",
+            ),
+            _base_event(
+                payload,
+                operation="run_started",
+                status="running",
+                observed_at=timestamp,
+                run_id=prompt_run_id,
+                trace_id=trace_id,
+                span_id=child_id,
+                event_key=hook,
+                agent_name=child_name,
+            ),
+        ]
+
+    if hook == "SubagentStop":
+        child_id = _text(payload.get("agent_id"), 128)
+        if not child_id:
+            return []
+        child_type = _safe_label(payload.get("agent_type"), default="subagent", limit=80)
         return [_base_event(
             payload,
-            operation="run_started" if hook == "SubagentStart" else "run_finished",
-            status="running" if hook == "SubagentStart" else "unknown",
+            operation="run_finished",
+            status="unknown",
             observed_at=timestamp,
-            run_id=sub_run_id,
+            run_id=prompt_run_id,
             trace_id=trace_id,
-            span_id=agent_id,
+            span_id=child_id,
             event_key=hook,
-            agent_name=f"Claude Code/{agent_type}",
+            agent_name=f"Claude Code/{child_type}",
         )]
 
     if hook == "StopFailure":
-        prompt_id = _text(payload.get("prompt_id"), 240)
         return [_base_event(
             payload,
             operation="error",
             status="error",
             observed_at=timestamp,
-            run_id=session_id,
+            run_id=prompt_run_id,
             trace_id=trace_id,
-            span_id=prompt_id,
+            span_id=_text(payload.get("prompt_id"), 128),
             event_key=hook,
+            agent_name=agent_name,
         )]
 
     return []
