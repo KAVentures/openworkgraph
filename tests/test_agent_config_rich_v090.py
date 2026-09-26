@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from adapters.claude_code_hook import settings_fragment
 from adapters.claude_code_otel import env_settings
+from adapters.codex_config import config_snippet
 from server import agent_config_writer as writer
 
 
@@ -92,3 +94,15 @@ def test_claude_manual_fragment_contains_no_content_collection_opt_in():
     forbidden_truthy = [key for key in managed if key.startswith("OTEL_LOG_") and managed[key] not in {"0", "false", "False"}]
     assert forbidden_truthy == []
     assert "OTEL_TRACES_EXPORTER" not in managed  # beta detailed traces are not required for v0.90
+
+
+def test_codex_fragment_exports_structural_logs_and_traces_but_no_content_opt_ins():
+    snippet = config_snippet(token="write-only-token", base_url="http://127.0.0.1:8787")
+    parsed = tomllib.loads(snippet)["otel"]
+    assert "otlp-http" in parsed["exporter"]
+    assert "otlp-http" in parsed["trace_exporter"]
+    assert parsed["exporter"]["otlp-http"]["endpoint"].endswith("/agent-ingest/v1/codex-otel")
+    assert parsed["trace_exporter"]["otlp-http"]["endpoint"].endswith("/agent-ingest/v1/codex-otel")
+    assert parsed["log_user_prompt"] is False
+    assert parsed["log_agent_responses"] is False
+    assert parsed["log_guardian_assessments"] is False
