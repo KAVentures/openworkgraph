@@ -11,6 +11,7 @@ from .agent_auth import agent_bearer_matches
 from .agent_ingest import (
     MAX_AGENT_BATCH_BYTES,
     ingest_agent_payloads,
+    ingest_claude_otel_payload,
     ingest_codex_otel_payload,
     ingest_otel_payload,
 )
@@ -34,6 +35,7 @@ router = APIRouter()
 AGENT_EVENT_PATH = "/agent-ingest/v1/events"
 AGENT_OTEL_PATH = "/agent-ingest/v1/otel"
 AGENT_CODEX_OTEL_PATH = "/agent-ingest/v1/codex-otel"
+AGENT_CLAUDE_OTEL_PATH = "/agent-ingest/v1/claude-otel"
 
 
 class OTelDefaults(BaseModel):
@@ -137,6 +139,22 @@ async def ingest_codex_otel(request: Request) -> Response:
 
     # OTLP clients only need a successful HTTP status. Codex's own exporter tests
     # accept an empty 202 response, avoiding dependence on non-standard OWG JSON.
+    return Response(status_code=202)
+
+
+@router.post(AGENT_CLAUDE_OTEL_PATH, status_code=202)
+async def ingest_claude_otel(request: Request) -> Response:
+    """Accept Claude Code OTLP/HTTP JSON logs on a write-only local endpoint."""
+    _require_agent_write_bearer(request)
+    payload = await _read_bounded_json(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
+    defaults_raw = payload.pop("openworkgraph", {})
+    try:
+        defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
+        ingest_claude_otel_payload(payload, defaults=defaults)
+    except (AgentEvidenceError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(status_code=202)
 
 
