@@ -5,7 +5,7 @@ description = "Local-first work evidence, self-hosted organizational context gat
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 classifiers = [
-  "License :: OSI Approved :: Apache License 2.0",
+  "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
   "fastapi>=0.116,<1",
