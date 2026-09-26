@@ -104,7 +104,7 @@ Hooks remain asynchronous and fail-open. Invalid JSON, an unavailable OpenWorkGr
 
 ## Codex
 
-OpenWorkGraph's default Codex integration uses the native OTLP trace exporter and does not enable content-rich diagnostic log export.
+OpenWorkGraph's Codex integration uses **both Codex's structural OTLP log exporter and trace exporter**. The log layer is required for Codex business events such as API requests, completed tools, approval decisions and multi-agent communication; the trace layer supplies native span hierarchy. Content-bearing opt-ins stay disabled, and the server independently strict-allowlists every accepted field.
 
 The adapter maps structural evidence for:
 
@@ -124,7 +124,7 @@ Some Codex builds have emitted tracing call-site names in `event.name` rather th
 
 **Connect → Codex** appends a clearly marked managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a backup. If the file already has its own `[otel]` settings or invalid TOML, OWG changes nothing and requests manual merge. Disconnect removes only the managed block.
 
-The generated configuration disables prompt/agent-response/guardian logging and points only the trace exporter at:
+The generated configuration explicitly keeps prompt, agent-response and guardian-rationale logging disabled while pointing both the structural log exporter and trace exporter at the same local write-only endpoint:
 
 ```text
 POST /agent-ingest/v1/codex-otel
