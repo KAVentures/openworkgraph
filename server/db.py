@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from browser_privacy import harden_browser_event
+from browser_title_privacy import minimize_browser_title_at_rest
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 from sensitive_identifiers import sanitize_event_identifiers
@@ -350,6 +351,7 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
     with connect() as conn:
         for raw in events:
             e = sanitize_event_identifiers(dict(raw))
+            e = minimize_browser_title_at_rest(e)
             inserted += _insert_event(conn, "events", e)
             _insert_event(conn, "normalized_events", normalize_event(e))
             _insert_context(conn, contextualize_event(e))
