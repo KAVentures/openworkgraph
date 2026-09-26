@@ -11,6 +11,7 @@ from typing import Any
 
 import xlsxwriter
 
+from .agent_export import AGENT_RUN_EXPORT_FIELDS, agent_run_export_rows
 from .analytics import candidate_tasks, semantic_activity, summary
 from .db import normalized_rows, rows
 
@@ -70,6 +71,15 @@ def _query_table(table: str, *, since: str | None) -> list[dict[str, Any]]:
     return loader(f"SELECT * FROM {table} ORDER BY observed_at ASC")
 
 
+def _query_agent_events(*, since: str | None) -> list[dict[str, Any]]:
+    if since:
+        return rows(
+            "SELECT * FROM events WHERE source = ? AND observed_at >= ? ORDER BY observed_at ASC",
+            ("agent", since),
+        )
+    return rows("SELECT * FROM events WHERE source = ? ORDER BY observed_at ASC", ("agent",))
+
+
 def _count_table(table: str, *, since: str | None) -> int:
     loader = _loader_for(table)
     if since:
@@ -96,6 +106,7 @@ def _capture_manifest(
     raw_summary: dict[str, Any],
     operational_rows: int,
     raw_rows: int,
+    agent_run_rows: int,
 ) -> dict[str, Any]:
     browser_events = int(raw_summary.get("browser_semantic_events", 0) or 0)
     event_count = raw_rows
@@ -120,12 +131,16 @@ def _capture_manifest(
             "screenshots_in_normal_capture": False,
             "operational_evidence_rows_exported": operational_rows,
             "raw_evidence_rows_exported": raw_rows if include_raw else 0,
+            "agent_execution_runs_exported": max(0, int(agent_run_rows)),
+            "agent_execution_native_ids_exported": False,
+            "agent_execution_content_payloads_exported": False,
             "evidence_tables_truncated": False,
         },
         "interpretation": {
             "raw_local_evidence_role": "primary captured evidence when included",
             "operational_layers_role": "privacy-normalized derived/index views",
             "inferred_tasks_role": "heuristic convenience index; not ground truth",
+            "agent_runs_role": "derived privacy-safe structural execution index over canonical agent evidence; not a complete-runtime attestation",
             "derived_analytics_note": "Some summaries/heuristic indexes intentionally use bounded analytical windows; evidence tables themselves are complete.",
             "missing_browser_extension_events_mean": "No browser-extension semantic events were observed in the bounded summary; desktop-derived browser evidence may still exist.",
         },
@@ -138,6 +153,8 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
     raw_summary = summary(100000, since=since, operational=False)
     task_data = candidate_tasks(limit=100000, since=since)
     operational_events = _query_table("normalized_events", since=since)
+    agent_events = _query_agent_events(since=since)
+    agent_runs = agent_run_export_rows(agent_events)
     raw_events = _query_table("events", since=since) if include_raw else []
     operational_count = len(operational_events)
     raw_count = len(raw_events) if include_raw else _count_table("events", since=since)
@@ -147,6 +164,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         raw_summary=raw_summary,
         operational_rows=operational_count,
         raw_rows=raw_count,
+        agent_run_rows=len(agent_runs),
     )
 
     return {
@@ -163,7 +181,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
                 if include_raw
                 else "This export contains the privacy-normalized operational layer; raw local evidence is excluded."
             ),
-            "interpretation_note": "Observed evidence is authoritative for what was captured. Inferred tasks/summaries are non-authoritative heuristics that AI should verify against evidence.",
+            "interpretation_note": "Observed evidence is authoritative for what was captured. Inferred tasks/summaries and agent-run indexes are derived views that AI should verify against evidence and interpret according to observation coverage.",
         },
         "capture_manifest": manifest,
         "ai_guide_markdown": AI_DATA_DICTIONARY_MD,
@@ -189,6 +207,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         "inferred_tasks": task_data.get("tasks", []),
         "repeated_task_families": task_data.get("patterns", []),
         "task_inference": task_data.get("inference", {}),
+        "agent_runs": agent_runs,
         "operational_events": operational_events,
         "operational_semantic_activity": semantic_activity(limit=100000, since=since, operational=True),
         **({"raw_local_evidence": raw_events} if include_raw else {}),
@@ -298,6 +317,7 @@ def _csv_schema(filename: str) -> list[str]:
         "transitions.csv": ["from", "to", "count"],
         "inferred_tasks.csv": list(_task_row({}).keys()),
         "repeated_task_families.csv": list(_family_row({}).keys()),
+        "agent_runs.csv": list(AGENT_RUN_EXPORT_FIELDS),
         "operational_events.csv": event_fields,
         "raw_local_evidence.csv": event_fields,
         "semantic_activity.csv": [
@@ -314,6 +334,7 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
         "transitions.csv": list(payload.get("transitions") or []),
         "inferred_tasks.csv": [_task_row(x) for x in (payload.get("inferred_tasks") or [])],
         "repeated_task_families.csv": [_family_row(x) for x in (payload.get("repeated_task_families") or [])],
+        "agent_runs.csv": list(payload.get("agent_runs") or []),
         "operational_events.csv": [_flatten_event(x) for x in (payload.get("operational_events") or [])],
         "semantic_activity.csv": list(payload.get("operational_semantic_activity") or []),
     }
@@ -327,7 +348,7 @@ def csv_zip_bytes(payload: dict[str, Any]) -> bytes:
             "OpenWorkGraph AI context package\n\n"
             + str(payload["export"].get("privacy_note") or "")
             + "\n\nStart with START_HERE.md, AI_GUIDE.md, and CAPTURE_MANIFEST.json.\n"
-            + "Observed evidence is the primary record; inferred tasks and repeated families are heuristic convenience indexes.\n"
+            + "Observed evidence is the primary record; inferred tasks, repeated families, and agent-run summaries are derived convenience indexes.\n"
             + "Spreadsheet-leading formula characters are escaped in CSV/XLSX only; JSON evidence remains literal.\n"
             + "Each CSV represents one table from the captured session.\n",
         )
@@ -431,6 +452,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         ("Key presses", op.get("keypress_count", 0)),
         ("Clicks", op.get("click_count", 0)),
         ("Browser semantic events", op.get("browser_semantic_events", 0)),
+        ("Agent runs", len(payload.get("agent_runs") or [])),
         ("Inferred tasks", len(payload.get("inferred_tasks") or [])),
         ("Repeated task families", len(payload.get("repeated_task_families") or [])),
     ]
@@ -438,15 +460,17 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
         overview.write(i - 1, 0, key, text_fmt)
         overview.write(i - 1, 1, value, num_fmt if isinstance(value, float) else int_fmt)
 
-    overview.write("A24", "How AI should read this", section_fmt)
-    overview.write("A25", "Observed evidence", text_fmt)
-    overview.write("B25", "Primary record of what OpenWorkGraph captured.", wrap_fmt)
-    overview.write("A26", "Derived tasks/summaries", text_fmt)
-    overview.write("B26", "Heuristic convenience indexes; verify against evidence and reconstruct workflow when needed.", wrap_fmt)
-    overview.write("A27", "Browser semantic events = 0", text_fmt)
-    overview.write("B27", "Means no browser-extension semantic events were observed; desktop-derived browser evidence may still be present.", wrap_fmt)
-    overview.write("A28", "Full instructions", text_fmt)
-    overview.write("B28", "Read the 'AI guide', 'Starter prompt', and 'Capture manifest' sheets.", wrap_fmt)
+    overview.write("A25", "How AI should read this", section_fmt)
+    overview.write("A26", "Observed evidence", text_fmt)
+    overview.write("B26", "Primary record of what OpenWorkGraph captured.", wrap_fmt)
+    overview.write("A27", "Derived tasks/summaries", text_fmt)
+    overview.write("B27", "Heuristic convenience indexes; verify against evidence and reconstruct workflow when needed.", wrap_fmt)
+    overview.write("A28", "Agent runs", text_fmt)
+    overview.write("B28", "Privacy-safe structural run index derived from canonical agent evidence. Missing signals mean not observed, not that an action did not occur.", wrap_fmt)
+    overview.write("A29", "Browser semantic events = 0", text_fmt)
+    overview.write("B29", "Means no browser-extension semantic events were observed; desktop-derived browser evidence may still be present.", wrap_fmt)
+    overview.write("A30", "Full instructions", text_fmt)
+    overview.write("B30", "Read the 'AI guide', 'Starter prompt', and 'Capture manifest' sheets.", wrap_fmt)
 
     def write_table(sheet_name: str, records: list[dict[str, Any]], *, widths: dict[str, int] | None = None) -> None:
         chunks = [records[i:i + EXCEL_DATA_ROWS_PER_SHEET] for i in range(0, len(records), EXCEL_DATA_ROWS_PER_SHEET)] or [[]]
@@ -503,6 +527,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
 
     effort = list(payload.get("effort_by_surface") or [])
     write_table("Effort by surface", effort, widths={"surface": 24, "container_app": 22})
+    write_table("Agent runs", list(payload.get("agent_runs") or []), widths={"execution_id": 28, "agent_name": 24, "provider": 18, "framework": 22, "outcome_status": 18, "observed_family_key": 36, "tool_category_counts": 36, "observed_signal_names": 50, "unobserved_signal_names": 50})
     write_table("Inferred tasks", [_task_row(x) for x in payload.get("inferred_tasks") or []], widths={"interpretation_status": 28, "task_label": 28, "task_family": 28, "surfaces": 38, "semantic_actions": 45})
     write_table("Repeated families", [_family_row(x) for x in payload.get("repeated_task_families") or []], widths={"interpretation_status": 28, "task_label": 28, "task_family": 30, "surfaces": 38})
     write_table("Transitions", list(payload.get("transitions") or []), widths={"from": 30, "to": 30})
@@ -513,7 +538,7 @@ def xlsx_bytes(payload: dict[str, Any]) -> bytes:
 
     if effort:
         top = effort[:10]
-        start_row = 31
+        start_row = 33
         overview.write(start_row, 0, "Top work surfaces by engaged time", section_fmt)
         overview.write(start_row + 1, 0, "Surface", header_fmt)
         overview.write(start_row + 1, 1, "Engaged seconds", header_fmt)
