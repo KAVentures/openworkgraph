@@ -223,13 +223,17 @@ No separate MCP network port is kept open for normal local use.
 
 AI access starts OFF on every OpenWorkGraph launch. The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
-The canonical tool is:
+New dashboard-generated connections and the Claude MCP bundle use a compact eight-tool surface so agents have fewer overlapping choices: current context, search, canonical trace, work profile, repeated workflows, task context, descriptive feedback from similar runs, and agent-run inspection. Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool surface; OpenWorkGraph does not silently remove those tools underneath existing clients.
+
+The canonical evidence tool remains:
 
 ```text
 get_workflow_trace(...)
 ```
 
 It exposes rich-but-paginated observed evidence. Other summary/task tools are optional indexes and should point back to source evidence when a conclusion matters.
+
+Normative governance capabilities remain implemented and tested but are experimental rather than part of the default compact MCP menu. Set `OWG_EXPERIMENTAL_GOVERNANCE=1` to expose the experimental compact governance tools. The flag does not unmount existing REST routes or turn observed repetition into policy or permission. See **[Experimental governance](docs/EXPERIMENTAL_GOVERNANCE.md)**.
 
 ## 3. Gateway REST / MCP
 
@@ -361,6 +365,7 @@ The CI matrix tests Linux, macOS and Windows, browser JavaScript, and builds the
 
 - [Self-hosting](docs/SELF_HOSTING.md)
 - [How MCP works](docs/MCP_ARCHITECTURE.md)
+- [Experimental governance](docs/EXPERIMENTAL_GOVERNANCE.md)
 - [Integration patterns](docs/INTEGRATIONS.md)
 - [Privacy and data handling](docs/PRIVACY_AND_DATA.md)
 - [Exports and AI](docs/EXPORTS_AND_AI.md)

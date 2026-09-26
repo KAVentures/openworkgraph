@@ -8,6 +8,7 @@ DEFAULT_LOCAL_POLICY: dict[str, Any] = {
     "share_excluded": False,
     "share_window_titles": True,
     "share_metadata": True,
+    "allow_agent_events": False,
     "allowed_event_types": [],
     "strip_metadata_keys": [],
 }
@@ -49,15 +50,15 @@ def _effective_agent_sharing(
 ) -> bool:
     """Return the restrictive effective agent-sharing choice.
 
-    The normal connector configuration always supplies the endpoint-local key and
-    defaults it to False. Missing keys here are treated as permissive only for
-    compatibility with legacy/internal callers that construct policy dictionaries
-    directly rather than loading endpoint configuration. An explicit local False
-    always wins, and an organization may further narrow an endpoint opt-in.
+    Agent evidence requires an explicit endpoint-local opt-in. A missing local key
+    therefore fails closed. The organization side is a narrowing layer: a missing
+    organization key means that the organization imposes no additional restriction,
+    while an explicit organization False still disables sharing. This preserves the
+    rule that a remote organization can never broaden the endpoint's local choice.
     """
     local_source = local_policy if isinstance(local_policy, dict) else {}
     remote_source = organization_policy if isinstance(organization_policy, dict) else {}
-    local_allows = bool(local_source.get("allow_agent_events", True))
+    local_allows = bool(local_source.get("allow_agent_events", False))
     remote_allows = bool(remote_source.get("allow_agent_events", True))
     return local_allows and remote_allows
 

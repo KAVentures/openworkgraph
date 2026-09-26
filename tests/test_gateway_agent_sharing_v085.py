@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from connector.config import load_gateway_settings
-from connector.policy import merge_policies, prepare_event_for_gateway
+from connector.policy import DEFAULT_LOCAL_POLICY, merge_policies, prepare_event_for_gateway
 
 
 def _config(tmp_path: Path, local_policy: dict | None = None) -> Path:
@@ -42,6 +42,17 @@ def test_gateway_config_defaults_agent_evidence_to_local_only(tmp_path):
     assert effective["allow_agent_events"] is False
     assert prepare_event_for_gateway(_event(source="agent"), effective) is None
     assert prepare_event_for_gateway(_event(source="desktop"), effective) is not None
+
+
+def test_policy_layer_itself_fails_closed_when_local_agent_setting_is_missing():
+    assert DEFAULT_LOCAL_POLICY["allow_agent_events"] is False
+    assert merge_policies({}, {})["allow_agent_events"] is False
+    assert merge_policies({}, {"allow_agent_events": True})["allow_agent_events"] is False
+
+
+def test_missing_organization_agent_setting_is_neutral_after_local_opt_in():
+    assert merge_policies({"allow_agent_events": True}, {})["allow_agent_events"] is True
+    assert merge_policies({"allow_agent_events": True}, None)["allow_agent_events"] is True
 
 
 def test_endpoint_must_explicitly_opt_in_to_agent_gateway_sharing(tmp_path):

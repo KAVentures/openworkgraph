@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "openworkgraph-local",
   "display_name": "OpenWorkGraph",
-  "version": "0.86.0",
-  "description": "Connect Claude Desktop to the local OpenWorkGraph workflow context layer.",
-  "long_description": "Uses the OpenWorkGraph installation already running on this computer. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
+  "version": "0.87.0",
+  "description": "Connect Claude Desktop to the compact local OpenWorkGraph context surface.",
+  "long_description": "Uses the OpenWorkGraph installation already running on this computer. New connections expose a compact read-oriented tool surface while the legacy 24-tool stdio entrypoint remains available for existing configurations. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
   "author": {
     "name": "Koyar Afrasyab / Kinvectum"
   },
@@ -22,18 +22,14 @@
     }
   },
   "tools": [
-    {"name": "get_workflow_trace", "description": "Read compact paginated chronological workflow evidence."},
-    {"name": "get_current_work_context", "description": "Read current rich workflow context and small task hints."},
-    {"name": "search_work_history", "description": "Search prior rich workflow evidence."},
-    {"name": "find_similar_work", "description": "Find prior work similar to a description."},
-    {"name": "get_context_session", "description": "Read one captured session."},
-    {"name": "find_process_examples", "description": "Find inferred executions of a task family."},
-    {"name": "company_workflow_summary", "description": "Read a compact workflow and effort summary."},
-    {"name": "search_work_observations", "description": "Search observed workflow events."},
-    {"name": "recent_semantic_activity", "description": "Read recent semantic browser/desktop actions."},
-    {"name": "candidate_task_executions", "description": "Read compact inferred task executions."},
-    {"name": "get_work_session", "description": "Read one work session as a compact trace."},
-    {"name": "automation_candidates", "description": "Read repeated-work candidates for human-reviewed automation."}
+    {"name": "get_current_work_context", "description": "Read bounded current evidence, task hints and semantic activity."},
+    {"name": "search_work", "description": "Search prior work through evidence or semantic layers."},
+    {"name": "get_workflow_trace", "description": "Read canonical paginated workflow evidence, optionally for one session."},
+    {"name": "get_work_profile", "description": "Read derived workflow signals without productivity scoring."},
+    {"name": "find_repeated_workflows", "description": "Find repeated-work candidates and representative executions."},
+    {"name": "get_task_context", "description": "Read a bounded task-context bundle with provenance and authority separation."},
+    {"name": "how_did_similar_runs_go", "description": "Read descriptive outcomes, failure points, approval hotspots and observed next steps from similar runs."},
+    {"name": "get_agent_runs", "description": "List privacy-safe agent runs or inspect one structural trace by execution ID."}
   ],
   "compatibility": {
     "platforms": ["darwin", "win32"],

@@ -8,10 +8,10 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Human access, OIDC and privacy-scoped reads](HUMAN_ACCESS.md) — optional SSO for people, self/team/org authorization, thresholded aggregate-only access, and explicitly scoped pseudonymous reads while preserving machine-token compatibility.
 - [Gateway operational hardening](GATEWAY_HARDENING.md) — opt-in PostgreSQL pooling, credential-scoped rate limiting, non-secret token/device inventory, administrative device revocation, and runtime visibility.
 - [Gateway data lifecycle](DATA_LIFECYCLE.md) — opt-in organization retention, dry-run-first physical cleanup, retroactive actor/device/session/time-scoped evidence purge, audit behavior, and backup caveats.
-- [How MCP works](MCP_ARCHITECTURE.md) — plain-language explanation of local stdio MCP, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
+- [How MCP works](MCP_ARCHITECTURE.md) — local compact stdio MCP for new connections, the legacy 24-tool compatibility entrypoint, on-demand local HTTP MCP, organization Gateway MCP, authentication, and why MCP does not imply cloud storage.
 - [Integrations](INTEGRATIONS.md) — vendor-neutral REST/MCP patterns for automation systems, company brains and other AI platforms.
-- [Agent evidence contract](AGENT_EVIDENCE.md) — vendor-neutral structural telemetry for agent runs, tool calls, trace/span relationships, human approvals, observation depth, cross-actor workflow correlation, and privacy-safe adapter design.
-- [Native agent adapters](NATIVE_AGENT_ADAPTERS.md) — opt-in Claude Code lifecycle hooks and Codex OTLP trace ingestion, least-privilege credentials, fail-open behavior and privacy boundaries.
+- [Agent evidence contract](AGENT_EVIDENCE.md) — vendor-neutral structural telemetry for agent runs, tool calls, trace/span relationships, human approvals, observation depth, cross-actor workflow correlation, and privacy-safe adapter design. Exact standard OTLP exporter environment variables are documented in [Native agent adapters](NATIVE_AGENT_ADAPTERS.md#generic-opentelemetry-trace-export).
+- [Native agent adapters](NATIVE_AGENT_ADAPTERS.md) — opt-in Claude Code lifecycle hooks, Codex OTLP trace ingestion and exact generic OTLP/HTTP JSON exporter configuration, with least-privilege credentials, fail-open behavior and privacy boundaries.
 - [OpenAI Agents SDK adapter](OPENAI_AGENTS_ADAPTER.md) — additive tracing processor, bounded fail-open delivery, hashed native IDs and strict structural privacy projection for Python agent applications.
 - [Procedural memory](PROCEDURAL_MEMORY.md) — read-only evidence-backed workflow families, similar runs, explicit failure patterns, observed next steps and approval hotspots across humans and agents.
 - [Procedural context packs](PROCEDURAL_CONTEXT_PACK.md) — hard-capped observational workflow-memory bundles for agents, with explicit policy/authority separation and no automatic injection or execution.
@@ -19,14 +19,6 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Task-context preflight client](TASK_PREFLIGHT.md) — reusable non-prescriptive Python client for pre-action context retrieval, explicit fail-open availability semantics, stable context fingerprints and no automatic prompt injection or enforcement.
 - [Context to execution linkage](CONTEXT_EXECUTION_LINKAGE.md) — privacy-safe linkage from a preflight context/policy fingerprint to the structural agent run and observed outcome, with no prompt/reasoning capture and no causal claim.
 - [Context/outcome associations](CONTEXT_OUTCOME_ASSOCIATIONS.md) — aggregate same-family/same-observation-depth outcome comparisons with minimum-support gates, explicit unknown outcomes and no causal/effect claim.
-- [Declared policy action advisory](POLICY_ACTION_ADVISORY.md) — action-aware read of explicit structural policy before a proposed step, with prerequisite/approval warnings but no allow/deny decision, execution or enforcement.
-- [Opt-in policy approval gate](POLICY_APPROVAL_GATE.md) — least-privilege action guard for instrumented runtimes: warn-only mode, explicit human approval gating, post-approval policy recheck and fail-safe unavailable behavior without global interception or hard deny.
-- [Policy-bound approval receipts](POLICY_BOUND_APPROVAL_RECEIPTS.md) — optional short-lived binding of a granted human approval to the exact declared-policy snapshot, with stale-policy invalidation and a final pre-execution policy read.
-- [Declared policy / SOP plane](DECLARED_POLICY.md) — explicit machine-readable local policy manifests, provenance/versioning, conservative policy-vs-observation comparison, and governed context packs that keep normative policy separate from observed behavior.
-- [Controlled policy authoring](POLICY_AUTHORING.md) — immutable local proposals, structural diffs, stale-base detection, interactive activation, atomic replacement, SHA-addressed history and privacy-minimized audit records.
-- [Trusted policy source sync](POLICY_SOURCE_SYNC.md) — allow-listed local files and committed Git policy manifests, privacy-minimized provenance, deterministic proposal creation, dirty-worktree isolation and zero automatic activation.
-- [Policy source drift and provenance](POLICY_SOURCE_DRIFT.md) — read-only semantic/source freshness, active-policy origin receipts, Git commit drift, proposal availability, and conservative unknown states when source evidence is unavailable.
-- [Enterprise policy signing and distribution](ENTERPRISE_POLICY_SIGNING.md) — offline Ed25519 signing authority, Gateway transport, endpoint public-key pinning, key rotation, software-local rollback protection, and opt-in managed activation.
 - [Privacy and data handling](PRIVACY_AND_DATA.md) — what is captured, what is deliberately not captured, storage-time sanitization, presentation redaction, retained context, and local trust boundaries.
 - [Exports and AI analysis](EXPORTS_AND_AI.md) — JSON/XLSX/CSV ZIP behavior, the AI data dictionary, semantic columns, privacy tokens, and recommended upload workflow for AI analysis.
 - [Owner/person presentation redaction](OWNER_REDACTION.md) — how `OWNER`, `PERSON`, learned aliases and the reset control work.
@@ -34,6 +26,25 @@ This directory contains implementation, privacy, self-hosting and integration no
 - [Nontechnical testing guide](../NONTECHNICAL_TESTING.md) — practical end-to-end checks for the current release.
 
 The repository root [README](../README.md) is the canonical product overview and installation guide.
+
+## Experimental governance
+
+The default compact MCP surface is evidence/context focused. Normative governance remains implemented and tested, but is intentionally positioned as experimental rather than as the primary product workflow. See [Experimental governance surfaces](EXPERIMENTAL_GOVERNANCE.md) for the `OWG_EXPERIMENTAL_GOVERNANCE` exposure flag and compatibility model.
+
+These existing documents remain at their current paths so old links do not break:
+
+- [Declared policy action advisory](POLICY_ACTION_ADVISORY.md)
+- [Opt-in policy approval gate](POLICY_APPROVAL_GATE.md)
+- [Policy-bound approval receipts](POLICY_BOUND_APPROVAL_RECEIPTS.md)
+- [Declared policy / SOP plane](DECLARED_POLICY.md)
+- [Controlled policy authoring](POLICY_AUTHORING.md)
+- [Trusted policy source sync](POLICY_SOURCE_SYNC.md)
+- [Policy source drift and provenance](POLICY_SOURCE_DRIFT.md)
+- [Enterprise policy signing and distribution](ENTERPRISE_POLICY_SIGNING.md)
+- [Shadow-enforcement preview](SHADOW_ENFORCEMENT_PREVIEW.md)
+- [Shadow-enforcement outcome analytics](SHADOW_ENFORCEMENT_OUTCOME_ANALYTICS.md)
+
+The underlying REST routes remain available by default for compatibility. The experimental flag controls compact MCP exposure; it does not delete or unmount governance code.
 
 ## Historical notes
 

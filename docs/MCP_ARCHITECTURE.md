@@ -23,47 +23,87 @@ local SQLite evidence
 
 The AI application does not open the SQLite database itself. The MCP process exposes named tools and translates a tool call into an authenticated request to the local OpenWorkGraph API.
 
-Example:
+Local AI access starts OFF on every OpenWorkGraph launch and can be disabled again while a client is configured. Every compact MCP tool reuses the same AI-access gate, authenticated local API transport, activity audit and prompt-injection filtering as the legacy MCP surface.
+
+### Compact surface for new connections
+
+New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use a compact tool surface:
 
 ```text
-AI calls: get_workflow_trace(limit=100)
-              |
-              v
-MCP requests local /v1/workflow-trace
-              |
-              v
-privacy-hardened rich evidence is returned
-              |
-              v
-MCP trust-boundary filtering
-              |
-              v
-AI receives the result
+get_current_work_context
+search_work
+get_workflow_trace
+get_work_profile
+find_repeated_workflows
+get_task_context
+how_did_similar_runs_go
+get_agent_runs
 ```
 
-Local AI access starts OFF on every OpenWorkGraph launch and can be disabled again while a client is configured.
+The smaller menu reduces overlapping tool definitions without deleting underlying capabilities:
+
+- `get_current_work_context` includes bounded recent semantic activity and task hints;
+- `search_work` replaces the overlapping history/observation/similar-work search entrypoints;
+- `get_workflow_trace` accepts `session_id`, so separate work/context-session tools are unnecessary;
+- `find_repeated_workflows` combines repeated patterns, automation candidates and representative process examples;
+- `how_did_similar_runs_go` combines similar prior runs, explicit failure patterns, observed approval-request hotspots, frequently observed next steps and a bounded observational context pack;
+- `get_agent_runs` lists agent executions and accepts an optional opaque `execution_id` to retrieve one structural trace.
+
+The consolidated tools preserve the same interpretation boundaries. Repeated behavior is not policy or authorization. Human completion is not silently promoted to validated success. Missing agent signals mean **not observed**, not proof that an action did not happen.
+
+### Legacy 24-tool compatibility surface
+
+Existing saved configurations that explicitly launch:
+
+```text
+python -m mcp_server.secure_stdio
+```
+
+continue to receive the existing 24-tool surface. OpenWorkGraph does not silently remove or rename those tools underneath already configured clients.
+
+The compact stdio entrypoint is:
+
+```text
+python -m mcp_server.compact_stdio
+```
+
+This compatibility split allows OpenWorkGraph to simplify new AI connections without breaking older local MCP configurations.
+
+### Experimental governance exposure
+
+Normative governance is intentionally not emphasized in the default compact tool menu. Set:
+
+```bash
+OWG_EXPERIMENTAL_GOVERNANCE=1
+```
+
+to add the experimental compact MCP tools `get_action_policy_advisory` and `get_governed_context_pack`.
+
+The flag controls product/MCP exposure only. Existing declared-policy, approval and shadow-enforcement REST APIs remain mounted for backward compatibility and research use. Observed approval hotspots stay available descriptively through `how_did_similar_runs_go`; they are not treated as policy.
+
+See [Experimental governance surfaces](EXPERIMENTAL_GOVERNANCE.md).
 
 ### Why stdio is preferred locally
 
 `stdio` does not require a standing MCP network listener. The AI client starts the MCP subprocess and communicates through its standard input/output streams.
 
-For clients that cannot start a local stdio server, OpenWorkGraph can explicitly start an authenticated loopback HTTP MCP endpoint on demand. That endpoint is not the company Gateway and should not be exposed directly to the public internet.
+For clients that cannot start a local stdio server, OpenWorkGraph can explicitly start an authenticated loopback HTTP MCP endpoint on demand. New HTTP bridges expose the same compact MCP tool surface. The endpoint is not the company Gateway and should not be exposed directly to the public internet.
 
 ## The canonical local evidence tool
 
-The central MCP tool is:
+The central evidence tool remains:
 
 ```text
 get_workflow_trace
 ```
 
-It is deliberately raw-evidence-first. In v0.53, a trace row preserves the privacy-hardened event metadata rather than reducing the event to OpenWorkGraph's current deterministic task inference.
+It is deliberately raw-evidence-first. A trace row preserves privacy-hardened event metadata rather than reducing the event to OpenWorkGraph's current deterministic task inference.
 
 This matters because an AI may recognize a workflow that today's heuristic layer does not.
 
 A row can contain, where observed:
 
-- stable `event_id`;
+- stable `event_id` provenance;
 - timestamp, app/window, event type and source;
 - browser host/path;
 - target/control role and label;
@@ -76,13 +116,15 @@ A row can contain, where observed:
 
 The result is still paginated so an AI does not receive the entire work history in every call. Cursor pagination freezes a snapshot boundary so newly arriving events do not create skips or duplicates while the AI pages through older evidence.
 
-Derived task/process tools may still exist as convenience indexes, but their output is not authoritative. When a conclusion matters, the AI should inspect supporting `get_workflow_trace` evidence.
+Derived task/process tools are convenience indexes, not authoritative truth. When a conclusion matters, the AI should inspect supporting `get_workflow_trace` evidence.
 
 ## MCP trust boundary
 
 Window titles, page titles, messages and UI labels are observed data. They are not instructions to the model.
 
 Before observed evidence crosses the MCP boundary, OpenWorkGraph applies prompt-injection hardening to the returned copy. This does not rewrite the stored canonical local evidence. It prevents instruction-like text observed on screen from silently becoming trusted MCP instructions.
+
+`get_task_context` additionally records representation provenance for the source API snapshot and the protected MCP representation. Those fingerprints establish which representation was emitted; they do not attest that a model read, used or obeyed it.
 
 ## Organization Gateway MCP
 
@@ -139,7 +181,7 @@ An automation backend does not need to support MCP to integrate with OpenWorkGra
 
 The self-hosted Gateway must know who may write or read evidence, so it needs authentication/authorization. That does not require an account at openworkgraph.com.
 
-v0.53 distinguishes:
+OpenWorkGraph distinguishes:
 
 - endpoint **device credentials** — may write their own authenticated device evidence and read organization sharing policy;
 - **integration credentials** — may read only the scopes assigned to them;
@@ -156,7 +198,8 @@ MCP does not automatically:
 - give an AI unrestricted access to every employee;
 - make inferred task labels ground truth;
 - expose clipboard contents or typed text;
-- bypass endpoint/company sharing policy.
+- bypass endpoint/company sharing policy;
+- turn observed repetition into permission or policy.
 
 It is simply a standardized way for an authorized AI client to ask the evidence service for specific context.
 
@@ -165,7 +208,7 @@ It is simply a standardized way for an authorized AI client to ask the evidence 
 The Gateway MCP adapter (`gateway/mcp.py`) is a separate stdio MCP server that calls a running Gateway's REST API with a service token. It is not started by the Gateway Docker image.
 
 ```bash
-export OWG_GATEWAY_URL="https://gateway.example.internal"   # default: http://127.0.0.1:8790
+export OWG_GATEWAY_URL="https://gateway.example.internal"
 export OWG_GATEWAY_SERVICE_TOKEN="<integration token with evidence:read>"
 python -m gateway.mcp
 ```

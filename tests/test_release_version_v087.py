@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.86.0"
+EXPECTED_VERSION = "0.87.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -29,6 +29,8 @@ def test_release_notes_are_current_and_version_driven():
     assert "dedicated privacy-safe agent-run table" in workflow
     assert "gateway.local_policy.allow_agent_events=true" in workflow
     assert "`gateway.local_policy.allow_agent_events" not in workflow
+    assert "compact MCP" in workflow
+    assert "legacy 24-tool" in workflow
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():

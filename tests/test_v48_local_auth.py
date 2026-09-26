@@ -149,7 +149,7 @@ def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_a
         assert config.status_code == 200
         cfg = config.json()
         assert cfg["transport"] == "stdio"
-        assert cfg["args"] == ["-m", "mcp_server.secure_stdio"]
+        assert cfg["args"] == ["-m", "mcp_server.compact_stdio"]
         assert "token" not in cfg
         assert secured_api["mcp_token"] not in json.dumps(cfg)
 
@@ -176,7 +176,7 @@ def test_browser_requires_server_proof_and_signed_request(secured_api):
 
 def test_mcp_http_endpoint_rejects_unauthenticated_clients(secured_api):
     mcp_port = _free_port(); env = dict(secured_api["env"]); env["WORKFLOW_OBSERVER_API"] = secured_api["base"]
-    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "mcp_server.http_app:app", "--host", "127.0.0.1", "--port", str(mcp_port)], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "mcp_server.compact_http_app:app", "--host", "127.0.0.1", "--port", str(mcp_port)], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     endpoint = f"http://127.0.0.1:{mcp_port}/mcp"
     try:
         deadline = time.time() + 12
@@ -202,7 +202,8 @@ def test_browser_pairing_bundle_is_runtime_only_and_launcher_preserves_core_path
     assert "server.secure_app:app" in start
     assert "collector.secure_main" in start
     assert "mcp_server.http_app:app" not in start
-    assert "mcp_server.http_app:app" in optional
+    assert "mcp_server.compact_http_app:app" not in start
+    assert "mcp_server.compact_http_app:app" in optional
     assert "write_browser_pairing_bundle" in start
     assert "browser_extension/pairing.json" in gitignore
 
