@@ -54,7 +54,11 @@ Content-heavy events such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`,
 
 `PermissionRequest` is represented as `human_approval_requested` because the hook fires as Claude Code is about to ask the user for permission and the OpenWorkGraph hook itself never supplies a decision. `PermissionDenied` is different: current Claude Code emits it for an automatic permission denial in auto mode, so OpenWorkGraph records it as a denied execution/error rather than falsely claiming that a human denied the action.
 
-### Generate the settings fragment
+### One-click setup
+
+On the dashboard's **Connect** tab, click **Connect** on the Claude Code card. OpenWorkGraph adds its hooks to `~/.claude/settings.json`: it writes a timestamped `settings.json.owg-backup-*` copy first, keeps every other setting and hook, replaces (never duplicates) earlier OpenWorkGraph hooks, and refuses to touch a file that is not valid JSON. **Disconnect** removes only OpenWorkGraph's handlers. Changes apply to new Claude Code sessions. The card still turns green only when telemetry actually arrives.
+
+### Generate the settings fragment manually
 
 From the same OpenWorkGraph installation/interpreter that you normally use:
 
@@ -70,7 +74,7 @@ Merge the printed `hooks` object into either:
 
 for your local user, or the relevant project `.claude/settings.json` if you intentionally want project-scoped configuration.
 
-OpenWorkGraph does **not** edit Claude Code settings automatically.
+OpenWorkGraph edits Claude Code settings only when you click **Connect** or **Disconnect** on the dashboard; it never does so in the background.
 
 The generated hook is a single shell command that first `cd`s into the OpenWorkGraph installation directory (the `adapters` package is not installed into the venv, and Claude Code runs hooks from the session's project directory) and then runs the interpreter with `-m adapters.claude_code_hook`. Both paths are shell-quoted, so directories containing spaces such as `Application Support` work. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
 
@@ -100,7 +104,11 @@ codex.api_request         -> model_call
 
 The parser also understands `codex.tool_decision` if a compatible relay explicitly sends such a record, but the default configuration below does not enable Codex log export merely to obtain approval events. A tool decision is represented as `human_approval_received` only when Codex explicitly marks its decision source as `user`; decisions resolved by an automated reviewer, or records with no decision provenance, are ignored rather than attributed to a person.
 
-### Generate a safe trace-exporter snippet
+### One-click setup
+
+On the dashboard's **Connect** tab, click **Connect** on the Codex card. OpenWorkGraph appends a clearly marked, managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a timestamped backup, validates the result as TOML, and restarts nothing: Codex picks it up on its next start. If the file already has its own `[otel]` settings, or is not valid TOML, OpenWorkGraph changes nothing and asks you to merge manually. **Disconnect** removes only the managed block.
+
+### Generate a safe trace-exporter snippet manually
 
 Preview a snippet with a placeholder credential:
 
