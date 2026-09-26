@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "openworkgraph-local",
   "display_name": "OpenWorkGraph",
-  "version": "0.87.1",
+  "version": "0.87.2",
   "description": "Connect Claude Desktop to the compact local OpenWorkGraph context surface.",
   "long_description": "Uses the OpenWorkGraph installation already running on this computer. New connections expose a compact read-oriented tool surface while the legacy 24-tool stdio entrypoint remains available for existing configurations. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
   "author": {
@@ -22,13 +22,13 @@
     }
   },
   "tools": [
-    {"name": "get_current_work_context", "description": "Read bounded current evidence, task hints and semantic activity."},
+    {"name": "get_current_work_context", "description": "Read a compact current-work overview with pointers to canonical evidence."},
     {"name": "search_work", "description": "Search prior work through evidence or semantic layers."},
     {"name": "get_workflow_trace", "description": "Read canonical paginated workflow evidence, optionally for one session."},
     {"name": "get_work_profile", "description": "Read derived workflow signals without productivity scoring."},
     {"name": "find_repeated_workflows", "description": "Find repeated-work candidates and exact procedural-memory family keys for follow-up."},
     {"name": "get_task_context", "description": "Read a bounded task-context bundle with provenance and authority separation."},
-    {"name": "how_did_similar_runs_go", "description": "Read descriptive outcomes, failure points, approval hotspots and observed next steps from a selected prior-run family."},
+    {"name": "how_did_similar_runs_go", "description": "Read descriptive prior-run feedback with privacy-safe human step labels, failure points, approval hotspots and observed next steps."},
     {"name": "get_agent_runs", "description": "List privacy-safe agent runs or inspect one structural trace by execution ID."}
   ],
   "compatibility": {

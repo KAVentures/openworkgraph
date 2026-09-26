@@ -73,6 +73,25 @@ def _install_feedback_fakes(monkeypatch):
             return summary
         if path == "/v1/procedural-memory":
             return overview
+        if path == "/v1/procedural-memory/readable-feedback":
+            return {
+                "status": "ok",
+                "family_key": params.get("family_key"),
+                "step_vocabulary": "privacy_safe_semantic",
+                "identity_vocabulary": "legacy_structural_steps_unchanged",
+                "valid_semantic_steps": ["Gmail · Open email", "Gmail · Send"],
+                "runs": [
+                    {
+                        "execution_id": f"execution:{i}",
+                        "semantic_steps": ["Gmail · Open email", "Gmail · Send"],
+                    }
+                    for i in range(3)
+                ],
+                "returned": 3,
+                "median_completed_duration_seconds": 30.0,
+                "next_steps": {"candidates": [{"step": "Gmail · Open email", "support": 3}]},
+                "family_keys_changed": False,
+            }
         if path == "/v1/procedural-memory/similar-runs":
             key = params.get("family_key")
             return {
@@ -113,6 +132,7 @@ def test_repeated_workflow_key_feeds_feedback_loop(monkeypatch):
     assert feedback["family_key"] == "human:email.compose_send"
     assert feedback["resolution_method"] == "exact_family_key"
     assert feedback["similar_prior_runs"]["returned"] == 3
+    assert feedback["similar_prior_runs"]["step_vocabulary"] == "privacy_safe_semantic"
 
 
 def test_feedback_accepts_bare_canonical_human_family_without_guessing_agent(monkeypatch):
@@ -175,12 +195,12 @@ def test_compact_context_defaults_are_smaller_but_explicit_limits_still_work(mon
     compact.get_current_work_context()
     trace_call = next(params for path, params in calls if path == "/v1/workflow-trace")
     semantic_call = next(params for path, params in calls if path == "/v1/semantic-activity")
-    assert trace_call["limit"] == 25
-    assert semantic_call["limit"] == 20
+    assert trace_call["limit"] == 6
+    assert semantic_call["limit"] == 6
 
     calls.clear()
     compact.get_workflow_trace()
-    assert calls[-1][1]["limit"] == 25
+    assert calls[-1][1]["limit"] == 4
 
     calls.clear()
     compact.get_workflow_trace(limit=100)
@@ -194,6 +214,8 @@ def test_feedback_and_task_context_tool_descriptions_explain_inputs():
     context_doc = inspect.getdoc(compact.get_task_context) or ""
     assert "find_repeated_workflows" in feedback_doc
     assert "family_key" in feedback_doc
+    assert "Gmail · Open email" in feedback_doc
+    assert "Legacy structural tokens" in feedback_doc
     assert "family_key" in context_doc
     assert "task_family" in context_doc
     assert "structural step" in context_doc
