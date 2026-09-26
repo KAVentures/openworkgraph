@@ -10,16 +10,15 @@ them; see server.agent_config_writer for the safety rules. The dashboard still
 treats an integration as active only when structural telemetry is observed.
 """
 
-import json
 import shlex
 import sys
-from pathlib import Path
 from typing import Any
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from adapters.claude_code_hook import settings_fragment
+from adapters.claude_code_hook import settings_fragment as claude_hook_settings
+from adapters.claude_code_otel import env_settings as claude_otel_env
 from adapters.codex_config import config_snippet
 from server import agent_config_writer as writer
 from server.agent_auth import ensure_agent_ingest_token
@@ -28,11 +27,26 @@ from server.secure_app import app
 
 
 DASHBOARD_SCRIPT = ROOT / "dashboard" / "agent_control_plane.js"
+OBSERVABILITY_SCRIPT = ROOT / "dashboard" / "agent_observability_v090.js"
 _SCRIPT_MARKER = '<script src="/agent-control-plane.js"></script>'
+_OBSERVABILITY_MARKER = '<script src="/agent-observability-v090.js"></script>'
 
 
 def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
+
+
+def _claude_env(request: Request) -> dict[str, str]:
+    return claude_otel_env(
+        token=ensure_agent_ingest_token(),
+        base_url=_base_url(request),
+    )
+
+
+def _claude_settings(request: Request) -> dict[str, Any]:
+    settings = dict(claude_hook_settings())
+    settings["env"] = _claude_env(request)
+    return settings
 
 
 def agent_setup_payload(request: Request) -> dict[str, Any]:
@@ -78,10 +92,12 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
         "integrations": {
             "claude_code": {
                 "label": "Claude Code",
-                "method": "native_lifecycle_hooks",
+                "method": "native_hooks_plus_otel_logs",
                 "command": f"cd {shlex.quote(str(ROOT))} && {shlex.quote(sys.executable)} -m adapters.claude_code_hook --print-settings",
                 "one_click": True,
-                "settings": settings_fragment(),
+                "settings": _claude_settings(request),
+                "otel_endpoint": f"{base_url}/agent-ingest/v1/claude-otel",
+                "telemetry_depth": "rich_structural",
                 "events": [
                     "SessionStart",
                     "SessionEnd",
@@ -92,9 +108,18 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
                     "SubagentStart",
                     "SubagentStop",
                     "StopFailure",
+                    "claude_code.user_prompt",
+                    "claude_code.api_request",
+                    "claude_code.api_error",
+                    "claude_code.api_refusal",
+                    "claude_code.tool_result",
+                    "claude_code.tool_decision",
+                    "claude_code.api_retries_exhausted",
+                    "claude_code.subagent_completed",
                 ],
-                "instructions": "Click Connect to add these hooks to ~/.claude/settings.json (other settings are preserved and a backup is written), or merge the hooks object manually into ~/.claude/settings.json or an intentional project-scoped .claude/settings.json.",
+                "instructions": "Click Connect to add OpenWorkGraph's hooks and logs-only OpenTelemetry settings to ~/.claude/settings.json. Other settings are preserved, conflicting existing telemetry is never overwritten, and a backup is written. Manual setup can merge the shown hooks and env objects instead.",
                 "failure_mode": "fail_open_async",
+                "content_logging_enabled": False,
             },
             "codex": {
                 "label": "Codex",
@@ -105,13 +130,15 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
                 "endpoint": f"{base_url}/agent-ingest/v1/codex-otel",
                 "instructions": "Click Connect to add a managed [otel] block to ~/.codex/config.toml (refused if you already have your own [otel] settings), or merge these keys manually into the existing [otel] section. Do not create a second [otel] table.",
                 "logs_enabled_by_owg": False,
+                "telemetry_depth": "native_trace",
             },
             "openai_agents": {
                 "label": "OpenAI Agents SDK",
                 "method": "additional_tracing_processor",
                 "python": "from adapters.openai_agents import install_openai_agents_processor\n\ninstall_openai_agents_processor()",
-                "instructions": "Register OpenWorkGraph as an additional tracing processor in the agent application. Existing SDK tracing remains in place.",
+                "instructions": "Register OpenWorkGraph as an additional tracing processor in the agent application. Existing SDK tracing remains in place. OWG projects model spans, tools, handoffs, hierarchy, usage when the SDK exposes it, timings and errors without serializing span content.",
                 "one_click": False,
+                "telemetry_depth": "native_trace",
             },
             "otel": {
                 "label": "Generic OpenTelemetry",
@@ -119,7 +146,8 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
                 "endpoint": otel_endpoint,
                 "posix": posix_otel,
                 "powershell": powershell_otel,
-                "instructions": "Use the signal-specific traces endpoint exactly as shown. OpenWorkGraph currently accepts OTLP/HTTP JSON here, not protobuf or gRPC.",
+                "instructions": "Use the signal-specific traces endpoint exactly as shown. OpenWorkGraph currently accepts OTLP/HTTP JSON here, not protobuf or gRPC. Portable GenAI model/tool spans are supported; provider-specific handoff or approval signals require a native adapter.",
+                "telemetry_depth": "portable_genai",
             },
             "custom": {
                 "label": "Custom structural agent",
@@ -140,22 +168,22 @@ def get_agent_setup(request: Request) -> JSONResponse:
 
 _ONE_CLICK = {
     "claude_code": {
-        "status": writer.claude_status,
-        "connect": lambda request: writer.claude_connect(settings_fragment),
-        "disconnect": writer.claude_disconnect,
+        "status": lambda request: writer.claude_status(_claude_env(request)),
+        "connect": lambda request: writer.claude_connect(claude_hook_settings, _claude_env(request)),
+        "disconnect": lambda request: writer.claude_disconnect(_claude_env(request)),
     },
     "codex": {
-        "status": writer.codex_status,
+        "status": lambda request: writer.codex_status(),
         "connect": lambda request: writer.codex_connect(
             config_snippet(token=ensure_agent_ingest_token(), base_url=_base_url(request))
         ),
-        "disconnect": writer.codex_disconnect,
+        "disconnect": lambda request: writer.codex_disconnect(),
     },
 }
 
 
-def get_agent_config_status() -> JSONResponse:
-    status = {kind: ops["status"]() for kind, ops in _ONE_CLICK.items()}
+def get_agent_config_status(request: Request) -> JSONResponse:
+    status = {kind: ops["status"](request) for kind, ops in _ONE_CLICK.items()}
     return JSONResponse({"integrations": status}, headers={"Cache-Control": "no-store"})
 
 
@@ -170,7 +198,7 @@ async def change_agent_config(request: Request) -> JSONResponse:
     if ops is None or action not in {"connect", "disconnect"}:
         return JSONResponse({"detail": "unsupported agent or action"}, status_code=400)
     try:
-        result = ops["connect"](request) if action == "connect" else ops["disconnect"]()
+        result = ops[action](request)
     except writer.ConfigConflict as exc:
         return JSONResponse({"detail": str(exc), "manual_setup_required": True}, status_code=409)
     except OSError:
@@ -183,6 +211,10 @@ async def change_agent_config(request: Request) -> JSONResponse:
 
 def agent_control_plane_script() -> Response:
     return Response(DASHBOARD_SCRIPT.read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+def agent_observability_script() -> Response:
+    return Response(OBSERVABILITY_SCRIPT.read_text(encoding="utf-8"), media_type="application/javascript")
 
 
 async def _inject_agent_control_plane(request: Request, call_next):
@@ -202,6 +234,8 @@ async def _inject_agent_control_plane(request: Request, call_next):
         return response
     if _SCRIPT_MARKER not in text:
         text = text.replace("</body>", _SCRIPT_MARKER + "\n</body>")
+    if _OBSERVABILITY_MARKER not in text:
+        text = text.replace("</body>", _OBSERVABILITY_MARKER + "\n</body>")
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return HTMLResponse(text, status_code=response.status_code, headers=headers)
@@ -212,6 +246,7 @@ def _install() -> None:
     app.add_api_route("/v1/agent-config", get_agent_config_status, methods=["GET"])
     app.add_api_route("/v1/agent-config", change_agent_config, methods=["POST"])
     app.add_api_route("/agent-control-plane.js", agent_control_plane_script, methods=["GET"])
+    app.add_api_route("/agent-observability-v090.js", agent_observability_script, methods=["GET"])
     app.middleware("http")(_inject_agent_control_plane)
 
 
