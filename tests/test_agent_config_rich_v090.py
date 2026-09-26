@@ -19,6 +19,13 @@ def claude_file(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture
+def codex_file(tmp_path, monkeypatch):
+    path = tmp_path / ".codex" / "config.toml"
+    monkeypatch.setenv("OWG_CODEX_CONFIG_PATH", str(path))
+    return path
+
+
 def _managed_env() -> dict[str, str]:
     return env_settings(token="write-only-token", base_url="http://127.0.0.1:8787")
 
@@ -106,3 +113,30 @@ def test_codex_fragment_exports_structural_logs_and_traces_but_no_content_opt_in
     assert parsed["log_user_prompt"] is False
     assert parsed["log_agent_responses"] is False
     assert parsed["log_guardian_assessments"] is False
+
+
+def test_codex_trace_only_owg_block_is_detected_as_partial_and_upgraded(codex_file):
+    codex_file.parent.mkdir(parents=True)
+    endpoint = "http://127.0.0.1:8787/agent-ingest/v1/codex-otel"
+    old_block = "\n".join([
+        writer.CODEX_BLOCK_START,
+        "[otel]",
+        "log_user_prompt = false",
+        "log_agent_responses = false",
+        "log_guardian_assessments = false",
+        f'trace_exporter = {{ otlp-http = {{ endpoint = "{endpoint}", headers = {{ Authorization = "Bearer tok" }}, protocol = "json" }} }}',
+        writer.CODEX_BLOCK_END,
+        "",
+    ])
+    codex_file.write_text(old_block)
+
+    before = writer.codex_status()
+    assert before["configured"] is False
+    assert before["partial_configured"] is True
+
+    writer.codex_connect(config_snippet(token="tok", base_url="http://127.0.0.1:8787"))
+    after = writer.codex_status()
+    assert after["configured"] is True
+    assert after["partial_configured"] is False
+    parsed = tomllib.loads(codex_file.read_text())["otel"]
+    assert "exporter" in parsed and "trace_exporter" in parsed
