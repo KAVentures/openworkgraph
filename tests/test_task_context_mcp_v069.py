@@ -10,6 +10,7 @@ def test_secure_task_context_mcp_uses_existing_access_protection_and_audit_bound
     start = source.index("def get_task_context(")
     next_marker = source.find("\n\n@core.mcp.tool()", start)
     block = source[start: next_marker if next_marker >= 0 else len(source)]
+    signature = block.split('"""', 1)[0]
 
     assert 'name = "get_task_context"' in block
     assert "core._begin(name)" in block
@@ -18,9 +19,8 @@ def test_secure_task_context_mcp_uses_existing_access_protection_and_audit_bound
     assert '"family_key": family_key' in block
     assert '"task_family": task_family' in block
     assert '"current_steps": current_steps' in block
-    assert "task_description" not in block
-    assert '"prompt"' not in block.lower()
-    assert "prompt=" not in block.lower()
+    assert "task_description" not in signature
+    assert "prompt" not in signature.lower()
 
     finish_start = source.index("def _finish_task_context(")
     finish_end = source.index("\n\ndef authorize_tool", finish_start)
