@@ -43,13 +43,13 @@
       const section=document.createElement('div');
       section.id='agent-observation-setup';section.className='card connection-section';
       section.innerHTML=`
-        <div class="agent-control-intro"><div><h2>Observe an agent</h2><div class="muted">Instrument an agent's native lifecycle or trace surface so OpenWorkGraph can measure structural execution: runs, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
+        <div class="agent-control-intro"><div><h2>Observe an agent</h2><div class="muted">Instrument an agent's native lifecycle or telemetry surface so OpenWorkGraph can measure structural execution: runs, models, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
         <div class="note" style="margin-top:12px"><strong>Status means telemetry observed.</strong> The green badge appears only when evidence actually arrives. <strong>Connect</strong> adds OpenWorkGraph's entries to that agent's own settings file (a backup is written first and your other settings are kept); <strong>Disconnect</strong> removes only what OpenWorkGraph added.</div>
         <div class="setup-grid" style="margin-top:12px">
-          ${setupCard('claude_code','Native hooks','Claude Code','Observe lifecycle, tool use, failures, approval requests and subagent handoffs without capturing prompts or tool contents.')}
-          ${setupCard('codex','OTel trace','Codex','Use Codex trace export only. OpenWorkGraph does not enable the richer diagnostic log stream.')}
-          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor; existing SDK tracing remains active.')}
-          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
+          ${setupCard('claude_code','Hooks + OTel logs','Claude Code','Observe per-request model calls and tokens, tool use, approval requests/decisions, failures and subagent handoffs without capturing prompt or tool content.')}
+          ${setupCard('codex','OTel logs + trace','Codex','Observe structural API, tool, approval and multi-agent events plus trace hierarchy. Content-bearing log options stay disabled.')}
+          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor for model, tool, handoff, hierarchy, usage and timing signals.')}
+          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send portable GenAI OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
         </div>`;
       const anchor=grid||panel.lastElementChild;
       if(anchor&&anchor.parentNode===panel)anchor.insertAdjacentElement('afterend',section);else panel.appendChild(section);
@@ -114,7 +114,7 @@
       renderConfigState();
       const where=result.path?`<code>${h(result.path)}</code>`:'its settings file';
       const backup=result.backup?`<div class="note">Backup of the previous file: <code>${h(result.backup)}</code></div>`:'';
-      if(action==='connect')window.openModal?.(`${label} connected`,'Agent observation',`<p>OpenWorkGraph's observation hooks were added to ${where}. ${h(result.note||'')}</p>${backup}<div class="note">The status turns green once the first telemetry arrives. Disconnect removes only OpenWorkGraph's entries.</div>`);
+      if(action==='connect')window.openModal?.(`${label} connected`,'Agent observation',`<p>OpenWorkGraph's observation settings were added to ${where}. ${h(result.note||'')}</p>${backup}<div class="note">The status turns green once the first telemetry arrives. Disconnect removes only OpenWorkGraph's entries.</div>`);
       else window.openModal?.(`${label} disconnected`,'Agent observation',`<p>OpenWorkGraph's entries were removed from ${where}. Your other settings were left as they were.</p>${backup}`);
     }catch(_){
       renderConfigState();
@@ -156,10 +156,10 @@
       let title='Observe an agent',body='';
       if(kind==='claude_code'){
         const x=integrations.claude_code||{};title='Observe Claude Code';
-        body=`<p>Prefer the <strong>Connect</strong> button, which does this for you. To do it by hand, merge the <code>hooks</code> object below into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open. If OpenWorkGraph is unavailable, Claude Code continues normally.</div>`;
+        body=`<p>Prefer the <strong>Connect</strong> button, which does this for you. To do it by hand, merge the <code>hooks</code> and <code>env</code> objects below into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent hook command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open. OTel content logging is explicitly disabled; the OWG ingest path independently strict-allowlists structural fields.</div>`;
       }else if(kind==='codex'){
         const x=integrations.codex||{};title='Observe Codex';
-        body=`<p>Prefer the <strong>Connect</strong> button, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables trace export only. User prompts, agent responses and guardian assessments remain disabled.</div>`;
+        body=`<p>Prefer the <strong>Connect</strong> button, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables structural Codex log events and trace export. User prompts, agent responses and guardian assessments remain disabled, and content-bearing fields are discarded server-side.</div>`;
       }else if(kind==='openai_agents'){
         const x=integrations.openai_agents||{};title='Observe OpenAI Agents SDK';
         body=`<p>Add OpenWorkGraph as an additional tracing processor in the agent application's Python environment.</p>${privacyHtml(payload)}${codeBox(x.python||'', 'agentSetupCode')}<div class="note">This does not replace existing SDK tracing and does not make OpenWorkGraph a dependency for the agent's control flow.</div>`;
