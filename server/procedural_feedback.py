@@ -16,6 +16,7 @@ from typing import Any
 from browser_utils import is_browser_app
 from mcp_server.security import _looks_instruction_like
 from normalizer import safe_action_label, safe_surface
+from semantic_actions import safe_semantic_action_label
 
 from .context_layers import candidate_tasks
 from .dashboard_privacy_policy import safe_dashboard_action
@@ -53,6 +54,7 @@ _SURFACE_DISPLAY = {
     "codex": "Codex",
     "openworkgraph": "OpenWorkGraph",
 }
+_PAIR_SEPARATOR_RE = re.compile(r"\s*(?:·|\s[-–—]\s)\s*", re.UNICODE)
 
 
 def _event_meta(event: dict[str, Any]) -> dict[str, Any]:
@@ -68,8 +70,6 @@ def _safe_desktop_surface(app: Any) -> str:
     suffix = token.split(":", 1)[1] if ":" in token else "unknown"
     if suffix in _SURFACE_DISPLAY:
         return _SURFACE_DISPLAY[suffix]
-    # Unknown desktop application names can contain customer/person/resource text.
-    # Preserve only the stable pseudonym already used by structural memory.
     return f"Desktop app {suffix}"
 
 
@@ -95,7 +95,7 @@ def _safe_event_action(event: dict[str, Any]) -> str:
     event_type = str(event.get("event_type") or "")
     meta = _event_meta(event)
     target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
-    label = safe_action_label(target)
+    label = safe_semantic_action_label(target) or safe_action_label(target)
     if not label:
         label = safe_dashboard_action(
             meta.get("interaction"),
@@ -136,6 +136,31 @@ def _semantic_steps(task: dict[str, Any], session_events: list[dict[str, Any]]) 
     return out
 
 
+def _window_event_refs(task: dict[str, Any], session_events: list[dict[str, Any]]) -> list[str]:
+    start = memory._ts(task.get("started_at"))
+    end = memory._ts(task.get("ended_at"))
+    refs: list[str] = []
+    seen: set[str] = set()
+    for value in list(task.get("anchor_event_ids") or []):
+        ref = memory._event_ref(value)
+        if ref and ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    if start is None or end is None:
+        return refs[:8]
+    for event in session_events:
+        when = memory._ts(event.get("observed_at"))
+        if when is None or when < start - 0.001 or when > end + 0.001:
+            continue
+        ref = memory._event_ref(event.get("event_id"))
+        if ref and ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+        if len(refs) >= 8:
+            break
+    return refs[:8]
+
+
 def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
@@ -153,33 +178,35 @@ def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         structural_steps = memory._human_steps(task, session_events)
         if not structural_steps:
             continue
-        # Family identity is calculated from the pre-existing structural sequence.
-        # The readable semantic sequence below is presentation only.
         family_key, family_basis = memory._human_family(task, structural_steps)
         semantic_steps = _semantic_steps(task, session_events)
         observed_completion = bool(task.get("completion_observed"))
+        started_at = task.get("started_at")
+        ended_at = task.get("ended_at")
         output.append({
             "execution_id": memory._execution_id(
-                "human", task.get("task_id") or session_id, task.get("started_at")
+                "human", task.get("task_id") or session_id, started_at
             ),
             "family_key": family_key,
             "family_basis": family_basis,
-            "started_at": task.get("started_at"),
-            "ended_at": task.get("ended_at"),
+            "started_at": started_at,
+            "ended_at": ended_at,
             "duration_seconds": round(float(task.get("elapsed_seconds") or 0), 3),
             "outcome_status": "observed_completion" if observed_completion else "unknown",
             "outcome_basis": (
                 "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor"
             ),
             "positive_example": observed_completion,
-            # Kept internally so identity regression tests can prove semantic labels
-            # never affect the legacy structural family calculation.
             "structural_steps": structural_steps[:_MAX_STEPS],
             "semantic_steps": semantic_steps[:_MAX_STEPS],
-            "evidence_refs": [
-                memory._event_ref(value)
-                for value in list(task.get("anchor_event_ids") or [])[:8]
-            ],
+            "evidence_refs": _window_event_refs(task, session_events),
+            "evidence_window": {"started_at": started_at, "ended_at": ended_at},
+            "trace_lookup": {
+                "tool": "get_workflow_trace",
+                "since": started_at,
+                "until": ended_at,
+                "scope": "all",
+            },
             "derived": True,
             "authoritative": False,
             "needs_review": True,
@@ -196,6 +223,16 @@ def _split_steps(value: str) -> list[str]:
     if len(parts) > _MAX_STEPS:
         raise ValueError("too many readable steps")
     return parts
+
+
+def _canonical_readable_alias(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    pieces = _PAIR_SEPARATOR_RE.split(raw, maxsplit=1)
+    if len(pieces) == 2 and pieces[0].strip() and pieces[1].strip():
+        return f"{pieces[0].strip()} · {pieces[1].strip()}"
+    return raw
 
 
 def _validate_readable_probe(value: str) -> None:
@@ -235,13 +272,14 @@ def _resolve_semantic_steps(
     lookup = {step.casefold(): step for step in valid_steps}
     resolved: list[str] = []
     unknown: list[str] = []
-    for step in requested:
+    for raw_step in requested:
+        step = _canonical_readable_alias(raw_step)
         _validate_readable_probe(step)
         exact = lookup.get(step.casefold())
         if exact:
             resolved.append(exact)
         else:
-            unknown.append(step)
+            unknown.append(raw_step)
     return ("ok" if not unknown else "unrecognized_step"), resolved, unknown
 
 
@@ -286,7 +324,8 @@ def readable_feedback(
             "valid_semantic_steps": valid_steps,
             "instruction": (
                 "Use an exact valid semantic step shown here, or omit current_steps/after_step. "
-                "Legacy structural tokens remain supported by the standard procedural-memory views."
+                "Readable separators '·', '-', '–' and '—' are accepted. Legacy structural "
+                "tokens remain supported by the standard procedural-memory views."
             ),
             "runs": [],
             "returned": 0,
@@ -311,7 +350,8 @@ def readable_feedback(
             for key in (
                 "execution_id", "started_at", "ended_at", "duration_seconds",
                 "outcome_status", "outcome_basis", "family_basis", "semantic_steps",
-                "evidence_refs", "derived", "authoritative", "needs_review",
+                "evidence_refs", "evidence_window", "trace_lookup", "derived",
+                "authoritative", "needs_review",
             )
         } | {
             "similarity_score": score,
