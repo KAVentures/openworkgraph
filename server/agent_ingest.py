@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 from shared.agent_evidence import AgentEvidenceError, agent_event_to_evidence
+from shared.agent_ingress_validation import validate_agent_ingress_event
+from shared.capture_control import filter_recordable
 from shared.codex_otel_adapter import codex_otel_to_agent_events
 from shared.otel_agent_adapter import otel_payload_to_agent_events
 from .db import insert_events
@@ -25,6 +27,21 @@ def _bounded_json_size(value: Any, *, maximum: int = MAX_AGENT_BATCH_BYTES) -> N
         raise AgentEvidenceError(f"agent payload exceeds {maximum} bytes")
 
 
+def _validated_events(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Validate all untrusted events before projecting or writing any of them. This
+    # preserves the existing all-or-nothing batch behavior for malformed input.
+    return [agent_event_to_evidence(validate_agent_ingress_event(item)) for item in payloads]
+
+
+def _insert_recordable(events: list[dict[str, Any]]) -> int:
+    # Agent evidence obeys the same user-controlled Pause/Stop boundaries and
+    # permanent deletion tombstones as desktop/browser evidence. This is applied
+    # immediately before persistence so late or buffered agent delivery cannot
+    # recreate skipped/deleted work.
+    recordable, _suppressed = filter_recordable(events)
+    return insert_events(recordable) if recordable else 0
+
+
 def ingest_agent_payloads(payloads: list[dict[str, Any]]) -> dict[str, int]:
     if not isinstance(payloads, list):
         raise AgentEvidenceError("events must be a list")
@@ -34,10 +51,8 @@ def ingest_agent_payloads(payloads: list[dict[str, Any]]) -> dict[str, int]:
         raise AgentEvidenceError(f"agent batch exceeds {MAX_AGENT_EVENTS} events")
     _bounded_json_size(payloads)
 
-    # Validate and project the entire batch before the first database write so a
-    # malformed final event cannot leave a partially accepted batch behind.
-    events = [agent_event_to_evidence(item) for item in payloads]
-    return {"received": len(payloads), "inserted": insert_events(events)}
+    events = _validated_events(payloads)
+    return {"received": len(payloads), "inserted": _insert_recordable(events)}
 
 
 def ingest_otel_payload(
@@ -55,8 +70,8 @@ def ingest_otel_payload(
     )
     if len(projected) > MAX_AGENT_EVENTS * 2:
         raise AgentEvidenceError("OpenTelemetry projection produced too many agent events")
-    events = [agent_event_to_evidence(item) for item in projected]
-    inserted = insert_events(events) if events else 0
+    events = _validated_events(projected)
+    inserted = _insert_recordable(events)
     return {
         "spans_seen": int(stats.get("spans_seen") or 0),
         "spans_ignored": int(stats.get("spans_ignored") or 0),
@@ -79,8 +94,8 @@ def ingest_codex_otel_payload(
     )
     if len(projected) > MAX_AGENT_EVENTS * 2:
         raise AgentEvidenceError("Codex OpenTelemetry projection produced too many agent events")
-    events = [agent_event_to_evidence(item) for item in projected]
-    inserted = insert_events(events) if events else 0
+    events = _validated_events(projected)
+    inserted = _insert_recordable(events)
     return {
         "records_seen": int(stats.get("records_seen") or 0),
         "records_ignored": int(stats.get("records_ignored") or 0),

@@ -5,16 +5,16 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .agent_execution_traces import agent_execution_traces
-from .local_auth import bearer_matches
+from .agent_read_auth import agent_read_authorized
 from .procedural_memory import load_recent_evidence
 
 
 router = APIRouter()
 
 
-def _require_api_read_bearer(request: Request) -> None:
-    if not bearer_matches(request.headers.get("authorization")):
-        raise HTTPException(status_code=401, detail="API authentication required")
+def _require_agent_report_read(request: Request) -> None:
+    if not agent_read_authorized(request.headers.get("authorization")):
+        raise HTTPException(status_code=401, detail="API or dashboard authentication required")
 
 
 @router.get("/v1/agent-execution-traces")
@@ -28,7 +28,7 @@ def get_agent_execution_traces(
     max_events_per_execution: int = 100,
 ) -> dict[str, Any]:
     """Return privacy-safe ordered structural traces for observed agent runs."""
-    _require_api_read_bearer(request)
+    _require_agent_report_read(request)
     try:
         raw = load_recent_evidence(
             limit=max(1, min(int(evidence_limit), 100_000)),
