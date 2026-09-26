@@ -149,7 +149,9 @@ def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_a
         assert config.status_code == 200
         cfg = config.json()
         assert cfg["transport"] == "stdio"
-        assert cfg["args"] == ["-m", "mcp_server.compact_stdio"]
+        assert len(cfg["args"]) == 1
+        assert cfg["args"][0].endswith("mcp_server/launcher.py") or cfg["args"][0].endswith("mcp_server\\launcher.py")
+        assert cfg["env"] == {}
         assert "token" not in cfg
         assert secured_api["mcp_token"] not in json.dumps(cfg)
 
@@ -168,7 +170,7 @@ def test_browser_requires_server_proof_and_signed_request(secured_api):
     assert httpx.post(f"{base}/v1/browser-events", json=payload, headers={"Origin": origin}).status_code == 401
     body = json.dumps(payload, separators=(",", ":"))
     auth = _signed_browser_header(secured_api["browser_secret"], "POST", "/v1/browser-events", body)
-    accepted = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
+    accepted = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth)
     assert accepted.status_code == 200 and accepted.json()["status"] == "ok"
     replay = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
     assert replay.status_code == 401
