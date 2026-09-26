@@ -100,18 +100,36 @@ def test_similar_run_feedback_combines_observational_views(monkeypatch):
 
     def fake_get(path: str, params: dict | None = None):
         paths.append(path)
+        if path == "/v1/procedural-memory":
+            return {
+                "families": [
+                    {
+                        "family_key": "agent:test",
+                        "actor_kind": "agent",
+                        "family_basis": "structural_signature",
+                        "execution_count": 2,
+                        "positive_example_count": 2,
+                        "explicit_failure_count": 0,
+                        "confidence": "low",
+                    }
+                ]
+            }
         return {"path": path, "evidence_refs": ["event:1"]}
 
     monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
     result = compact.how_did_similar_runs_go("agent:test")
 
     assert paths == [
+        "/v1/procedural-memory",
         "/v1/procedural-memory/similar-runs",
         "/v1/procedural-memory/failure-patterns",
         "/v1/procedural-memory/approval-patterns",
         "/v1/procedural-memory/next-steps",
         "/v1/procedural-memory/context-pack",
     ]
+    assert result["status"] == "ok"
+    assert result["family_key"] == "agent:test"
+    assert result["resolution_method"] == "exact_family_key"
     assert result["approval_request_hotspots"]["evidence_refs"] == ["event:1"]
     assert result["interpretation"] == {
         "derived": True,

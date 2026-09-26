@@ -1,6 +1,6 @@
 [project]
 name = "workflow-observer"
-version = "0.87.0"
+version = "0.87.1"
 description = "Local-first work evidence, self-hosted organizational context gateway, REST API, and MCP access."
 requires-python = ">=3.11"
 license = {file = "LICENSE"}

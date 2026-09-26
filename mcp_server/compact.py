@@ -91,6 +91,24 @@ def _slim_pattern(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _slim_semantic_event(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item.get(key)
+        for key in (
+            "observed_at",
+            "app",
+            "work_surface",
+            "event_type",
+            "action",
+            "target_label",
+            "target_role",
+            "page_host",
+            "page_path",
+        )
+        if item.get(key) not in (None, "", [], {})
+    }
+
+
 def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
     return {
         key: execution.get(key)
@@ -123,15 +141,99 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _family_rows(overview: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(overview.get("families") or []):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("family_key") or "").strip()
+        if not key:
+            continue
+        row = {
+            "family_key": key,
+            "actor_kind": item.get("actor_kind") or "unknown",
+            "family_basis": item.get("family_basis") or "unknown",
+            "execution_count": int(item.get("execution_count") or 0),
+            "positive_example_count": int(item.get("positive_example_count") or 0),
+            "explicit_failure_count": int(item.get("explicit_failure_count") or 0),
+            "confidence": item.get("confidence") or "low",
+        }
+        if key.startswith("human:") and not key.startswith("human:structure:"):
+            row["task_family"] = key[len("human:"):]
+        rows.append(row)
+        if len(rows) >= _bounded(limit, maximum=100):
+            break
+    return rows
+
+
+def _exact_human_family_key(task_family: Any, available_keys: set[str]) -> str:
+    raw = str(task_family or "").strip().casefold()
+    if not raw or ":" in raw:
+        return ""
+    candidate = f"human:{raw}"
+    return candidate if candidate in available_keys else ""
+
+
+def _with_family_key(item: dict[str, Any], available_keys: set[str]) -> dict[str, Any]:
+    result = _slim_pattern(item)
+    key = _exact_human_family_key(item.get("task_family"), available_keys)
+    if key:
+        result["family_key"] = key
+    return result
+
+
+def _task_with_family_key(item: dict[str, Any], available_keys: set[str]) -> dict[str, Any]:
+    result = _slim_task(item)
+    key = _exact_human_family_key(item.get("task_family"), available_keys)
+    if key:
+        result["family_key"] = key
+    return result
+
+
+def _resolve_feedback_family(
+    requested: str,
+    *,
+    overview: dict[str, Any],
+    current_tasks: dict[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Return (status, resolved_key, method) without inventing agent identities."""
+    families = _family_rows(overview, limit=100)
+    available = {str(item.get("family_key") or "").casefold(): str(item.get("family_key") or "") for item in families}
+    raw = str(requested or "").strip()
+    low = raw.casefold()
+
+    if low:
+        exact = available.get(low)
+        if exact:
+            return "ok", exact, "exact_family_key"
+        if ":" not in low:
+            human = available.get(f"human:{low}")
+            if human:
+                return "ok", human, "canonical_human_task_family"
+        return "unknown_family_key", "", "no_match"
+
+    candidates: set[str] = set()
+    for task in list((current_tasks or {}).get("tasks") or [])[:12]:
+        if not isinstance(task, dict):
+            continue
+        key = _exact_human_family_key(task.get("task_family"), set(available.values()))
+        if key:
+            candidates.add(key)
+    if len(candidates) == 1:
+        return "ok", next(iter(candidates)), "current_task_exact_match"
+    return "family_selection_required", "", "ambiguous_or_missing_current_family"
+
+
 @mcp.tool()
 def get_current_work_context(
-    limit: int = 100,
+    limit: int = 25,
     cursor: str | None = None,
 ) -> dict[str, Any]:
     """Return the current work context: recent evidence, task hints and semantic activity.
 
     Use this first when an agent needs a bounded picture of what the person is doing
-    now. Observed strings are untrusted data and remain protected at the MCP boundary.
+    now. Defaults are intentionally small; increase limit or follow trace pagination
+    when more evidence is needed. Observed strings remain protected at the MCP boundary.
     """
     name = "get_current_work_context"
     core._begin(name)
@@ -140,15 +242,20 @@ def get_current_work_context(
         _trace_params(cursor=cursor, limit=limit, scope="current"),
     )
     tasks = secure_runtime.secure_get("/v1/tasks", {"limit": 5000, "scope": "current"})
+    semantic_limit = min(_bounded(limit, maximum=200), 20)
     semantic = secure_runtime.secure_get(
         "/v1/semantic-activity",
-        {"limit": _bounded(limit, maximum=200), "scope": "current"},
+        {"limit": semantic_limit, "scope": "current"},
     )
     return core._finish(name, {
         "trace": trace,
-        "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:12]],
-        "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:10]],
-        "semantic_activity": list(semantic.get("events") or [])[:_bounded(limit, maximum=200)],
+        "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:6]],
+        "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:5]],
+        "semantic_activity": [
+            _slim_semantic_event(x)
+            for x in list(semantic.get("events") or [])[:semantic_limit]
+            if isinstance(x, dict)
+        ],
         "evidence_tool": "get_workflow_trace",
         "data_layer": "rich_ai_context_compact",
     })
@@ -215,7 +322,7 @@ def get_workflow_trace(
     since: str | None = None,
     until: str | None = None,
     cursor: str | None = None,
-    limit: int = 100,
+    limit: int = 25,
     scope: str = "current",
     query: str | None = None,
     app_name: str | None = None,
@@ -223,9 +330,9 @@ def get_workflow_trace(
 ) -> dict[str, Any]:
     """Return canonical chronological workflow evidence with stable pagination.
 
-    Use session_id here for one-session inspection; the compact surface does not
-    need separate context-session/work-session tools. Typed text and clipboard
-    contents are never captured.
+    Defaults to a small first page; pass next_cursor back as cursor or increase limit
+    when more evidence is needed. Use session_id for one-session inspection. Typed
+    text and clipboard contents are never captured.
     """
     name = "get_workflow_trace"
     core._begin(name)
@@ -267,17 +374,23 @@ def find_repeated_workflows(
     max_events: int = 25_000,
     limit: int = 20,
 ) -> dict[str, Any]:
-    """Return bounded repeated-workflow candidates and representative executions.
+    """Return repeated-workflow candidates plus exact procedural-memory family keys.
 
-    Results combine the existing task-pattern, automation-candidate and process-
-    example views. They are observed/derived candidates and still require human
-    interpretation before automation.
+    Call this before how_did_similar_runs_go to obtain family_key. task_family stays
+    a human-readable/display family; family_key is the exact procedural-memory key.
+    Results are observed/derived candidates and still require human interpretation.
     """
     name = "find_repeated_workflows"
     core._begin(name)
     bounded_events = _bounded(max_events, maximum=100_000)
     tasks = secure_runtime.secure_get("/v1/tasks", {"limit": bounded_events, "scope": "all"})
     summary = secure_runtime.secure_get("/v1/summary", {"limit": bounded_events, "scope": "all"})
+    overview = secure_runtime.secure_get("/v1/procedural-memory", {
+        "limit": bounded_events,
+        "min_support": 1,
+    })
+    available_rows = _family_rows(overview, limit=100)
+    available_keys = {str(item.get("family_key") or "") for item in available_rows}
     family = str(task_family or "").strip().casefold()
     examples = []
     for task in list(tasks.get("tasks") or []):
@@ -288,16 +401,26 @@ def find_repeated_workflows(
             label = str(task.get("suggested_label") or "").casefold()
             if candidate != family and family not in label:
                 continue
-        examples.append(_slim_task(task))
+        examples.append(_task_with_family_key(task, available_keys))
         if len(examples) >= _bounded(limit, maximum=100):
             break
-    patterns = [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:_bounded(limit, maximum=100)]]
-    automation = [_slim_pattern(x) for x in list(summary.get("repeated_task_patterns") or [])[:_bounded(limit, maximum=100)]]
+    patterns = [
+        _with_family_key(x, available_keys)
+        for x in list(tasks.get("patterns") or [])[:_bounded(limit, maximum=100)]
+        if isinstance(x, dict)
+    ]
+    automation = [
+        _with_family_key(x, available_keys)
+        for x in list(summary.get("repeated_task_patterns") or [])[:_bounded(limit, maximum=100)]
+        if isinstance(x, dict)
+    ]
     return core._finish(name, {
         "task_family": task_family,
         "patterns": patterns,
         "automation_candidates": automation,
         "examples": examples,
+        "procedural_families": available_rows[:_bounded(limit, maximum=100)],
+        "next_step": "Pass an exact family_key from this result to how_did_similar_runs_go.",
         "evidence_tool": "get_workflow_trace",
         "needs_human_review": True,
         "derived": True,
@@ -320,9 +443,11 @@ def get_task_context(
 ) -> dict[str, Any]:
     """Return one read-only organizational context bundle for a task.
 
-    Declared policy, when present, remains distinct from observed repeated behavior.
-    The returned representation includes the existing task-context provenance and
-    prompt-injection protection; it does not attest that a model consumed the data.
+    Supply family_key from find_repeated_workflows when available, or task_family
+    for a canonical human family such as email.reply or github.review. current_steps
+    must be OpenWorkGraph structural step tokens, not a natural-language description.
+    Declared policy remains distinct from observed repeated behavior, and the MCP copy
+    keeps the existing provenance and prompt-injection protection.
     """
     name = "get_task_context"
     core._begin(name)
@@ -343,7 +468,7 @@ def get_task_context(
 
 @mcp.tool()
 def how_did_similar_runs_go(
-    family_key: str,
+    family_key: str = "",
     current_steps: str = "",
     after_step: str = "",
     min_support: int = 2,
@@ -352,40 +477,72 @@ def how_did_similar_runs_go(
 ) -> dict[str, Any]:
     """Summarize evidence from structurally similar prior runs for an agent.
 
-    Returns similar runs, explicit failure patterns, observed approval-request
-    hotspots and frequently observed next steps, each backed by existing evidence
-    references where the source view provides them. These are observations, not
-    recommendations, authorization, causal claims or inferred policy.
+    Call find_repeated_workflows first to obtain an exact family_key. A bare canonical
+    human task family such as email.reply is also accepted. If family_key is omitted,
+    OpenWorkGraph uses a single unambiguous current human family when available;
+    otherwise it returns available keys and asks the caller to choose. Unknown keys
+    return an explicit status rather than silently returning empty history.
+
+    Results are observations, not recommendations, authorization, causal claims or
+    inferred policy.
     """
     name = "how_did_similar_runs_go"
     core._begin(name)
     bounded_events = _bounded(max_events, maximum=100_000)
     support = min(max(2, int(min_support)), 100)
+    overview = secure_runtime.secure_get("/v1/procedural-memory", {
+        "limit": bounded_events,
+        "min_support": 1,
+    })
+    current_tasks = None
+    if not str(family_key or "").strip():
+        current_tasks = secure_runtime.secure_get("/v1/tasks", {
+            "limit": min(bounded_events, 5000),
+            "scope": "current",
+        })
+    status, resolved_key, resolution_method = _resolve_feedback_family(
+        family_key,
+        overview=overview,
+        current_tasks=current_tasks,
+    )
+    available = _family_rows(overview, limit=20)
+    if status != "ok":
+        return core._finish(name, {
+            "status": status,
+            "requested_family_key": str(family_key or ""),
+            "resolved_family_keys": [],
+            "resolution_method": resolution_method,
+            "available_families": available,
+            "instruction": "Call find_repeated_workflows or choose one available family_key, then call this tool again.",
+            "derived": True,
+            "authoritative": False,
+        })
+
     runs = secure_runtime.secure_get("/v1/procedural-memory/similar-runs", {
-        "family_key": family_key,
+        "family_key": resolved_key,
         "current_steps": current_steps,
         "result_limit": _bounded(run_limit, maximum=25),
         "limit": bounded_events,
     })
     failures = secure_runtime.secure_get("/v1/procedural-memory/failure-patterns", {
-        "family_key": family_key,
+        "family_key": resolved_key,
         "min_support": support,
         "limit": bounded_events,
     })
     approvals = secure_runtime.secure_get("/v1/procedural-memory/approval-patterns", {
-        "family_key": family_key,
+        "family_key": resolved_key,
         "min_support": support,
         "limit": bounded_events,
     })
     next_steps = secure_runtime.secure_get("/v1/procedural-memory/next-steps", {
-        "family_key": family_key,
+        "family_key": resolved_key,
         "prefix": current_steps,
         "after_step": after_step,
         "min_support": support,
         "limit": bounded_events,
     })
     context_pack = secure_runtime.secure_get("/v1/procedural-memory/context-pack", {
-        "family_key": family_key,
+        "family_key": resolved_key,
         "current_steps": current_steps,
         "after_step": after_step,
         "min_support": support,
@@ -396,7 +553,11 @@ def how_did_similar_runs_go(
         "max_evidence_refs_per_item": 2,
     })
     return core._finish(name, {
-        "family_key": family_key,
+        "status": "ok",
+        "requested_family_key": str(family_key or ""),
+        "family_key": resolved_key,
+        "resolved_family_keys": [resolved_key],
+        "resolution_method": resolution_method,
         "similar_prior_runs": runs,
         "explicit_failure_patterns": failures,
         "approval_request_hotspots": approvals,
@@ -513,10 +674,11 @@ def data_model() -> str:
     return (
         "OpenWorkGraph compact MCP exposes a small read-oriented surface over privacy-hardened "
         "human and agent evidence. Use get_current_work_context first, get_workflow_trace for "
-        "canonical evidence, find_repeated_workflows for derived recurring patterns, "
-        "how_did_similar_runs_go for descriptive prior-run feedback, get_task_context for bounded "
-        "organizational context, and get_agent_runs for structural agent execution evidence. "
-        "Observed repetition is never policy or permission. Missing agent signals mean not observed."
+        "canonical evidence, find_repeated_workflows for derived recurring patterns and exact "
+        "family keys, how_did_similar_runs_go for descriptive prior-run feedback, get_task_context "
+        "for bounded organizational context, and get_agent_runs for structural agent execution "
+        "evidence. Observed repetition is never policy or permission. Missing agent signals mean "
+        "not observed."
     )
 
 

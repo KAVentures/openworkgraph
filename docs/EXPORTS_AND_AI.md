@@ -116,17 +116,19 @@ The dashboard's **AI access** switch controls whether MCP tools may read workflo
 
 When access is off, the MCP client receives an intentional error telling the user to enable AI access in the local dashboard.
 
-## Local AI clients use stdio
+## Local AI clients use compact stdio
 
-Claude Desktop, Cursor and other local MCP clients should use the local stdio server:
+Claude Desktop, Cursor and other new local MCP connections should use the compact local stdio server:
 
 ```text
-mcp_server.secure_stdio
+mcp_server.compact_stdio
 ```
 
-The dashboard generates the correct installed Python path and environment automatically. This avoids keeping an additional localhost MCP port open during normal use.
+The dashboard generates the correct installed Python path and environment automatically. This avoids keeping an additional localhost MCP port open during normal use and exposes the smaller default MCP tool surface introduced in v0.87.
 
-The v0.49+ release also includes `OpenWorkGraph-Claude.mcpb`, a small Claude Desktop extension wrapper around the installed stdio server.
+`mcp_server.secure_stdio` remains available as the **legacy 24-tool compatibility entrypoint** for saved configurations created before v0.87. New setups should not use it unless they explicitly require the legacy tool names.
+
+The v0.49+ release line also includes `OpenWorkGraph-Claude.mcpb`, a small Claude Desktop extension wrapper around the installed stdio server; current bundles use the compact surface.
 
 ## HTTP MCP is on demand
 
@@ -143,6 +145,25 @@ OpenWorkGraph:
 
 This means an unrelated process that merely owns port 8788 is not treated as OpenWorkGraph. Port 8788 is only preferred when free; another loopback port can be used.
 
+## Compact MCP surface
+
+New v0.87+ connections expose these default tools:
+
+```text
+get_current_work_context
+search_work
+get_workflow_trace
+get_work_profile
+find_repeated_workflows
+get_task_context
+how_did_similar_runs_go
+get_agent_runs
+```
+
+`OWG_EXPERIMENTAL_GOVERNANCE=1` adds the explicitly experimental governance tools documented in `EXPERIMENTAL_GOVERNANCE.md`. The flag controls MCP exposure; it does not remove the underlying governance REST implementation.
+
+For repeated-work feedback, call `find_repeated_workflows` first and pass its exact `family_key` to `how_did_similar_runs_go`. `task_family` is a display/canonical human family such as `email.reply`; procedural-memory `family_key` values are the exact identifiers used to retrieve prior runs.
+
 ## Canonical rich-evidence tool
 
 The main evidence retrieval tool is:
@@ -152,12 +173,12 @@ get_workflow_trace(
   since=None,
   until=None,
   cursor=None,
-  limit=100,
+  limit=25,
   scope="current"
 )
 ```
 
-It returns one compact chronological table rather than repeating the same events as raw/context/semantic layers.
+The compact server intentionally defaults to a small first page. Increase `limit` when needed, or pass `next_cursor` back as `cursor` until `has_more` is false.
 
 Useful row fields include:
 
@@ -203,7 +224,7 @@ The cursor includes the last `(observed_at, database id)` pair so multiple event
 
 ## Compact derived tools
 
-Summary and task tools intentionally return small derived representations instead of appending hundreds of raw events. When the AI needs supporting detail it should call `get_workflow_trace` for the relevant time range.
+Summary and task tools intentionally return small derived representations instead of appending hundreds of raw events. `get_current_work_context` also uses a small default evidence page and slim semantic activity. When the AI needs supporting detail it should call `get_workflow_trace` for the relevant time range or request a larger explicit limit.
 
 This design reduces model context consumption and makes truncation less likely while preserving the rich evidence needed for reconstruction.
 
