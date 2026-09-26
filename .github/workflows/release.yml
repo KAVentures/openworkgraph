@@ -104,35 +104,41 @@ jobs:
           cat > /tmp/openworkgraph-release-notes.md <<EOF
           ## OpenWorkGraph ${TAG}
 
-          OpenWorkGraph is a local-first, open-source work-evidence layer for AI. v0.53 adds an **optional self-hosted organization Gateway** without changing the no-account local product.
+          OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
           ### Local-first remains the default
-          A normal OpenWorkGraph install still captures to local SQLite, provides local exports/API/MCP, and requires no OpenWorkGraph account. Gateway sharing is disabled by default. Capture continues locally if a configured Gateway or network is unavailable.
+          A normal OpenWorkGraph install captures to local SQLite, provides local dashboard/export/API/MCP access, and requires no OpenWorkGraph account or OpenWorkGraph-hosted evidence store. Capture continues locally if an optional customer-controlled Gateway or network is unavailable.
 
-          ### Self-hosted organization Gateway
-          Organizations can run the Gateway and PostgreSQL entirely in infrastructure they control. The endpoint connector makes outbound requests to that customer-controlled Gateway after endpoint-side policy filtering. OpenWorkGraph/Kinvectum does not need to receive or store the organization's workflow evidence.
+          ### Human + agent execution evidence
+          Human desktop/browser evidence and provider-neutral structural agent execution evidence coexist in the canonical local evidence store. Agent evidence can describe observed lifecycle boundaries, model calls, tool calls, handoffs, approvals, errors, duration, token usage and context linkage when those signals are available.
 
-          The repository includes **deploy/Dockerfile.gateway**, **deploy/docker-compose.yml**, and **docs/SELF_HOSTING.md**.
+          Missing agent signals mean **not observed**, not proof that the underlying runtime did not perform the action. OpenWorkGraph does not claim to observe hidden model reasoning.
 
-          ### Vendor-neutral REST + MCP
-          The Gateway exposes organization-scoped rich evidence through REST for backend platforms such as automation/company-context systems. A thin MCP adapter exposes the same evidence service to AI/agent clients. MCP is an interface, not a cloud-storage requirement; see **docs/MCP_ARCHITECTURE.md**.
+          ### Agent observability
+          The local dashboard includes an Agents view with run-level reports and structural execution traces. REST/MCP surfaces provide privacy-safe run inspection for authorized human/AI clients. The write-only agent-ingest token cannot read work history or reports.
 
-          ### Raw rich evidence is canonical
-          The canonical workflow trace now preserves privacy-hardened event metadata and stable event IDs so an AI can reconstruct work directly from observed evidence. Browser/tab context, safe control semantics, semantic-action hints, copy/paste transfer linkage and effort/timing metadata remain available when observed. Inferred tasks/process families remain regeneratable hints, not ground truth.
+          ### Safer agent ingestion
+          Agent evidence obeys the same Pause/Stop and permanent deletion boundaries as other local evidence. Untrusted structural identifiers and timestamps are validated, far-future timestamps are rejected, and agent-ingest authentication/size limits are applied before request bodies are fully buffered.
 
-          ### Enterprise data-plane controls
-          Device write credentials and integration read credentials are separate and revocable. Gateway queries are tenant-scoped. Event identity is scoped by organization. Organization/actor/device identity comes from the authenticated endpoint credential rather than uploaded JSON. Endpoint policy can only be narrowed by organization policy, not broadened. Sharing can be paused independently of local capture.
+          Prompts, model-response content, tool arguments/results, transcript paths and chain-of-thought/reasoning content are outside the agent evidence contract.
 
-          Typed text, ordinary key identities, clipboard contents and screenshot bytes are outside the Gateway contract and are rejected/not synchronized.
+          ### Explicit organization sharing
+          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in with `gateway.local_policy.allow_agent_events: true`; organization policy may narrow that opt-in but cannot broaden a local restriction.
+
+          ### Native integrations and OTLP
+          OpenWorkGraph includes privacy-minimized integrations for Claude Code, Codex telemetry, OpenAI Agents and generic structural agent ingestion. Claude Code observer hooks are asynchronous so observation does not add tool-call latency. The generic OTLP endpoint currently accepts OTLP/HTTP JSON; exact exporter configuration is documented in **docs/NATIVE_AGENT_ADAPTERS.md**.
+
+          ### Exports
+          JSON, CSV ZIP and XLSX exports include a dedicated privacy-safe agent-run table derived from canonical agent evidence. It uses opaque OpenWorkGraph execution references and does not expose native run/trace/span identifiers or agent content payloads.
 
           ### macOS / Windows testers
-          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. The standalone desktop product remains usable without the Gateway. **AI_GUIDE.md** and **PROMPT.md** are included.
+          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. The standalone desktop product remains usable without an organization Gateway. **AI_GUIDE.md** and **PROMPT.md** are included.
 
           ### Claude Desktop
-          **OpenWorkGraph-Claude.mcpb** remains a small local stdio MCP wrapper for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
+          **OpenWorkGraph-Claude.mcpb** is the local stdio MCP wrapper for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
 
           ### Security note
-          Self-hosted production deployments should use customer-controlled TLS/network access, secret management, retention/backups and identity infrastructure appropriate to their environment. The v0.53 Gateway data plane uses explicit device/service credentials and can sit behind an organization OAuth/OIDC-aware access proxy; native SSO/SCIM provisioning is not required for the core self-hosted data plane.
+          Self-hosted production deployments should use customer-controlled TLS/network access, secret management, retention/backups and identity infrastructure appropriate to their environment. OpenWorkGraph's local-first and customer-hosted deployment options do not remove those operational responsibilities.
           EOF
 
           gh release create "$TAG" \
