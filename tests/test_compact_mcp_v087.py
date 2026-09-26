@@ -130,10 +130,13 @@ def test_legacy_stdio_entrypoint_remains_available_and_unchanged_in_source():
     assert "compact" not in source
 
 
-def test_new_bundle_and_http_bridge_use_compact_surface():
+def test_new_connection_paths_use_compact_surface():
     bundle = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
     control = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
+    secure_app = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
     assert "mcp_server.compact_stdio" in bundle
+    assert "mcp_server.compact_stdio" in secure_app
     assert "mcp_server.compact_http_app:app" in control
     assert "mcp_server.secure_stdio" not in bundle
+    assert '"args": ["-m", "mcp_server.secure_stdio"]' not in secure_app
     assert "mcp_server.http_app:app" not in control
