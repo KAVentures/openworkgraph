@@ -15,6 +15,8 @@ from .dashboard_privacy_policy import (
 )
 from .main import BROWSER_STATUS, COLLECTOR_STATUS, ROOT, VERSION
 from .privacy_pipeline import redact_for_display
+from .procedural_feedback import readable_feedback
+from .procedural_memory import load_recent_evidence
 from .secure_app import app
 from .v0571_polish import corrected_patterns
 
@@ -87,6 +89,40 @@ def dashboard_patterns(scope: str = "current") -> dict[str, Any]:
     return redact_for_display(dashboard_safe_patterns(corrected_patterns(scope=scope)))
 
 
+@app.get("/v1/procedural-memory/readable-feedback")
+def procedural_readable_feedback(
+    family_key: str,
+    current_steps: str = "",
+    after_step: str = "",
+    limit: int = 25_000,
+    result_limit: int = 8,
+    min_support: int = 2,
+) -> dict[str, Any]:
+    """Privacy-safe semantic projection over stable human procedural identities.
+
+    The route is read-only. Family keys and legacy structural steps are not changed;
+    readable steps are derived from allowlisted SaaS surfaces and safe action labels.
+    """
+    try:
+        raw = load_recent_evidence(limit=max(1, min(int(limit), 100_000)))
+        result = readable_feedback(
+            raw,
+            family_key=str(family_key or ""),
+            current_steps=current_steps,
+            after_step=after_step,
+            min_support=min_support,
+            run_limit=result_limit,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid readable procedural-feedback query") from exc
+    return redact_for_display({
+        **result,
+        "evidence_rows_considered": len(raw),
+        "evidence_is_canonical": True,
+        "memory_is_regeneratable": True,
+    })
+
+
 @app.get("/dashboard-privacy.js")
 def dashboard_privacy_script() -> Response:
     return Response(DASHBOARD_PRIVACY_JS, media_type="application/javascript")
@@ -120,4 +156,9 @@ async def inject_dashboard_privacy(request: Request, call_next):
     return HTMLResponse(content=text, status_code=response.status_code, headers=headers)
 
 
-__all__ = ["app", "dashboard_summary", "dashboard_patterns"]
+__all__ = [
+    "app",
+    "dashboard_summary",
+    "dashboard_patterns",
+    "procedural_readable_feedback",
+]
