@@ -285,7 +285,26 @@ def _parse_toml(text: str, path: Path) -> dict[str, Any]:
 def codex_status() -> dict[str, Any]:
     path = codex_config_path()
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    return {"configured": CODEX_BLOCK_START in text, "path": str(path)}
+    managed = CODEX_BLOCK_START in text
+    if not managed:
+        return {"configured": False, "partial_configured": False, "path": str(path)}
+    try:
+        otel = _parse_toml(text, path).get("otel") or {}
+    except ConfigConflict as exc:
+        return {"configured": False, "partial_configured": True, "path": str(path), "error": str(exc)}
+    rich = (
+        isinstance(otel, dict)
+        and "exporter" in otel
+        and "trace_exporter" in otel
+        and otel.get("log_user_prompt") is False
+        and otel.get("log_agent_responses") is False
+        and otel.get("log_guardian_assessments") is False
+    )
+    return {
+        "configured": bool(rich),
+        "partial_configured": not bool(rich),
+        "path": str(path),
+    }
 
 
 def codex_connect(snippet: str) -> dict[str, Any]:
@@ -301,12 +320,18 @@ def codex_connect(snippet: str) -> dict[str, Any]:
     body = remainder.rstrip("\n")
     updated = (body + "\n\n" if body else "") + block
     parsed = _parse_toml(updated, path)
-    if "trace_exporter" not in (parsed.get("otel") or {}):
+    otel = parsed.get("otel") or {}
+    if not isinstance(otel, dict) or "exporter" not in otel or "trace_exporter" not in otel:
         raise ConfigConflict("Generated Codex configuration did not validate; use manual setup")
     backup = _backup(path)
     _atomic_write(path, updated)
-    return {"configured": True, "path": str(path), "backup": backup,
-            "note": "Takes effect the next time Codex starts."}
+    return {
+        "configured": True,
+        "partial_configured": False,
+        "path": str(path),
+        "backup": backup,
+        "note": "Takes effect the next time Codex starts.",
+    }
 
 
 def codex_disconnect() -> dict[str, Any]:
@@ -320,4 +345,4 @@ def codex_disconnect() -> dict[str, Any]:
     _parse_toml(remainder, path)
     backup = _backup(path)
     _atomic_write(path, remainder)
-    return {"configured": False, "path": str(path), "backup": backup}
+    return {"configured": False, "partial_configured": False, "path": str(path), "backup": backup}
