@@ -170,7 +170,7 @@ def test_browser_requires_server_proof_and_signed_request(secured_api):
     assert httpx.post(f"{base}/v1/browser-events", json=payload, headers={"Origin": origin}).status_code == 401
     body = json.dumps(payload, separators=(",", ":"))
     auth = _signed_browser_header(secured_api["browser_secret"], "POST", "/v1/browser-events", body)
-    accepted = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth)
+    accepted = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
     assert accepted.status_code == 200 and accepted.json()["status"] == "ok"
     replay = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
     assert replay.status_code == 401
