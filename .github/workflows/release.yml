@@ -117,6 +117,9 @@ jobs:
           ### Agent observability
           The local dashboard includes an Agents view with run-level reports and structural execution traces. REST/MCP surfaces provide privacy-safe run inspection for authorized human/AI clients. The write-only agent-ingest token cannot read work history or reports.
 
+          ### Agent setup control plane
+          The dashboard now separates giving an AI access to OpenWorkGraph context from observing an agent's own execution. It provides reviewable setup material for Claude Code lifecycle hooks, Codex trace export, OpenAI Agents tracing and generic OpenTelemetry/custom structural adapters. OpenWorkGraph does not silently edit third-party configuration files. An integration is shown as active only when telemetry actually observed by the local evidence store supports that status.
+
           ### Compact MCP for new connections
           New dashboard-generated connections, the Claude MCP bundle and the on-demand local HTTP bridge expose a compact MCP surface focused on current context, search, canonical evidence, repeated workflows, task context, prior-run feedback and agent execution inspection. Overlapping tools are consolidated so AI clients have fewer competing tool definitions.
 
