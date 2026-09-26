@@ -6,7 +6,10 @@ from starlette.responses import JSONResponse
 
 from server.local_auth import mcp_bearer_matches
 from .secure_runtime import mcp
+from .agent_tools import register_agent_tools
 
+
+register_agent_tools(mcp)
 _inner = mcp.streamable_http_app()
 
 
