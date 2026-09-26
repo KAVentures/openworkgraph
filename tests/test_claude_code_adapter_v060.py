@@ -112,6 +112,7 @@ def test_settings_fragment_registers_only_safe_supported_hooks():
     handler = hooks["PostToolUse"][0]["hooks"][0]
     assert handler["command"] == "python"
     assert handler["args"] == ["-m", "adapters.claude_code_hook"]
+    assert handler["async"] is True
     assert handler["timeout"] == 2
 
 
