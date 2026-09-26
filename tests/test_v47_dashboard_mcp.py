@@ -105,17 +105,23 @@ def test_dashboard_data_first_layout_keeps_required_observer_controls():
     assert "See how work actually happens" not in html
 
 
-def test_cursor_and_claude_connections_use_compact_stdio_and_chatgpt_http_is_on_demand():
+def test_local_connections_use_stable_stdio_and_chatgpt_http_is_advanced_only():
     html = _read("dashboard/index.html")
     secure = _read("server/secure_app.py")
+    connection = _read("server/mcp_connection.py")
+    launcher = _read("mcp_server/launcher.py")
     assert "cursor://anysphere.cursor-deeplink/mcp/install" in secure
-    assert '"transport": "stdio"' in secure
-    assert '"-m", "mcp_server.compact_stdio"' in secure
-    assert "Authorization:`Bearer ${c.token}`" not in secure.split("window.connectCursor", 1)[1].split("window.showBrowserPairingCode", 1)[0]
+    assert "vscode:mcp/install" in secure
+    assert '"transport": "stdio"' in connection
+    assert "launcher.py" in connection
+    assert "mcp_server.compact_stdio" in launcher
+    assert "Authorization:`Bearer ${c.token}`" not in secure.split("window.connectCursor", 1)[1].split("window.connectVSCode", 1)[0]
+    assert "/v1/claude-mcpb" in secure
     assert "httpMcp('start')" in secure
     assert "Secure MCP Tunnel" in secure
     assert "help.openai.com/en/articles/12584461" in secure
-    assert "support.claude.com/en/articles/10949351" in secure
+    chatgpt = secure.split("if(kind==='chatgpt')", 1)[1].split("if(kind==='other')", 1)[0]
+    assert "httpMcp('start')" not in chatgpt
     assert "AI access" in secure
     assert "Recent AI activity" in secure
     assert "Connect Claude" in html

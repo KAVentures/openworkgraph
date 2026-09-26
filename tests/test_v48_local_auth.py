@@ -149,7 +149,9 @@ def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_a
         assert config.status_code == 200
         cfg = config.json()
         assert cfg["transport"] == "stdio"
-        assert cfg["args"] == ["-m", "mcp_server.compact_stdio"]
+        assert len(cfg["args"]) == 1
+        assert cfg["args"][0].endswith("mcp_server/launcher.py") or cfg["args"][0].endswith("mcp_server\\launcher.py")
+        assert cfg["env"] == {}
         assert "token" not in cfg
         assert secured_api["mcp_token"] not in json.dumps(cfg)
 

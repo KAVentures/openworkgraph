@@ -176,7 +176,7 @@ def _connection_override_script() -> str:
   async function setAiAccess(enabled){return jsonCall('/v1/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});}
   async function httpMcp(action){return jsonCall('/v1/mcp-http',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});}
   async function ensureAiAccess(){const s=await jsonCall('/v1/ai-access');if(!s.enabled)await setAiAccess(true);}
-  function stdioObject(c){return {command:c.command,args:c.args,env:c.env};}
+  function stdioObject(c){return {command:c.command,args:c.args,env:c.env||{}};}
 
   window.connectCursor = async function(){
     try{
@@ -186,6 +186,32 @@ def _connection_override_script() -> str:
       window.location.href=`cursor://anysphere.cursor-deeplink/mcp/install?name=OpenWorkGraph&config=${encodeURIComponent(config)}`;
       setTimeout(refreshAiPanel,800);
     }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not create the local MCP connection.')}</p><div class="note">Reopen the dashboard from the OpenWorkGraph launcher and try again.</div>`);}
+  };
+
+  window.connectVSCode = async function(){
+    try{
+      await ensureAiAccess();
+      const c=await connectionConfig();
+      const config={name:'OpenWorkGraph',...stdioObject(c)};
+      window.location.href=`vscode:mcp/install?${encodeURIComponent(JSON.stringify(config))}`;
+      setTimeout(refreshAiPanel,800);
+    }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not create the VS Code MCP connection.')}</p>`);}
+  };
+
+  window.downloadClaudeConnector = async function(){
+    try{
+      await ensureAiAccess();
+      const r=await fetch('/v1/claude-mcpb',{cache:'no-store'});
+      if(!r.ok)throw new Error('Could not build the Claude connector.');
+      const blob=await r.blob();
+      const href=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=href;a.download='OpenWorkGraph-Claude.mcpb';a.style.display='none';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(href),5000);
+      openModal('Claude connector downloaded','One-time install',`<ol class="steps"><li>Open <strong>OpenWorkGraph-Claude.mcpb</strong> from your Downloads folder.</li><li>Claude Desktop will show the connector and ask you to install/approve it.</li><li>After that, Claude can start OpenWorkGraph's local MCP automatically whenever it needs it.</li></ol><div class="note">You do not need to edit JSON, copy a port, or manage a bearer token. OpenWorkGraph's AI access switch is still checked on every tool call.</div><div class="modal-actions"><button class="secondary" onclick="openClaudeApp()">Open Claude Desktop</button></div>`);
+      refreshAiPanel();
+    }catch(e){openModal('Claude connector unavailable','Local security',`<p>${esc(e.message||'Could not download the Claude connector.')}</p>`);}
   };
 
   window.showBrowserPairingCode = async function(){
@@ -200,39 +226,43 @@ def _connection_override_script() -> str:
     return JSON.stringify({mcpServers:{openworkgraph:stdioObject(c)}},null,2);
   }
 
+  async function showAdvancedHttp(title='Advanced local HTTP MCP'){
+    try{
+      await ensureAiAccess();
+      const h=await httpMcp('start');
+      if(!h.running)throw new Error(h.error||'Could not start the local HTTP MCP bridge.');
+      const cfg=JSON.stringify({url:h.endpoint,headers:{Authorization:`Bearer ${h.token}`}},null,2);
+      openModal(title,'Temporary loopback endpoint',`<p>This endpoint is bound to this computer. Use it only with a local client or as the local side of a supported secure tunnel. It is <strong>not directly reachable by cloud ChatGPT</strong>.</p><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyHttpCfg">Copy HTTP config</button><button class="secondary" onclick="openConnect('chatgpt')">Back to ChatGPT options</button></div><div class="note">The bearer dies when the HTTP MCP bridge stops or OpenWorkGraph exits. Every tool call also checks the dashboard AI-access switch.</div>`);
+      document.querySelector('#copyHttpCfg').onclick=function(){copyText(cfg,this)};
+      refreshAiPanel();
+    }catch(e){openModal('HTTP MCP unavailable','Local security',`<p>${esc(e.message||'Could not start the temporary HTTP MCP endpoint.')}</p>`);}
+  }
+  window.showAdvancedHttp=showAdvancedHttp;
+
   const originalOpenConnect=window.openConnect;
   window.openConnect=async function(kind){
     if(kind==='chooser'){
-      openModal('Connect your AI','MCP',`<p><strong>Export</strong> is the universal path. For ongoing local access, OpenWorkGraph uses stdio for local MCP clients so no extra localhost MCP port is needed.</p><div class="modal-actions"><button onclick="closeModal();connectCursor()">Add to Cursor</button><button class="secondary" onclick="openConnect('claude')">Claude Desktop</button><button class="secondary" onclick="openConnect('chatgpt')">ChatGPT live</button><button class="secondary" onclick="openConnect('other')">Other MCP</button></div>`);return;
+      openModal('Connect your AI','MCP',`<p>Choose the AI you use. OpenWorkGraph handles the MCP configuration; you should not need to understand ports, Python paths, or MCP JSON.</p><div class="modal-actions"><button onclick="closeModal();connectCursor()">Cursor</button><button class="secondary" onclick="openConnect('claude')">Claude Desktop</button><button class="secondary" onclick="closeModal();connectVSCode()">VS Code</button><button class="secondary" onclick="openConnect('chatgpt')">ChatGPT</button><button class="secondary" onclick="openConnect('other')">Other MCP</button></div>`);return;
     }
     if(kind==='claude'){
       try{
         await ensureAiAccess();
         const cfg=await claudeConfig();
-        openModal('Connect Claude Desktop','Local stdio MCP',`<p>OpenWorkGraph uses Claude's local stdio MCP path. No MCP network port or bearer token is required.</p><ol class="steps"><li>Open Claude Desktop → <strong>Settings → Developer / local MCP settings</strong>.</li><li>Merge the <code>openworkgraph</code> entry below into <code>mcpServers</code>.</li><li>Restart Claude Desktop and approve OpenWorkGraph if prompted.</li></ol><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyClaudeCfg">Copy Claude config</button><button class="secondary" onclick="openClaudeApp()">Open Claude Desktop</button><a class="btn ghost" target="_blank" rel="noreferrer" href="https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop">Official Claude guide</a></div><div class="note" style="margin-top:12px">AI access is enabled for this OpenWorkGraph run. Turn it off at any time from the dashboard; configured clients will then be denied until you re-enable it.</div>`);
+        openModal('Connect Claude Desktop','Recommended: packaged connector',`<p>Use the packaged OpenWorkGraph connector. It wraps the local stdio MCP server and avoids manual Claude configuration.</p><div class="modal-actions"><button onclick="downloadClaudeConnector()">Download Claude connector</button><button class="secondary" id="copyClaudeCfg">Copy manual config instead</button><button class="ghost" onclick="openClaudeApp()">Open Claude Desktop</button></div><div class="note" style="margin-top:12px">After downloading, open the <code>.mcpb</code> file once and approve it in Claude Desktop. Manual JSON remains available only as a fallback.</div>`);
         document.querySelector('#copyClaudeCfg').onclick=function(){copyText(cfg,this)};
         refreshAiPanel();
       }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not create Claude configuration.')}</p>`);} return;
     }
     if(kind==='chatgpt'){
-      try{
-        await ensureAiAccess();
-        const c=await httpMcp('start');
-        if(!c.running)throw new Error(c.error||'Could not start the local HTTP MCP bridge.');
-        openModal('Connect ChatGPT live','On-demand HTTP MCP',`<p>ChatGPT cannot directly reach a local stdio process, so OpenWorkGraph started an authenticated HTTP MCP endpoint <strong>only for this live connection</strong>. Use OpenAI's Secure MCP Tunnel/custom app flow; do not expose the port publicly.</p><h3>Endpoint</h3><div class="codebox">${esc(c.endpoint)}</div><h3>Authorization</h3><div class="codebox">Bearer ${esc(c.token)}</div><div class="modal-actions"><button id="copyChatEndpoint">Copy endpoint</button><button class="secondary" id="copyChatAuth">Copy authorization</button><a class="btn secondary" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT setup guide</a></div><div class="note" style="margin-top:12px">This bearer is temporary and dies when the HTTP MCP bridge stops or OpenWorkGraph exits. Every tool call also checks the dashboard's AI access switch.</div>`);
-        document.querySelector('#copyChatEndpoint').onclick=function(){copyText(c.endpoint,this)};
-        document.querySelector('#copyChatAuth').onclick=function(){copyText(`Bearer ${c.token}`,this)};
-        refreshAiPanel();
-      }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not start ChatGPT live access.')}</p>`);} return;
+      openModal('Connect ChatGPT','Remote MCP / secure tunnel',`<p>Cloud ChatGPT cannot directly call a server on <code>127.0.0.1</code>. For a local OpenWorkGraph install, use OpenAI's <strong>Secure MCP Tunnel</strong>. Organizations can instead point ChatGPT at their customer-hosted OpenWorkGraph Gateway.</p><div class="modal-actions"><a class="btn" target="_blank" rel="noreferrer" href="https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt">Open ChatGPT MCP guide</a><button class="secondary" onclick="showAdvancedHttp('Local endpoint for a secure tunnel')">Start local HTTP endpoint</button></div><div class="note" style="margin-top:12px">Starting the local HTTP endpoint alone does not connect ChatGPT. It is an advanced building block for a supported tunnel or another client that can reach this computer.</div>`);return;
     }
     if(kind==='other'){
       try{
         await ensureAiAccess();
         const c=await connectionConfig();
         const cfg=JSON.stringify(stdioObject(c),null,2);
-        openModal('Other MCP client','Local stdio preferred',`<p>For clients that can launch a local MCP process, use stdio. This avoids a standing MCP network listener.</p><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyOtherCfg">Copy stdio config</button><button class="secondary" id="startHttpBtn">Start HTTP MCP instead</button></div><div class="note">HTTP MCP is intended only for clients that cannot use stdio. Its endpoint and bearer are temporary and allocated only when you start it.</div>`);
+        openModal('Other MCP client','Local stdio preferred',`<p>For clients that can launch a local MCP process, use this stdio configuration. OpenWorkGraph's launcher handles its own working directory and local authentication paths.</p><div class="codebox">${esc(cfg)}</div><div class="modal-actions"><button id="copyOtherCfg">Copy stdio config</button><button class="secondary" onclick="showAdvancedHttp()">Advanced HTTP fallback</button></div><div class="note">HTTP MCP is a fallback for clients that cannot launch stdio; it is temporary and authenticated.</div>`);
         document.querySelector('#copyOtherCfg').onclick=function(){copyText(cfg,this)};
-        document.querySelector('#startHttpBtn').onclick=async function(){const h=await httpMcp('start');const txt=JSON.stringify({url:h.endpoint,headers:{Authorization:`Bearer ${h.token}`}},null,2);copyText(txt,this);this.textContent='HTTP config copied';refreshAiPanel();};
         refreshAiPanel();
       }catch(e){openModal('Connection unavailable','Local security',`<p>${esc(e.message||'Could not create connection details.')}</p>`);} return;
     }
@@ -251,10 +281,10 @@ def _connection_override_script() -> str:
       const state=document.querySelector('#aiAccessState');
       const log=document.querySelector('#mcpActivityLog');
       if(btn){btn.textContent=access.enabled?'Turn AI access off':'Enable AI access';btn.className=access.enabled?'secondary':'green';}
-      if(state)state.innerHTML=access.enabled?'<span class="ok">ON for this run</span>':'<span class="off">OFF</span> — MCP calls are denied';
+      if(state)state.innerHTML=access.enabled?'<span class="ok">ON for this run</span> — configured clients may read context':'<span class="off">OFF</span> — MCP calls are denied';
       if(log)log.innerHTML=activityHtml(activity.items||[]);
       const box=document.querySelector('.statusbox.mcp');
-      if(box)box.innerHTML=`<span class="mcpdot"></span><strong>Local MCP:</strong> stdio available${http.running?` · HTTP <code>${esc(http.endpoint)}</code>`:' · HTTP off'}<div class="muted" style="margin-top:3px">Local clients use stdio. HTTP starts only on demand.</div>`;
+      if(box)box.innerHTML=`<span class="mcpdot"></span><strong>Local MCP:</strong> stdio ready${http.running?` · advanced HTTP <code>${esc(http.endpoint)}</code>`:' · advanced HTTP off'}<div class="muted" style="margin-top:3px">Normal local clients use the stable stdio launcher. HTTP starts only on demand.</div>`;
       const stop=document.querySelector('#stopHttpMcp');if(stop)stop.style.display=http.running?'inline-flex':'none';
     }catch(_){}
   }
@@ -262,11 +292,23 @@ def _connection_override_script() -> str:
 
   document.addEventListener('DOMContentLoaded',()=>{
     const connect=document.querySelector('.connect-grid');
-    if(connect && !document.querySelector('#aiAccessPanel')){
-      const panel=document.createElement('div');
+    if(connect){
+      connect.innerHTML=`
+        <div class="connect-card"><div class="tag">One-click local MCP</div><h3>Cursor</h3><p>Open Cursor's native MCP install confirmation with OpenWorkGraph already configured.</p><button onclick="connectCursor()">Connect Cursor</button></div>
+        <div class="connect-card"><div class="tag">Packaged local connector</div><h3>Claude Desktop</h3><p>Download the OpenWorkGraph connector, open it once, and approve it in Claude Desktop.</p><button class="secondary" onclick="openConnect('claude')">Connect Claude</button></div>
+        <div class="connect-card"><div class="tag">One-click local MCP</div><h3>VS Code</h3><p>Open VS Code's native MCP installation flow with the local launcher preconfigured.</p><button class="secondary" onclick="connectVSCode()">Connect VS Code</button></div>
+        <div class="connect-card"><div class="tag">Remote / secure tunnel</div><h3>ChatGPT</h3><p>Use a Secure MCP Tunnel for this local install, or connect a customer-hosted Gateway.</p><button class="secondary" onclick="openConnect('chatgpt')">ChatGPT options</button></div>
+        <div class="connect-card"><div class="tag">Advanced</div><h3>Other MCP app</h3><p>Copy a stdio configuration, with temporary authenticated HTTP available only as fallback.</p><button class="secondary" onclick="openConnect('other')">Connection details</button></div>`;
+    }
+
+    let panel=document.querySelector('#aiAccessPanel');
+    if(!panel && connect){
+      panel=document.createElement('div');
       panel.id='aiAccessPanel';panel.className='card';panel.style.marginTop='12px';
-      panel.innerHTML=`<div style="display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:5px">AI access</h2><div id="aiAccessState" class="muted">Checking…</div><div class="muted" style="margin-top:4px">OFF by default on every launch. Each MCP tool call is checked live.</div></div><div style="display:flex;gap:8px"><button id="aiAccessToggle" class="green">Enable AI access</button><button id="stopHttpMcp" class="ghost" style="display:none">Stop HTTP MCP</button></div></div><div style="margin-top:13px"><strong style="font-size:12px">Recent AI activity</strong><div id="mcpActivityLog" class="muted" style="margin-top:5px">No MCP reads this run.</div></div>`;
-      connect.parentNode.insertBefore(panel,connect.nextSibling);
+      connect.parentNode.insertBefore(panel,connect);
+    }
+    if(panel){
+      panel.innerHTML=`<div style="display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:5px">AI access</h2><div id="aiAccessState" class="muted">Checking…</div><div class="muted" style="margin-top:4px">OFF by default on every launch. Each MCP tool call is checked live.</div></div><div style="display:flex;gap:8px"><button id="aiAccessToggle" class="green">Enable AI access</button><button id="stopHttpMcp" class="ghost" style="display:none">Stop advanced HTTP MCP</button></div></div><div style="margin-top:13px"><strong style="font-size:12px">Recent AI activity</strong><div id="mcpActivityLog" class="muted" style="margin-top:5px">No MCP reads this run.</div></div>`;
       panel.querySelector('#aiAccessToggle').onclick=async()=>{const s=await jsonCall('/v1/ai-access');await setAiAccess(!s.enabled);refreshAiPanel();};
       panel.querySelector('#stopHttpMcp').onclick=async()=>{await httpMcp('stop');refreshAiPanel();};
     }
@@ -377,19 +419,8 @@ async def local_capability_guard(request: Request, call_next):
     if path == "/v1/mcp-connection-config" and method == "GET":
         if not _api_authenticated(request):
             return _json_error("authentication required", 401)
-        root = str(DASHBOARD.parent.parent)
-        env = {
-            "PYTHONPATH": root,
-            "WORKFLOW_OBSERVER_API": "http://127.0.0.1:8787",
-            "WORKFLOW_OBSERVER_AUTH_DIR": os.getenv("WORKFLOW_OBSERVER_AUTH_DIR", os.path.join(root, "data", "auth")),
-        }
-        return JSONResponse({
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "mcp_server.compact_stdio"],
-            "env": env,
-            "security_note": local_security_note(),
-        })
+        from .mcp_connection import stdio_connection_config
+        return JSONResponse(stdio_connection_config())
 
     if (method, path) in BROWSER_ROUTES:
         body = await request.body()
@@ -424,6 +455,20 @@ def get_workflow_trace(
     from .mcp_trace import workflow_trace
     from .privacy_pipeline import redact_for_display
     return redact_for_display(workflow_trace(since=since, until=until, cursor=cursor, limit=limit, scope=scope, query=query, app_name=app_name, session_id=session_id))
+
+
+@app.get("/v1/claude-mcpb")
+def get_claude_mcpb():
+    from .mcp_bundle import claude_mcpb_bytes
+    try:
+        payload = claude_mcpb_bytes()
+    except FileNotFoundError:
+        return _json_error("Claude MCP bundle sources are not installed", 404)
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="OpenWorkGraph-Claude.mcpb"'},
+    )
 
 
 @app.get("/v1/ai-access")
