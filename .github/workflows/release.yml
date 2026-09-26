@@ -117,13 +117,18 @@ jobs:
           ### Agent observability
           The local dashboard includes an Agents view with run-level reports and structural execution traces. REST/MCP surfaces provide privacy-safe run inspection for authorized human/AI clients. The write-only agent-ingest token cannot read work history or reports.
 
+          ### Compact MCP for new connections
+          New dashboard-generated connections, the Claude MCP bundle and the on-demand local HTTP bridge expose a compact MCP surface focused on current context, search, canonical evidence, repeated workflows, task context, prior-run feedback and agent execution inspection. Overlapping tools are consolidated so AI clients have fewer competing tool definitions.
+
+          Existing saved configurations that explicitly launch mcp_server.secure_stdio keep the legacy 24-tool compatibility surface. OpenWorkGraph does not silently remove those tools underneath existing clients. Normative governance tools are experimental on the compact surface and are exposed only when OWG_EXPERIMENTAL_GOVERNANCE is enabled; underlying REST APIs remain available for compatibility.
+
           ### Safer agent ingestion
           Agent evidence obeys the same Pause/Stop and permanent deletion boundaries as other local evidence. Untrusted structural identifiers and timestamps are validated, far-future timestamps are rejected, and agent-ingest authentication/size limits are applied before request bodies are fully buffered.
 
           Prompts, model-response content, tool arguments/results, transcript paths and chain-of-thought/reasoning content are outside the agent evidence contract.
 
           ### Explicit organization sharing
-          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in by setting gateway.local_policy.allow_agent_events=true; organization policy may narrow that opt-in but cannot broaden a local restriction.
+          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in by setting gateway.local_policy.allow_agent_events=true; organization policy may narrow that opt-in but cannot broaden a local restriction. The policy layer itself also fails closed when an endpoint-local agent-sharing key is missing.
 
           ### Native integrations and OTLP
           OpenWorkGraph includes privacy-minimized integrations for Claude Code, Codex telemetry, OpenAI Agents and generic structural agent ingestion. Claude Code observer hooks are asynchronous so observation does not add tool-call latency. The generic OTLP endpoint currently accepts OTLP/HTTP JSON; exact exporter configuration is documented in **docs/NATIVE_AGENT_ADAPTERS.md**.
@@ -135,7 +140,7 @@ jobs:
           Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. The standalone desktop product remains usable without an organization Gateway. **AI_GUIDE.md** and **PROMPT.md** are included.
 
           ### Claude Desktop
-          **OpenWorkGraph-Claude.mcpb** is the local stdio MCP wrapper for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
+          **OpenWorkGraph-Claude.mcpb** uses the compact local stdio MCP surface for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
 
           ### Security note
           Self-hosted production deployments should use customer-controlled TLS/network access, secret management, retention/backups and identity infrastructure appropriate to their environment. OpenWorkGraph's local-first and customer-hosted deployment options do not remove those operational responsibilities.
