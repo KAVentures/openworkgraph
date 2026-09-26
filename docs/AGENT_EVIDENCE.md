@@ -230,6 +230,8 @@ execute_tool / retrieval -> tool_call
 
 Unknown spans are ignored rather than guessed.
 
+For the exact standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json`, and bearer-header environment variables—and why a generic OTLP base endpoint would incorrectly target `/v1/traces`—see [Native agent adapters: Generic OpenTelemetry trace export](NATIVE_AGENT_ADAPTERS.md#generic-opentelemetry-trace-export). The generic endpoint is JSON-only; the configuration is documented there once so the two documents do not drift.
+
 Optional OpenWorkGraph defaults can be supplied at the top level:
 
 ```json
