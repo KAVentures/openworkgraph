@@ -171,7 +171,7 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/json"
 export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer WRITE_ONLY_AGENT_TOKEN"
 ```
 
-Use the signal-specific endpoint exactly as shown. The generic endpoint currently accepts JSON, not OTLP protobuf or gRPC.
+Use the signal-specific endpoint exactly as shown. The generic endpoint accepts OTLP/HTTP JSON and **does not accept protobuf bodies**. It also **does not currently expose the conventional `/v1/traces` alias**; use `/agent-ingest/v1/otel` exactly.
 
 ## Local-first boundary
 
