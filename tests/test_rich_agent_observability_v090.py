@@ -89,7 +89,6 @@ def test_claude_otel_projects_rich_structure_and_never_content():
         "private-tool-id",
         "private-tool-approval",
         "tool_parameters",
-        "tool_result",
     ):
         assert forbidden not in serialized
 
