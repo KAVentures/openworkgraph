@@ -53,6 +53,14 @@ def load_gateway_settings(config_path: Path, *, auth_dir: Path) -> GatewaySyncSe
     declared = gateway.get("declared_policy") if isinstance(gateway.get("declared_policy"), dict) else {}
     target_value = str(declared.get("target_file") or "").strip()
     token_file = auth_dir / ".gateway_device_token"
+
+    # Agent execution evidence is more structurally rich than normal human
+    # observer rows and may describe tool/model/handoff activity. Keep it local
+    # unless this endpoint explicitly opts into organization sharing. A remote
+    # organization policy may narrow this later, but cannot turn it on locally.
+    local_policy = dict(gateway.get("local_policy") or {})
+    local_policy.setdefault("allow_agent_events", False)
+
     return GatewaySyncSettings(
         enabled=bool(gateway.get("enabled", False)),
         url=str(gateway.get("url") or "").rstrip("/"),
@@ -60,7 +68,7 @@ def load_gateway_settings(config_path: Path, *, auth_dir: Path) -> GatewaySyncSe
         batch_size=max(1, min(int(gateway.get("batch_size", 100)), 500)),
         poll_seconds=max(0.25, float(gateway.get("poll_seconds", 2))),
         policy_refresh_seconds=max(5.0, float(gateway.get("policy_refresh_seconds", 60))),
-        local_policy=dict(gateway.get("local_policy") or {}),
+        local_policy=local_policy,
         token_file=token_file,
         managed_declared_policy_enabled=bool(declared.get("enabled", False)),
         managed_declared_policy_organization_id=str(declared.get("organization_id") or "").strip(),
