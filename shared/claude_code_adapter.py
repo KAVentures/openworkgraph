@@ -162,7 +162,7 @@ def claude_hook_to_agent_events(
             run_id=session_id,
             trace_id=trace_id,
             event_key=hook,
-            model=_safe_label(payload.get("model"), limit=160),
+            model=_safe_label(payload.get("model"), default="", limit=160),
         )]
 
     if hook == "SessionEnd":
