@@ -14,9 +14,9 @@ test('agent observability dashboard JavaScript parses',()=>{
 
 test('dashboard adds a dedicated accessible Agents tab and panel before DOM ready',()=>{
   assert.match(source,/id='tab-agents'/);
-  assert.match(source,/data\.tab='agents'/);
+  assert.match(source,/tab\.dataset\.tab='agents'/);
   assert.match(source,/id='panel-agents'/);
-  assert.match(source,/data\.panel='agents'/);
+  assert.match(source,/panel\.dataset\.panel='agents'/);
   assert.match(source,/ensureAgentDashboardSurface\(\);/);
 });
 
