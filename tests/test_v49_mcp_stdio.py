@@ -106,8 +106,13 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert "get_workflow_trace" in names
                 assert "automation_candidates" in names
                 assert "get_work_profile" in names
+                expected_agent_inspection = {
+                    "get_agent_runs",
+                    "get_agent_execution_trace",
+                }
                 assert expected_procedural <= names
-                assert len(names) == 22
+                assert expected_agent_inspection <= names
+                assert len(names) == 24
 
                 denied = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert denied.is_error is True
