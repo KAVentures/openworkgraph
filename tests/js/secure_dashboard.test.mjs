@@ -29,12 +29,21 @@ test('dashboard exports use short-lived server tickets rather than cookie naviga
   assert.doesNotMatch(override, /location\.href/);
 });
 
-test('local AI connectors use compact authenticated stdio while HTTP bearer is on demand only', () => {
+test('local AI connectors use stable authenticated stdio while HTTP bearer is advanced only', () => {
   assert.match(source, /\/v1\/mcp-connection-config/);
-  assert.match(source, /mcp_server\.compact_stdio/);
+  assert.match(source, /mcp_connection import stdio_connection_config/);
   assert.match(source, /cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install/);
-  const cursorBlock = source.split('window.connectCursor', 2)[1].split('window.showBrowserPairingCode', 1)[0];
+  assert.match(source, /vscode:mcp\/install/);
+  assert.match(source, /\/v1\/claude-mcpb/);
+
+  const cursorBlock = source.split('window.connectCursor', 2)[1].split('window.connectVSCode', 1)[0];
   assert.doesNotMatch(cursorBlock, /Bearer/);
+
+  const chatgptBlock = source.split("if(kind==='chatgpt')", 2)[1].split("if(kind==='other')", 1)[0];
+  assert.match(chatgptBlock, /cannot directly call a server/);
+  assert.doesNotMatch(chatgptBlock, /httpMcp\('start'\)/);
+
+  assert.match(source, /showAdvancedHttp/);
   assert.match(source, /httpMcp\('start'\)/);
-  assert.match(source, /Bearer \$\{c\.token\}/);
+  assert.match(source, /Bearer \$\{h\.token\}/);
 });
