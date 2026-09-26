@@ -5,9 +5,12 @@ import os
 from starlette.responses import JSONResponse
 
 from server.local_auth import mcp_bearer_matches
-from .compact import mcp
+from . import compact as _compact
+from .compact_hardening import apply_compact_hardening
 
 
+apply_compact_hardening(_compact)
+mcp = _compact.mcp
 _inner = mcp.streamable_http_app()
 
 
