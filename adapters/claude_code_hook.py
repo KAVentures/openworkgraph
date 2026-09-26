@@ -10,6 +10,7 @@ payloads, secrets, prompts, arguments, or tool results.
 import argparse
 import json
 import os
+import shlex
 import sys
 
 from adapters._agent_client import post_agent_events
@@ -28,12 +29,27 @@ SUPPORTED_EVENTS = [
 ]
 
 
-def settings_fragment(command: str | None = None) -> dict:
+# Repository root that contains the ``adapters`` package. The package is not
+# installed into the venv, so ``-m adapters.claude_code_hook`` only resolves when
+# the working directory is this root. Claude Code runs hooks from the session's
+# project directory, so the generated command must ``cd`` here first.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def hook_command(command: str | None = None) -> str:
     executable = command or sys.executable
+    return (
+        f"cd {shlex.quote(PROJECT_ROOT)} && "
+        f"{shlex.quote(executable)} -m adapters.claude_code_hook"
+    )
+
+
+def settings_fragment(command: str | None = None) -> dict:
     handler = {
         "type": "command",
-        "command": executable,
-        "args": ["-m", "adapters.claude_code_hook"],
+        # Single shell command string: quoted paths survive spaces (e.g.
+        # "Application Support") without relying on a separate args field.
+        "command": hook_command(command),
         # OpenWorkGraph is observational and never returns a Claude Code control
         # decision. Run the bridge in the background so local telemetry cannot
         # add latency to the triggering tool/lifecycle event.

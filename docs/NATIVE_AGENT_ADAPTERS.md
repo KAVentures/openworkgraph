@@ -72,7 +72,7 @@ for your local user, or the relevant project `.claude/settings.json` if you inte
 
 OpenWorkGraph does **not** edit Claude Code settings automatically.
 
-The generated hook uses separate `command` and `args` fields, so interpreter paths containing spaces do not need shell-quoting tricks. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
+The generated hook is a single shell command that first `cd`s into the OpenWorkGraph installation directory (the `adapters` package is not installed into the venv, and Claude Code runs hooks from the session's project directory) and then runs the interpreter with `-m adapters.claude_code_hook`. Both paths are shell-quoted, so directories containing spaces such as `Application Support` work. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
 
 ### Failure behavior
 
