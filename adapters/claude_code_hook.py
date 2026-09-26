@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import shlex
+import subprocess
 import sys
 
 from adapters._agent_client import post_agent_events
@@ -36,19 +37,30 @@ SUPPORTED_EVENTS = [
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _shell_quote(value: str) -> str:
+    """Quote one command argument for the host platform's default shell."""
+    if os.name == "nt":
+        return subprocess.list2cmdline([value])
+    return shlex.quote(value)
+
+
 def hook_command(command: str | None = None) -> str:
     executable = command or sys.executable
-    return (
-        f"cd {shlex.quote(PROJECT_ROOT)} && "
-        f"{shlex.quote(executable)} -m adapters.claude_code_hook"
-    )
+    root = _shell_quote(PROJECT_ROOT)
+    python = _shell_quote(executable)
+    if os.name == "nt":
+        # ``/d`` lets cmd.exe change both directory and drive. Single-quote
+        # POSIX escaping is invalid in cmd.exe, so use Windows command-line
+        # quoting via ``subprocess.list2cmdline`` above.
+        return f"cd /d {root} && {python} -m adapters.claude_code_hook"
+    return f"cd {root} && {python} -m adapters.claude_code_hook"
 
 
 def settings_fragment(command: str | None = None) -> dict:
     handler = {
         "type": "command",
-        # Single shell command string: quoted paths survive spaces (e.g.
-        # "Application Support") without relying on a separate args field.
+        # Single shell command string: platform-native quoting survives spaces
+        # (e.g. "Application Support") without relying on a separate args field.
         "command": hook_command(command),
         # OpenWorkGraph is observational and never returns a Claude Code control
         # decision. Run the bridge in the background so local telemetry cannot
