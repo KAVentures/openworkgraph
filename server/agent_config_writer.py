@@ -70,7 +70,7 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
-# --- Claude Code: hooks in ~/.claude/settings.json ---------------------------
+# --- Claude Code: hooks + logs-only OTel in ~/.claude/settings.json ----------
 
 def _load_claude(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -87,6 +87,9 @@ def _load_claude(path: Path) -> dict[str, Any]:
     hooks = data.get("hooks")
     if hooks is not None and not isinstance(hooks, dict):
         raise ConfigConflict(f"'hooks' in {path} has an unexpected shape; use manual setup")
+    env = data.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise ConfigConflict(f"'env' in {path} has an unexpected shape; use manual setup")
     return data
 
 
@@ -125,24 +128,92 @@ def _strip_owg_hooks(data: dict[str, Any]) -> int:
     return removed
 
 
-def claude_status() -> dict[str, Any]:
-    path = claude_settings_path()
-    try:
-        data = _load_claude(path)
-    except ConfigConflict as exc:
-        return {"configured": False, "path": str(path), "error": str(exc)}
-    configured = any(
+def _claude_hooks_configured(data: dict[str, Any]) -> bool:
+    return any(
         _is_owg_handler(h)
         for groups in (data.get("hooks") or {}).values() if isinstance(groups, list)
         for group in groups if isinstance(group, dict)
         for h in (group.get("hooks") or []) if isinstance(group.get("hooks"), list)
     )
-    return {"configured": configured, "path": str(path)}
 
 
-def claude_connect(fragment_factory: Callable[[], dict]) -> dict[str, Any]:
+def _claude_env_matches(data: dict[str, Any], managed_env: dict[str, str] | None) -> bool:
+    if not managed_env:
+        return True
+    existing = data.get("env") if isinstance(data.get("env"), dict) else {}
+    return all(str(existing.get(key) or "") == str(value) for key, value in managed_env.items())
+
+
+def _validate_claude_env_conflicts(data: dict[str, Any], managed_env: dict[str, str]) -> None:
+    existing = data.get("env") if isinstance(data.get("env"), dict) else {}
+    conflicts = [
+        key for key, desired in managed_env.items()
+        if key in existing and str(existing.get(key)) != str(desired)
+    ]
+    if conflicts:
+        joined = ", ".join(sorted(conflicts))
+        raise ConfigConflict(
+            f"Claude Code already has different telemetry settings for {joined}. "
+            "OpenWorkGraph will not overwrite them; use manual setup or an OTLP collector/tee."
+        )
+
+
+def _merge_claude_env(data: dict[str, Any], managed_env: dict[str, str]) -> None:
+    if not managed_env:
+        return
+    env = data.setdefault("env", {})
+    if not isinstance(env, dict):
+        raise ConfigConflict("Claude Code 'env' has an unexpected shape; use manual setup")
+    for key, value in managed_env.items():
+        env[key] = str(value)
+
+
+def _strip_matching_claude_env(data: dict[str, Any], managed_env: dict[str, str]) -> int:
+    """Remove only OWG values that still exactly match what OWG would write.
+
+    If the user changed a value after connecting, leave it untouched. This makes
+    Disconnect reversible without claiming ownership of unrelated telemetry keys.
+    """
+    env = data.get("env")
+    if not isinstance(env, dict):
+        return 0
+    removed = 0
+    for key, expected in managed_env.items():
+        if key in env and str(env.get(key)) == str(expected):
+            del env[key]
+            removed += 1
+    if not env:
+        data.pop("env", None)
+    return removed
+
+
+def claude_status(managed_env: dict[str, str] | None = None) -> dict[str, Any]:
+    path = claude_settings_path()
+    try:
+        data = _load_claude(path)
+    except ConfigConflict as exc:
+        return {"configured": False, "path": str(path), "error": str(exc)}
+    hooks_configured = _claude_hooks_configured(data)
+    telemetry_configured = _claude_env_matches(data, managed_env)
+    return {
+        "configured": hooks_configured and telemetry_configured,
+        "hooks_configured": hooks_configured,
+        "telemetry_configured": telemetry_configured,
+        "path": str(path),
+    }
+
+
+def claude_connect(
+    fragment_factory: Callable[[], dict],
+    managed_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     path = claude_settings_path()
     data = _load_claude(path)
+    desired_env = dict(managed_env or {})
+    # Fail before changing hooks if a user already owns a conflicting telemetry
+    # destination or privacy flag.
+    _validate_claude_env_conflicts(data, desired_env)
+
     # Replace, never duplicate: older OpenWorkGraph handlers (e.g. the pre-0.89
     # command/args form) are removed before the current ones are added.
     _strip_owg_hooks(data)
@@ -152,22 +223,38 @@ def claude_connect(fragment_factory: Callable[[], dict]) -> dict[str, Any]:
         if not isinstance(existing, list):
             raise ConfigConflict(f"hooks.{event} in {path} has an unexpected shape; use manual setup")
         existing.extend(groups)
+    _merge_claude_env(data, desired_env)
+
     backup = _backup(path)
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    return {"configured": True, "path": str(path), "backup": backup,
-            "note": "Takes effect in new Claude Code sessions."}
+    return {
+        "configured": True,
+        "hooks_configured": True,
+        "telemetry_configured": bool(desired_env),
+        "path": str(path),
+        "backup": backup,
+        "note": "Takes effect in new Claude Code sessions.",
+    }
 
 
-def claude_disconnect() -> dict[str, Any]:
+def claude_disconnect(managed_env: dict[str, str] | None = None) -> dict[str, Any]:
     path = claude_settings_path()
     if not path.exists():
         return {"configured": False, "path": str(path), "backup": None}
     data = _load_claude(path)
-    if not _strip_owg_hooks(data):
+    removed_hooks = _strip_owg_hooks(data)
+    removed_env = _strip_matching_claude_env(data, dict(managed_env or {}))
+    if not (removed_hooks or removed_env):
         return {"configured": False, "path": str(path), "backup": None}
     backup = _backup(path)
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    return {"configured": False, "path": str(path), "backup": backup}
+    return {
+        "configured": False,
+        "hooks_configured": False,
+        "telemetry_configured": False,
+        "path": str(path),
+        "backup": backup,
+    }
 
 
 # --- Codex: [otel] in ~/.codex/config.toml ------------------------------------
