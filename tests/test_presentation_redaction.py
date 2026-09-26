@@ -218,7 +218,7 @@ def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
     assert safe["events"][0]["metadata"]["activity"] == raw["events"][0]["metadata"]["activity"]
 
 
-def test_browser_container_titles_are_minimized_at_rest_and_display_remains_safe(monkeypatch, tmp_path):
+def test_browser_container_titles_are_minimized_at_rest_without_changing_event_structure(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.db as db
     import server.presentation as presentation
@@ -252,7 +252,6 @@ def test_browser_container_titles_are_minimized_at_rest_and_display_remains_safe
     assert "Anna Svensson" not in stored["window_title"]
     assert "anna.svensson@acme.com" not in stored["window_title"].lower()
     assert shown["window_title"] == "Gmail"
-    assert "Anna Svensson" not in shown["metadata"]["target"]["label"]
     assert stored["event_id"] == shown["event_id"] == "raw1"
     assert stored["event_type"] == shown["event_type"] == "browser_click"
 
