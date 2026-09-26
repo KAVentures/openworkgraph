@@ -32,7 +32,7 @@ const env = {
   WORKFLOW_OBSERVER_AUTH_DIR: path.join(root, 'data', 'auth'),
 };
 
-const child = spawn(python, ['-m', 'mcp_server.secure_stdio'], {
+const child = spawn(python, ['-m', 'mcp_server.compact_stdio'], {
   cwd: root,
   env,
   stdio: ['inherit', 'inherit', 'inherit'],
