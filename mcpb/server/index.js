@@ -26,7 +26,7 @@ if (!root || !fs.existsSync(python) || !fs.existsSync(launcher)) {
   process.exit(1);
 }
 
-const child = spawn(python, [launcher], {
+const child = spawn(python, [launcher, '--client', 'claude_desktop'], {
   cwd: root,
   env: process.env,
   stdio: ['inherit', 'inherit', 'inherit'],

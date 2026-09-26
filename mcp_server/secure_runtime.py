@@ -106,24 +106,31 @@ def _finish_task_context(tool_name: str, source_result: dict[str, Any]) -> dict[
     return protected
 
 
+def _client_id() -> str:
+    return os.getenv("OWG_MCP_CLIENT", "").strip()
+
+
 def authorize_tool(tool_name: str) -> None:
+    client = _client_id()
     try:
-        state = secure_get("/v1/ai-access")
+        state = secure_get("/v1/ai-access", {"client": client} if client else None)
     except Exception as exc:
         raise ToolError("OpenWorkGraph could not verify AI access. Keep OpenWorkGraph running and reopen its local dashboard.") from exc
     if state.get("enabled"):
         return
     try:
-        secure_post("/v1/mcp-activity", {"tool": tool_name, "status": "denied", "rows": 0, "bytes": 0})
+        secure_post("/v1/mcp-activity", {"tool": tool_name, "status": "denied", "rows": 0, "bytes": 0, "client": client})
     except Exception:
         pass
+    if state.get("global_enabled", True) and state.get("client_enabled") is False:
+        raise ToolError("OpenWorkGraph context is switched OFF for this app. Turn it on in the OpenWorkGraph dashboard (Connect tab).")
     raise ToolError("OpenWorkGraph AI access is OFF. Enable AI access in the local dashboard for this run.")
 
 
 def audit_tool(tool_name: str, result: dict[str, Any]) -> None:
     try:
         summary = _activity_summary(result)
-        secure_post("/v1/mcp-activity", {"tool": tool_name, "status": "ok", **summary})
+        secure_post("/v1/mcp-activity", {"tool": tool_name, "status": "ok", **summary, "client": _client_id()})
     except Exception:
         # Observability must never turn a successful evidence read into a failure.
         pass

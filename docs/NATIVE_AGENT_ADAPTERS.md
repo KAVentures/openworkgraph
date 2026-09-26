@@ -56,7 +56,7 @@ Content-heavy events such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`,
 
 ### One-click setup
 
-On the dashboard's **Connect** tab, click **Connect** on the Claude Code card. OpenWorkGraph adds its hooks to `~/.claude/settings.json`: it writes a timestamped `settings.json.owg-backup-*` copy first, keeps every other setting and hook, replaces (never duplicates) earlier OpenWorkGraph hooks, and refuses to touch a file that is not valid JSON. **Disconnect** removes only OpenWorkGraph's handlers. Changes apply to new Claude Code sessions. The card still turns green only when telemetry actually arrives.
+On the dashboard's **Connect** tab, flip Claude Code's **Observe** switch under **Connections** (or run `owg_connect.py on claude_code --observe`; see [CONNECTIONS.md](CONNECTIONS.md)). Switching it off later is instant and keeps the hooks installed; **Remove** uninstalls them. The first time, OpenWorkGraph adds its hooks to `~/.claude/settings.json`: it writes a timestamped `settings.json.owg-backup-*` copy first, keeps every other setting and hook, replaces (never duplicates) earlier OpenWorkGraph hooks, and refuses to touch a file that is not valid JSON. **Remove** deletes only OpenWorkGraph's handlers. Installing applies to new Claude Code sessions. The Connections row shows *Telemetry observed* only when telemetry actually arrives.
 
 ### Generate the settings fragment manually
 
@@ -74,7 +74,7 @@ Merge the printed `hooks` object into either:
 
 for your local user, or the relevant project `.claude/settings.json` if you intentionally want project-scoped configuration.
 
-OpenWorkGraph edits Claude Code settings only when you click **Connect** or **Disconnect** on the dashboard; it never does so in the background.
+OpenWorkGraph edits Claude Code settings only when you turn Observe on for the first time or click **Remove** (dashboard or CLI); it never does so in the background.
 
 The generated hook is a single shell command that first `cd`s into the OpenWorkGraph installation directory (the `adapters` package is not installed into the venv, and Claude Code runs hooks from the session's project directory) and then runs the interpreter with `-m adapters.claude_code_hook`. Both paths are shell-quoted, so directories containing spaces such as `Application Support` work. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
 
@@ -106,7 +106,7 @@ The parser also understands `codex.tool_decision` if a compatible relay explicit
 
 ### One-click setup
 
-On the dashboard's **Connect** tab, click **Connect** on the Codex card. OpenWorkGraph appends a clearly marked, managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a timestamped backup, validates the result as TOML, and restarts nothing: Codex picks it up on its next start. If the file already has its own `[otel]` settings, or is not valid TOML, OpenWorkGraph changes nothing and asks you to merge manually. **Disconnect** removes only the managed block.
+On the dashboard's **Connect** tab, flip Codex's **Observe** switch under **Connections** (or run `owg_connect.py on codex --observe`). The first time, OpenWorkGraph appends a clearly marked, managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a timestamped backup, validates the result as TOML, and restarts nothing: Codex picks it up on its next start. If the file already has its own `[otel]` settings, or is not valid TOML, OpenWorkGraph changes nothing and asks you to merge manually. Switching off is instant (events are dropped at ingest); **Remove** deletes only the managed block.
 
 ### Generate a safe trace-exporter snippet manually
 

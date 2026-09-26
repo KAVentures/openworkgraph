@@ -15,6 +15,7 @@ from .agent_ingest import (
     ingest_otel_payload,
 )
 from .agent_read_auth import agent_read_authorized
+from .connections import is_enabled
 from .agent_workflows import agent_workflow_view
 from .agent_execution_trace_routes import router as agent_execution_trace_router
 from .context_execution_routes import router as context_execution_router
@@ -45,6 +46,17 @@ class OTelDefaults(BaseModel):
     framework: str = ""
     run_id: str = ""
     workflow_id: str = ""
+
+
+# Frameworks whose observation can be switched on/off per client in the
+# dashboard (server.connections). Other frameworks are always accepted.
+_SWITCHABLE_FRAMEWORKS = {"claude-code": "claude_code", "codex": "codex"}
+
+
+def _observation_enabled_for(event: Any) -> bool:
+    framework = str(event.get("framework") or "") if isinstance(event, dict) else ""
+    client = _SWITCHABLE_FRAMEWORKS.get(framework)
+    return is_enabled(client, "observe") if client else True
 
 
 def _require_agent_write_bearer(request: Request) -> None:
@@ -96,8 +108,11 @@ async def ingest_agent_events(request: Request) -> dict[str, int | str]:
     payload = await _read_bounded_json(request)
     if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
         raise HTTPException(status_code=422, detail="events must be a list")
+    events = [event for event in payload["events"] if _observation_enabled_for(event)]
+    if not events:
+        return {"received": 0, "status": "observation_off"}
     try:
-        result = ingest_agent_payloads(payload["events"])
+        result = ingest_agent_payloads(events)
     except AgentEvidenceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**result, "status": "ok"}
@@ -125,6 +140,10 @@ async def ingest_codex_otel(request: Request) -> Response:
     payload = await _read_bounded_json(request)
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
+
+    if not is_enabled("codex", "observe"):
+        # Switched off in the dashboard: accept and drop so Codex does not retry.
+        return Response(status_code=202)
 
     # Codex sends standard OTLP JSON. Optional OpenWorkGraph defaults are useful
     # for custom relays/tests, but normal Codex exporters need no OWG-specific body.

@@ -28,7 +28,9 @@ from server.secure_app import app
 
 
 DASHBOARD_SCRIPT = ROOT / "dashboard" / "agent_control_plane.js"
+CONNECTIONS_SCRIPT = ROOT / "dashboard" / "connections.js"
 _SCRIPT_MARKER = '<script src="/agent-control-plane.js"></script>'
+_CONNECTIONS_MARKER = '<script src="/connections.js"></script>'
 
 
 def _base_url(request: Request) -> str:
@@ -181,6 +183,40 @@ async def change_agent_config(request: Request) -> JSONResponse:
     return JSONResponse({"agent": kind, **result}, headers={"Cache-Control": "no-store"})
 
 
+def get_connections() -> JSONResponse:
+    from server.connections import list_connections
+    return JSONResponse(list_connections(), headers={"Cache-Control": "no-store"})
+
+
+async def change_connection(request: Request) -> JSONResponse:
+    from server import connections
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "invalid request"}, status_code=400)
+    payload = payload if isinstance(payload, dict) else {}
+    kind = str(payload.get("kind") or "both")
+    kinds = connections.KINDS if kind == "both" else (kind,)
+    try:
+        result = connections.change(str(payload.get("client") or ""), str(payload.get("action") or ""), kinds)
+    except KeyError:
+        return JSONResponse({"detail": "unknown client"}, status_code=400)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    except writer.ConfigConflict as exc:
+        return JSONResponse({"detail": str(exc), "manual_setup_required": True}, status_code=409)
+    except OSError:
+        return JSONResponse(
+            {"detail": "Could not write the client configuration file.", "manual_setup_required": True},
+            status_code=500,
+        )
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+def connections_script() -> Response:
+    return Response(CONNECTIONS_SCRIPT.read_text(encoding="utf-8"), media_type="application/javascript")
+
+
 def agent_control_plane_script() -> Response:
     return Response(DASHBOARD_SCRIPT.read_text(encoding="utf-8"), media_type="application/javascript")
 
@@ -202,6 +238,8 @@ async def _inject_agent_control_plane(request: Request, call_next):
         return response
     if _SCRIPT_MARKER not in text:
         text = text.replace("</body>", _SCRIPT_MARKER + "\n</body>")
+    if _CONNECTIONS_MARKER not in text:
+        text = text.replace("</body>", _CONNECTIONS_MARKER + "\n</body>")
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return HTMLResponse(text, status_code=response.status_code, headers=headers)
@@ -212,6 +250,9 @@ def _install() -> None:
     app.add_api_route("/v1/agent-config", get_agent_config_status, methods=["GET"])
     app.add_api_route("/v1/agent-config", change_agent_config, methods=["POST"])
     app.add_api_route("/agent-control-plane.js", agent_control_plane_script, methods=["GET"])
+    app.add_api_route("/v1/connections", get_connections, methods=["GET"])
+    app.add_api_route("/v1/connections", change_connection, methods=["POST"])
+    app.add_api_route("/connections.js", connections_script, methods=["GET"])
     app.middleware("http")(_inject_agent_control_plane)
 
 

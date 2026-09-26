@@ -32,9 +32,14 @@ class ConfigConflict(Exception):
     """The file exists but cannot be changed safely; use manual setup."""
 
 
+def _home() -> Path:
+    override = os.getenv("OWG_CONNECTIONS_HOME", "").strip()
+    return Path(override) if override else Path.home()
+
+
 def claude_settings_path() -> Path:
     override = os.getenv("OWG_CLAUDE_SETTINGS_PATH", "").strip()
-    return Path(override) if override else Path.home() / ".claude" / "settings.json"
+    return Path(override) if override else _home() / ".claude" / "settings.json"
 
 
 def codex_config_path() -> Path:
@@ -42,7 +47,7 @@ def codex_config_path() -> Path:
     if override:
         return Path(override)
     codex_home = os.getenv("CODEX_HOME", "").strip()
-    return (Path(codex_home) if codex_home else Path.home() / ".codex") / "config.toml"
+    return (Path(codex_home) if codex_home else _home() / ".codex") / "config.toml"
 
 
 def _backup(path: Path) -> str | None:
@@ -172,14 +177,16 @@ def claude_disconnect() -> dict[str, Any]:
 
 # --- Codex: [otel] in ~/.codex/config.toml ------------------------------------
 
-def _strip_codex_block(text: str) -> tuple[str, bool]:
-    start = text.find(CODEX_BLOCK_START)
+def _strip_codex_block(
+    text: str, marker_start: str = CODEX_BLOCK_START, marker_end: str = CODEX_BLOCK_END
+) -> tuple[str, bool]:
+    start = text.find(marker_start)
     if start < 0:
         return text, False
-    end = text.find(CODEX_BLOCK_END, start)
+    end = text.find(marker_end, start)
     if end < 0:
         raise ConfigConflict("The OpenWorkGraph block in the Codex config is incomplete; fix it manually")
-    end += len(CODEX_BLOCK_END)
+    end += len(marker_end)
     if text[end:end + 1] == "\n":
         end += 1
     head = text[:start].rstrip("\n")
