@@ -173,7 +173,9 @@ def test_stdio_connection_config_contains_no_long_lived_mcp_bearer(v49_api):
     cfg = httpx.get(v49_api["base"] + "/v1/mcp-connection-config", headers=v49_api["headers"]).json()
     assert cfg["transport"] == "stdio"
     assert cfg["command"] == sys.executable
-    assert cfg["args"] == ["-m", "mcp_server.compact_stdio"]
+    assert len(cfg["args"]) == 1
+    assert cfg["args"][0].endswith("mcp_server/launcher.py") or cfg["args"][0].endswith("mcp_server\\launcher.py")
+    assert cfg["env"] == {}
     assert "token" not in cfg
     assert "Authorization" not in json.dumps(cfg)
 
@@ -207,6 +209,6 @@ def test_mcpb_manifest_and_builder_are_local_compact_stdio_wrapper():
     assert manifest["server"]["type"] == "node"
     assert manifest["server"]["entry_point"] == "server/index.js"
     assert any(x.get("name") == "get_workflow_trace" for x in manifest["tools"])
-    launcher = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
-    assert "mcp_server.compact_stdio" in launcher
-    assert "WORKFLOW_OBSERVER_API" in launcher
+    wrapper = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
+    assert "mcp_server" in wrapper and "launcher.py" in wrapper
+    assert "WORKFLOW_OBSERVER_API" not in wrapper
