@@ -172,6 +172,8 @@ def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor"
             ),
             "positive_example": observed_completion,
+            # Kept internally so identity regression tests can prove semantic labels
+            # never affect the legacy structural family calculation.
             "structural_steps": structural_steps[:_MAX_STEPS],
             "semantic_steps": semantic_steps[:_MAX_STEPS],
             "evidence_refs": [
@@ -308,8 +310,8 @@ def readable_feedback(
             key: run.get(key)
             for key in (
                 "execution_id", "started_at", "ended_at", "duration_seconds",
-                "outcome_status", "outcome_basis", "family_basis", "structural_steps",
-                "semantic_steps", "evidence_refs", "derived", "authoritative", "needs_review",
+                "outcome_status", "outcome_basis", "family_basis", "semantic_steps",
+                "evidence_refs", "derived", "authoritative", "needs_review",
             )
         } | {
             "similarity_score": score,
