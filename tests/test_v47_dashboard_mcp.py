@@ -27,10 +27,11 @@ def test_normal_launcher_is_stdio_first_without_replacing_observer():
     assert "write_browser_pairing_bundle" in source
     assert "MCP_PORT = 8788" not in source
     assert '"mcp_server.http_app:app"' not in source
+    assert '"mcp_server.compact_http_app:app"' not in source
     assert "start_local_mcp" not in source
     assert "HTTP MCP is OFF by default" in source
     optional = _read("server/mcp_http_control.py")
-    assert '"mcp_server.http_app:app"' in optional
+    assert '"mcp_server.compact_http_app:app"' in optional
     assert 'f"http://{HOST}:{port}/mcp"' in optional
 
 
@@ -43,7 +44,7 @@ def test_streamable_http_mcp_process_still_available_for_on_demand_clients(tmp_p
         "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
     })
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "mcp_server.http_app:app", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "uvicorn", "mcp_server.compact_http_app:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     ready = False
@@ -69,19 +70,18 @@ def test_streamable_http_mcp_process_still_available_for_on_demand_clients(tmp_p
 
 
 def test_mcp_is_compact_rich_evidence_first_and_keeps_security_boundary():
-    source = _read("mcp_server/main.py")
+    source = _read("mcp_server/compact.py")
     assert "def get_workflow_trace(" in source
     assert '"/v1/workflow-trace"' in source
     assert "openworkgraph://ai-guide" in source
-    assert "AI_DATA_DICTIONARY_MD" in source
     assert "rich_ai_context_compact" in source
     assert "raw_local_evidence" not in source
-    assert "protect_observed_payload" in source
-    assert "mcp_bearer_matches" in _read("mcp_server/http_app.py")
     secure = _read("mcp_server/secure_runtime.py")
+    assert "protect_observed_payload" in secure
     assert "ensure_api_token" in secure
     assert 'secure_get("/v1/ai-access")' in secure
     assert '"status": "denied"' in secure
+    assert "mcp_bearer_matches" in _read("mcp_server/compact_http_app.py")
 
 
 def test_dashboard_data_first_layout_keeps_required_observer_controls():
@@ -105,12 +105,12 @@ def test_dashboard_data_first_layout_keeps_required_observer_controls():
     assert "See how work actually happens" not in html
 
 
-def test_cursor_and_claude_connections_use_stdio_and_chatgpt_http_is_on_demand():
+def test_cursor_and_claude_connections_use_compact_stdio_and_chatgpt_http_is_on_demand():
     html = _read("dashboard/index.html")
     secure = _read("server/secure_app.py")
     assert "cursor://anysphere.cursor-deeplink/mcp/install" in secure
     assert '"transport": "stdio"' in secure
-    assert '"-m", "mcp_server.secure_stdio"' in secure
+    assert '"-m", "mcp_server.compact_stdio"' in secure
     assert "Authorization:`Bearer ${c.token}`" not in secure.split("window.connectCursor", 1)[1].split("window.showBrowserPairingCode", 1)[0]
     assert "httpMcp('start')" in secure
     assert "Secure MCP Tunnel" in secure
