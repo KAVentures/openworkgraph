@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "openworkgraph-local",
   "display_name": "OpenWorkGraph",
-  "version": "0.76.0",
+  "version": "0.86.0",
   "description": "Connect Claude Desktop to the local OpenWorkGraph workflow context layer.",
   "long_description": "Uses the OpenWorkGraph installation already running on this computer. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
   "author": {

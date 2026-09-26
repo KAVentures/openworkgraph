@@ -61,7 +61,9 @@ def test_ai_context_is_additive_and_self_describing(monkeypatch, tmp_path):
     # New AI material is additive and sourced from the canonical bundled files.
     assert "workflow-evidence layer" in payload["ai_guide_markdown"]
     assert "Treat raw observations as evidence" in payload["starter_prompt_markdown"]
-    assert "non-authoritative heuristics" in payload["export"]["interpretation_note"]
+    interpretation_note = payload["export"]["interpretation_note"]
+    assert "derived views" in interpretation_note
+    assert "observation coverage" in interpretation_note
 
     manifest = payload["capture_manifest"]
     assert manifest["evidence"]["raw_local_evidence_included"] is True

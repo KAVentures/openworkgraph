@@ -34,6 +34,10 @@ def settings_fragment(command: str | None = None) -> dict:
         "type": "command",
         "command": executable,
         "args": ["-m", "adapters.claude_code_hook"],
+        # OpenWorkGraph is observational and never returns a Claude Code control
+        # decision. Run the bridge in the background so local telemetry cannot
+        # add latency to the triggering tool/lifecycle event.
+        "async": True,
         "timeout": 2,
     }
     return {
