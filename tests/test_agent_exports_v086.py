@@ -95,18 +95,25 @@ def test_agent_run_export_is_one_row_per_run_and_hides_native_ids():
     assert row["coverage_absence_means"] == "not_observed_not_proof_of_nonoccurrence"
 
     serialized = json.dumps(row, ensure_ascii=False)
-    for forbidden in (
+    for native_value in (
         "native-run-export-v086",
         "native-trace-export-v086",
         "native-tool-span-v086",
+    ):
+        assert native_value not in serialized
+
+    # Check field names structurally instead of substring-searching the serialized
+    # representation: privacy-safe coverage names such as `span_identity` are
+    # intentionally allowed and do not expose a native `span_id`.
+    forbidden_fields = {
         "run_id",
         "trace_id",
         "span_id",
         "tool_arguments",
         "tool_results",
         "chain_of_thought",
-    ):
-        assert forbidden not in serialized
+    }
+    assert forbidden_fields.isdisjoint(row.keys())
 
 
 def test_csv_zip_contains_dedicated_agent_runs_table_with_stable_headers():
