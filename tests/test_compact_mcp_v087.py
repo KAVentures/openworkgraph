@@ -138,6 +138,7 @@ def test_similar_run_feedback_combines_observational_views(monkeypatch):
         "causal": False,
         "observed_behavior_becomes_policy": False,
         "approval_patterns_are_policy": False,
+        "semantic_steps_change_family_identity": False,
     }
 
 

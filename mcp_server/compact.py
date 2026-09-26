@@ -102,10 +102,52 @@ def _slim_semantic_event(item: dict[str, Any]) -> dict[str, Any]:
             "action",
             "target_label",
             "target_role",
-            "page_host",
-            "page_path",
         )
         if item.get(key) not in (None, "", [], {})
+    }
+
+
+def _slim_trace_row(item: dict[str, Any]) -> dict[str, Any]:
+    """Small overview row; get_workflow_trace remains the canonical full-row tool."""
+    return {
+        key: item.get(key)
+        for key in (
+            "observed_at",
+            "app",
+            "event_type",
+            "duration_seconds",
+            "source",
+            "action",
+            "target_label",
+            "target_role",
+            "foreground_seconds",
+            "engaged_seconds",
+            "keypress_count",
+            "click_count",
+            "scroll_count",
+        )
+        if item.get(key) not in (None, "", [], {})
+    }
+
+
+def _slim_trace(trace: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "rows": [
+            _slim_trace_row(item)
+            for item in list(trace.get("rows") or [])
+            if isinstance(item, dict)
+        ],
+        **{
+            key: trace.get(key)
+            for key in (
+                "returned", "total", "has_more", "next_cursor", "snapshot_until",
+                "scope", "since", "until", "query_applied", "app_filter",
+                "data_layer", "derived_task_inference_authoritative",
+            )
+            if key in trace
+        },
+        "rows_are_compact_overview": True,
+        "canonical_detail_tool": "get_workflow_trace",
     }
 
 
@@ -224,16 +266,41 @@ def _resolve_feedback_family(
     return "family_selection_required", "", "ambiguous_or_missing_current_family"
 
 
+def _is_readable_step_input(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(text and ("·" in text or "→" in text))
+
+
+def _readable_feedback(
+    family_key: str,
+    *,
+    current_steps: str = "",
+    after_step: str = "",
+    max_events: int,
+    run_limit: int,
+    min_support: int,
+) -> dict[str, Any]:
+    return secure_runtime.secure_get("/v1/procedural-memory/readable-feedback", {
+        "family_key": family_key,
+        "current_steps": current_steps,
+        "after_step": after_step,
+        "limit": max_events,
+        "result_limit": _bounded(run_limit, maximum=25),
+        "min_support": min(max(2, int(min_support)), 100),
+    })
+
+
 @mcp.tool()
 def get_current_work_context(
-    limit: int = 25,
+    limit: int = 6,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return the current work context: recent evidence, task hints and semantic activity.
+    """Return a compact current-work overview with pointers to canonical evidence.
 
     Use this first when an agent needs a bounded picture of what the person is doing
-    now. Defaults are intentionally small; increase limit or follow trace pagination
-    when more evidence is needed. Observed strings remain protected at the MCP boundary.
+    now. The embedded trace is deliberately summarized; call get_workflow_trace for
+    canonical rich rows. Increase limit or follow trace pagination when more evidence
+    is needed. Observed strings remain protected at the MCP boundary.
     """
     name = "get_current_work_context"
     core._begin(name)
@@ -242,22 +309,22 @@ def get_current_work_context(
         _trace_params(cursor=cursor, limit=limit, scope="current"),
     )
     tasks = secure_runtime.secure_get("/v1/tasks", {"limit": 5000, "scope": "current"})
-    semantic_limit = min(_bounded(limit, maximum=200), 20)
+    semantic_limit = min(_bounded(limit, maximum=200), 6)
     semantic = secure_runtime.secure_get(
         "/v1/semantic-activity",
         {"limit": semantic_limit, "scope": "current"},
     )
     return core._finish(name, {
-        "trace": trace,
-        "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:6]],
-        "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:5]],
+        "trace": _slim_trace(trace),
+        "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:3]],
+        "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:3]],
         "semantic_activity": [
             _slim_semantic_event(x)
             for x in list(semantic.get("events") or [])[:semantic_limit]
             if isinstance(x, dict)
         ],
         "evidence_tool": "get_workflow_trace",
-        "data_layer": "rich_ai_context_compact",
+        "data_layer": "rich_ai_context_compact_overview",
     })
 
 
@@ -322,7 +389,7 @@ def get_workflow_trace(
     since: str | None = None,
     until: str | None = None,
     cursor: str | None = None,
-    limit: int = 25,
+    limit: int = 4,
     scope: str = "current",
     query: str | None = None,
     app_name: str | None = None,
@@ -330,9 +397,9 @@ def get_workflow_trace(
 ) -> dict[str, Any]:
     """Return canonical chronological workflow evidence with stable pagination.
 
-    Defaults to a small first page; pass next_cursor back as cursor or increase limit
-    when more evidence is needed. Use session_id for one-session inspection. Typed
-    text and clipboard contents are never captured.
+    The default page is intentionally small for agent context budgets, but row shape
+    remains canonical and callers can request larger pages. Pass next_cursor back as
+    cursor for more evidence. Typed text and clipboard contents are never captured.
     """
     name = "get_workflow_trace"
     core._begin(name)
@@ -444,10 +511,10 @@ def get_task_context(
     """Return one read-only organizational context bundle for a task.
 
     Supply family_key from find_repeated_workflows when available, or task_family
-    for a canonical human family such as email.reply or github.review. current_steps
-    must be OpenWorkGraph structural step tokens, not a natural-language description.
-    Declared policy remains distinct from observed repeated behavior, and the MCP copy
-    keeps the existing provenance and prompt-injection protection.
+    for a canonical human family such as email.reply or github.review. This policy-
+    preserving context surface still accepts OpenWorkGraph structural step tokens;
+    use how_did_similar_runs_go for privacy-safe readable progress such as
+    'Gmail · Open email'. Declared policy remains distinct from observed behavior.
     """
     name = "get_task_context"
     core._begin(name)
@@ -475,13 +542,13 @@ def how_did_similar_runs_go(
     max_events: int = 25_000,
     run_limit: int = 8,
 ) -> dict[str, Any]:
-    """Summarize evidence from structurally similar prior runs for an agent.
+    """Summarize evidence from similar prior runs with readable human-work steps.
 
     Call find_repeated_workflows first to obtain an exact family_key. A bare canonical
-    human task family such as email.reply is also accepted. If family_key is omitted,
-    OpenWorkGraph uses a single unambiguous current human family when available;
-    otherwise it returns available keys and asks the caller to choose. Unknown keys
-    return an explicit status rather than silently returning empty history.
+    human task family such as email.reply is also accepted. For human families,
+    current_steps/after_step may use exact privacy-safe labels returned by this tool,
+    e.g. 'Gmail · Open email'. Legacy structural tokens remain supported. Unknown
+    readable steps return valid observed names instead of a generic tool error.
 
     Results are observations, not recommendations, authorization, causal claims or
     inferred policy.
@@ -518,9 +585,39 @@ def how_did_similar_runs_go(
             "authoritative": False,
         })
 
+    readable_mode = _is_readable_step_input(current_steps) or _is_readable_step_input(after_step)
+    human_family = resolved_key.startswith("human:")
+    readable = None
+    if human_family:
+        readable = _readable_feedback(
+            resolved_key,
+            current_steps=current_steps if readable_mode else "",
+            after_step=after_step if readable_mode else "",
+            max_events=bounded_events,
+            run_limit=run_limit,
+            min_support=support,
+        )
+        if readable_mode and readable.get("status") != "ok":
+            return core._finish(name, {
+                "status": readable.get("status") or "unrecognized_step",
+                "requested_family_key": str(family_key or ""),
+                "family_key": resolved_key,
+                "resolved_family_keys": [resolved_key],
+                "resolution_method": resolution_method,
+                "unrecognized_steps": readable.get("unrecognized_steps") or [],
+                "valid_semantic_steps": readable.get("valid_semantic_steps") or [],
+                "instruction": readable.get("instruction"),
+                "legacy_structural_steps_still_supported": True,
+                "derived": True,
+                "authoritative": False,
+                "prescriptive": False,
+            })
+
+    structural_current = "" if readable_mode else current_steps
+    structural_after = "" if readable_mode else after_step
     runs = secure_runtime.secure_get("/v1/procedural-memory/similar-runs", {
         "family_key": resolved_key,
-        "current_steps": current_steps,
+        "current_steps": structural_current,
         "result_limit": _bounded(run_limit, maximum=25),
         "limit": bounded_events,
     })
@@ -536,15 +633,15 @@ def how_did_similar_runs_go(
     })
     next_steps = secure_runtime.secure_get("/v1/procedural-memory/next-steps", {
         "family_key": resolved_key,
-        "prefix": current_steps,
-        "after_step": after_step,
+        "prefix": structural_current,
+        "after_step": structural_after,
         "min_support": support,
         "limit": bounded_events,
     })
     context_pack = secure_runtime.secure_get("/v1/procedural-memory/context-pack", {
         "family_key": resolved_key,
-        "current_steps": current_steps,
-        "after_step": after_step,
+        "current_steps": structural_current,
+        "after_step": structural_after,
         "min_support": support,
         "limit": min(bounded_events, 25_000),
         "run_limit": min(_bounded(run_limit, maximum=5), 5),
@@ -552,16 +649,35 @@ def how_did_similar_runs_go(
         "max_steps_per_run": 16,
         "max_evidence_refs_per_item": 2,
     })
-    return core._finish(name, {
+
+    similar_output = runs
+    next_output = next_steps
+    if human_family and readable and readable.get("status") == "ok":
+        # With no progress supplied, prefer the readable view. With legacy structural
+        # progress, preserve the structural match and provide readable evidence beside it.
+        if readable_mode or (not current_steps and not after_step):
+            similar_output = {
+                "family_key": resolved_key,
+                "runs": readable.get("runs") or [],
+                "returned": readable.get("returned") or 0,
+                "step_vocabulary": "privacy_safe_semantic",
+                "valid_semantic_steps": readable.get("valid_semantic_steps") or [],
+                "median_completed_duration_seconds": readable.get("median_completed_duration_seconds"),
+                "derived": True,
+                "authoritative": False,
+            }
+            next_output = readable.get("next_steps") or next_steps
+
+    response = {
         "status": "ok",
         "requested_family_key": str(family_key or ""),
         "family_key": resolved_key,
         "resolved_family_keys": [resolved_key],
         "resolution_method": resolution_method,
-        "similar_prior_runs": runs,
+        "similar_prior_runs": similar_output,
         "explicit_failure_patterns": failures,
         "approval_request_hotspots": approvals,
-        "frequently_observed_next_steps": next_steps,
+        "frequently_observed_next_steps": next_output,
         "observational_context_pack": context_pack,
         "interpretation": {
             "derived": True,
@@ -570,9 +686,22 @@ def how_did_similar_runs_go(
             "causal": False,
             "observed_behavior_becomes_policy": False,
             "approval_patterns_are_policy": False,
+            "semantic_steps_change_family_identity": False,
         },
         "evidence_tool": "get_workflow_trace",
-    })
+    }
+    if human_family and readable:
+        response["readable_human_feedback"] = {
+            "step_vocabulary": readable.get("step_vocabulary"),
+            "identity_vocabulary": readable.get("identity_vocabulary"),
+            "valid_semantic_steps": readable.get("valid_semantic_steps") or [],
+            "runs": readable.get("runs") or [],
+            "next_steps": readable.get("next_steps") or {},
+            "median_completed_duration_seconds": readable.get("median_completed_duration_seconds"),
+            "family_keys_changed": False,
+        }
+        response["readable_progress_applied"] = readable_mode
+    return core._finish(name, response)
 
 
 @mcp.tool()
@@ -675,10 +804,11 @@ def data_model() -> str:
         "OpenWorkGraph compact MCP exposes a small read-oriented surface over privacy-hardened "
         "human and agent evidence. Use get_current_work_context first, get_workflow_trace for "
         "canonical evidence, find_repeated_workflows for derived recurring patterns and exact "
-        "family keys, how_did_similar_runs_go for descriptive prior-run feedback, get_task_context "
-        "for bounded organizational context, and get_agent_runs for structural agent execution "
-        "evidence. Observed repetition is never policy or permission. Missing agent signals mean "
-        "not observed."
+        "family keys, how_did_similar_runs_go for descriptive prior-run feedback with privacy-safe "
+        "readable human steps, get_task_context for bounded organizational context, and get_agent_runs "
+        "for structural agent execution evidence. Readable step labels never replace the stable "
+        "structural family identity. Observed repetition is never policy or permission. Missing agent "
+        "signals mean not observed."
     )
 
 

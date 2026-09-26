@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .local_auth import bearer_matches
 from .procedural_context_pack import build_context_pack
+from .procedural_feedback import readable_feedback
 from .procedural_memory import (
     approval_patterns,
     failure_patterns,
@@ -193,4 +194,32 @@ def get_procedural_context_pack(
         )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="invalid procedural-context-pack query") from exc
+    return _derived_response(payload, raw)
+
+
+@router.get("/v1/procedural-memory/readable-feedback")
+def get_readable_feedback(
+    request: Request,
+    family_key: str,
+    current_steps: str = "",
+    after_step: str = "",
+    since: str | None = None,
+    limit: int = 25_000,
+    result_limit: int = 8,
+    min_support: int = 2,
+) -> dict[str, Any]:
+    """Return privacy-safe semantic human steps over stable structural identities."""
+    _require_api_read_bearer(request)
+    raw = _raw(limit, since)
+    try:
+        payload = readable_feedback(
+            raw,
+            family_key=family_key,
+            current_steps=current_steps,
+            after_step=after_step,
+            min_support=min_support,
+            run_limit=result_limit,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid readable procedural-feedback query") from exc
     return _derived_response(payload, raw)
