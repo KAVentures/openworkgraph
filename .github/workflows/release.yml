@@ -123,7 +123,7 @@ jobs:
           Prompts, model-response content, tool arguments/results, transcript paths and chain-of-thought/reasoning content are outside the agent evidence contract.
 
           ### Explicit organization sharing
-          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in with `gateway.local_policy.allow_agent_events: true`; organization policy may narrow that opt-in but cannot broaden a local restriction.
+          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in by setting gateway.local_policy.allow_agent_events=true; organization policy may narrow that opt-in but cannot broaden a local restriction.
 
           ### Native integrations and OTLP
           OpenWorkGraph includes privacy-minimized integrations for Claude Code, Codex telemetry, OpenAI Agents and generic structural agent ingestion. Claude Code observer hooks are asynchronous so observation does not add tool-call latency. The generic OTLP endpoint currently accepts OTLP/HTTP JSON; exact exporter configuration is documented in **docs/NATIVE_AGENT_ADAPTERS.md**.

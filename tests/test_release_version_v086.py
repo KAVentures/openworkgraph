@@ -27,6 +27,8 @@ def test_release_notes_are_current_and_version_driven():
     assert "${TAG}" in workflow
     assert "Agent evidence is local-only by default" in workflow
     assert "dedicated privacy-safe agent-run table" in workflow
+    assert "gateway.local_policy.allow_agent_events=true" in workflow
+    assert "`gateway.local_policy.allow_agent_events" not in workflow
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
