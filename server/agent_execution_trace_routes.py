@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from .agent_execution_traces import agent_execution_traces
 from .agent_observability import enrich_agent_execution_payload
 from .agent_read_auth import agent_read_authorized
+from .agent_tool_labels import readable_tool_name
 from .procedural_memory import load_recent_evidence
 
 
@@ -30,6 +31,27 @@ def _row_framework(row: dict[str, Any]) -> str:
             return ""
     agent = meta.get("agent") if isinstance(meta, dict) else None
     return str((agent or {}).get("framework") or "") if isinstance(agent, dict) else ""
+
+
+def _sanitize_tool_names(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep public runtime vocabulary readable while hiding custom identifiers."""
+    executions = payload.get("executions") if isinstance(payload, dict) else None
+    if not isinstance(executions, list):
+        return payload
+    for execution in executions:
+        if not isinstance(execution, dict):
+            continue
+        events = execution.get("events")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            tool = event.get("tool")
+            if not isinstance(tool, dict) or not tool.get("name"):
+                continue
+            tool["name"] = readable_tool_name(tool.get("name"))
+    return payload
 
 
 @router.get("/v1/agent-execution-traces")
@@ -68,6 +90,7 @@ def get_agent_execution_traces(
             max_events_per_execution=max_events_per_execution,
         )
         payload = enrich_agent_execution_payload(payload, raw)
+        payload = _sanitize_tool_names(payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="invalid agent-execution-trace query") from exc
     return {
