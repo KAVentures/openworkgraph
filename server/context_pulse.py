@@ -75,8 +75,21 @@ def _parse_ts(value: Any) -> float | None:
         return None
 
 
-def _source_rows(*, snapshot_max_id: int, lookback_days: int) -> tuple[list[dict[str, Any]], bool]:
-    since = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+def _parse_datetime(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    except Exception as exc:
+        raise ValueError("Invalid Context Pulse snapshot time") from exc
+
+
+def _source_rows(
+    *,
+    snapshot_max_id: int,
+    snapshot_at: str,
+    lookback_days: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    since = (_parse_datetime(snapshot_at).astimezone(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM events WHERE id <= ? AND observed_at >= ? "
@@ -121,10 +134,8 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
         # Avoid turning every briefly opened app into a long-horizon finding.
         if active_days < 2 and engaged < 1800:
             continue
-        finding_id = _finding_id("surface_engagement", surface)
-        material_version = f"d{active_days}:q{int(engaged // 900)}"
         findings.append({
-            "finding_id": finding_id,
+            "finding_id": _finding_id("surface_engagement", surface),
             "finding_kind": "surface_engagement",
             "surface": surface,
             "engaged_seconds": engaged,
@@ -135,7 +146,9 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
             "last_observed_at": value["last_observed_at"],
             "evidence_event_ids": list(dict.fromkeys(value["evidence_event_ids"]))[-12:],
             "lookback_days": lookback_days,
-            "material_version": material_version,
+            # Engagement changes are material every 15 engaged minutes, or when a
+            # new active day appears. Tiny focus/heartbeat changes do not spam AI.
+            "material_version": f"d{active_days}:q{int(engaged // 900)}",
             "factual_aggregate": True,
             "task_inference_used": False,
             "advice": False,
@@ -202,8 +215,17 @@ def _transition_findings(timeline: list[dict[str, Any]], lookback_days: int) -> 
     return findings
 
 
-def _findings(*, snapshot_max_id: int, lookback_days: int) -> tuple[list[dict[str, Any]], bool]:
-    raw_rows, truncated = _source_rows(snapshot_max_id=snapshot_max_id, lookback_days=lookback_days)
+def _findings(
+    *,
+    snapshot_max_id: int,
+    snapshot_at: str,
+    lookback_days: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    raw_rows, truncated = _source_rows(
+        snapshot_max_id=snapshot_max_id,
+        snapshot_at=snapshot_at,
+        lookback_days=lookback_days,
+    )
     timeline = factual_context_timeline(_raw_events=raw_rows)
     findings = [
         *_surface_findings(timeline, lookback_days),
@@ -232,16 +254,17 @@ def context_pulse(
     page_limit = max(1, min(int(recent_limit), 500))
     output_finding_limit = max(0, min(int(finding_limit), 50))
 
+    # Once a cursor exists it owns the lookback contract. A caller can start a new
+    # pulse (no cursor) to choose another lookback; it need not repeat the original
+    # value on every subsequent tool call.
     if state:
-        pinned_lookback = int(state.get("lookback_days") or 30)
-        if int(lookback_days) != pinned_lookback:
-            raise ValueError("lookback_days must match the existing Context Pulse cursor")
-        lookback_days = pinned_lookback
+        lookback_days = max(7, min(int(state.get("lookback_days") or 30), 90))
     else:
         lookback_days = max(7, min(int(lookback_days), 90))
 
     last_event_id = max(0, int(state.get("last_event_id") or 0)) if state else 0
     pending_snapshot = max(0, int(state.get("pending_snapshot_max_id") or 0)) if state else 0
+    pending_snapshot_at = str(state.get("pending_snapshot_at") or "") if state else ""
     previous_versions = state.get("finding_versions") if state else {}
     if not isinstance(previous_versions, dict):
         raise ValueError("Invalid Context Pulse finding state")
@@ -249,10 +272,12 @@ def context_pulse(
         str(key): str(value)
         for key, value in list(previous_versions.items())[:_MAX_TRACKED_FINDINGS]
     }
+    baseline_pending = bool(state.get("baseline_pending")) if state else True
 
     with connect() as conn:
         current_max_id = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0])
     snapshot_max_id = pending_snapshot or current_max_id
+    snapshot_at = pending_snapshot_at or datetime.now(timezone.utc).isoformat()
 
     if bootstrap:
         with connect() as conn:
@@ -276,6 +301,7 @@ def context_pulse(
     recent_rows = [rich_evidence_row(dict(row), include_identity=False) for row in visible]
     findings, findings_truncated = _findings(
         snapshot_max_id=snapshot_max_id,
+        snapshot_at=snapshot_at,
         lookback_days=lookback_days,
     )
     current_versions = {
@@ -283,34 +309,54 @@ def context_pulse(
         for item in findings
     }
 
+    # Keep only still-current delivered state. Crucially, a finding does not enter
+    # the cursor until it has actually been returned to the caller; a low
+    # finding_limit therefore cannot silently mark unseen findings as delivered.
+    next_versions = {
+        finding_id: version
+        for finding_id, version in previous_versions.items()
+        if finding_id in current_versions
+    }
+    candidates: list[tuple[dict[str, Any], str]] = []
+    if output_finding_limit > 0:
+        for item in findings:
+            finding_id = str(item["finding_id"])
+            version = str(item["material_version"])
+            previous = previous_versions.get(finding_id)
+            if previous == version:
+                continue
+            status = "baseline" if baseline_pending and previous is None else ("new" if previous is None else "changed")
+            candidates.append((item, status))
+
+    selected = candidates[:output_finding_limit] if output_finding_limit > 0 else []
     changed: list[dict[str, Any]] = []
-    for item in findings:
-        finding_id = str(item["finding_id"])
-        previous = previous_versions.get(finding_id)
-        status = "baseline" if bootstrap else ("new" if previous is None else "changed")
-        if bootstrap or previous != str(item["material_version"]):
-            out = {key: value for key, value in item.items() if key != "material_version"}
-            out["status"] = status
-            changed.append(out)
-            if len(changed) >= output_finding_limit:
-                break
+    for item, status in selected:
+        out = {key: value for key, value in item.items() if key != "material_version"}
+        out["status"] = status
+        changed.append(out)
+        next_versions[str(item["finding_id"])] = str(item["material_version"])
+
+    findings_has_more = output_finding_limit > 0 and len(candidates) > len(selected)
+    next_baseline_pending = bool(baseline_pending and findings_has_more)
 
     if bootstrap:
         next_last_event_id = snapshot_max_id
-        next_pending = 0
     elif has_more and visible:
         next_last_event_id = int(visible[-1]["id"])
-        next_pending = snapshot_max_id
     else:
         next_last_event_id = snapshot_max_id
-        next_pending = 0
 
+    # Freeze the same snapshot while either the evidence page or finding page has
+    # more to deliver. New arrivals wait for the next completed pulse.
+    keep_snapshot = bool(has_more or findings_has_more)
     next_cursor = _encode_cursor({
         "v": _CURSOR_VERSION,
         "last_event_id": next_last_event_id,
-        "pending_snapshot_max_id": next_pending,
+        "pending_snapshot_max_id": snapshot_max_id if keep_snapshot else 0,
+        "pending_snapshot_at": snapshot_at if keep_snapshot else "",
         "lookback_days": lookback_days,
-        "finding_versions": current_versions,
+        "baseline_pending": next_baseline_pending,
+        "finding_versions": dict(list(next_versions.items())[:_MAX_TRACKED_FINDINGS]),
     })
 
     return {
@@ -320,8 +366,10 @@ def context_pulse(
         "recent_returned": len(recent_rows),
         "recent_has_more": has_more,
         "snapshot_max_event_watermark": snapshot_max_id,
+        "snapshot_at": snapshot_at,
         "findings": changed,
         "findings_returned": len(changed),
+        "findings_has_more": findings_has_more,
         "findings_lookback_days": lookback_days,
         "findings_source_truncated": findings_truncated,
         "next_cursor": next_cursor,
