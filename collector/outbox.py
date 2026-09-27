@@ -8,6 +8,7 @@ from typing import Any
 
 from sensitive_identifiers import sanitize_event_identifiers
 from shared.evidence_deletion import event_overlaps_range
+from shared.history_policy import event_kind
 
 
 class EventOutbox:
@@ -56,8 +57,6 @@ class EventOutbox:
                     safe = sanitize_event_identifiers(event)
                     payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
                 except Exception:
-                    # Do not destroy a delivery queue merely because one legacy
-                    # payload is malformed; new events are always sanitized.
                     continue
                 if payload != row["payload_json"]:
                     conn.execute(
@@ -93,6 +92,18 @@ class EventOutbox:
         with self._lock, self._connect() as conn:
             conn.execute(f"DELETE FROM pending_events WHERE event_id IN ({placeholders})", tuple(ids))
 
+    def _delete_ids(self, conn: sqlite3.Connection, delete_ids: list[str]) -> int:
+        if not delete_ids:
+            return 0
+        for offset in range(0, len(delete_ids), 500):
+            chunk = delete_ids[offset : offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            conn.execute(
+                f"DELETE FROM pending_events WHERE event_id IN ({placeholders})",
+                tuple(chunk),
+            )
+        return len(delete_ids)
+
     def prune_range(self, since: str, until: str) -> int:
         """Remove queued evidence that overlaps a durable local deletion range."""
         with self._lock, self._connect() as conn:
@@ -105,16 +116,27 @@ class EventOutbox:
                     continue
                 if isinstance(event, dict) and event_overlaps_range(event, since, until):
                     delete_ids.append(str(row["event_id"]))
-            if not delete_ids:
-                return 0
-            for offset in range(0, len(delete_ids), 500):
-                chunk = delete_ids[offset : offset + 500]
-                placeholders = ",".join("?" for _ in chunk)
-                conn.execute(
-                    f"DELETE FROM pending_events WHERE event_id IN ({placeholders})",
-                    tuple(chunk),
-                )
-            return len(delete_ids)
+            return self._delete_ids(conn, delete_ids)
+
+    def prune_sessions(self, kind: str, session_ids: list[str]) -> int:
+        """Remove queued rows belonging to expired human or agent sessions."""
+        selected_kind = "agent" if str(kind).lower() == "agent" else "human"
+        wanted = {str(value) for value in session_ids if str(value)}
+        if not wanted:
+            return 0
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT event_id, payload_json FROM pending_events").fetchall()
+            delete_ids: list[str] = []
+            for row in rows:
+                try:
+                    event = json.loads(row["payload_json"])
+                except Exception:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if str(event.get("session_id") or "") in wanted and event_kind(event) == selected_kind:
+                    delete_ids.append(str(row["event_id"]))
+            return self._delete_ids(conn, delete_ids)
 
     def mark_failed(self, event_ids: list[str], error: str) -> None:
         ids = [str(x) for x in event_ids if x]
