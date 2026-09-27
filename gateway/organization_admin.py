@@ -14,6 +14,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
 
+from .app import EnrollmentRequest
 from .auth import env_token_matches
 from .db import GatewayDB
 from .enrollment_links import (
@@ -181,7 +182,10 @@ def install_organization_admin(
         }
 
     @app.post("/v1/devices/enroll")
-    def enroll_device(request: Any, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def enroll_device(
+        request: EnrollmentRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
         presented = _bearer(authorization)
         if not presented.startswith("owg_enroll_link_"):
             return original_enroll(request, authorization)
@@ -189,9 +193,9 @@ def install_organization_admin(
             result = enroll_device_with_link(
                 db,
                 enrollment_token=presented,
-                requested_organization_id=str(getattr(request, "organization_id", "") or ""),
-                actor_id=str(getattr(request, "actor_id", "") or ""),
-                device_id=str(getattr(request, "device_id", "") or ""),
+                requested_organization_id=request.organization_id,
+                actor_id=request.actor_id,
+                device_id=request.device_id,
             )
         except EnrollmentLinkError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
