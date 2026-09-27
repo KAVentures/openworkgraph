@@ -88,6 +88,20 @@ def _default(*, has_existing_evidence: bool) -> dict[str, Any]:
     }
 
 
+def _uninitialized_fallback() -> dict[str, Any]:
+    """Preserve pre-History retention until the owning runtime initializes it.
+
+    The production runner explicitly initializes History: genuinely new installs
+    then receive the ephemeral onboarding default, while upgrades preserve existing
+    history. Legacy/embedded callers that import agent ingestion or secure_app
+    directly do not run that initialization. Absence of a policy file there must
+    not silently turn completed agent runs into disposable data.
+    """
+    value = _default(has_existing_evidence=True)
+    value["upgrade_preserved_existing_history"] = False
+    return value
+
+
 def _normalize(value: dict[str, Any]) -> dict[str, Any]:
     result = dict(value)
     result["version"] = _POLICY_VERSION
@@ -170,9 +184,10 @@ def read_policy() -> dict[str, Any]:
                 raise ValueError("history policy must be an object")
             return _normalize(value)
         except Exception:
-            # This fallback is intentionally ephemeral. Production startup calls
-            # initialize_policy with DB knowledge before reads are exposed.
-            return _default(has_existing_evidence=False)
+            # History has not been initialized by the owning runtime yet. Keep
+            # legacy/direct callers non-destructive; production initialization
+            # writes the explicit new-install or upgrade policy before use.
+            return _uninitialized_fallback()
 
 
 def update_retention(
