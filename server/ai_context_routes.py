@@ -38,13 +38,17 @@ async def _ai_context_middleware(request: Request, call_next):
     content_type = str(response.headers.get("content-type") or "")
     level = ai_context.effective_detail()["detail_level"]
     if "application/json" not in content_type:
-        if level == ai_context.DETAIL_FULL or response.status_code >= 400:
+        # Full is an explicit local user choice, so existing binary/text routes
+        # remain usable there. Redacted must never pass an uninspected body
+        # through -- including 4xx/5xx error pages that may echo sensitive text.
+        if level == ai_context.DETAIL_FULL:
             response.headers[ai_context.DETAIL_HEADER] = level
             return response
+        status_code = response.status_code if response.status_code >= 400 else 406
         return JSONResponse(
-            {"detail": "AI context responses must be JSON so they can be redacted."},
-            status_code=406,
-            headers={ai_context.DETAIL_HEADER: level},
+            {"detail": "OpenWorkGraph withheld a non-JSON AI context response because it could not be redacted safely."},
+            status_code=status_code,
+            headers={ai_context.DETAIL_HEADER: ai_context.DETAIL_REDACTED},
         )
 
     try:
