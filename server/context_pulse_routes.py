@@ -11,8 +11,8 @@ from .secure_app import app
 @app.get("/v1/context-pulse")
 def get_context_pulse(
     cursor: str | None = None,
-    recent_limit: int = 25,
-    finding_limit: int = 10,
+    recent_limit: int = 12,
+    finding_limit: int = 6,
     lookback_days: int = 30,
     recent_detail: str = "compact",
 ) -> dict[str, Any]:
