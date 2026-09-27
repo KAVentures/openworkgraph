@@ -21,9 +21,6 @@ def _readable_step_input(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
-    # Preserve the pre-v0.87 structural token contract. Anything else is treated
-    # as human-readable progress so the readable endpoint can return helpful
-    # validation instead of leaking an opaque structural parser error.
     return _LEGACY_STEP_RE.fullmatch(text) is None
 
 
@@ -62,8 +59,8 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
     @compact_module.mcp.tool()
     def get_context_pulse(
         cursor: str | None = None,
-        recent_limit: int = 25,
-        finding_limit: int = 10,
+        recent_limit: int = 12,
+        finding_limit: int = 6,
         lookback_days: int = 30,
         recent_detail: str = "compact",
     ) -> dict[str, Any]:
@@ -73,8 +70,8 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
         canonical-origin evidence that arrived since this caller's bookmark.
         Findings are deterministic evidence-backed aggregates, never advice. A
         repeated-workflow finding may use task inference, and says so explicitly.
-        Defaults are small; use ``recent_detail='rich'`` or get_workflow_trace when
-        full canonical rich rows are needed.
+        Defaults deliberately fit a small context budget; raise the limits, use
+        ``recent_detail='rich'``, or call get_workflow_trace when more is needed.
         """
         name = "get_context_pulse"
         compact_module.core._begin(name)
