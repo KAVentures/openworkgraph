@@ -129,13 +129,18 @@ class _Delivery:
                 self.dropped += 1
             return False
         self._ensure_worker()
-        try:
-            self.queue.put_nowait(dict(event))
-        except queue.Full:
-            with self.lock:
-                self.dropped += 1
-            return False
+        # Admission and shutdown share this lock. An event either enters the
+        # queue before shutdown closes admission, or is deterministically
+        # rejected afterwards; it cannot be accepted after the worker exits.
         with self.lock:
+            if self.stop.is_set():
+                self.dropped += 1
+                return False
+            try:
+                self.queue.put_nowait(dict(event))
+            except queue.Full:
+                self.dropped += 1
+                return False
             self.accepted += 1
         return True
 
@@ -178,10 +183,12 @@ class _Delivery:
         return self.queue.unfinished_tasks == 0
 
     def shutdown(self, timeout: float = 2.0) -> None:
-        self.stop.set()
+        with self.lock:
+            self.stop.set()
         self.flush(timeout)
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=max(0.0, min(float(timeout), 10.0)))
+        thread = self.thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(0.0, min(float(timeout), 10.0)))
 
     def stats(self) -> ObserverStats:
         with self.lock:
