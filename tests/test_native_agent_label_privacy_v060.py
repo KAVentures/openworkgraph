@@ -23,7 +23,7 @@ def test_claude_rejects_content_bearing_tool_and_agent_labels():
     assert tool_event["tool_name"] == "unknown-tool"
     assert "patient@example.com" not in json.dumps(tool_event)
 
-    [agent_event] = claude_hook_to_agent_events(
+    subagent_events = claude_hook_to_agent_events(
         {
             "session_id": "s1",
             "hook_event_name": "SubagentStart",
@@ -32,8 +32,13 @@ def test_claude_rejects_content_bearing_tool_and_agent_labels():
         },
         observed_at="2026-09-25T00:00:00Z",
     )
+    assert len(subagent_events) == 2
+    handoff, agent_event = subagent_events
+    assert handoff["operation"] == "handoff"
+    assert handoff["tool_name"] == "subagent:subagent"
+    assert agent_event["operation"] == "run_started"
     assert agent_event["agent_name"] == "Claude Code/subagent"
-    assert "patient@example.com" not in json.dumps(agent_event)
+    assert "patient@example.com" not in json.dumps(subagent_events)
 
 
 def test_codex_rejects_content_bearing_tool_and_model_labels():

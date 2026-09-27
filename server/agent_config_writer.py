@@ -75,7 +75,25 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
-# --- Claude Code: hooks in ~/.claude/settings.json ---------------------------
+def _default_claude_env() -> dict[str, str]:
+    """Return OWG's local, write-only structural Claude telemetry settings.
+
+    Connections calls the writer without an HTTP Request object. Resolve the same
+    safe local defaults here so the unified Connections switch cannot silently
+    fall back to hooks-only observation.
+    """
+    from adapters._agent_client import _base_url
+    from adapters.claude_code_otel import env_settings
+    from server.agent_auth import ensure_agent_ingest_token
+
+    return env_settings(token=ensure_agent_ingest_token(), base_url=_base_url())
+
+
+def _resolved_claude_env(managed_env: dict[str, str] | None) -> dict[str, str]:
+    return _default_claude_env() if managed_env is None else dict(managed_env)
+
+
+# --- Claude Code: hooks + logs-only OTel in ~/.claude/settings.json ----------
 
 def _load_claude(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -92,18 +110,19 @@ def _load_claude(path: Path) -> dict[str, Any]:
     hooks = data.get("hooks")
     if hooks is not None and not isinstance(hooks, dict):
         raise ConfigConflict(f"'hooks' in {path} has an unexpected shape; use manual setup")
+    env = data.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise ConfigConflict(f"'env' in {path} has an unexpected shape; use manual setup")
     return data
 
 
 def _is_owg_handler(handler: Any) -> bool:
-    # Also matches the pre-0.89 form, which kept the module name in "args".
     if not isinstance(handler, dict):
         return False
     return CLAUDE_HOOK_MARKER in str(handler.get("command", "")) + " " + " ".join(map(str, handler.get("args") or []))
 
 
 def _strip_owg_hooks(data: dict[str, Any]) -> int:
-    """Remove OpenWorkGraph handlers in place; return how many were removed."""
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         return 0
@@ -130,26 +149,75 @@ def _strip_owg_hooks(data: dict[str, Any]) -> int:
     return removed
 
 
-def claude_status() -> dict[str, Any]:
-    path = claude_settings_path()
-    try:
-        data = _load_claude(path)
-    except ConfigConflict as exc:
-        return {"configured": False, "path": str(path), "error": str(exc)}
-    configured = any(
+def _claude_hooks_configured(data: dict[str, Any]) -> bool:
+    return any(
         _is_owg_handler(h)
         for groups in (data.get("hooks") or {}).values() if isinstance(groups, list)
         for group in groups if isinstance(group, dict)
         for h in (group.get("hooks") or []) if isinstance(group.get("hooks"), list)
     )
-    return {"configured": configured, "path": str(path)}
 
 
-def claude_connect(fragment_factory: Callable[[], dict]) -> dict[str, Any]:
+def _claude_env_matches(data: dict[str, Any], managed_env: dict[str, str]) -> bool:
+    existing = data.get("env") if isinstance(data.get("env"), dict) else {}
+    return all(str(existing.get(key) or "") == str(value) for key, value in managed_env.items())
+
+
+def _validate_claude_env_conflicts(data: dict[str, Any], managed_env: dict[str, str]) -> None:
+    existing = data.get("env") if isinstance(data.get("env"), dict) else {}
+    conflicts = [key for key, desired in managed_env.items() if key in existing and str(existing.get(key)) != str(desired)]
+    if conflicts:
+        joined = ", ".join(sorted(conflicts))
+        raise ConfigConflict(
+            f"Claude Code already has different telemetry settings for {joined}. "
+            "OpenWorkGraph will not overwrite them; use manual setup or an OTLP collector/tee."
+        )
+
+
+def _merge_claude_env(data: dict[str, Any], managed_env: dict[str, str]) -> None:
+    env = data.setdefault("env", {})
+    if not isinstance(env, dict):
+        raise ConfigConflict("Claude Code 'env' has an unexpected shape; use manual setup")
+    for key, value in managed_env.items():
+        env[key] = str(value)
+
+
+def _strip_matching_claude_env(data: dict[str, Any], managed_env: dict[str, str]) -> int:
+    env = data.get("env")
+    if not isinstance(env, dict):
+        return 0
+    removed = 0
+    for key, expected in managed_env.items():
+        if key in env and str(env.get(key)) == str(expected):
+            del env[key]
+            removed += 1
+    if not env:
+        data.pop("env", None)
+    return removed
+
+
+def claude_status(managed_env: dict[str, str] | None = None) -> dict[str, Any]:
+    path = claude_settings_path()
+    try:
+        data = _load_claude(path)
+    except ConfigConflict as exc:
+        return {"configured": False, "path": str(path), "error": str(exc)}
+    desired_env = _resolved_claude_env(managed_env)
+    hooks_configured = _claude_hooks_configured(data)
+    telemetry_configured = _claude_env_matches(data, desired_env)
+    return {
+        "configured": hooks_configured and telemetry_configured,
+        "hooks_configured": hooks_configured,
+        "telemetry_configured": telemetry_configured,
+        "path": str(path),
+    }
+
+
+def claude_connect(fragment_factory: Callable[[], dict], managed_env: dict[str, str] | None = None) -> dict[str, Any]:
     path = claude_settings_path()
     data = _load_claude(path)
-    # Replace, never duplicate: older OpenWorkGraph handlers (e.g. the pre-0.89
-    # command/args form) are removed before the current ones are added.
+    desired_env = _resolved_claude_env(managed_env)
+    _validate_claude_env_conflicts(data, desired_env)
     _strip_owg_hooks(data)
     hooks = data.setdefault("hooks", {})
     for event, groups in fragment_factory()["hooks"].items():
@@ -157,28 +225,46 @@ def claude_connect(fragment_factory: Callable[[], dict]) -> dict[str, Any]:
         if not isinstance(existing, list):
             raise ConfigConflict(f"hooks.{event} in {path} has an unexpected shape; use manual setup")
         existing.extend(groups)
+    _merge_claude_env(data, desired_env)
     backup = _backup(path)
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    return {"configured": True, "path": str(path), "backup": backup,
-            "note": "Takes effect in new Claude Code sessions."}
+    return {
+        "configured": True,
+        "hooks_configured": True,
+        "telemetry_configured": True,
+        "path": str(path),
+        "backup": backup,
+        "note": "Takes effect in new Claude Code sessions.",
+    }
 
 
-def claude_disconnect() -> dict[str, Any]:
+def claude_disconnect(managed_env: dict[str, str] | None = None) -> dict[str, Any]:
     path = claude_settings_path()
     if not path.exists():
         return {"configured": False, "path": str(path), "backup": None}
     data = _load_claude(path)
-    if not _strip_owg_hooks(data):
+    desired_env = _resolved_claude_env(managed_env)
+    removed_hooks = _strip_owg_hooks(data)
+    removed_env = _strip_matching_claude_env(data, desired_env)
+    if not (removed_hooks or removed_env):
         return {"configured": False, "path": str(path), "backup": None}
     backup = _backup(path)
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    return {"configured": False, "path": str(path), "backup": backup}
+    return {
+        "configured": False,
+        "hooks_configured": False,
+        "telemetry_configured": False,
+        "path": str(path),
+        "backup": backup,
+    }
 
 
 # --- Codex: [otel] in ~/.codex/config.toml ------------------------------------
 
 def _strip_codex_block(
-    text: str, marker_start: str = CODEX_BLOCK_START, marker_end: str = CODEX_BLOCK_END
+    text: str,
+    marker_start: str = CODEX_BLOCK_START,
+    marker_end: str = CODEX_BLOCK_END,
 ) -> tuple[str, bool]:
     start = text.find(marker_start)
     if start < 0:
@@ -205,7 +291,22 @@ def _parse_toml(text: str, path: Path) -> dict[str, Any]:
 def codex_status() -> dict[str, Any]:
     path = codex_config_path()
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    return {"configured": CODEX_BLOCK_START in text, "path": str(path)}
+    managed = CODEX_BLOCK_START in text
+    if not managed:
+        return {"configured": False, "partial_configured": False, "path": str(path)}
+    try:
+        otel = _parse_toml(text, path).get("otel") or {}
+    except ConfigConflict as exc:
+        return {"configured": False, "partial_configured": True, "path": str(path), "error": str(exc)}
+    rich = (
+        isinstance(otel, dict)
+        and "exporter" in otel
+        and "trace_exporter" in otel
+        and otel.get("log_user_prompt") is False
+        and otel.get("log_agent_responses") is False
+        and otel.get("log_guardian_assessments") is False
+    )
+    return {"configured": bool(rich), "partial_configured": not bool(rich), "path": str(path)}
 
 
 def codex_connect(snippet: str) -> dict[str, Any]:
@@ -221,12 +322,18 @@ def codex_connect(snippet: str) -> dict[str, Any]:
     body = remainder.rstrip("\n")
     updated = (body + "\n\n" if body else "") + block
     parsed = _parse_toml(updated, path)
-    if "trace_exporter" not in (parsed.get("otel") or {}):
+    otel = parsed.get("otel") or {}
+    if not isinstance(otel, dict) or "exporter" not in otel or "trace_exporter" not in otel:
         raise ConfigConflict("Generated Codex configuration did not validate; use manual setup")
     backup = _backup(path)
     _atomic_write(path, updated)
-    return {"configured": True, "path": str(path), "backup": backup,
-            "note": "Takes effect the next time Codex starts."}
+    return {
+        "configured": True,
+        "partial_configured": False,
+        "path": str(path),
+        "backup": backup,
+        "note": "Takes effect the next time Codex starts.",
+    }
 
 
 def codex_disconnect() -> dict[str, Any]:
@@ -240,4 +347,4 @@ def codex_disconnect() -> dict[str, Any]:
     _parse_toml(remainder, path)
     backup = _backup(path)
     _atomic_write(path, remainder)
-    return {"configured": False, "path": str(path), "backup": backup}
+    return {"configured": False, "partial_configured": False, "path": str(path), "backup": backup}

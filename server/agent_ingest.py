@@ -8,6 +8,7 @@ from typing import Any
 from shared.agent_evidence import AgentEvidenceError, agent_event_to_evidence
 from shared.agent_ingress_validation import validate_agent_ingress_event
 from shared.capture_control import filter_recordable
+from shared.claude_otel_adapter import claude_otel_to_agent_events
 from shared.codex_otel_adapter import codex_otel_to_agent_events
 from shared.otel_agent_adapter import otel_payload_to_agent_events
 from .db import insert_events
@@ -16,6 +17,7 @@ MAX_AGENT_EVENTS = 500
 MAX_AGENT_BATCH_BYTES = 2_000_000
 MAX_OTEL_SPANS = 1000
 MAX_CODEX_OTEL_RECORDS = 1000
+MAX_CLAUDE_OTEL_RECORDS = 1000
 
 
 def _bounded_json_size(value: Any, *, maximum: int = MAX_AGENT_BATCH_BYTES) -> None:
@@ -94,6 +96,30 @@ def ingest_codex_otel_payload(
     )
     if len(projected) > MAX_AGENT_EVENTS * 2:
         raise AgentEvidenceError("Codex OpenTelemetry projection produced too many agent events")
+    events = _validated_events(projected)
+    inserted = _insert_recordable(events)
+    return {
+        "records_seen": int(stats.get("records_seen") or 0),
+        "records_ignored": int(stats.get("records_ignored") or 0),
+        "projected": len(events),
+        "inserted": inserted,
+    }
+
+
+def ingest_claude_otel_payload(
+    payload: dict[str, Any],
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Ingest Claude Code OTLP logs through a strict structural allowlist."""
+    _bounded_json_size({"payload": payload, "defaults": defaults or {}})
+    projected, stats = claude_otel_to_agent_events(
+        payload,
+        defaults=defaults,
+        max_records=MAX_CLAUDE_OTEL_RECORDS,
+    )
+    if len(projected) > MAX_AGENT_EVENTS * 2:
+        raise AgentEvidenceError("Claude Code OpenTelemetry projection produced too many agent events")
     events = _validated_events(projected)
     inserted = _insert_recordable(events)
     return {

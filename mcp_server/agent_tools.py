@@ -32,7 +32,11 @@ def _run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "run_finish_observed",
             "complete_boundary_observed",
             "event_count_total",
+            # operation_counts remains for backward compatibility. New clients
+            # should prefer observed_operation_counts because it applies native
+            # adapter de-duplication (for example Claude hooks + OTel).
             "operation_counts",
+            "observed_operation_counts",
             "tool_category_counts",
             "structural_steps",
             "structural_steps_truncated",
@@ -40,6 +44,11 @@ def _run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "approval_received_count",
             "task_context_linkage_status",
             "observed_coverage",
+            "signal_capabilities",
+            "telemetry_sources",
+            "telemetry_depth",
+            "models_observed",
+            "usage_totals",
             "derived",
             "authoritative",
         )
@@ -65,9 +74,10 @@ def register_agent_tools(mcp: Any) -> None:
     ) -> dict[str, Any]:
         """Return compact privacy-safe summaries of observed agent executions.
 
-        Results report only structural signals actually present in canonical
-        evidence. Missing coverage means not observed, not proof that the runtime
-        did not perform the underlying action. Native run/trace/span identifiers,
+        Results report observed structural counts separately from the active
+        adapter's capability to observe each signal. A numeric zero is meaningful
+        only when that signal is observable; not_observable/unknown must not be
+        interpreted as zero underlying activity. Native run/trace/span IDs,
         prompts, model-response content, tool arguments/results and hidden
         reasoning are not exposed.
         """
@@ -86,6 +96,7 @@ def register_agent_tools(mcp: Any) -> None:
             **{key: value for key, value in result.items() if key != "executions"},
             "executions": [_run_summary(item) for item in list(result.get("executions") or [])],
             "events_omitted_from_list_view": True,
+            "count_semantics": "prefer observed_operation_counts; interpret counts together with signal_capabilities",
             "detail_tool": "get_agent_execution_trace",
         }
         return core._finish(name, compact)

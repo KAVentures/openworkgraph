@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Print a Codex OTLP trace-exporter snippet for OpenWorkGraph.
+"""Print a privacy-safe Codex OTLP logs + trace exporter snippet for OWG.
 
-This helper never edits ~/.codex/config.toml. With --with-token it intentionally
-prints the least-privilege write token so an administrator can paste a complete
-local-only configuration.
+Codex's business events (API requests, completed tools, approval decisions and
+multi-agent communication) are emitted on its OTLP log surface, while native
+span hierarchy is emitted on the trace surface. OWG points both at the same
+write-only structural endpoint and keeps all content-bearing opt-ins disabled.
 """
 
 import argparse
@@ -20,21 +21,29 @@ def _toml_string(value: str) -> str:
     return json.dumps(value)
 
 
+def _exporter(endpoint: str, authorization: str) -> str:
+    return (
+        "{ otlp-http = { endpoint = "
+        + _toml_string(endpoint)
+        + ", headers = { Authorization = "
+        + _toml_string(authorization)
+        + " }, protocol = \"json\" } }"
+    )
+
+
 def config_snippet(*, token: str, base_url: str | None = None) -> str:
     endpoint = (base_url or _base_url()).rstrip("/") + "/agent-ingest/v1/codex-otel"
     authorization = f"Bearer {token}"
+    exporter = _exporter(endpoint, authorization)
     return "\n".join([
         "[otel]",
+        # Keep every Codex content-bearing opt-in disabled. Structural business
+        # events still export and are then strict-allowlisted again server-side.
         "log_user_prompt = false",
         "log_agent_responses = false",
         "log_guardian_assessments = false",
-        (
-            "trace_exporter = { otlp-http = { endpoint = "
-            + _toml_string(endpoint)
-            + ", headers = { Authorization = "
-            + _toml_string(authorization)
-            + " }, protocol = \"json\" } }"
-        ),
+        f"exporter = {exporter}",
+        f"trace_exporter = {exporter}",
     ])
 
 
