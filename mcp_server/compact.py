@@ -295,12 +295,13 @@ def get_current_work_context(
     limit: int = 6,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return a compact current-work overview with pointers to canonical evidence.
+    """Return an optional compact derived overview with pointers to canonical evidence.
 
-    Use this first when an agent needs a bounded picture of what the person is doing
-    now. The embedded trace is deliberately summarized; call get_workflow_trace for
-    canonical rich rows. Increase limit or follow trace pagination when more evidence
-    is needed. Observed strings remain protected at the MCP boundary.
+    Use get_workflow_trace first when reconstructing what happened. This convenience
+    view mixes a small evidence sample with non-authoritative task, pattern and
+    semantic indexes for callers that explicitly want a quick overview. Verify any
+    interpretation against canonical evidence. Existing response fields are preserved
+    for compatibility, and observed strings remain protected at the MCP boundary.
     """
     name = "get_current_work_context"
     core._begin(name)
@@ -324,6 +325,13 @@ def get_current_work_context(
             if isinstance(x, dict)
         ],
         "evidence_tool": "get_workflow_trace",
+        "canonical_evidence_tool": "get_workflow_trace",
+        "overview_is_derived": True,
+        "authoritative": False,
+        "derived_sections": ["task_hints", "repeated_patterns", "semantic_activity"],
+        "reconstruction_guidance": (
+            "Use get_workflow_trace as the source of truth; task_hints and repeated_patterns are non-authoritative."
+        ),
         "data_layer": "rich_ai_context_compact_overview",
     })
 
@@ -389,7 +397,7 @@ def get_workflow_trace(
     since: str | None = None,
     until: str | None = None,
     cursor: str | None = None,
-    limit: int = 4,
+    limit: int = 100,
     scope: str = "current",
     query: str | None = None,
     app_name: str | None = None,
@@ -397,9 +405,12 @@ def get_workflow_trace(
 ) -> dict[str, Any]:
     """Return canonical chronological workflow evidence with stable pagination.
 
-    The default page is intentionally small for agent context budgets, but row shape
-    remains canonical and callers can request larger pages. Pass next_cursor back as
-    cursor for more evidence. Typed text and clipboard contents are never captured.
+    Use this first to reconstruct what happened. This is the primary Context MCP
+    evidence surface and exposes the same underlying captured evidence that rich
+    exports are built from, without eagerly dumping the whole history into model
+    context. Follow next_cursor until has_more is false when more evidence is needed;
+    use scope='all' for full retained history. Typed text and clipboard contents are
+    never captured.
     """
     name = "get_workflow_trace"
     core._begin(name)
@@ -802,13 +813,14 @@ def ai_guide() -> str:
 def data_model() -> str:
     return (
         "OpenWorkGraph compact MCP exposes a small read-oriented surface over privacy-hardened "
-        "human and agent evidence. Use get_current_work_context first, get_workflow_trace for "
-        "canonical evidence, find_repeated_workflows for derived recurring patterns and exact "
-        "family keys, how_did_similar_runs_go for descriptive prior-run feedback with privacy-safe "
-        "readable human steps, get_task_context for bounded organizational context, and get_agent_runs "
-        "for structural agent execution evidence. Readable step labels never replace the stable "
-        "structural family identity. Observed repetition is never policy or permission. Missing agent "
-        "signals mean not observed."
+        "human and agent evidence. Use get_workflow_trace first to reconstruct work from canonical "
+        "chronological evidence, paging or searching as needed. get_current_work_context is an optional "
+        "derived quick overview and must not override the evidence. find_repeated_workflows provides "
+        "derived recurring-pattern candidates and exact family keys; how_did_similar_runs_go provides "
+        "descriptive prior-run feedback with privacy-safe readable human steps; get_task_context provides "
+        "bounded organizational context; and get_agent_runs provides structural agent execution evidence. "
+        "Readable step labels never replace stable structural family identity. Observed repetition is never "
+        "policy or permission. Missing agent signals mean not observed."
     )
 
 

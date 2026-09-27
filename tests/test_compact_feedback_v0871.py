@@ -189,22 +189,44 @@ def test_feedback_without_family_key_returns_selection_when_current_family_is_am
     assert len(result["available_families"]) == 2
 
 
-def test_compact_context_defaults_are_smaller_but_explicit_limits_still_work(monkeypatch):
+def test_compact_overview_stays_small_but_canonical_trace_defaults_to_100(monkeypatch):
     compact, calls = _install_feedback_fakes(monkeypatch)
 
-    compact.get_current_work_context()
+    overview = compact.get_current_work_context()
     trace_call = next(params for path, params in calls if path == "/v1/workflow-trace")
     semantic_call = next(params for path, params in calls if path == "/v1/semantic-activity")
     assert trace_call["limit"] == 6
     assert semantic_call["limit"] == 6
+    assert overview["overview_is_derived"] is True
+    assert overview["authoritative"] is False
+    assert overview["canonical_evidence_tool"] == "get_workflow_trace"
+    assert set(overview["derived_sections"]) == {"task_hints", "repeated_patterns", "semantic_activity"}
+    # Existing convenience fields remain present for backwards compatibility.
+    assert "task_hints" in overview and "repeated_patterns" in overview and "semantic_activity" in overview
 
     calls.clear()
     compact.get_workflow_trace()
-    assert calls[-1][1]["limit"] == 4
+    assert calls[-1][1]["limit"] == 100
 
     calls.clear()
-    compact.get_workflow_trace(limit=100)
-    assert calls[-1][1]["limit"] == 100
+    compact.get_workflow_trace(limit=37)
+    assert calls[-1][1]["limit"] == 37
+
+
+def test_compact_context_contract_is_evidence_first():
+    from mcp_server import compact
+
+    trace_doc = inspect.getdoc(compact.get_workflow_trace) or ""
+    overview_doc = inspect.getdoc(compact.get_current_work_context) or ""
+    model = compact.data_model()
+
+    assert "Use this first" in trace_doc
+    assert "primary Context MCP" in trace_doc
+    assert "Use get_workflow_trace first" in overview_doc
+    assert "optional compact derived overview" in overview_doc
+    assert "Use get_workflow_trace first" in model
+    assert "get_current_work_context is an optional" in model
+    assert "Use get_current_work_context first" not in model
 
 
 def test_feedback_and_task_context_tool_descriptions_explain_inputs():
