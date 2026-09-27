@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -94,6 +95,38 @@ def test_python_harness_sdk_delivery_failure_is_fail_open():
     assert stats.accepted == 3
     assert stats.send_failures >= 1
     observer.shutdown(timeout=1.0)
+
+
+def test_python_harness_sdk_shutdown_never_accepts_an_event_after_admission_closes():
+    batches: list[list[dict]] = []
+    batches_lock = threading.Lock()
+    decisions: list[bool] = []
+
+    def sender(_endpoint: str, _token: str, events: list[dict]) -> None:
+        with batches_lock:
+            batches.append(events)
+
+    observer = AgentObserver("Harness", token="t", sender=sender, flush_interval=0.02, batch_size=7)
+    start = threading.Event()
+
+    def emitter() -> None:
+        start.wait()
+        run = observer.run(run_id="race-run")
+        for _ in range(400):
+            decisions.append(run.record_error())
+
+    thread = threading.Thread(target=emitter)
+    thread.start()
+    start.set()
+    observer.shutdown(timeout=2.0)
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+    delivered = [event for batch in batches for event in batch]
+    assert len(delivered) == sum(decisions)
+    assert observer.stats().accepted == len(delivered)
+    # Once shutdown returns, admission is permanently closed.
+    assert observer.run(run_id="after-shutdown").record_error() is False
 
 
 def test_python_harness_sdk_rejects_non_structural_configuration():
