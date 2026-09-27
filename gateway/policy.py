@@ -10,6 +10,9 @@ DEFAULT_ORGANIZATION_POLICY: dict[str, Any] = {
     "strip_metadata_keys": [],
     # Require Redacted AI context (MCP) on every enrolled device.
     "force_redacted_ai_context": False,
+    # Structural agent evidence is shared only when BOTH this organization
+    # ceiling and the endpoint-local opt-in allow it. Off by default.
+    "allow_agent_events": False,
 }
 
 FORBIDDEN_CONTENT_KEYS = {
@@ -41,7 +44,13 @@ FORBIDDEN_TRUE_FLAGS = {
 def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     result = dict(DEFAULT_ORGANIZATION_POLICY)
-    for key in ("share_excluded", "share_window_titles", "share_metadata", "force_redacted_ai_context"):
+    for key in (
+        "share_excluded",
+        "share_window_titles",
+        "share_metadata",
+        "force_redacted_ai_context",
+        "allow_agent_events",
+    ):
         if key in source:
             result[key] = bool(source[key])
     for key in ("allowed_event_types", "strip_metadata_keys"):
