@@ -42,11 +42,11 @@
       const section=document.createElement('div');
       section.id='agent-observation-setup';section.className='card connection-section';
       section.innerHTML=`
-        <div class="agent-control-intro"><div><h2>Observe a custom agent</h2><div class="muted">Claude Code and Codex are switched on in <strong>Connections</strong> above. For your own agents, instrument the native lifecycle or trace surface so OpenWorkGraph can measure structural execution: runs, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
+        <div class="agent-control-intro"><div><h2>Observe a custom agent</h2><div class="muted">Claude Code and Codex are switched on in <strong>Connections</strong> above. For your own agents, instrument the native lifecycle or telemetry surface so OpenWorkGraph can measure structural execution: runs, models, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
         <div class="note" style="margin-top:12px"><strong>Status means telemetry observed.</strong> The green badge appears only when evidence actually arrives, not when setup code has merely been copied.</div>
         <div class="setup-grid" style="margin-top:12px">
-          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor; existing SDK tracing remains active.')}
-          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
+          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor for model, tool, handoff, hierarchy, usage and timing signals.')}
+          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send portable GenAI OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
         </div>`;
       const anchor=grid||panel.lastElementChild;
       if(anchor&&anchor.parentNode===panel)anchor.insertAdjacentElement('afterend',section);else panel.appendChild(section);
@@ -65,7 +65,6 @@
       :`<div class="agent-config-line">Added in your own code, so it can't be one-click.</div>`;
     return `<div class="setup-card"><div class="setup-tag">${h(tag)}</div><h3>${h(title)}</h3><div class="agent-connect-status" id="agent-status-${h(kind)}"><span class="dot"></span><span>No telemetry observed</span></div>${configLine}<p>${h(description)}</p><div class="setup-actions">${actions}</div></div>`;
   }
-
 
   function enhanceAgentsPanel(){
     const panel=document.querySelector('#panel-agents');
@@ -100,10 +99,10 @@
       let title='Observe an agent',body='';
       if(kind==='claude_code'){
         const x=integrations.claude_code||{};title='Observe Claude Code';
-        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which does this for you. To do it by hand, merge the <code>hooks</code> object below into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open. If OpenWorkGraph is unavailable, Claude Code continues normally.</div>`;
+        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which does this for you. To do it by hand, merge the shown <code>hooks</code> and <code>env</code> objects into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open; the logs-only OTel feed adds model/token/decision structure. Content-bearing telemetry flags remain disabled.</div>`;
       }else if(kind==='codex'){
         const x=integrations.codex||{};title='Observe Codex';
-        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables trace export only. User prompts, agent responses and guardian assessments remain disabled.</div>`;
+        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables structural OTel logs plus trace export. User prompts, agent responses and guardian assessments remain disabled.</div>`;
       }else if(kind==='openai_agents'){
         const x=integrations.openai_agents||{};title='Observe OpenAI Agents SDK';
         body=`<p>Add OpenWorkGraph as an additional tracing processor in the agent application's Python environment.</p>${privacyHtml(payload)}${codeBox(x.python||'', 'agentSetupCode')}<div class="note">This does not replace existing SDK tracing and does not make OpenWorkGraph a dependency for the agent's control flow.</div>`;
