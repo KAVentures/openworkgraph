@@ -1,0 +1,17 @@
+{
+  "name": "@openworkgraph/agent",
+  "version": "0.95.0",
+  "description": "Dependency-free structural telemetry helper for custom OpenWorkGraph agent harnesses",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  },
+  "types": "./index.d.ts",
+  "files": ["index.mjs", "index.d.ts"],
+  "license": "Apache-2.0",
+  "engines": {"node": ">=18"},
+  "private": true
+}

@@ -66,9 +66,39 @@ jobs:
           path: dist/OpenWorkGraph-Claude.mcpb
           if-no-files-found: error
 
+  sdk-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate standalone custom-agent SDKs
+        run: |
+          python -m py_compile sdk/python/openworkgraph_agent.py
+          node --check sdk/typescript/index.mjs
+      - name: Stage standalone custom-agent SDK assets
+        run: |
+          mkdir -p dist
+          cp sdk/python/openworkgraph_agent.py dist/OpenWorkGraph-Agent-Python.py
+          cp sdk/typescript/index.mjs dist/OpenWorkGraph-Agent-Node.mjs
+          cp sdk/typescript/index.d.ts dist/OpenWorkGraph-Agent-Node.d.ts
+      - name: Upload custom-agent SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-agent-sdk
+          path: |
+            dist/OpenWorkGraph-Agent-Python.py
+            dist/OpenWorkGraph-Agent-Node.mjs
+            dist/OpenWorkGraph-Agent-Node.d.ts
+          if-no-files-found: error
+
   publish-release:
     if: github.ref == 'refs/heads/main'
-    needs: [macos-package, windows-package, mcpb-package]
+    needs: [macos-package, windows-package, mcpb-package, sdk-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +116,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: OpenWorkGraph-Claude
+          path: release-assets
+      - name: Download custom-agent SDK assets
+        uses: actions/download-artifact@v4
+        with:
+          name: pkg-agent-sdk
           path: release-assets
       - name: Publish GitHub Release when VERSION is new
         env:
@@ -119,6 +154,11 @@ jobs:
 
           ### Agent setup control plane
           The dashboard now separates giving an AI access to OpenWorkGraph context from observing an agent's own execution. It provides reviewable setup material for Claude Code lifecycle hooks, Codex trace export, OpenAI Agents tracing and generic OpenTelemetry/custom structural adapters. OpenWorkGraph does not silently edit third-party configuration files. An integration is shown as active only when telemetry actually observed by the local evidence store supports that status.
+
+          ### Custom harnesses
+          Arbitrary self-built or third-party agent harnesses can now connect in either or both directions. Python and Node/TypeScript helpers, OTLP/HTTP JSON and raw structural HTTP can send privacy-safe execution telemetry through the dedicated write-only agent credential. Any MCP-capable harness can separately read only the OpenWorkGraph context the user has authorized. The setup flow keeps telemetry write permission and context/history read permission explicitly separate.
+
+          The standalone helpers do not accept or serialize prompt text, model responses, tool arguments/results, returned values, exception text or hidden reasoning. OpenWorkGraph observer failures remain fail-open for the agent. This release publishes **OpenWorkGraph-Agent-Python.py**, **OpenWorkGraph-Agent-Node.mjs** and **OpenWorkGraph-Agent-Node.d.ts** as standalone release assets.
 
           ### Compact MCP for new connections
           New dashboard-generated connections, the Claude MCP bundle and the on-demand local HTTP bridge expose a compact MCP surface focused on current context, search, canonical evidence, repeated workflows, task context, prior-run feedback and agent execution inspection. Overlapping tools are consolidated so AI clients have fewer competing tool definitions.
@@ -158,6 +198,9 @@ jobs:
             release-assets/OpenWorkGraph-Windows.zip \
             release-assets/OpenWorkGraph-Windows.zip.sha256 \
             release-assets/OpenWorkGraph-Claude.mcpb \
+            release-assets/OpenWorkGraph-Agent-Python.py \
+            release-assets/OpenWorkGraph-Agent-Node.mjs \
+            release-assets/OpenWorkGraph-Agent-Node.d.ts \
             --target "$GITHUB_SHA" \
             --title "OpenWorkGraph ${TAG}" \
             --notes-file /tmp/openworkgraph-release-notes.md
