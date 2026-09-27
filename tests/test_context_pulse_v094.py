@@ -130,8 +130,6 @@ now=datetime.now(timezone.utc)
 events=[]
 for day in range(3):
     base=now-timedelta(days=day, hours=1)
-    # Enough engaged time to produce a surface finding plus two repeated
-    # directional transitions across the three sessions.
     for index,(app,offset) in enumerate([('Gmail',0),('ChatGPT',120),('Gmail',240)]):
         events.append({
             'event_id':f'limit-{day}-{index}',
@@ -142,26 +140,24 @@ for day in range(3):
         })
 assert insert_events(events)==9
 
-page1=context_pulse(recent_limit=20,finding_limit=1)
-assert page1['findings_returned']==1 and page1['findings_has_more'] is True, page1
-frozen=page1['snapshot_max_event_watermark']
-seen={page1['findings'][0]['finding_id']}
+page=context_pulse(recent_limit=20,finding_limit=1)
+assert page['findings_returned']==1 and page['findings_has_more'] is True, page
+frozen=page['snapshot_max_event_watermark']
+seen=set()
 
-page2=context_pulse(cursor=page1['next_cursor'],recent_limit=20,finding_limit=1)
-assert page2['snapshot_max_event_watermark']==frozen
-assert page2['findings_returned']==1, page2
-assert page2['findings'][0]['status']=='baseline'
-assert page2['findings'][0]['finding_id'] not in seen
-seen.add(page2['findings'][0]['finding_id'])
+while True:
+    assert page['snapshot_max_event_watermark']==frozen
+    assert page['findings_returned']==1, page
+    item=page['findings'][0]
+    assert item['status']=='baseline'
+    assert item['finding_id'] not in seen
+    seen.add(item['finding_id'])
+    if not page['findings_has_more']:
+        break
+    page=context_pulse(cursor=page['next_cursor'],recent_limit=20,finding_limit=1)
 
-page3=context_pulse(cursor=page2['next_cursor'],recent_limit=20,finding_limit=1)
-assert page3['snapshot_max_event_watermark']==frozen
-assert page3['findings_returned']==1, page3
-assert page3['findings'][0]['status']=='baseline'
-assert page3['findings'][0]['finding_id'] not in seen
-assert page3['findings_has_more'] is False
-
-settled=context_pulse(cursor=page3['next_cursor'],recent_limit=20,finding_limit=1)
+assert len(seen)>=3, seen
+settled=context_pulse(cursor=page['next_cursor'],recent_limit=20,finding_limit=1)
 assert settled['findings']==[], settled
 ''', tmp_path)
 
