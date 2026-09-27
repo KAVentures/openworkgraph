@@ -59,11 +59,17 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         "PYTHONPATH": str(ROOT),
     })
     api = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.secure_app:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        [sys.executable, "-m", "server.enterprise_runner", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     _wait(base + "/health", api)
     headers = {"Authorization": f"Bearer {token}"}
+    retention = httpx.put(
+        base + "/v1/history-policy",
+        json={"human_mode": "forever", "agent_mode": "forever", "onboarding_complete": True},
+        headers=headers,
+    )
+    assert retention.status_code == 200, retention.text
     event = {
         "event_id": "stdio-real-1", "observed_at": "2026-09-18T16:00:00+00:00",
         "device_id": "d", "sensor_id": "browser:test", "source": "browser_extension",
@@ -113,6 +119,7 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert expected_procedural <= names
                 assert expected_agent_inspection <= names
                 assert len(names) == 24
+                assert "list_history" not in names
 
                 denied = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert denied.is_error is True
@@ -120,6 +127,12 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
 
                 enabled = httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=headers)
                 assert enabled.status_code == 200 and enabled.json()["enabled"] is True
+                lease = httpx.post(
+                    base + "/v1/history/ai-access",
+                    json={"mode": "all_saved", "expires_minutes": 60},
+                    headers=headers,
+                )
+                assert lease.status_code == 200 and lease.json()["access"]["mode"] == "all_saved"
 
                 result = await session.call_tool("get_workflow_trace", {"limit": 10})
                 assert result.is_error is False
