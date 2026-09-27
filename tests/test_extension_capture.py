@@ -48,8 +48,8 @@ def test_browser_delivery_is_durable_idempotent_and_sanitized():
     assert "flushBrowserQueue" in background
     assert "sanitizePendingBrowserQueue" in background
     assert "sensor_version" in background
-    assert manifest["version"] == "1.11.0"
-    assert manifest["version_name"] == "1.11.0-v58-metadata-signals"
+    assert manifest["version"] == "1.12.0"
+    assert manifest["version_name"] == "1.12.0-v94-agent-lifecycle"
     assert manifest["background"]["service_worker"] == "secure_background.js"
 
 

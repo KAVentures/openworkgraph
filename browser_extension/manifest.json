@@ -1,48 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Workflow Observer Browser Sensor",
-  "version": "1.11.0",
-  "version_name": "1.11.0-v58-metadata-signals",
-  "description": "Local-only semantic browser telemetry for Workflow Observer. Query values/fragments, typed field values, clipboard contents, filenames, file contents, and ordinary key identities are not collected.",
+  "version": "1.12.0",
+  "version_name": "1.12.0-v94-agent-lifecycle",
+  "description": "Local-only structural browser telemetry for OpenWorkGraph. Query values/fragments, typed field values, clipboard contents, filenames, file contents, prompts and model responses are not collected.",
   "incognito": "not_allowed",
-  "permissions": [
-    "tabs",
-    "webNavigation",
-    "storage",
-    "alarms"
-  ],
-  "host_permissions": [
-    "http://127.0.0.1:8787/*",
-    "http://*/*",
-    "https://*/*"
-  ],
+  "permissions": ["tabs", "webNavigation", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8787/*", "http://*/*", "https://*/*"],
   "background": {
-    "scripts": [
-      "browser_auth.js",
-      "background.js",
-      "workflow_enrichment.js",
-      "browser_signal_enrichment.js"
-    ],
+    "scripts": ["browser_auth.js", "background.js", "workflow_enrichment.js", "browser_signal_enrichment.js"],
     "service_worker": "secure_background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content.js",
-        "content_enrichment.js",
-        "browser_signals.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true
-    }
-  ],
-  "action": {
-    "default_title": "Workflow Observer Browser Sensor",
-    "default_popup": "popup.html"
-  }
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["content.js", "content_enrichment.js", "browser_signals.js", "agent_surface_adapters.js"],
+    "run_at": "document_start",
+    "all_frames": true,
+    "match_about_blank": true
+  }],
+  "action": {"default_title": "Workflow Observer Browser Sensor", "default_popup": "popup.html"}
 }

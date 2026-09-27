@@ -29,6 +29,7 @@ LABEL = "Open email from Anna Svensson"
 CONTEXT_TOOL_ARGS = {
     "get_current_work_context": {},
     "get_context_pulse": {},
+    "list_history": {},
     "search_work": {"query": "Contract"},
     "get_workflow_trace": {"limit": 50},
     "get_work_profile": {},
@@ -122,8 +123,20 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
     headers = {"Authorization": f"Bearer {token}"}
     try:
         _wait(base + "/health", api)
+        retention = httpx.put(
+            base + "/v1/history-policy",
+            json={"human_mode": "forever", "agent_mode": "forever", "onboarding_complete": True},
+            headers=headers,
+        )
+        assert retention.status_code == 200, retention.text
         assert httpx.post(base + "/v1/events", json={"events": _events(now)}, headers=headers).status_code == 200
         assert httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=headers).json()["enabled"] is True
+        lease = httpx.post(
+            base + "/v1/history/ai-access",
+            json={"mode": "all_saved", "expires_minutes": 60},
+            headers=headers,
+        )
+        assert lease.status_code == 200 and lease.json()["access"]["mode"] == "all_saved"
 
         async def call_all() -> dict[str, tuple[str, dict]]:
             params = StdioServerParameters(
@@ -190,7 +203,8 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
     finally:
         _stop(api)
 
-    # Raw local evidence is untouched by any of this.
+    # Raw local evidence is untouched by AI redaction. This test explicitly chose
+    # forever retention above, so shutdown retention cleanup must not remove it.
     db = sqlite3.connect(data / "workflow_observer.db")
     titles = {row[0] for row in db.execute("SELECT window_title FROM events")}
     labels = {json.loads(row[0] or "{}").get("target", {}).get("label") for row in db.execute("SELECT metadata_json FROM events")}

@@ -11,6 +11,7 @@ from collector.outbox import EventOutbox
 from connector.runtime import start_sync_worker, status as worker_status, stop_sync_worker
 from connector.state import SyncState
 from shared.evidence_deletion import add_tombstone, audit_deletion, normalize_range
+from shared.history_policy import bump_history_generation
 from . import analytics
 from .db import DATA_DIR
 from .evidence_delete import delete_database_range, remove_local_screenshots, rewrite_jsonl_range
@@ -44,8 +45,6 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
         if was_running:
             stop_sync_worker()
 
-        # Fail closed first. Any late collector/browser delivery for this range is
-        # rejected even if a later filesystem cleanup encounters an error.
         add_tombstone(since, until)
 
         result: dict[str, Any] | None = None
@@ -54,12 +53,10 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
         screenshots_removed = 0
         jsonl_removed = 0
         gateway_cursor = 0
+        history_generation = 0
         try:
             sync_state = SyncState(DATA_DIR / "gateway_sync_state.db")
             gateway_cursor = sync_state.get_int("last_local_event_id", 0)
-
-            # Collector JSONL and pending delivery are auxiliary local evidence
-            # copies, so delete them as part of the same user operation.
             jsonl_removed = rewrite_jsonl_range(since, until)
             outbox = EventOutbox(DATA_DIR / "collector_outbox.db")
             pruned_outbox = outbox.prune_range(since, until)
@@ -68,11 +65,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             local_ids = [int(value) for value in result.get("local_ids") or []]
             skipped_gateway = sync_state.add_skip_ids(local_ids, "local_evidence_deleted")
             screenshots_removed = remove_local_screenshots(list(result.get("screenshot_paths") or []))
-
-            # The summary cache historically assumes append-only local evidence.
-            # Deletion must invalidate it explicitly or the dashboard can display
-            # rows that no longer exist in SQLite.
             analytics.clear_summary_cache()
+            history_generation = bump_history_generation(reason="manual_range_deletion")
 
             audit_deletion(
                 since=since,
@@ -108,6 +102,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             "gateway_local_rows_marked_never_share": int(skipped_gateway),
             "screenshots_removed": int(screenshots_removed),
             "late_delivery_suppressed": True,
+            "history_generation": int(history_generation),
+            "context_pulse_cursors_invalidated": True,
             "gateway_recall_performed": False,
             "rows_at_or_before_gateway_cursor": int(at_or_before_cursor),
             "notice": (

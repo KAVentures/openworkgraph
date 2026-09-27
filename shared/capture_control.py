@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .evidence_deletion import prepare_recordable_event as prepare_not_deleted
+from .history_policy import prepare_recordable_event as prepare_retained
 
 _LOCK = threading.RLock()
 _MAX_INTERVALS = 500
@@ -190,16 +191,18 @@ def timestamp_is_skipped(observed_at: str | None, *, state: dict[str, Any] | Non
 
 
 def prepare_recordable_event(event: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Apply permanent deletion tombstones, then capture pause/stop boundaries.
+    """Apply deletion, retention and capture-control boundaries before persistence.
 
-    Deleted time ranges are checked first so late queued evidence cannot recreate
-    locally deleted work. Capture-state clipping then protects against a collector
-    process that is shutting down just after Pause/Stop.
+    Deletion and retention are checked before pause/stop clipping so buffered or
+    late evidence cannot recreate a session the user already expired or deleted.
     """
     deletion_safe = prepare_not_deleted(event)
     if deletion_safe is None:
         return None
-    event = deletion_safe
+    retention_safe = prepare_retained(deletion_safe)
+    if retention_safe is None:
+        return None
+    event = retention_safe
     value = state or read_state()
     start = _parse(str(event.get("observed_at") or ""))
     if start is None:
