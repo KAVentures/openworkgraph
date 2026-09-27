@@ -9,7 +9,6 @@ remains subject to the normal per-run AI-access and saved-history controls.
 import json
 import shlex
 import sys
-from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -21,9 +20,6 @@ from server.secure_app import app
 
 SCRIPT = ROOT / "dashboard" / "custom_harness_setup.js"
 SCRIPT_MARKER = '<script src="/custom-harness-setup.js"></script>'
-PYTHON_SDK = ROOT / "sdk" / "python" / "openworkgraph_agent.py"
-TYPESCRIPT_SDK = ROOT / "sdk" / "typescript" / "index.mjs"
-TYPESCRIPT_TYPES = ROOT / "sdk" / "typescript" / "index.d.ts"
 LAUNCHER = ROOT / "mcp_server" / "launcher.py"
 VERSION_FILE = ROOT / "VERSION"
 
@@ -116,15 +112,15 @@ try {
                 "install": python_install,
                 "environment": python_env,
                 "example": python_example,
-                "bundled_source": str(PYTHON_SDK),
+                "source": "sdk/python/openworkgraph_agent.py",
                 "dependency_free_runtime": True,
             },
             "typescript": {
                 "download": typescript_download,
                 "environment": typescript_env,
                 "example": typescript_example,
-                "bundled_source": str(TYPESCRIPT_SDK),
-                "types_source": str(TYPESCRIPT_TYPES),
+                "source": "sdk/typescript/index.mjs",
+                "types_source": "sdk/typescript/index.d.ts",
                 "dependency_free_runtime": True,
                 "minimum_node": 18,
             },
