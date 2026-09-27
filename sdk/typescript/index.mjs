@@ -144,13 +144,11 @@ export class AgentRun {
     if(typeof options==='function'){fn=options;options={};}
     if(typeof fn!=='function')throw new TypeError('tool requires a function');
     const category=options.category||'other';if(!CATEGORIES.has(category))throw new TypeError(`unsupported tool category: ${category}`);
-    const started=performance.now();
+    const started=performance.now();let failed=false;
     try{return await fn();}
-    catch(error){this.observer._enqueue('tool_call',this._fields({status:'error',tool_name:clean(name,200),tool_category:category,duration_seconds:(performance.now()-started)/1000}));throw error;}
+    catch(error){failed=true;throw error;}
     finally{
-      // Successful calls are emitted here; failed calls were already emitted in catch.
-      // Returned values and exception content are never serialized.
-      if(!arguments.callee){} // no-op kept out of payload; see success branch below
+      this.observer._enqueue('tool_call',this._fields({status:failed?'error':'success',tool_name:clean(name,200),tool_category:category,duration_seconds:(performance.now()-started)/1000}));
     }
   }
   async model(options={}, fn){
