@@ -58,6 +58,39 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
         return
     compact_module._is_readable_step_input = _readable_step_input
     compact_module.secure_runtime = _CompactRuntimeProxy(compact_module.secure_runtime)
+
+    @compact_module.mcp.tool()
+    def get_context_pulse(
+        cursor: str | None = None,
+        recent_limit: int = 100,
+        finding_limit: int = 20,
+        lookback_days: int = 30,
+    ) -> dict[str, Any]:
+        """Return what changed since the last check plus changed factual findings.
+
+        Pass ``next_cursor`` back unchanged on the next call. The recent section is
+        canonical evidence that arrived since this caller's bookmark. Findings are
+        deterministic evidence-backed counts/aggregates over the rolling lookback,
+        never recommendations or task-label guesses. On the first call they are a
+        baseline; later calls omit findings that have not materially changed.
+        """
+        name = "get_context_pulse"
+        compact_module.core._begin(name)
+        params: dict[str, Any] = {
+            "recent_limit": min(max(1, int(recent_limit)), 500),
+            "finding_limit": min(max(0, int(finding_limit)), 50),
+            "lookback_days": min(max(7, int(lookback_days)), 90),
+        }
+        if cursor not in (None, ""):
+            params["cursor"] = cursor
+        return compact_module.core._finish(
+            name,
+            compact_module.secure_runtime.secure_get("/v1/context-pulse", params),
+        )
+
+    # Keep the function addressable for direct unit tests/debugging in addition to
+    # registering it with both compact stdio and compact HTTP MCP transports.
+    compact_module.get_context_pulse = get_context_pulse
     compact_module._V0873_HARDENING_APPLIED = True
 
 

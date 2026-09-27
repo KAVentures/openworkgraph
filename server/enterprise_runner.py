@@ -26,6 +26,7 @@ def main() -> None:
     import server.v0571_polish  # noqa: F401
     import server.evidence_paging  # noqa: F401
     import server.work_profile_routes  # noqa: F401
+    import server.context_pulse_routes  # noqa: F401
     import server.browser_signal_routes  # noqa: F401
     import server.agent_dashboard_control_plane  # noqa: F401
     # Import last so its HTML middleware injects the privacy-safe dashboard loader

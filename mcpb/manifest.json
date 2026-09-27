@@ -4,7 +4,7 @@
   "display_name": "OpenWorkGraph",
   "version": "0.91.0",
   "description": "Connect Claude Desktop to the compact local OpenWorkGraph context surface.",
-  "long_description": "Uses the OpenWorkGraph installation already running on this computer. New connections expose canonical workflow evidence first through the compact read-oriented Context MCP surface, while derived task and pattern views remain optional and non-authoritative. The legacy 24-tool stdio entrypoint remains available for existing configurations. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
+  "long_description": "Uses the OpenWorkGraph installation already running on this computer. New connections expose canonical workflow evidence first through the compact read-oriented Context MCP surface, while Context Pulse provides incremental factual updates and changed long-horizon findings. Derived task and pattern views remain optional and non-authoritative. The legacy 24-tool stdio entrypoint remains available for existing configurations. Workflow evidence remains in the local OpenWorkGraph store until Claude requests it through MCP. AI access can be turned off instantly from the OpenWorkGraph dashboard.",
   "author": {
     "name": "Koyar Afrasyab / Kinvectum"
   },
@@ -23,6 +23,7 @@
   },
   "tools": [
     {"name": "get_current_work_context", "description": "Read an optional compact derived overview with pointers to canonical evidence."},
+    {"name": "get_context_pulse", "description": "Read what changed since the last check plus new or materially changed factual findings; pass the returned cursor back next time."},
     {"name": "search_work", "description": "Search prior work through evidence or semantic layers."},
     {"name": "get_workflow_trace", "description": "Read the primary canonical paginated workflow evidence, optionally for one session."},
     {"name": "get_work_profile", "description": "Read derived workflow signals without productivity scoring."},
