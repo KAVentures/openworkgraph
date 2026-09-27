@@ -68,3 +68,34 @@ test('TypeScript SDK remains fail-open when OWG is unavailable', async ()=>{
     assert.ok(observer.stats().sendFailures>=1);
   }finally{globalThis.fetch=previous;}
 });
+
+test('TypeScript shutdown waits for an already in-flight telemetry request', async ()=>{
+  const previous=globalThis.fetch;
+  let releaseFetch;
+  let fetchStarted;
+  const started=new Promise(resolve=>{fetchStarted=resolve;});
+  const gate=new Promise(resolve=>{releaseFetch=resolve;});
+  globalThis.fetch=async()=>{
+    fetchStarted();
+    await gate;
+    return {ok:true,status:200};
+  };
+  try{
+    const observer=new AgentObserver('Custom harness',{token:'t',flushMs:20});
+    const run=observer.startRun({runId:'shutdown-run'});
+    run.finish('success');
+    const firstFlush=observer.flush();
+    await started;
+    let shutdownResolved=false;
+    const shutdown=observer.shutdown().then(()=>{shutdownResolved=true;});
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(shutdownResolved,false);
+    releaseFetch();
+    await firstFlush;
+    await shutdown;
+    assert.equal(shutdownResolved,true);
+    assert.equal(observer.stats().queued,0);
+    assert.equal(observer.stats().batchesSent,1);
+    assert.equal(run.recordError(),false);
+  }finally{globalThis.fetch=previous;}
+});
