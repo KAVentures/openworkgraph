@@ -30,6 +30,20 @@ init_db();insert_events([{'event_id':'old','observed_at':datetime.now(timezone.u
 ''',tmp_path/'existing')
 
 
+def test_uninitialized_legacy_runtime_does_not_delete_completed_agent_run(tmp_path):
+    _run(r'''
+from datetime import datetime, timedelta, timezone
+from server.db import init_db,connect
+from server.agent_ingest import ingest_agent_payloads
+from shared.history_policy import read_policy
+init_db();assert read_policy()['agent_retention']['mode']=='forever'
+base=datetime.now(timezone.utc)-timedelta(minutes=2)
+events=[{'observed_at':base.isoformat(),'agent_name':'LegacyAgent','provider':'test','framework':'custom','operation':'run_started','status':'running','observation_level':'native_trace','run_id':'legacy-run','session_id':'legacy-run','tool_category':'none'},{'observed_at':(base+timedelta(seconds=1)).isoformat(),'agent_name':'LegacyAgent','provider':'test','framework':'custom','operation':'run_finished','status':'success','observation_level':'native_trace','run_id':'legacy-run','session_id':'legacy-run','tool_category':'none'}]
+r=ingest_agent_payloads(events);assert r['inserted']==2
+with connect() as c: assert c.execute("SELECT COUNT(*) FROM events WHERE session_id='legacy-run'").fetchone()[0]==2
+''',tmp_path/'legacy')
+
+
 def test_ephemeral_cleanup_tombstones_late_delivery_and_bumps_generation(tmp_path):
     _run(r'''
 from datetime import datetime, timezone
@@ -54,7 +68,7 @@ init_db();initialize_policy(has_existing_evidence=False);update_retention(human_
 base=datetime.now(timezone.utc)-timedelta(hours=3)
 def h(eid,offset): return {'event_id':eid,'observed_at':(base+timedelta(minutes=offset)).isoformat(),'device_id':'d','session_id':'human-1','app':'Editor','window_title':'Work','event_type':'focus_span','duration_seconds':60,'metadata':{'activity':{'foreground_seconds':60,'engaged_seconds':50}}}
 insert_events([h('h1',0),h('h2',10),h('h3',55)])
-ingest_agent_payloads([{'observed_at':(base+timed(minutes=5)).isoformat(),'agent_name':'ChatGPT','provider':'openai','framework':'chatgpt_web','operation':'run_started','status':'running','observation_level':'os_observed','run_id':'web-test1','session_id':'web-test1','tool_category':'none'},{'observed_at':(base+timed(minutes=6)).isoformat(),'agent_name':'ChatGPT','provider':'openai','framework':'chatgpt_web','operation':'run_finished','status':'success','observation_level':'os_observed','run_id':'web-test1','session_id':'web-test1','tool_category':'none'}])
+ingest_agent_payloads([{'observed_at':(base+timedelta(minutes=5)).isoformat(),'agent_name':'ChatGPT','provider':'openai','framework':'chatgpt_web','operation':'run_started','status':'running','observation_level':'os_observed','run_id':'web-test1','session_id':'web-test1','tool_category':'none'},{'observed_at':(base+timedelta(minutes=6)).isoformat(),'agent_name':'ChatGPT','provider':'openai','framework':'chatgpt_web','operation':'run_finished','status':'success','observation_level':'os_observed','run_id':'web-test1','session_id':'web-test1','tool_category':'none'}])
 h=list_history(limit=20);human=next(x for x in h['sessions'] if x['kind']=='human');agent=next(x for x in h['sessions'] if x['kind']=='agent');assert len(human['activity_blocks'])==2,human;assert human['event_count']==3;assert agent['observation_level']=='os_observed';assert h['derived_task_labels_used'] is False
 ''',tmp_path)
 
