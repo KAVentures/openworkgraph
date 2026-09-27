@@ -6,12 +6,10 @@ from server.local_auth import mcp_bearer_matches
 from . import secure_runtime as _secure_runtime
 from .agent_tools import register_agent_tools
 from .history_guard import install_history_guard
-from .history_tools import register_history_tools
 
 install_history_guard(_secure_runtime)
 mcp = _secure_runtime.mcp
 register_agent_tools(mcp)
-register_history_tools(mcp, _secure_runtime)
 _inner = mcp.streamable_http_app()
 
 class MCPBearerGuard:
