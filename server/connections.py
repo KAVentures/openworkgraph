@@ -309,6 +309,7 @@ def _read_switches() -> dict[str, dict[str, bool]]:
         try:
             mtime = path.stat().st_mtime_ns
         except FileNotFoundError:
+            _CACHE.update(mtime=None, data={})
             return {}
         if _CACHE["mtime"] == mtime:
             return _CACHE["data"]
@@ -322,10 +323,19 @@ def _read_switches() -> dict[str, dict[str, bool]]:
 
 
 def _write_switch(client_id: str, kind: str, enabled: bool) -> None:
+    path = _switch_path()
     with _LOCK:
         data = json.loads(json.dumps(_read_switches()))
         data.setdefault(kind, {})[client_id] = bool(enabled)
-        writer._atomic_write(_switch_path(), json.dumps(data, indent=2) + "\n")
+        writer._atomic_write(path, json.dumps(data, indent=2) + "\n")
+        # Do not depend on filesystem timestamp granularity after an atomic
+        # replace. Windows can report the same mtime for rapid successive
+        # writes, which previously let the cache return the pre-write state.
+        try:
+            mtime = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime = None
+        _CACHE.update(mtime=mtime, data=json.loads(json.dumps(data)))
 
 
 def is_enabled(client_id: str | None, kind: str) -> bool:
