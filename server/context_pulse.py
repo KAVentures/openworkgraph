@@ -131,8 +131,11 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
     for surface, value in grouped.items():
         engaged = round(float(value["engaged_seconds"]), 3)
         active_days = len(value["days"])
-        # Avoid turning every briefly opened app into a long-horizon finding.
-        if active_days < 2 and engaged < 1800:
+        # Foreground presence alone is not engagement. In particular, a window
+        # left open across multiple days must not become a long-horizon finding.
+        # Multi-day surfaces need at least five engaged minutes total; a one-day
+        # surface needs at least thirty engaged minutes to be worth surfacing.
+        if engaged < 300 or (active_days < 2 and engaged < 1800):
             continue
         findings.append({
             "finding_id": _finding_id("surface_engagement", surface),
@@ -159,7 +162,12 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
 def _transition_findings(timeline: list[dict[str, Any]], lookback_days: int) -> list[dict[str, Any]]:
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in timeline:
-        by_session[str(row.get("session_id") or "")].append(row)
+        session_id = str(row.get("session_id") or "").strip()
+        if not session_id:
+            # Missing session identity means we cannot safely assert adjacency;
+            # grouping all such rows together would manufacture transitions.
+            continue
+        by_session[session_id].append(row)
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for rows in by_session.values():
