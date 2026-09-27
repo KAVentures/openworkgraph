@@ -7,8 +7,8 @@ Context Pulse answers two factual questions without becoming an advice engine:
 1. What canonical evidence arrived since this caller last checked?
 2. Which long-horizon factual aggregates are new or materially changed?
 
-The cursor intentionally contains no titles, names, surfaces or other captured text.
-It keeps only monotonic database watermarks and hashes/versions of findings.
+The cursor intentionally contains no titles, names, surfaces or other captured
+text. It keeps only monotonic database watermarks and opaque finding versions.
 """
 
 import base64
@@ -26,6 +26,11 @@ _CURSOR_VERSION = 1
 _MAX_CURSOR_BYTES = 32_768
 _MAX_TRACKED_FINDINGS = 50
 _MAX_FINDING_SOURCE_EVENTS = 100_000
+_COMPACT_FIELDS = (
+    "event_id", "observed_at", "source", "event_type", "app", "window_title",
+    "action", "target_label", "target_role", "page_host", "duration_seconds",
+    "engaged_seconds",
+)
 
 
 def _encode_cursor(value: dict[str, Any]) -> str:
@@ -100,6 +105,20 @@ def _source_rows(
     return [_event_dict(row) for row in rows[:_MAX_FINDING_SOURCE_EVENTS]], truncated
 
 
+def _compact_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep useful follow-along evidence fields; full rows remain separately available."""
+    out = {
+        key: row.get(key)
+        for key in _COMPACT_FIELDS
+        if row.get(key) not in (None, "", 0, 0.0)
+    }
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    for key in ("operation", "status", "agent_name"):
+        if meta.get(key):
+            out[key] = meta.get(key)
+    return out
+
+
 def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in timeline:
@@ -131,10 +150,8 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
     for surface, value in grouped.items():
         engaged = round(float(value["engaged_seconds"]), 3)
         active_days = len(value["days"])
-        # Foreground presence alone is not engagement. In particular, a window
-        # left open across multiple days must not become a long-horizon finding.
-        # Multi-day surfaces need at least five engaged minutes total; a one-day
-        # surface needs at least thirty engaged minutes to be worth surfacing.
+        # Foreground presence alone is not engagement. Multi-day surfaces need
+        # at least five engaged minutes; a one-day surface needs thirty minutes.
         if engaged < 300 or (active_days < 2 and engaged < 1800):
             continue
         findings.append({
@@ -149,8 +166,6 @@ def _surface_findings(timeline: list[dict[str, Any]], lookback_days: int) -> lis
             "last_observed_at": value["last_observed_at"],
             "evidence_event_ids": list(dict.fromkeys(value["evidence_event_ids"]))[-12:],
             "lookback_days": lookback_days,
-            # Engagement changes are material every 15 engaged minutes, or when a
-            # new active day appears. Tiny focus/heartbeat changes do not spam AI.
             "material_version": f"d{active_days}:q{int(engaged // 900)}",
             "factual_aggregate": True,
             "task_inference_used": False,
@@ -164,8 +179,6 @@ def _transition_findings(timeline: list[dict[str, Any]], lookback_days: int) -> 
     for row in timeline:
         session_id = str(row.get("session_id") or "").strip()
         if not session_id:
-            # Missing session identity means we cannot safely assert adjacency;
-            # grouping all such rows together would manufacture transitions.
             continue
         by_session[session_id].append(row)
 
@@ -226,6 +239,7 @@ def _transition_findings(timeline: list[dict[str, Any]], lookback_days: int) -> 
 def _findings(
     *,
     snapshot_max_id: int,
+    snapshot_context_max_id: int,
     snapshot_at: str,
     lookback_days: int,
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -235,14 +249,34 @@ def _findings(
         lookback_days=lookback_days,
     )
     timeline = factual_context_timeline(_raw_events=raw_rows)
+    from .context_pulse_findings import (
+        agent_failure_findings,
+        manual_transfer_findings,
+        repeated_workflow_findings,
+    )
+
     findings = [
-        *_surface_findings(timeline, lookback_days),
+        *repeated_workflow_findings(raw_rows, lookback_days),
+        *manual_transfer_findings(
+            snapshot_context_max_id=snapshot_context_max_id,
+            snapshot_at=snapshot_at,
+            lookback_days=lookback_days,
+        ),
+        *agent_failure_findings(raw_rows, lookback_days),
         *_transition_findings(timeline, lookback_days),
+        *_surface_findings(timeline, lookback_days),
     ]
+    rank = {
+        "repeated_workflow": 0,
+        "manual_transfer": 1,
+        "agent_repeated_failure": 2,
+        "repeated_surface_transition": 3,
+        "surface_engagement": 4,
+    }
     findings.sort(
         key=lambda item: (
-            0 if item.get("finding_kind") == "repeated_surface_transition" else 1,
-            -int(item.get("occurrence_count") or item.get("active_days") or 0),
+            rank.get(str(item.get("finding_kind") or ""), 9),
+            -int(item.get("occurrence_count") or item.get("failing_run_count") or item.get("active_days") or 0),
             str(item.get("finding_id") or ""),
         )
     )
@@ -252,19 +286,18 @@ def _findings(
 def context_pulse(
     *,
     cursor: str | None = None,
-    recent_limit: int = 100,
-    finding_limit: int = 20,
+    recent_limit: int = 25,
+    finding_limit: int = 10,
     lookback_days: int = 30,
+    recent_detail: str = "compact",
 ) -> dict[str, Any]:
     """Return one incremental factual update and an opaque bookmark for the next check."""
+    recent_detail = "rich" if str(recent_detail or "").strip().lower() == "rich" else "compact"
     state = _decode_cursor(cursor)
     bootstrap = not bool(state)
     page_limit = max(1, min(int(recent_limit), 500))
     output_finding_limit = max(0, min(int(finding_limit), 50))
 
-    # Once a cursor exists it owns the lookback contract. A caller can start a new
-    # pulse (no cursor) to choose another lookback; it need not repeat the original
-    # value on every subsequent tool call.
     if state:
         lookback_days = max(7, min(int(state.get("lookback_days") or 30), 90))
     else:
@@ -272,6 +305,7 @@ def context_pulse(
 
     last_event_id = max(0, int(state.get("last_event_id") or 0)) if state else 0
     pending_snapshot = max(0, int(state.get("pending_snapshot_max_id") or 0)) if state else 0
+    pending_context_snapshot = max(0, int(state.get("pending_context_snapshot_max_id") or 0)) if state else 0
     pending_snapshot_at = str(state.get("pending_snapshot_at") or "") if state else ""
     previous_versions = state.get("finding_versions") if state else {}
     if not isinstance(previous_versions, dict):
@@ -284,7 +318,12 @@ def context_pulse(
 
     with connect() as conn:
         current_max_id = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0])
+        try:
+            current_context_max_id = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM context_events").fetchone()[0])
+        except Exception:
+            current_context_max_id = 0
     snapshot_max_id = pending_snapshot or current_max_id
+    snapshot_context_max_id = pending_context_snapshot or current_context_max_id
     snapshot_at = pending_snapshot_at or datetime.now(timezone.utc).isoformat()
 
     if bootstrap:
@@ -306,9 +345,11 @@ def context_pulse(
         visible = db_rows[:page_limit]
         recent_mode = "since_last_pulse"
 
-    recent_rows = [rich_evidence_row(dict(row), include_identity=False) for row in visible]
+    rich_rows = [rich_evidence_row(dict(row), include_identity=False) for row in visible]
+    recent_rows = rich_rows if recent_detail == "rich" else [_compact_row(row) for row in rich_rows]
     findings, findings_truncated = _findings(
         snapshot_max_id=snapshot_max_id,
+        snapshot_context_max_id=snapshot_context_max_id,
         snapshot_at=snapshot_at,
         lookback_days=lookback_days,
     )
@@ -317,9 +358,6 @@ def context_pulse(
         for item in findings
     }
 
-    # Keep only still-current delivered state. Crucially, a finding does not enter
-    # the cursor until it has actually been returned to the caller; a low
-    # finding_limit therefore cannot silently mark unseen findings as delivered.
     next_versions = {
         finding_id: version
         for finding_id, version in previous_versions.items()
@@ -354,26 +392,32 @@ def context_pulse(
     else:
         next_last_event_id = snapshot_max_id
 
-    # Freeze the same snapshot while either the evidence page or finding page has
-    # more to deliver. New arrivals wait for the next completed pulse.
+    # Freeze both canonical event and context-event watermarks while either page
+    # still has data. A late/backdated transfer cannot jump ahead of this Pulse.
     keep_snapshot = bool(has_more or findings_has_more)
     next_cursor = _encode_cursor({
         "v": _CURSOR_VERSION,
         "last_event_id": next_last_event_id,
         "pending_snapshot_max_id": snapshot_max_id if keep_snapshot else 0,
+        "pending_context_snapshot_max_id": snapshot_context_max_id if keep_snapshot else 0,
         "pending_snapshot_at": snapshot_at if keep_snapshot else "",
         "lookback_days": lookback_days,
         "baseline_pending": next_baseline_pending,
         "finding_versions": dict(list(next_versions.items())[:_MAX_TRACKED_FINDINGS]),
     })
 
+    evidence_contract = dict(RAW_RICH_EVIDENCE_CONTRACT)
+    evidence_contract["representation"] = "full_rich_row" if recent_detail == "rich" else "compact_projection"
+
     return {
         "bootstrap": bootstrap,
         "recent_mode": recent_mode,
+        "recent_detail": recent_detail,
         "recent_evidence": recent_rows,
         "recent_returned": len(recent_rows),
         "recent_has_more": has_more,
         "snapshot_max_event_watermark": snapshot_max_id,
+        "snapshot_max_context_watermark": snapshot_context_max_id,
         "snapshot_at": snapshot_at,
         "findings": changed,
         "findings_returned": len(changed),
@@ -383,10 +427,10 @@ def context_pulse(
         "next_cursor": next_cursor,
         "cursor_contract": "opaque_bookmark; pass next_cursor unchanged to the next get_context_pulse call",
         "canonical_evidence_tool": "get_workflow_trace",
-        "recent_evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
+        "recent_evidence_contract": evidence_contract,
         "finding_contract": {
             "factual_aggregates_only": True,
-            "task_inference_used": False,
+            "task_inference": "repeated_workflow only; explicitly marked task_inference_used=true and needs_review=true",
             "recommendations_or_advice": False,
             "unchanged_findings_omitted_after_bootstrap": True,
             "material_change": "new support, new active day, or another 15 minutes of engaged time depending on finding kind",
