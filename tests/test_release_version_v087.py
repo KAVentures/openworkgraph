@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.95.0"
+EXPECTED_VERSION = "0.96.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -40,6 +40,7 @@ def test_release_notes_are_current_and_version_driven():
     assert "Agent setup control plane" in workflow
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
+    assert "First useful reconstruction" in workflow
     assert "pkg-agent-sdk" in workflow
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
