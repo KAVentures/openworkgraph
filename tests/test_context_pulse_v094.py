@@ -119,6 +119,53 @@ assert [x['event_id'] for x in next_pulse['recent_evidence']]==['after-snapshot'
 ''', tmp_path)
 
 
+def test_finding_limit_drains_same_snapshot_without_marking_unseen_findings_seen(tmp_path):
+    _run(r'''
+from datetime import datetime, timedelta, timezone
+from server.db import init_db, insert_events
+from server.context_pulse import context_pulse
+
+init_db()
+now=datetime.now(timezone.utc)
+events=[]
+for day in range(3):
+    base=now-timedelta(days=day, hours=1)
+    # Enough engaged time to produce a surface finding plus two repeated
+    # directional transitions across the three sessions.
+    for index,(app,offset) in enumerate([('Gmail',0),('ChatGPT',120),('Gmail',240)]):
+        events.append({
+            'event_id':f'limit-{day}-{index}',
+            'observed_at':(base+timedelta(seconds=offset)).isoformat(),
+            'device_id':'d','session_id':f'limit-s{day}','app':app,
+            'window_title':app,'event_type':'focus_span','duration_seconds':120,
+            'metadata':{'activity':{'foreground_seconds':120,'engaged_seconds':100,'active_input_seconds':40}},
+        })
+assert insert_events(events)==9
+
+page1=context_pulse(recent_limit=20,finding_limit=1)
+assert page1['findings_returned']==1 and page1['findings_has_more'] is True, page1
+frozen=page1['snapshot_max_event_watermark']
+seen={page1['findings'][0]['finding_id']}
+
+page2=context_pulse(cursor=page1['next_cursor'],recent_limit=20,finding_limit=1)
+assert page2['snapshot_max_event_watermark']==frozen
+assert page2['findings_returned']==1, page2
+assert page2['findings'][0]['status']=='baseline'
+assert page2['findings'][0]['finding_id'] not in seen
+seen.add(page2['findings'][0]['finding_id'])
+
+page3=context_pulse(cursor=page2['next_cursor'],recent_limit=20,finding_limit=1)
+assert page3['snapshot_max_event_watermark']==frozen
+assert page3['findings_returned']==1, page3
+assert page3['findings'][0]['status']=='baseline'
+assert page3['findings'][0]['finding_id'] not in seen
+assert page3['findings_has_more'] is False
+
+settled=context_pulse(cursor=page3['next_cursor'],recent_limit=20,finding_limit=1)
+assert settled['findings']==[], settled
+''', tmp_path)
+
+
 def test_findings_do_not_turn_idle_foreground_or_missing_sessions_into_patterns(tmp_path):
     _run(r'''
 from server.context_pulse import _surface_findings, _transition_findings
