@@ -115,6 +115,16 @@ OpenWorkGraph therefore gives explicit non-card/reference cues precedence over c
 
 For old rows that were already irreversibly pseudonymized as payment cards in an earlier version, v0.46+ can repair the semantics when the surrounding OCR/reference cue survives. Such a token can be presented as `OCR_REFERENCE_x`; the original digits cannot be reconstructed.
 
+## Three layers: raw, redacted, safe allowlist
+
+| Layer | What it is | Who sees it |
+|---|---|---|
+| **Raw** | Rich local evidence exactly as stored. | Local analysis (patterns, findings, work profile). Never sent to AI by default. |
+| **Redacted** | The original text with only sensitive spans replaced by typed stable tokens (`PERSON_…`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`, `ID_…`): `Re: Contract for PERSON_1A2B3C - Gmail`. | **Default for every Context MCP tool**, and optionally exports (**Redact names in export**). |
+| **Safe allowlist** | Only known safe phrases; everything else dropped. | Dashboard glance views and organization (Gateway) sharing. Unchanged. |
+
+The **AI context detail** setting (Connect tab → Connections) chooses what AI apps get: **Redacted** (default) or **Full** (raw labels and titles). An organization can force Redacted. Every MCP response carries `detail_level` so the AI knows which it received. The raw database is never modified by any of this. See [OWNER_REDACTION.md](OWNER_REDACTION.md#contextual-redaction-for-ai-context).
+
 ## Person/owner presentation redaction
 
 Person-name handling is a separate presentation policy rather than the same storage sanitizer.

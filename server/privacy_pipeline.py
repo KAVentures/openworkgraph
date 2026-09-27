@@ -108,6 +108,7 @@ def initialize_privacy_state() -> None:
 
 def reset_persistent_identities() -> bool:
     """Delete only learned person aliases; captured workflow evidence is untouched."""
+    first_name_policy.clear_memory_registry(_presentation)
     path = _presentation._people_registry_path()
     try:
         lock = getattr(_presentation, "_REGISTRY_LOCK", None)
@@ -123,7 +124,19 @@ def reset_persistent_identities() -> bool:
         return False
 
 
+def redact_for_display_now(value: Any) -> Any:
+    """Apply the presentation pipeline unconditionally."""
+    return _redactor(value)
+
+
 def redact_for_display(value: Any) -> Any:
+    # AI-context requests (MCP) are redacted once, for the whole response, by
+    # server.ai_context according to the effective detail level. Redacting here
+    # too would make "Full" impossible and double-process every string.
+    from .ai_context import ai_request_active
+
+    if ai_request_active():
+        return value
     return _redactor(value)
 
 

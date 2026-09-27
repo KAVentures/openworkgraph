@@ -500,13 +500,18 @@ def get_session(session_id: str, limit: int = 1000):
 
 
 @app.get("/v1/export/{fmt}")
-def export_session(fmt: str, scope: str = "current", include_raw: bool = False):
+def export_session(fmt: str, scope: str = "current", include_raw: bool = False, redact_names: bool = False):
     fmt = fmt.lower().strip()
     if fmt not in {"json", "xlsx", "csvzip"}:
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
     if scope not in {"current", "all"}:
         raise HTTPException(status_code=400, detail="scope must be current or all")
-    payload = redact_for_display(build_export_payload(scope=scope, include_raw=include_raw))
+    if redact_names:
+        # Same redactor as Redacted AI context: names/identifiers replaced in place.
+        from .ai_context import redact_contextually
+        payload = redact_contextually(build_export_payload(scope=scope, include_raw=include_raw))
+    else:
+        payload = redact_for_display(build_export_payload(scope=scope, include_raw=include_raw))
     if fmt == "json":
         body = json_bytes(payload)
         media = "application/json"

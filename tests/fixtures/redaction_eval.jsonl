@@ -1,0 +1,246 @@
+{"id": 1, "app": "gmail", "lang": "en", "text": "Re: Contract for Anna Svensson - Gmail", "spans": [{"start": 17, "end": 30, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 2, "app": "gmail", "lang": "en", "text": "Open email from Anna Svensson", "spans": [{"start": 16, "end": 29, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 3, "app": "gmail", "lang": "en", "text": "Inbox (3) - anna.svensson@acme.se - Gmail", "spans": [{"start": 12, "end": 33, "kind": "EMAIL", "text": "anna.svensson@acme.se"}]}
+{"id": 4, "app": "gmail", "lang": "en", "text": "Fwd: Invoice from Michael Brown - Gmail", "spans": [{"start": 18, "end": 31, "kind": "PERSON", "text": "Michael Brown"}]}
+{"id": 5, "app": "gmail", "lang": "en", "text": "Re: Q3 budget review with Emily Johnson - Gmail", "spans": [{"start": 26, "end": 39, "kind": "PERSON", "text": "Emily Johnson"}]}
+{"id": 6, "app": "gmail", "lang": "en", "text": "Select Sarah Miller, Renewal quote attached", "spans": [{"start": 7, "end": 19, "kind": "PERSON", "text": "Sarah Miller"}]}
+{"id": 7, "app": "gmail", "lang": "en", "text": "Message from David Wilson about the onboarding plan", "spans": [{"start": 13, "end": 25, "kind": "PERSON", "text": "David Wilson"}]}
+{"id": 8, "app": "gmail", "lang": "en", "text": "Reply to Jennifer Taylor - Gmail", "spans": [{"start": 9, "end": 24, "kind": "PERSON", "text": "Jennifer Taylor"}]}
+{"id": 9, "app": "gmail", "lang": "en", "text": "Draft to Robert Anderson - Gmail", "spans": [{"start": 9, "end": 24, "kind": "PERSON", "text": "Robert Anderson"}]}
+{"id": 10, "app": "gmail", "lang": "en", "text": "Re: Lunch on Friday? - Gmail", "spans": []}
+{"id": 11, "app": "gmail", "lang": "en", "text": "Your May statement is ready - Gmail", "spans": []}
+{"id": 12, "app": "gmail", "lang": "en", "text": "Mark as read", "spans": []}
+{"id": 13, "app": "gmail", "lang": "en", "text": "Starred - Gmail", "spans": []}
+{"id": 14, "app": "gmail", "lang": "en", "text": "Chris Martin shared a document with you - Gmail", "spans": [{"start": 0, "end": 12, "kind": "PERSON", "text": "Chris Martin"}]}
+{"id": 15, "app": "gmail", "lang": "en", "text": "Thanks, Laura! - Gmail", "spans": [{"start": 8, "end": 13, "kind": "PERSON", "text": "Laura"}]}
+{"id": 16, "app": "gmail", "lang": "en", "text": "Re: Proposal for Acme AB - Gmail", "spans": []}
+{"id": 17, "app": "gmail", "lang": "en", "text": "Hi Thomas, following up on the invoice - Gmail", "spans": [{"start": 3, "end": 9, "kind": "PERSON", "text": "Thomas"}]}
+{"id": 18, "app": "gmail", "lang": "en", "text": "Re: Meeting notes from Kevin Nguyen - Gmail", "spans": [{"start": 23, "end": 35, "kind": "PERSON", "text": "Kevin Nguyen"}]}
+{"id": 19, "app": "gmail", "lang": "en", "text": "Sent - Gmail", "spans": []}
+{"id": 20, "app": "gmail", "lang": "en", "text": "Re: Pay Bill before Friday - Gmail", "spans": []}
+{"id": 21, "app": "gmail", "lang": "sv", "text": "Sv: Avtal för Karin Lindberg - Gmail", "spans": [{"start": 14, "end": 28, "kind": "PERSON", "text": "Karin Lindberg"}]}
+{"id": 22, "app": "outlook", "lang": "sv", "text": "Faktura 4471 från Erik Lindqvist - Outlook", "spans": [{"start": 18, "end": 32, "kind": "PERSON", "text": "Erik Lindqvist"}]}
+{"id": 23, "app": "outlook", "lang": "sv", "text": "Vb: Offert till Maria Johansson - Outlook", "spans": [{"start": 16, "end": 31, "kind": "PERSON", "text": "Maria Johansson"}]}
+{"id": 24, "app": "outlook", "lang": "sv", "text": "Möte med Lars Nilsson och Eva Larsson - Outlook", "spans": [{"start": 9, "end": 21, "kind": "PERSON", "text": "Lars Nilsson"}, {"start": 26, "end": 37, "kind": "PERSON", "text": "Eva Larsson"}]}
+{"id": 25, "app": "outlook", "lang": "sv", "text": "Hej Per, här kommer rapporten - Outlook", "spans": [{"start": 4, "end": 7, "kind": "PERSON", "text": "Per"}]}
+{"id": 26, "app": "outlook", "lang": "sv", "text": "Inkorg - Outlook", "spans": []}
+{"id": 27, "app": "outlook", "lang": "sv", "text": "Sv: Budget 2027 - Outlook", "spans": []}
+{"id": 28, "app": "outlook", "lang": "sv", "text": "Påminnelse: faktura förfaller i maj - Outlook", "spans": []}
+{"id": 29, "app": "outlook", "lang": "sv", "text": "Kallelse: Styrgrupp Q4 - Outlook", "spans": []}
+{"id": 30, "app": "outlook", "lang": "sv", "text": "Samtal med Mikael Andersson om avtalet", "spans": [{"start": 11, "end": 27, "kind": "PERSON", "text": "Mikael Andersson"}]}
+{"id": 31, "app": "outlook", "lang": "sv", "text": "Skickat av Sofia Gustafsson - Outlook", "spans": [{"start": 11, "end": 27, "kind": "PERSON", "text": "Sofia Gustafsson"}]}
+{"id": 32, "app": "outlook", "lang": "sv", "text": "Anders Pettersson <anders.pettersson@firma.se> - Inkorg", "spans": [{"start": 0, "end": 17, "kind": "PERSON", "text": "Anders Pettersson"}, {"start": 19, "end": 45, "kind": "EMAIL", "text": "anders.pettersson@firma.se"}]}
+{"id": 33, "app": "outlook", "lang": "sv", "text": "Re: Leverans till Volvo Cars - Outlook", "spans": []}
+{"id": 34, "app": "outlook", "lang": "sv", "text": "Ärende hos Försäkringskassan - Outlook", "spans": []}
+{"id": 35, "app": "outlook", "lang": "sv", "text": "Inbjudan: Kickoff i Göteborg - Outlook", "spans": []}
+{"id": 36, "app": "outlook", "lang": "en", "text": "Accepted: Weekly sync with Olivia Smith - Outlook", "spans": [{"start": 27, "end": 39, "kind": "PERSON", "text": "Olivia Smith"}]}
+{"id": 37, "app": "outlook", "lang": "en", "text": "Declined: Budget review - Outlook", "spans": []}
+{"id": 38, "app": "outlook", "lang": "en", "text": "RE: Purchase order 45120 for Ericsson - Outlook", "spans": []}
+{"id": 39, "app": "outlook", "lang": "en", "text": "Out of office: Daniel Garcia - Outlook", "spans": [{"start": 15, "end": 28, "kind": "PERSON", "text": "Daniel Garcia"}]}
+{"id": 40, "app": "outlook", "lang": "en", "text": "Calendar - Outlook", "spans": []}
+{"id": 41, "app": "teams", "lang": "en", "text": "Microsoft Teams - Chat with Sara Ek", "spans": [{"start": 28, "end": 35, "kind": "PERSON", "text": "Sara Ek"}]}
+{"id": 42, "app": "teams", "lang": "en", "text": "Chat | Johan Berg | Microsoft Teams", "spans": [{"start": 7, "end": 17, "kind": "PERSON", "text": "Johan Berg"}]}
+{"id": 43, "app": "teams", "lang": "en", "text": "Anna | Microsoft Teams", "spans": [{"start": 0, "end": 4, "kind": "PERSON", "text": "Anna"}]}
+{"id": 44, "app": "teams", "lang": "en", "text": "Meeting with Johan and Anna re Q3 budget - Microsoft Teams", "spans": [{"start": 13, "end": 18, "kind": "PERSON", "text": "Johan"}, {"start": 23, "end": 27, "kind": "PERSON", "text": "Anna"}]}
+{"id": 45, "app": "teams", "lang": "en", "text": "Sales Team | General | Microsoft Teams", "spans": []}
+{"id": 46, "app": "teams", "lang": "en", "text": "Call with Peter Holm - Microsoft Teams", "spans": [{"start": 10, "end": 20, "kind": "PERSON", "text": "Peter Holm"}]}
+{"id": 47, "app": "teams", "lang": "en", "text": "Activity | Microsoft Teams", "spans": []}
+{"id": 48, "app": "teams", "lang": "sv", "text": "Chatt med Linnea Sjöberg | Microsoft Teams", "spans": [{"start": 10, "end": 24, "kind": "PERSON", "text": "Linnea Sjöberg"}]}
+{"id": 49, "app": "teams", "lang": "sv", "text": "Möte med Oskar och Elin | Microsoft Teams", "spans": [{"start": 9, "end": 14, "kind": "PERSON", "text": "Oskar"}, {"start": 19, "end": 23, "kind": "PERSON", "text": "Elin"}]}
+{"id": 50, "app": "teams", "lang": "en", "text": "Project Phoenix | Files | Microsoft Teams", "spans": []}
+{"id": 51, "app": "teams", "lang": "en", "text": "Grace Hopper Room booking - Microsoft Teams", "spans": []}
+{"id": 52, "app": "teams", "lang": "en", "text": "Chat with Priya Patel | Microsoft Teams", "spans": [{"start": 10, "end": 21, "kind": "PERSON", "text": "Priya Patel"}]}
+{"id": 53, "app": "teams", "lang": "en", "text": "Marketing | Q3 pipeline | Microsoft Teams", "spans": []}
+{"id": 54, "app": "teams", "lang": "en", "text": "Tomasz Kowalczyk | Microsoft Teams", "spans": [{"start": 0, "end": 16, "kind": "PERSON", "text": "Tomasz Kowalczyk"}]}
+{"id": 55, "app": "teams", "lang": "en", "text": "Channel: Paris office | Microsoft Teams", "spans": []}
+{"id": 56, "app": "slack", "lang": "en", "text": "Emma Wilson (DM) - Acme - Slack", "spans": [{"start": 0, "end": 11, "kind": "PERSON", "text": "Emma Wilson"}]}
+{"id": 57, "app": "slack", "lang": "en", "text": "#sales-pipeline - Acme - Slack", "spans": []}
+{"id": 58, "app": "slack", "lang": "en", "text": "Thread with James Carter - Slack", "spans": [{"start": 12, "end": 24, "kind": "PERSON", "text": "James Carter"}]}
+{"id": 59, "app": "slack", "lang": "en", "text": "Huddle with Lucas and Mia - Slack", "spans": [{"start": 12, "end": 17, "kind": "PERSON", "text": "Lucas"}, {"start": 22, "end": 25, "kind": "PERSON", "text": "Mia"}]}
+{"id": 60, "app": "slack", "lang": "en", "text": "#general - Slack", "spans": []}
+{"id": 61, "app": "slack", "lang": "en", "text": "Ahmed Hassan, Fatima Ali (group DM) - Slack", "spans": [{"start": 0, "end": 12, "kind": "PERSON", "text": "Ahmed Hassan"}, {"start": 14, "end": 24, "kind": "PERSON", "text": "Fatima Ali"}]}
+{"id": 62, "app": "slack", "lang": "en", "text": "#incident-4471 - Slack", "spans": []}
+{"id": 63, "app": "slack", "lang": "en", "text": "Mentions & reactions - Slack", "spans": []}
+{"id": 64, "app": "slack", "lang": "sv", "text": "Direktmeddelande med Karl Eriksson - Slack", "spans": [{"start": 21, "end": 34, "kind": "PERSON", "text": "Karl Eriksson"}]}
+{"id": 65, "app": "slack", "lang": "en", "text": "#product-launch-may - Slack", "spans": []}
+{"id": 66, "app": "slack", "lang": "en", "text": "Chat with Chinedu Okafor - Slack", "spans": [{"start": 10, "end": 24, "kind": "PERSON", "text": "Chinedu Okafor"}]}
+{"id": 67, "app": "slack", "lang": "en", "text": "Saved items - Slack", "spans": []}
+{"id": 68, "app": "slack", "lang": "en", "text": "Ruby on Rails upgrade thread - Slack", "spans": []}
+{"id": 69, "app": "slack", "lang": "en", "text": "Drafts & sent - Slack", "spans": []}
+{"id": 70, "app": "slack", "lang": "en", "text": "Canvas: Q3 OKRs - Slack", "spans": []}
+{"id": 71, "app": "calendar", "lang": "en", "text": "Meeting with Johan and Anna re Q3 budget - Google Calendar", "spans": [{"start": 13, "end": 18, "kind": "PERSON", "text": "Johan"}, {"start": 23, "end": 27, "kind": "PERSON", "text": "Anna"}]}
+{"id": 72, "app": "calendar", "lang": "en", "text": "1:1 Mark / Jessica - Google Calendar", "spans": [{"start": 4, "end": 8, "kind": "PERSON", "text": "Mark"}, {"start": 11, "end": 18, "kind": "PERSON", "text": "Jessica"}]}
+{"id": 73, "app": "calendar", "lang": "en", "text": "Interview: Hannah Clarke - Google Calendar", "spans": [{"start": 11, "end": 24, "kind": "PERSON", "text": "Hannah Clarke"}]}
+{"id": 74, "app": "calendar", "lang": "en", "text": "Lunch with Ben Harris - Google Calendar", "spans": [{"start": 11, "end": 21, "kind": "PERSON", "text": "Ben Harris"}]}
+{"id": 75, "app": "calendar", "lang": "en", "text": "Team offsite in Florence - Google Calendar", "spans": []}
+{"id": 76, "app": "calendar", "lang": "en", "text": "Q3 planning - Google Calendar", "spans": []}
+{"id": 77, "app": "calendar", "lang": "en", "text": "Dentist - Google Calendar", "spans": []}
+{"id": 78, "app": "calendar", "lang": "en", "text": "Call Dr. Lindqvist about lab results", "spans": [{"start": 9, "end": 18, "kind": "PERSON", "text": "Lindqvist"}]}
+{"id": 79, "app": "calendar", "lang": "sv", "text": "Möte med Anna-Karin Holmberg - Google Kalender", "spans": [{"start": 9, "end": 28, "kind": "PERSON", "text": "Anna-Karin Holmberg"}]}
+{"id": 80, "app": "calendar", "lang": "sv", "text": "Utvecklingssamtal Fredrik Lund - Outlook-kalender", "spans": [{"start": 18, "end": 30, "kind": "PERSON", "text": "Fredrik Lund"}]}
+{"id": 81, "app": "calendar", "lang": "en", "text": "Board meeting - May 14 - Google Calendar", "spans": []}
+{"id": 82, "app": "calendar", "lang": "en", "text": "Holiday: Midsummer Eve - Google Calendar", "spans": []}
+{"id": 83, "app": "calendar", "lang": "en", "text": "Demo for Jordan Ventures - Google Calendar", "spans": []}
+{"id": 84, "app": "calendar", "lang": "en", "text": "Sync: Rachel Adams + Tom Baker - Google Calendar", "spans": [{"start": 6, "end": 18, "kind": "PERSON", "text": "Rachel Adams"}, {"start": 21, "end": 30, "kind": "PERSON", "text": "Tom Baker"}]}
+{"id": 85, "app": "calendar", "lang": "en", "text": "Flight to Paris - Google Calendar", "spans": []}
+{"id": 86, "app": "salesforce", "lang": "en", "text": "Acme AB - Account - Salesforce", "spans": []}
+{"id": 87, "app": "salesforce", "lang": "en", "text": "Anna Svensson - Contact - Salesforce", "spans": [{"start": 0, "end": 13, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 88, "app": "salesforce", "lang": "en", "text": "Opportunity: Renewal 2027 - Acme AB - Salesforce", "spans": []}
+{"id": 89, "app": "salesforce", "lang": "en", "text": "Lead: William Scott - Salesforce", "spans": [{"start": 6, "end": 19, "kind": "PERSON", "text": "William Scott"}]}
+{"id": 90, "app": "salesforce", "lang": "en", "text": "Case 00012345 - Salesforce", "spans": []}
+{"id": 91, "app": "salesforce", "lang": "en", "text": "Task: Call back Jessica Lee - Salesforce", "spans": [{"start": 16, "end": 27, "kind": "PERSON", "text": "Jessica Lee"}]}
+{"id": 92, "app": "salesforce", "lang": "en", "text": "Northwind Traders - Account - Salesforce", "spans": []}
+{"id": 93, "app": "salesforce", "lang": "en", "text": "Contact: Hiroshi Tanaka - Salesforce", "spans": [{"start": 9, "end": 23, "kind": "PERSON", "text": "Hiroshi Tanaka"}]}
+{"id": 94, "app": "salesforce", "lang": "en", "text": "Reports - Pipeline by stage - Salesforce", "spans": []}
+{"id": 95, "app": "salesforce", "lang": "en", "text": "Owner: Matthew Young - Opportunity - Salesforce", "spans": [{"start": 7, "end": 20, "kind": "PERSON", "text": "Matthew Young"}]}
+{"id": 96, "app": "salesforce", "lang": "sv", "text": "Konto: Byggbolaget i Umeå AB - Salesforce", "spans": []}
+{"id": 97, "app": "salesforce", "lang": "sv", "text": "Kontakt: Ingrid Björklund - Salesforce", "spans": [{"start": 9, "end": 25, "kind": "PERSON", "text": "Ingrid Björklund"}]}
+{"id": 98, "app": "salesforce", "lang": "en", "text": "Dashboard - Sales Q3 - Salesforce", "spans": []}
+{"id": 99, "app": "salesforce", "lang": "en", "text": "Assigned to Nina Petrovic - Case - Salesforce", "spans": [{"start": 12, "end": 25, "kind": "PERSON", "text": "Nina Petrovic"}]}
+{"id": 100, "app": "salesforce", "lang": "en", "text": "Volvo Cars - Opportunity - Salesforce", "spans": []}
+{"id": 101, "app": "hubspot", "lang": "en", "text": "Contacts | HubSpot", "spans": []}
+{"id": 102, "app": "hubspot", "lang": "en", "text": "Jessica Brown | Contact | HubSpot", "spans": [{"start": 0, "end": 13, "kind": "PERSON", "text": "Jessica Brown"}]}
+{"id": 103, "app": "hubspot", "lang": "en", "text": "Deal: Acme expansion | HubSpot", "spans": []}
+{"id": 104, "app": "hubspot", "lang": "en", "text": "Email to Andrew Clark | HubSpot", "spans": [{"start": 9, "end": 21, "kind": "PERSON", "text": "Andrew Clark"}]}
+{"id": 105, "app": "hubspot", "lang": "en", "text": "Sequence: Q3 outbound | HubSpot", "spans": []}
+{"id": 106, "app": "hubspot", "lang": "en", "text": "Company: Spotify | HubSpot", "spans": []}
+{"id": 107, "app": "hubspot", "lang": "en", "text": "Meeting booked with Sophie Turner | HubSpot", "spans": [{"start": 20, "end": 33, "kind": "PERSON", "text": "Sophie Turner"}]}
+{"id": 108, "app": "hubspot", "lang": "sv", "text": "Kontakt: Johanna Lindgren | HubSpot", "spans": [{"start": 9, "end": 25, "kind": "PERSON", "text": "Johanna Lindgren"}]}
+{"id": 109, "app": "hubspot", "lang": "en", "text": "Tickets | Support pipeline | HubSpot", "spans": []}
+{"id": 110, "app": "hubspot", "lang": "en", "text": "Task: Follow up with Carlos Mendes | HubSpot", "spans": [{"start": 21, "end": 34, "kind": "PERSON", "text": "Carlos Mendes"}]}
+{"id": 111, "app": "jira", "lang": "en", "text": "[PROJ-4471] Login fails for SSO users - Jira", "spans": []}
+{"id": 112, "app": "jira", "lang": "en", "text": "Assigned to Anna Svensson - PROJ-12 - Jira", "spans": [{"start": 12, "end": 25, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 113, "app": "jira", "lang": "en", "text": "Sprint 42 board - Jira", "spans": []}
+{"id": 114, "app": "jira", "lang": "en", "text": "Reporter: Mohammed Al-Rashid - OPS-88 - Jira", "spans": [{"start": 10, "end": 28, "kind": "PERSON", "text": "Mohammed Al-Rashid"}]}
+{"id": 115, "app": "jira", "lang": "en", "text": "Transition to In Progress - Jira", "spans": []}
+{"id": 116, "app": "jira", "lang": "en", "text": "Backlog - Mobile App - Jira", "spans": []}
+{"id": 117, "app": "jira", "lang": "en", "text": "[DATA-9] Migrate Oracle reports - Jira", "spans": []}
+{"id": 118, "app": "jira", "lang": "en", "text": "Comment by Patrick O'Brien - WEB-301 - Jira", "spans": [{"start": 11, "end": 26, "kind": "PERSON", "text": "Patrick O'Brien"}]}
+{"id": 119, "app": "jira", "lang": "en", "text": "Release 2.4 - May hotfix - Jira", "spans": []}
+{"id": 120, "app": "jira", "lang": "sv", "text": "Tilldelad Henrik Sundberg - INT-77 - Jira", "spans": [{"start": 10, "end": 25, "kind": "PERSON", "text": "Henrik Sundberg"}]}
+{"id": 121, "app": "jira", "lang": "en", "text": "Roadmap - Q4 - Jira", "spans": []}
+{"id": 122, "app": "jira", "lang": "en", "text": "[SEC-12] Review access for Laura Chen - Jira", "spans": [{"start": 27, "end": 37, "kind": "PERSON", "text": "Laura Chen"}]}
+{"id": 123, "app": "github", "lang": "en", "text": "Pull request #412 by Anna Svensson - GitHub", "spans": [{"start": 21, "end": 34, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 124, "app": "github", "lang": "en", "text": "acme/billing-service: Issues - GitHub", "spans": []}
+{"id": 125, "app": "github", "lang": "en", "text": "Fix rounding in invoice export by Daniel Kim - Pull Request #88 - GitHub", "spans": [{"start": 34, "end": 44, "kind": "PERSON", "text": "Daniel Kim"}]}
+{"id": 126, "app": "github", "lang": "en", "text": "Actions - Deploy to production - GitHub", "spans": []}
+{"id": 127, "app": "github", "lang": "en", "text": "Review requested from Oliver Hughes - GitHub", "spans": [{"start": 22, "end": 35, "kind": "PERSON", "text": "Oliver Hughes"}]}
+{"id": 128, "app": "github", "lang": "en", "text": "Release v0.91.0 - KAVentures/openworkgraph - GitHub", "spans": []}
+{"id": 129, "app": "github", "lang": "en", "text": "Julia notebook benchmarks - GitHub", "spans": []}
+{"id": 130, "app": "github", "lang": "en", "text": "Commits - main - GitHub", "spans": []}
+{"id": 131, "app": "github", "lang": "en", "text": "Discussion: roadmap for Q3 - GitHub", "spans": []}
+{"id": 132, "app": "github", "lang": "en", "text": "Assigned to Ethan Wright - Issue #77 - GitHub", "spans": [{"start": 12, "end": 24, "kind": "PERSON", "text": "Ethan Wright"}]}
+{"id": 133, "app": "docs", "lang": "en", "text": "Google Sheets - Q3 pipeline tracker", "spans": []}
+{"id": 134, "app": "docs", "lang": "en", "text": "Performance review - Anna Svensson - Google Docs", "spans": [{"start": 21, "end": 34, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 135, "app": "docs", "lang": "en", "text": "Contract draft for Michael Scott - Google Docs", "spans": [{"start": 19, "end": 32, "kind": "PERSON", "text": "Michael Scott"}]}
+{"id": 136, "app": "docs", "lang": "en", "text": "Meeting notes 2026-09-14 - Google Docs", "spans": []}
+{"id": 137, "app": "docs", "lang": "en", "text": "Onboarding plan: Isabella Rossi - Google Docs", "spans": [{"start": 17, "end": 31, "kind": "PERSON", "text": "Isabella Rossi"}]}
+{"id": 138, "app": "docs", "lang": "en", "text": "Budget 2027 - Google Sheets", "spans": []}
+{"id": 139, "app": "docs", "lang": "en", "text": "Customer list - Nordics - Google Sheets", "spans": []}
+{"id": 140, "app": "docs", "lang": "en", "text": "Untitled document - Google Docs", "spans": []}
+{"id": 141, "app": "docs", "lang": "en", "text": "Rose Garden Hotel proposal - Google Docs", "spans": []}
+{"id": 142, "app": "docs", "lang": "en", "text": "Grace period policy - Google Docs", "spans": []}
+{"id": 143, "app": "docs", "lang": "sv", "text": "Anställningsavtal Emma Karlsson - Google Dokument", "spans": [{"start": 18, "end": 31, "kind": "PERSON", "text": "Emma Karlsson"}]}
+{"id": 144, "app": "docs", "lang": "sv", "text": "Protokoll styrelsemöte maj - Google Dokument", "spans": []}
+{"id": 145, "app": "docs", "lang": "sv", "text": "Offert till Stockholms stad - Google Dokument", "spans": []}
+{"id": 146, "app": "docs", "lang": "en", "text": "Reference letter for Samuel Osei - Google Docs", "spans": [{"start": 21, "end": 32, "kind": "PERSON", "text": "Samuel Osei"}]}
+{"id": 147, "app": "docs", "lang": "en", "text": "Q3 pipeline - Acme - Google Sheets", "spans": []}
+{"id": 148, "app": "docs", "lang": "en", "text": "Hope Street office lease - Google Docs", "spans": []}
+{"id": 149, "app": "docs", "lang": "en", "text": "Travel plan Victoria Station - Google Docs", "spans": []}
+{"id": 150, "app": "docs", "lang": "en", "text": "Will and testament template - Google Docs", "spans": []}
+{"id": 151, "app": "docs", "lang": "en", "text": "Chase Bank reconciliation - Google Sheets", "spans": []}
+{"id": 152, "app": "docs", "lang": "en", "text": "Interview scorecard - Aisha Bello - Google Docs", "spans": [{"start": 22, "end": 33, "kind": "PERSON", "text": "Aisha Bello"}]}
+{"id": 153, "app": "journal", "lang": "sv", "text": "Patient Karin Berg, 19850312-1234 - Journal", "spans": [{"start": 8, "end": 18, "kind": "PERSON", "text": "Karin Berg"}, {"start": 20, "end": 33, "kind": "PERSONNUMMER", "text": "19850312-1234"}]}
+{"id": 154, "app": "journal", "lang": "sv", "text": "Journal - Berg, Karin - Cosmic", "spans": [{"start": 10, "end": 21, "kind": "PERSON", "text": "Berg, Karin"}]}
+{"id": 155, "app": "journal", "lang": "sv", "text": "Remiss från Dr. Lindqvist - TakeCare", "spans": [{"start": 16, "end": 25, "kind": "PERSON", "text": "Lindqvist"}]}
+{"id": 156, "app": "journal", "lang": "sv", "text": "Provsvar för Ahmed Yusuf - Cosmic", "spans": [{"start": 13, "end": 24, "kind": "PERSON", "text": "Ahmed Yusuf"}]}
+{"id": 157, "app": "journal", "lang": "sv", "text": "Besök hos Anna Nyström - Journal", "spans": [{"start": 10, "end": 22, "kind": "PERSON", "text": "Anna Nyström"}]}
+{"id": 158, "app": "journal", "lang": "sv", "text": "Läkemedelslista - Cosmic", "spans": []}
+{"id": 159, "app": "journal", "lang": "sv", "text": "Journalanteckning, Svensson Per-Olof - Cosmic", "spans": [{"start": 19, "end": 36, "kind": "PERSON", "text": "Svensson Per-Olof"}]}
+{"id": 160, "app": "journal", "lang": "sv", "text": "Tidbok - Vårdcentral Kungsholmen - Cosmic", "spans": []}
+{"id": 161, "app": "journal", "lang": "sv", "text": "Samtal med patientens dotter Lena - Journal", "spans": [{"start": 29, "end": 33, "kind": "PERSON", "text": "Lena"}]}
+{"id": 162, "app": "journal", "lang": "en", "text": "Lab results for Maria Gonzalez - Epic", "spans": [{"start": 16, "end": 30, "kind": "PERSON", "text": "Maria Gonzalez"}]}
+{"id": 163, "app": "journal", "lang": "en", "text": "Referral to Dr. Okonkwo - Epic", "spans": [{"start": 16, "end": 23, "kind": "PERSON", "text": "Okonkwo"}]}
+{"id": 164, "app": "journal", "lang": "en", "text": "Discharge summary - Ward 4 - Epic", "spans": []}
+{"id": 165, "app": "journal", "lang": "en", "text": "Patient: John Doe - Chart - Epic", "spans": [{"start": 9, "end": 17, "kind": "PERSON", "text": "John Doe"}]}
+{"id": 166, "app": "journal", "lang": "sv", "text": "Recept förnyat för Gunilla Ek - Cosmic", "spans": [{"start": 19, "end": 29, "kind": "PERSON", "text": "Gunilla Ek"}]}
+{"id": 167, "app": "journal", "lang": "sv", "text": "Akutmottagningen - Karolinska - TakeCare", "spans": []}
+{"id": 168, "app": "ui", "lang": "en", "text": "Select Anna Svensson, Contract renewal", "spans": [{"start": 7, "end": 20, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 169, "app": "ui", "lang": "en", "text": "Open email from Anna Svensson", "spans": [{"start": 16, "end": 29, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 170, "app": "ui", "lang": "en", "text": "Remove Olivia Brown from group", "spans": [{"start": 7, "end": 19, "kind": "PERSON", "text": "Olivia Brown"}]}
+{"id": 171, "app": "ui", "lang": "en", "text": "Add Liam Walker to the call", "spans": [{"start": 4, "end": 15, "kind": "PERSON", "text": "Liam Walker"}]}
+{"id": 172, "app": "ui", "lang": "en", "text": "Share with Noah Thompson", "spans": [{"start": 11, "end": 24, "kind": "PERSON", "text": "Noah Thompson"}]}
+{"id": 173, "app": "ui", "lang": "en", "text": "Send", "spans": []}
+{"id": 174, "app": "ui", "lang": "en", "text": "Archive", "spans": []}
+{"id": 175, "app": "ui", "lang": "en", "text": "Mark as unread", "spans": []}
+{"id": 176, "app": "ui", "lang": "en", "text": "Account settings", "spans": []}
+{"id": 177, "app": "ui", "lang": "en", "text": "Invoice #4471", "spans": []}
+{"id": 178, "app": "ui", "lang": "en", "text": "Filter by owner: Megan Lewis", "spans": [{"start": 17, "end": 28, "kind": "PERSON", "text": "Megan Lewis"}]}
+{"id": 179, "app": "ui", "lang": "en", "text": "Mention @Ryan Cooper", "spans": [{"start": 9, "end": 20, "kind": "PERSON", "text": "Ryan Cooper"}]}
+{"id": 180, "app": "ui", "lang": "en", "text": "View profile of Grace Kelly", "spans": [{"start": 16, "end": 27, "kind": "PERSON", "text": "Grace Kelly"}]}
+{"id": 181, "app": "ui", "lang": "en", "text": "Rose Svensson is typing…", "spans": [{"start": 0, "end": 13, "kind": "PERSON", "text": "Rose Svensson"}]}
+{"id": 182, "app": "ui", "lang": "en", "text": "Pay bill", "spans": []}
+{"id": 183, "app": "ui", "lang": "en", "text": "May 2027", "spans": []}
+{"id": 184, "app": "ui", "lang": "sv", "text": "Välj Anna Svensson, Avtal", "spans": [{"start": 5, "end": 18, "kind": "PERSON", "text": "Anna Svensson"}]}
+{"id": 185, "app": "ui", "lang": "sv", "text": "Öppna mejl från Erik Lindqvist", "spans": [{"start": 16, "end": 30, "kind": "PERSON", "text": "Erik Lindqvist"}]}
+{"id": 186, "app": "ui", "lang": "sv", "text": "Lägg till Karin i gruppen", "spans": [{"start": 10, "end": 15, "kind": "PERSON", "text": "Karin"}]}
+{"id": 187, "app": "ui", "lang": "sv", "text": "Svara till Magnus Holm", "spans": [{"start": 11, "end": 22, "kind": "PERSON", "text": "Magnus Holm"}]}
+{"id": 188, "app": "ui", "lang": "sv", "text": "Skicka", "spans": []}
+{"id": 189, "app": "ui", "lang": "sv", "text": "Arkivera", "spans": []}
+{"id": 190, "app": "ui", "lang": "sv", "text": "Inställningar för konto", "spans": []}
+{"id": 191, "app": "ui", "lang": "en", "text": "Call Dr. Lindqvist about lab results", "spans": [{"start": 9, "end": 18, "kind": "PERSON", "text": "Lindqvist"}]}
+{"id": 192, "app": "ui", "lang": "en", "text": "Will Smith joined the meeting", "spans": [{"start": 0, "end": 10, "kind": "PERSON", "text": "Will Smith"}]}
+{"id": 193, "app": "ui", "lang": "en", "text": "Bill Gates foundation report", "spans": [{"start": 0, "end": 10, "kind": "PERSON", "text": "Bill Gates"}]}
+{"id": 194, "app": "ui", "lang": "en", "text": "Jordan Peterson lecture notes", "spans": [{"start": 0, "end": 15, "kind": "PERSON", "text": "Jordan Peterson"}]}
+{"id": 195, "app": "ui", "lang": "en", "text": "Customer: Acme AB, Contact: Sven Olsson", "spans": [{"start": 28, "end": 39, "kind": "PERSON", "text": "Sven Olsson"}]}
+{"id": 196, "app": "ui", "lang": "en", "text": "Phone: +46 70 123 45 67", "spans": [{"start": 7, "end": 23, "kind": "PHONE", "text": "+46 70 123 45 67"}]}
+{"id": 197, "app": "ui", "lang": "en", "text": "Order 123456789012 shipped", "spans": [{"start": 6, "end": 18, "kind": "ID", "text": "123456789012"}]}
+{"id": 198, "app": "misc", "lang": "en", "text": "Microsoft Teams", "spans": []}
+{"id": 199, "app": "misc", "lang": "en", "text": "Visual Studio Code - billing-service", "spans": []}
+{"id": 200, "app": "misc", "lang": "en", "text": "Figma - Checkout redesign v3", "spans": []}
+{"id": 201, "app": "misc", "lang": "en", "text": "Notion - Company wiki", "spans": []}
+{"id": 202, "app": "misc", "lang": "en", "text": "Lovable - Build apps with AI", "spans": []}
+{"id": 203, "app": "misc", "lang": "en", "text": "ChatGPT - Summarize contract", "spans": []}
+{"id": 204, "app": "misc", "lang": "en", "text": "Claude - Draft reply", "spans": []}
+{"id": 205, "app": "misc", "lang": "en", "text": "Zoom Meeting", "spans": []}
+{"id": 206, "app": "misc", "lang": "en", "text": "Spotify - Focus playlist", "spans": []}
+{"id": 207, "app": "misc", "lang": "en", "text": "Stockholm weather - Google Search", "spans": []}
+{"id": 208, "app": "misc", "lang": "en", "text": "Flights to Sydney - Google Flights", "spans": []}
+{"id": 209, "app": "misc", "lang": "en", "text": "Austin office floor plan", "spans": []}
+{"id": 210, "app": "misc", "lang": "en", "text": "Madison Square Garden tickets", "spans": []}
+{"id": 211, "app": "misc", "lang": "en", "text": "Ericsson Q3 interim report", "spans": []}
+{"id": 212, "app": "misc", "lang": "en", "text": "Nordea - Internet bank", "spans": []}
+{"id": 213, "app": "misc", "lang": "en", "text": "IKEA order confirmation", "spans": []}
+{"id": 214, "app": "misc", "lang": "en", "text": "Amazon Web Services console", "spans": []}
+{"id": 215, "app": "misc", "lang": "en", "text": "Salesforce Trailhead - Admin Beginner", "spans": []}
+{"id": 216, "app": "misc", "lang": "en", "text": "Harvard Business Review - Strategy", "spans": []}
+{"id": 217, "app": "misc", "lang": "en", "text": "Wikipedia - Grace Hopper", "spans": [{"start": 12, "end": 24, "kind": "PERSON", "text": "Grace Hopper"}]}
+{"id": 218, "app": "misc", "lang": "en", "text": "Johnson & Johnson supplier portal", "spans": []}
+{"id": 219, "app": "misc", "lang": "en", "text": "Wells Fargo statement", "spans": []}
+{"id": 220, "app": "misc", "lang": "en", "text": "Morgan Stanley research note", "spans": []}
+{"id": 221, "app": "misc", "lang": "en", "text": "Martin Luther King Jr. Day schedule", "spans": []}
+{"id": 222, "app": "misc", "lang": "en", "text": "Victoria Line delays - TfL", "spans": []}
+{"id": 223, "app": "misc", "lang": "sv", "text": "Skatteverket - Deklaration", "spans": []}
+{"id": 224, "app": "misc", "lang": "sv", "text": "1177 - Mina sidor", "spans": []}
+{"id": 225, "app": "misc", "lang": "sv", "text": "SL - Reseplanerare Stockholm", "spans": []}
+{"id": 226, "app": "misc", "lang": "sv", "text": "Systembolaget - Butiker i Uppsala", "spans": []}
+{"id": 227, "app": "misc", "lang": "sv", "text": "Arbetsförmedlingen - Platsbanken", "spans": []}
+{"id": 228, "app": "misc", "lang": "en", "text": "Budget - Google Sheets", "spans": []}
+{"id": 229, "app": "misc", "lang": "en", "text": "Report for Ericsson - Q3", "spans": []}
+{"id": 230, "app": "misc", "lang": "en", "text": "Invoice from Spotify AB", "spans": []}
+{"id": 231, "app": "misc", "lang": "en", "text": "Contract with Volvo Cars", "spans": []}
+{"id": 232, "app": "misc", "lang": "en", "text": "Meeting with Legal Team", "spans": []}
+{"id": 233, "app": "misc", "lang": "en", "text": "Email to Support", "spans": []}
+{"id": 234, "app": "misc", "lang": "en", "text": "Chat with Sales", "spans": []}
+{"id": 235, "app": "misc", "lang": "en", "text": "Call with Finance about Q3", "spans": []}
+{"id": 236, "app": "misc", "lang": "en", "text": "From Monday to Friday", "spans": []}
+{"id": 237, "app": "misc", "lang": "en", "text": "Report by May 3", "spans": []}
+{"id": 238, "app": "misc", "lang": "sv", "text": "Möte med Ekonomi om budget", "spans": []}
+{"id": 239, "app": "misc", "lang": "sv", "text": "Faktura från Telia", "spans": []}
+{"id": 240, "app": "misc", "lang": "sv", "text": "Avtal med Skanska", "spans": []}
+{"id": 241, "app": "misc", "lang": "en", "text": "Rachel's onboarding checklist - Notion", "spans": [{"start": 0, "end": 6, "kind": "PERSON", "text": "Rachel"}]}
+{"id": 242, "app": "misc", "lang": "en", "text": "Kim Andersen - LinkedIn", "spans": [{"start": 0, "end": 12, "kind": "PERSON", "text": "Kim Andersen"}]}
+{"id": 243, "app": "misc", "lang": "en", "text": "Zara order #88123", "spans": []}
+{"id": 244, "app": "misc", "lang": "en", "text": "Paris Agreement summary - Google Docs", "spans": []}
+{"id": 245, "app": "misc", "lang": "en", "text": "Florence Nightingale Museum visit", "spans": [{"start": 0, "end": 20, "kind": "PERSON", "text": "Florence Nightingale"}]}
+{"id": 246, "app": "misc", "lang": "en", "text": "Jack Daniels invoice - Outlook", "spans": []}

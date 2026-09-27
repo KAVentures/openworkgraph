@@ -201,6 +201,9 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     policy = merge_policies(settings.local_policy, remote)
                     policy_fetched_at = now
                     state.set("policy_refreshed_at", _now())
+                    # Read by the local server (server.ai_context) to lock AI
+                    # context detail to Redacted when the organization requires it.
+                    state.set_bool("org_force_redacted_ai_context", bool(policy.get("force_redacted_ai_context")))
 
                 cursor = state.get_int("last_local_event_id", 0)
                 rows = _read_local_rows(db_path, cursor, settings.batch_size)

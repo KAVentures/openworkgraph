@@ -30,12 +30,22 @@ def _audit_tool(tool_name: str, result: dict[str, Any]) -> None:
     return None
 
 
+def _detail_level() -> str | None:
+    """Patched by secure_runtime: the AI context detail level the server applied."""
+    return None
+
+
 def _begin(tool_name: str) -> None:
     _authorize_tool(tool_name)
 
 
 def _finish(tool_name: str, data: Any) -> dict[str, Any]:
     protected = protect_observed_payload(data)
+    detail = _detail_level()
+    if detail:
+        # Tell the AI what it is looking at: "redacted" (people/identifiers are
+        # stable tokens such as PERSON_1A2B3C) or "full" (raw labels and titles).
+        protected["detail_level"] = detail
     _audit_tool(tool_name, protected)
     return protected
 

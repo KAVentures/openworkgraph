@@ -11,13 +11,15 @@ DEFAULT_LOCAL_POLICY: dict[str, Any] = {
     "allow_agent_events": False,
     "allowed_event_types": [],
     "strip_metadata_keys": [],
+    # Organization can require that AI context (MCP) is always Redacted.
+    "force_redacted_ai_context": False,
 }
 
 
 def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     result = dict(DEFAULT_LOCAL_POLICY)
-    for key in ("share_excluded", "share_window_titles", "share_metadata", "allow_agent_events"):
+    for key in ("share_excluded", "share_window_titles", "share_metadata", "allow_agent_events", "force_redacted_ai_context"):
         if key in source:
             result[key] = bool(source[key])
     for key in ("allowed_event_types", "strip_metadata_keys"):
@@ -78,6 +80,8 @@ def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dic
         "allowed_event_types": allowed_event_types,
         "_deny_all_event_types": deny_all_event_types,
         "strip_metadata_keys": sorted(set(local["strip_metadata_keys"]) | set(remote["strip_metadata_keys"])),
+        # Restrictive direction: either side can force Redacted AI context.
+        "force_redacted_ai_context": bool(local["force_redacted_ai_context"] or remote["force_redacted_ai_context"]),
     }
 
 
