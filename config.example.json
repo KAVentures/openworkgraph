@@ -73,6 +73,7 @@
       "share_excluded": false,
       "share_window_titles": true,
       "share_metadata": true,
+      "allow_agent_events": false,
       "allowed_event_types": [],
       "strip_metadata_keys": []
     }

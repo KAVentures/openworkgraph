@@ -85,10 +85,32 @@ def _debug_notice() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="OpenWorkGraph Claude Code hook bridge")
-    parser.add_argument("--print-settings", action="store_true", help="print a Claude Code settings fragment")
+    parser.add_argument(
+        "--print-settings",
+        action="store_true",
+        help="print a Claude Code settings fragment (hooks + structural telemetry)",
+    )
+    parser.add_argument(
+        "--hooks-only",
+        action="store_true",
+        help="with --print-settings: omit the structural telemetry env block",
+    )
     args = parser.parse_args(argv)
     if args.print_settings:
-        print(json.dumps(settings_fragment(), indent=2))
+        fragment = settings_fragment()
+        if not args.hooks_only:
+            # Match the one-click Connections setup. Telemetry adds model calls,
+            # token counts, tool durations and prompt boundaries while every
+            # content-bearing Claude logging option remains explicitly disabled.
+            from adapters._agent_client import _base_url
+            from adapters.claude_code_otel import env_settings
+            from server.agent_auth import ensure_agent_ingest_token
+
+            fragment["env"] = env_settings(
+                token=ensure_agent_ingest_token(),
+                base_url=_base_url(),
+            )
+        print(json.dumps(fragment, indent=2))
         return 0
 
     try:

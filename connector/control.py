@@ -32,6 +32,54 @@ def _max_local_event_id(data_dir: Path) -> int:
         conn.close()
 
 
+def _read_root(config_path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(config_path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_root(config_path: Path, value: dict[str, Any]) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config_path.with_name(config_path.name + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    os.replace(tmp, config_path)
+
+
+def local_agent_sharing(config_path: Path) -> dict[str, Any]:
+    root = _read_root(config_path)
+    gateway = root.get("gateway") if isinstance(root.get("gateway"), dict) else {}
+    policy = gateway.get("local_policy") if isinstance(gateway.get("local_policy"), dict) else {}
+    return {
+        "allow_agent_events": bool(policy.get("allow_agent_events", False)),
+        "scope": "endpoint_local_preference",
+        "effective_requires_organization_permission": True,
+        "content_capture_changed": False,
+        "prompt_content_shared": False,
+        "model_response_content_shared": False,
+        "tool_arguments_shared": False,
+        "tool_results_shared": False,
+    }
+
+
+def set_local_agent_sharing(config_path: Path, enabled: bool) -> dict[str, Any]:
+    root = _read_root(config_path)
+    gateway = root.get("gateway") if isinstance(root.get("gateway"), dict) else {}
+    gateway = dict(gateway)
+    policy = gateway.get("local_policy") if isinstance(gateway.get("local_policy"), dict) else {}
+    policy = dict(policy)
+    policy["allow_agent_events"] = bool(enabled)
+    gateway["local_policy"] = policy
+    root["gateway"] = gateway
+    _write_root(config_path, root)
+    return local_agent_sharing(config_path)
+
+
 def status(config_path: Path) -> dict[str, Any]:
     data_dir, auth_dir = _paths(config_path)
     settings = load_gateway_settings(config_path, auth_dir=auth_dir)
@@ -61,6 +109,7 @@ def status(config_path: Path) -> dict[str, Any]:
         "policy_refreshed_at": state.get("policy_refreshed_at", "") or None,
         "quarantined_events": state.quarantine_count(),
         "credential_exposed": False,
+        "local_agent_sharing": local_agent_sharing(config_path),
     }
 
 

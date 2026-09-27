@@ -18,7 +18,13 @@ from fastapi.responses import JSONResponse, Response
 
 from . import ai_context
 from .contextual_redaction import lexicon_stats
+from .contextual_redaction_extensions import install as install_redaction_extensions
 from .secure_app import app
+
+
+# Add conservative edge-case coverage without changing the canonical evidence
+# store or the core detector's existing contract.
+install_redaction_extensions(ai_context)
 
 
 def _is_ai_request(request: Request) -> bool:

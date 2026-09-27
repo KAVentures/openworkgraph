@@ -7,8 +7,9 @@ import hashlib
 import re
 from typing import Any
 
+from .agent_tool_labels import readable_structural_step
 from .context_execution_linkage import _agent_groups, _meta, _one_execution
-from .procedural_memory import _agent_step, _event_ref
+from .procedural_memory import _event_ref
 
 
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
@@ -65,6 +66,8 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
     shadow = meta.get("shadow_enforcement") if isinstance(meta.get("shadow_enforcement"), dict) else {}
     operation = str(meta.get("operation") or "unknown")
     status = str(meta.get("status") or "unknown")
+    tool_name = str(tool.get("name") or "")[:200]
+    tool_category = str(tool.get("category") or "none")[:80]
 
     item: dict[str, Any] = {
         "event_ref": _event_ref(event.get("event_id")),
@@ -74,15 +77,18 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": event.get("duration_seconds") or 0.0,
         "span_ref": _opaque_ref("span", trace.get("span_id")),
         "parent_span_ref": _opaque_ref("span", trace.get("parent_span_id")),
-        "structural_step": _agent_step(event) or None,
+        "structural_step": readable_structural_step(
+            operation=operation,
+            status=status,
+            tool_name=tool_name,
+            tool_category=tool_category,
+        ) or None,
     }
 
     model = str(agent.get("model") or "")[:200]
     if model:
         item["model"] = model
 
-    tool_name = str(tool.get("name") or "")[:200]
-    tool_category = str(tool.get("category") or "none")[:80]
     if operation in {"tool_call", "human_approval_requested", "human_approval_received"} or tool_name:
         item["tool"] = {
             "name": tool_name or None,
@@ -234,6 +240,43 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
     }
 
 
+def _native_keys(events: list[dict[str, Any]]) -> tuple[str, set[str], set[str]]:
+    """Return native run plus parent handoff and child run-start span identifiers."""
+    run = ""
+    handoff_spans: set[str] = set()
+    start_spans: set[str] = set()
+    for event in events:
+        meta, trace = _meta(event)
+        run = run or str(trace.get("run_id") or trace.get("trace_id") or event.get("session_id") or "")
+        span = str(trace.get("span_id") or "")
+        if not span:
+            continue
+        operation = str(meta.get("operation") or "")
+        if operation == "handoff":
+            handoff_spans.add(span)
+        elif operation == "run_started":
+            start_spans.add(span)
+    return run, handoff_spans, start_spans
+
+
+def _parent_child_links(groups: list[list[dict[str, Any]]]) -> dict[int, dict[str, Any]]:
+    """Link subagent executions to the parent handoff without exposing native IDs."""
+    keys = [_native_keys(events) for events in groups]
+    ids = [_one_execution(events)["execution_id"] if events else "" for events in groups]
+    links: dict[int, dict[str, Any]] = {}
+    for child_index, (child_run, _child_handoffs, child_starts) in enumerate(keys):
+        if not child_run or not child_starts:
+            continue
+        for parent_index, (parent_run, parent_handoffs, _parent_starts) in enumerate(keys):
+            if parent_index == child_index or parent_run != child_run:
+                continue
+            if child_starts & parent_handoffs:
+                links.setdefault(child_index, {})["parent"] = ids[parent_index]
+                links.setdefault(parent_index, {}).setdefault("children", []).append(ids[child_index])
+                break
+    return links
+
+
 def agent_execution_traces(
     raw_events: list[dict[str, Any]],
     *,
@@ -252,13 +295,16 @@ def agent_execution_traces(
 
     run_limit = max(1, min(int(limit), 100))
     event_limit = max(1, min(int(max_events_per_execution), 500))
+    groups = [events for events in _agent_groups(raw_events) if events]
+    links = _parent_child_links(groups)
 
     traces: list[dict[str, Any]] = []
     considered = 0
-    for events in _agent_groups(raw_events):
-        if not events:
-            continue
+    for index, events in enumerate(groups):
         candidate = _one_trace(events, max_events=event_limit)
+        link = links.get(index, {})
+        candidate["parent_execution_id"] = link.get("parent")
+        candidate["child_execution_ids"] = list(link.get("children") or [])
         if family and candidate.get("observed_family_key") != family:
             continue
         if execution and candidate.get("execution_id") != execution:

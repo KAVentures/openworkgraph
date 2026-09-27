@@ -11,15 +11,17 @@ from .secure_app import app
 @app.get("/v1/context-pulse")
 def get_context_pulse(
     cursor: str | None = None,
-    recent_limit: int = 100,
-    finding_limit: int = 20,
+    recent_limit: int = 12,
+    finding_limit: int = 6,
     lookback_days: int = 30,
+    recent_detail: str = "compact",
 ) -> dict[str, Any]:
     """Return an incremental factual update for a connected AI client.
 
-    The endpoint is read-only. The caller owns the opaque cursor and passes the
-    returned ``next_cursor`` back on the next check. AI disclosure/redaction is
-    still enforced by the established Context boundary middleware.
+    The caller owns the opaque cursor. Recent evidence is compact by default;
+    pass ``recent_detail=rich`` or use the canonical workflow trace when full
+    rich rows are needed. AI disclosure/redaction is still enforced by the
+    established Context boundary middleware.
     """
     try:
         return context_pulse(
@@ -27,6 +29,7 @@ def get_context_pulse(
             recent_limit=recent_limit,
             finding_limit=finding_limit,
             lookback_days=lookback_days,
+            recent_detail=recent_detail,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
