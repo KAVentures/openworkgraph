@@ -111,8 +111,12 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
     })
     api = subprocess.Popen(
         # The production entry point: secure app plus every additive route module.
+        # Never leave an unread PIPE attached here: Windows anonymous pipe buffers
+        # are small enough that uvicorn/access logs can fill them during the three
+        # full MCP passes below, blocking the API child and masquerading as an MCP
+        # HTTP timeout. This test never consumes those logs, so discard them.
         [sys.executable, "-m", "server.enterprise_runner", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     headers = {"Authorization": f"Bearer {token}"}
     try:
