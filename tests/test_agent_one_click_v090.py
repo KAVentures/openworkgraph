@@ -87,7 +87,10 @@ def test_claude_disconnect_removes_only_openworkgraph(claude_file):
 def test_claude_connect_creates_missing_file_and_refuses_invalid_json(claude_file):
     writer.claude_connect(settings_fragment)
     assert writer.claude_status()["configured"] is True
-    assert oct(claude_file.stat().st_mode & 0o777) == "0o600"
+    # POSIX permission bits are meaningful on Unix-like systems. Windows reports
+    # synthesized mode bits (commonly 0666), so asserting 0600 there is invalid.
+    if os.name != "nt":
+        assert oct(claude_file.stat().st_mode & 0o777) == "0o600"
 
     claude_file.write_text("{not json")
     with pytest.raises(writer.ConfigConflict):
