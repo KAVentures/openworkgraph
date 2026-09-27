@@ -43,14 +43,13 @@
   function structuralPayload(provider, action, runId, source){
     return {
       type:'workflow_observer_event',
-      payload:{
-        observed_at:new Date().toISOString(),
-        browser_session_id:'',
-        action,
-        page:{origin:location.origin,hostname:location.hostname,pathname:'/',title:provider.name},
-        target:{role:'agent-lifecycle',label:provider.name},
-        metadata:{agent_provider:provider.key,agent_run_id:runId,state_source:String(source||'semantic_state').slice(0,40)}
-      }
+      observed_at:new Date().toISOString(),
+      action,
+      // background.js derives the real safe page URL from sender.tab. Deliberately
+      // do not send conversation paths, titles, prompts, responses or alert text.
+      page:{url:location.origin+'/',title:provider.name},
+      target:{role:'agent-lifecycle',label:provider.name},
+      metadata:{agent_provider:provider.key,agent_run_id:runId,state_source:String(source||'semantic_state').slice(0,40),top_frame:true}
     };
   }
   function sendLifecycle(provider,action,runId,source){
@@ -74,7 +73,7 @@
       if(busy&&!runId)begin('busy_state');
       if(runId){
         if(busy)wasBusy=true;
-        if(hasVisibleErrorState(doc)&&!errorSent){sendLifecycle(provider,'agent_error',runId,'aria_alert');errorSent=true;}
+        if(hasVisibleErrorState(doc)&&!errorSent){sendLifecycle(provider,'agent_error',runId,'aria_alert_present');errorSent=true;}
         if(hasApprovalState(doc)&&!approvalSent){sendLifecycle(provider,'agent_approval_requested',runId,'semantic_dialog');approvalSent=true;}
         if(wasBusy&&!busy&&!finishTimer){finishTimer=setTimeout(()=>{finishTimer=null;if(runId&&!hasBusyState(doc))finish();},900);}
         if(busy&&finishTimer){clearTimeout(finishTimer);finishTimer=null;}
