@@ -14,6 +14,7 @@ from .hardening import (
     SlidingWindowRateLimiter,
     bearer_fingerprint,
 )
+from .organization_admin import install_organization_admin
 from .settings import PRODUCT_VERSION, GatewaySettings
 
 GATEWAY_VERSION = PRODUCT_VERSION
@@ -55,6 +56,7 @@ def create_enterprise_app(
     app.state.hardening_settings = hardening
     app.state.rate_limiter = SlidingWindowRateLimiter(window_seconds=60)
     install_declared_policy_distribution(app, db=db, settings=settings)
+    install_organization_admin(app, db=db, settings=settings)
 
     core_health = _take_get_endpoint(app, "/health")
     core_capabilities = _take_get_endpoint(app, "/v1/capabilities")
@@ -92,7 +94,7 @@ def create_enterprise_app(
     @app.middleware("http")
     async def credential_rate_limit(request: Request, call_next):
         path = request.url.path
-        if path in {"/health", "/v1/capabilities", "/openapi.json", "/docs", "/redoc"}:
+        if path in {"/health", "/v1/capabilities", "/openapi.json", "/docs", "/redoc", "/admin"}:
             return await call_next(request)
 
         if path == "/v1/devices/enroll":
