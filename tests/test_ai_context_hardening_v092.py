@@ -166,7 +166,10 @@ try:
     proxy.secure_get('/v1/tasks',{'limit':25000})
     proxy.secure_get('/v1/summary',{'limit':25000})
     proxy.secure_get('/v1/procedural-memory',{'limit':25000})
-    assert all(params['limit']==5000 for _path,params in fake.calls), fake.calls
+    limits={path:params['limit'] for path,params in fake.calls}
+    assert limits['/v1/tasks']==5000, limits
+    assert limits['/v1/summary']==5000, limits
+    assert limits['/v1/procedural-memory']==1000, limits
 finally:
     h._CURRENT_TOOL.reset(tool_token)
 
