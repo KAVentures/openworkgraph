@@ -15,6 +15,14 @@ def main() -> None:
     installation-specific path knowledge here so saved client configurations do
     not have to know OpenWorkGraph's module layout or authentication directory.
     """
+    # Saved client configs pass "--client <id>" so the dashboard's per-client
+    # on/off switch can be enforced on every tool call.
+    argv = sys.argv[1:]
+    if "--client" in argv:
+        index = argv.index("--client")
+        if index + 1 < len(argv) and argv[index + 1]:
+            os.environ["OWG_MCP_CLIENT"] = argv[index + 1]
+        del sys.argv[1 + index:1 + index + 2]
     root = str(ROOT)
     if root not in sys.path:
         sys.path.insert(0, root)

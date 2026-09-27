@@ -472,9 +472,20 @@ def get_claude_mcpb():
 
 
 @app.get("/v1/ai-access")
-def get_ai_access():
+def get_ai_access(client: str | None = None):
     from .ai_access import ai_access_enabled
-    return {"enabled": ai_access_enabled(), "resets_on_restart": True}
+    global_enabled = ai_access_enabled()
+    if not client:
+        return {"enabled": global_enabled, "resets_on_restart": True}
+    from .connections import is_enabled
+    client_enabled = is_enabled(client, "mcp")
+    return {
+        "enabled": global_enabled and client_enabled,
+        "global_enabled": global_enabled,
+        "client": client,
+        "client_enabled": client_enabled,
+        "resets_on_restart": True,
+    }
 
 
 @app.post("/v1/ai-access")

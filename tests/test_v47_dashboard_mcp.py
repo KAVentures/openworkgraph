@@ -79,7 +79,7 @@ def test_mcp_is_compact_rich_evidence_first_and_keeps_security_boundary():
     secure = _read("mcp_server/secure_runtime.py")
     assert "protect_observed_payload" in secure
     assert "ensure_api_token" in secure
-    assert 'secure_get("/v1/ai-access")' in secure
+    assert 'secure_get("/v1/ai-access"' in secure
     assert '"status": "denied"' in secure
     assert "mcp_bearer_matches" in _read("mcp_server/compact_http_app.py")
 

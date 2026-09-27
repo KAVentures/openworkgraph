@@ -59,8 +59,9 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
         ({"session_id": "s", "hook_event_name": "SessionStart"}, "run_started", "running"),
         ({"session_id": "s", "hook_event_name": "SessionEnd"}, "run_finished", "unknown"),
         ({"session_id": "s", "hook_event_name": "PermissionRequest", "tool_use_id": "t", "tool_name": "Edit"}, "human_approval_requested", "running"),
-        # PermissionDenied is an auto-mode policy denial in current Claude Code,
-        # so it must not be mislabeled as a human decision.
+        # PermissionDenied can be an automatic policy denial, so it must not be
+        # mislabeled as a human decision. The richer OTel decision event carries
+        # the decision source when connected.
         ({"session_id": "s", "hook_event_name": "PermissionDenied", "tool_use_id": "t", "tool_name": "Edit"}, "error", "denied"),
         ({"session_id": "s", "hook_event_name": "StopFailure", "prompt_id": "p", "error": "private failure details"}, "error", "error"),
     ]
@@ -70,13 +71,27 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
         assert event["status"] == status
         assert "private failure details" not in json.dumps(event)
 
-    [started] = claude_hook_to_agent_events(
-        {"session_id": "s", "hook_event_name": "SubagentStart", "agent_id": "child", "agent_type": "Explore"},
+    started_events = claude_hook_to_agent_events(
+        {
+            "session_id": "s",
+            "prompt_id": "prompt-turn-1",
+            "hook_event_name": "SubagentStart",
+            "agent_id": "child",
+            "agent_type": "Explore",
+        },
         observed_at="2026-09-25T00:00:00Z",
     )
+    assert [event["operation"] for event in started_events] == ["handoff", "run_started"]
+    handoff, started = started_events
+    assert handoff["run_id"] == started["run_id"] == "prompt-turn-1"
+    assert handoff["agent_name"] == "Claude Code"
+    assert handoff["tool_name"] == "subagent:Explore"
+    assert started["agent_name"] == "Claude Code/Explore"
+
     [stopped] = claude_hook_to_agent_events(
         {
             "session_id": "s",
+            "prompt_id": "prompt-turn-1",
             "hook_event_name": "SubagentStop",
             "agent_id": "child",
             "agent_type": "Explore",
@@ -85,11 +100,26 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
         },
         observed_at="2026-09-25T00:00:05Z",
     )
-    assert started["run_id"] == stopped["run_id"] == "s:child"
-    assert started["operation"] == "run_started"
+    assert stopped["run_id"] == "prompt-turn-1"
     assert stopped["operation"] == "run_finished"
+    assert stopped["agent_name"] == "Claude Code/Explore"
     assert "do not store this" not in json.dumps(stopped)
     assert "/private/child.jsonl" not in json.dumps(stopped)
+
+
+def test_prompt_id_correlates_tool_and_permission_hooks_to_one_turn():
+    base = {"session_id": "session-1", "prompt_id": "prompt-1"}
+    [tool] = claude_hook_to_agent_events(
+        {**base, "hook_event_name": "PostToolUse", "tool_use_id": "t1", "tool_name": "Read"},
+        observed_at="2026-09-25T00:00:00Z",
+    )
+    [approval] = claude_hook_to_agent_events(
+        {**base, "hook_event_name": "PermissionRequest", "tool_use_id": "t2", "tool_name": "Edit"},
+        observed_at="2026-09-25T00:00:01Z",
+    )
+    assert tool["run_id"] == approval["run_id"] == "prompt-1"
+    assert tool["trace_id"] == approval["trace_id"] == "session-1"
+    assert tool["sensor_id"] == approval["sensor_id"] == "agent:claude-code-hook"
 
 
 def test_retry_of_same_hook_event_is_idempotent():

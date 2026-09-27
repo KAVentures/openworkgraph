@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Translate Codex OTLP JSON into structural OpenWorkGraph agent evidence.
 
-Codex can export diagnostic log records containing prompts, account identifiers,
-tool arguments, tool output, and error strings. This module intentionally reads
-only a small structural allowlist. It never copies OTLP record bodies or arbitrary
-attributes into canonical evidence.
+Codex telemetry can contain prompts, account identifiers, tool arguments/results,
+inter-agent message content and error strings. This adapter only projects a small
+structural allowlist and never copies record bodies or arbitrary attributes into
+canonical evidence.
 """
 
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ _SUPPORTED_EVENTS = frozenset({
     "codex.tool_result",
     "codex.tool_decision",
     "codex.api_request",
+    "codex.agent_communication",
 })
 _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]{0,199}$")
 
@@ -63,9 +64,10 @@ def _bool(value: Any) -> bool | None:
 
 def _int(value: Any) -> int | None:
     try:
-        return int(value)
+        number = int(value)
     except Exception:
         return None
+    return number if 0 <= number <= 1_000_000_000 else None
 
 
 def _duration_seconds(value: Any) -> float:
@@ -112,8 +114,30 @@ def _hash_part(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
+def _event_name(attrs: dict[str, Any]) -> str:
+    raw = _text(attrs.get("event.name"), 160)
+    if raw in _SUPPORTED_EVENTS:
+        return raw
+
+    # Some Codex builds have exported a tracing call-site in event.name instead
+    # of the semantic name. Infer only from low-cardinality structural fields;
+    # never inspect record bodies, arguments, output or inter-agent content.
+    if attrs.get("communication_id") and attrs.get("kind") and attrs.get("state"):
+        return "codex.agent_communication"
+    if attrs.get("call_id") and attrs.get("decision") is not None and attrs.get("source") is not None:
+        return "codex.tool_decision"
+    if attrs.get("call_id") and attrs.get("tool_name") and attrs.get("success") is not None:
+        return "codex.tool_result"
+    if attrs.get("attempt") is not None and (
+        "http.response.status_code" in attrs or "error.message" in attrs or "endpoint" in attrs
+    ):
+        return "codex.api_request"
+    if attrs.get("provider_name") and "approval_policy" in attrs and "sandbox_policy" in attrs:
+        return "codex.conversation_starts"
+    return ""
+
+
 def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> str:
-    """Stable across Codex log + trace copies without exposing native IDs."""
     if event_name == "codex.conversation_starts":
         discriminator = "conversation-start"
     elif event_name == "codex.tool_result":
@@ -133,6 +157,12 @@ def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> s
             request_hash,
             _text(attrs.get("attempt"), 40),
             "" if request_hash else _text(attrs.get("event.timestamp"), 80),
+        ])
+    elif event_name == "codex.agent_communication":
+        discriminator = "agent-communication|" + "|".join([
+            _hash_part(attrs.get("communication_id")),
+            _text(attrs.get("kind"), 40),
+            _text(attrs.get("state"), 40),
         ])
     else:
         discriminator = _text(attrs.get("event.timestamp"), 80)
@@ -157,6 +187,24 @@ def _tool_category(name: str, namespace: str = "") -> str:
     return "other" if name else "none"
 
 
+def _merge_span_structure(event_attrs: dict[str, Any], span_attrs: dict[str, Any]) -> dict[str, Any]:
+    out = dict(event_attrs)
+    for key in (
+        "conversation.id",
+        "thread.id",
+        "turn.id",
+        "model",
+        "gen_ai.request.model",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.cache_read.input_tokens",
+        "codex.usage.total_tokens",
+    ):
+        if key not in out and key in span_attrs:
+            out[key] = span_attrs[key]
+    return out
+
+
 def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
     seen = 0
 
@@ -174,8 +222,6 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
                     raise ValueError(f"Codex OTLP payload exceeds {max_records} records")
                 yield record, _attrs(record.get("attributes"))
 
-    # Codex also emits trace-safe telemetry as span events. Read event attributes,
-    # never arbitrary span attributes, span names, or native event bodies.
     for resource_span in payload.get("resourceSpans") or []:
         if not isinstance(resource_span, dict):
             continue
@@ -185,6 +231,7 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
             for span in scope_span.get("spans") or []:
                 if not isinstance(span, dict):
                     continue
+                span_attrs = _attrs(span.get("attributes"))
                 for event in span.get("events") or []:
                     if not isinstance(event, dict):
                         continue
@@ -194,9 +241,8 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
                     synthetic = dict(event)
                     if "timeUnixNano" not in synthetic and span.get("endTimeUnixNano"):
                         synthetic["timeUnixNano"] = span.get("endTimeUnixNano")
-                    yield synthetic, _attrs(event.get("attributes"))
+                    yield synthetic, _merge_span_structure(_attrs(event.get("attributes")), span_attrs)
 
-    # Small simplified form for deterministic adapter tests/integrators.
     for record in payload.get("records") or []:
         if not isinstance(record, dict):
             continue
@@ -204,6 +250,23 @@ def _iter_records(payload: dict[str, Any], max_records: int) -> Iterator[tuple[d
         if seen > max_records:
             raise ValueError(f"Codex OTLP payload exceeds {max_records} records")
         yield record, _attrs(record.get("attributes"))
+
+
+def _usage(attrs: dict[str, Any]) -> dict[str, int]:
+    mapping = {
+        "input_tokens": "gen_ai.usage.input_tokens",
+        "output_tokens": "gen_ai.usage.output_tokens",
+        "cached_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+        "total_tokens": "codex.usage.total_tokens",
+    }
+    out: dict[str, int] = {}
+    for target, source in mapping.items():
+        amount = _int(attrs.get(source))
+        if amount is not None:
+            out[target] = amount
+    if "total_tokens" not in out and ("input_tokens" in out or "output_tokens" in out):
+        out["total_tokens"] = out.get("input_tokens", 0) + out.get("output_tokens", 0)
+    return out
 
 
 def _base(
@@ -218,16 +281,18 @@ def _base(
     tool_category: str = "none",
     span_id: str = "",
 ) -> dict[str, Any] | None:
-    conversation_id = _text(attrs.get("conversation.id"), 240)
+    conversation_id = _text(attrs.get("conversation.id") or attrs.get("thread.id") or defaults.get("run_id"), 128)
     if not conversation_id:
         return None
-    model = _safe_label(attrs.get("model"), limit=200)
+    turn_id = _text(attrs.get("turn.id"), 128)
+    run_id = turn_id or conversation_id
+    model = _safe_label(attrs.get("model") or attrs.get("gen_ai.request.model"), limit=200)
     return {
         "event_id": _event_id(conversation_id, event_name, attrs),
         "observed_at": _observed_at(attrs, native),
-        "organization_id": _text(defaults.get("organization_id"), 240),
-        "actor_id": _text(defaults.get("actor_id"), 240),
-        "device_id": _text(defaults.get("device_id"), 240) or "codex-local",
+        "organization_id": _text(defaults.get("organization_id"), 128),
+        "actor_id": _text(defaults.get("actor_id"), 128),
+        "device_id": _text(defaults.get("device_id"), 128) or "codex-local",
         "sensor_id": "agent:codex-otel",
         "agent_name": _safe_label(defaults.get("agent_name"), default="Codex", limit=160),
         "provider": "openai",
@@ -236,13 +301,14 @@ def _base(
         "operation": operation,
         "status": status,
         "observation_level": "native_trace",
-        "run_id": conversation_id,
+        "run_id": run_id,
         "trace_id": conversation_id,
         "span_id": span_id,
-        "workflow_id": _text(defaults.get("workflow_id"), 240),
+        "workflow_id": _text(defaults.get("workflow_id"), 128),
         "tool_name": tool_name,
         "tool_category": tool_category,
         "duration_seconds": _duration_seconds(attrs.get("duration_ms")),
+        "usage": _usage(attrs),
     }
 
 
@@ -261,7 +327,7 @@ def codex_otel_to_agent_events(
 
     for native, attrs in _iter_records(payload, max_records):
         seen += 1
-        event_name = _text(attrs.get("event.name"), 100)
+        event_name = _event_name(attrs)
         if event_name not in _SUPPORTED_EVENTS:
             ignored += 1
             continue
@@ -269,12 +335,8 @@ def codex_otel_to_agent_events(
         projected: dict[str, Any] | None = None
         if event_name == "codex.conversation_starts":
             projected = _base(
-                attrs,
-                native,
-                defaults=defaults,
-                event_name=event_name,
-                operation="run_started",
-                status="running",
+                attrs, native, defaults=defaults, event_name=event_name,
+                operation="run_started", status="running",
             )
 
         elif event_name == "codex.tool_result":
@@ -282,20 +344,15 @@ def codex_otel_to_agent_events(
             namespace = _safe_label(attrs.get("tool_namespace"), limit=160)
             success = _bool(attrs.get("success"))
             projected = _base(
-                attrs,
-                native,
-                defaults=defaults,
-                event_name=event_name,
+                attrs, native, defaults=defaults, event_name=event_name,
                 operation="tool_call",
                 status="success" if success is True else "error" if success is False else "unknown",
                 tool_name=tool_name,
                 tool_category=_tool_category(tool_name, namespace),
-                span_id=_text(attrs.get("call_id"), 240),
+                span_id=("call:" + _hash_part(attrs.get("call_id"))) if attrs.get("call_id") else "",
             )
 
         elif event_name == "codex.tool_decision":
-            # Codex can resolve approvals through a user OR an automated reviewer.
-            # Only explicit user-sourced decisions are human approval evidence.
             source = _text(attrs.get("source"), 80).lower()
             if source != "user":
                 ignored += 1
@@ -303,32 +360,39 @@ def codex_otel_to_agent_events(
             tool_name = _safe_label(attrs.get("tool_name"), default="unknown-tool", limit=160)
             namespace = _safe_label(attrs.get("tool_namespace"), limit=160)
             decision = _text(attrs.get("decision"), 80).lower()
-            denied = any(token in decision for token in ("deny", "denied", "reject", "cancel"))
+            denied = any(token in decision for token in ("deny", "denied", "reject", "cancel", "abort"))
             approved = any(token in decision for token in ("approve", "approved", "allow"))
             projected = _base(
-                attrs,
-                native,
-                defaults=defaults,
-                event_name=event_name,
+                attrs, native, defaults=defaults, event_name=event_name,
                 operation="human_approval_received",
                 status="denied" if denied else "success" if approved else "unknown",
                 tool_name=tool_name,
                 tool_category=_tool_category(tool_name, namespace),
-                span_id=_text(attrs.get("call_id"), 240),
+                span_id=("call:" + _hash_part(attrs.get("call_id"))) if attrs.get("call_id") else "",
             )
 
         elif event_name == "codex.api_request":
             status_code = _int(attrs.get("http.response.status_code"))
-            # We only inspect whether an error exists; its text is never copied.
             has_error = bool(_text(attrs.get("error.message"), 1))
             success = status_code is not None and 200 <= status_code <= 299 and not has_error
             projected = _base(
-                attrs,
-                native,
-                defaults=defaults,
-                event_name=event_name,
+                attrs, native, defaults=defaults, event_name=event_name,
                 operation="model_call",
                 status="success" if success else "error" if has_error or (status_code or 0) >= 400 else "unknown",
+            )
+
+        elif event_name == "codex.agent_communication":
+            # Inter-agent messages/results are communication, not necessarily a
+            # delegation. Count only a new spawn as a handoff.
+            if _text(attrs.get("state"), 40).lower() != "send" or _text(attrs.get("kind"), 40).lower() != "spawn":
+                ignored += 1
+                continue
+            communication_id = _text(attrs.get("communication_id"), 128)
+            projected = _base(
+                attrs, native, defaults=defaults, event_name=event_name,
+                operation="handoff", status="success",
+                tool_name="agent:spawn", tool_category="other",
+                span_id=("communication:" + _hash_part(communication_id)) if communication_id else "",
             )
 
         if projected is None:

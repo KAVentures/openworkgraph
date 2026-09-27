@@ -37,6 +37,7 @@ def record_mcp_activity(entry: dict[str, Any]) -> dict[str, Any]:
         "bytes": max(0, int(entry.get("bytes") or 0)),
         "range_start": str(entry.get("range_start") or "")[:80],
         "range_end": str(entry.get("range_end") or "")[:80],
+        "client": str(entry.get("client") or "")[:40],
         # Search terms/arguments are intentionally not logged by default.
     }
     with _LOCK:

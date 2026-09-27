@@ -1,8 +1,7 @@
 (() => {
   let setupCache=null;
   let statusLoading=false;
-  let configState={};
-  const ONE_CLICK={claude_code:'Claude Code',codex:'Codex'};
+  const ONE_CLICK={};
 
   const h=value=>{
     const node=document.createElement('div');
@@ -18,7 +17,7 @@
       .connection-section{margin-bottom:13px}.connection-section h2{margin-bottom:5px}
       .agent-connect-status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:760;background:#f0f1ed;color:#555c55;margin-bottom:10px}
       .agent-connect-status.live{background:#edf7f0;color:#285e42}.agent-connect-status .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
-      .setup-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.setup-card{border:1px solid var(--line);border-radius:14px;padding:15px;background:#fafbf8;display:flex;flex-direction:column;min-height:205px}.setup-card h3{font-size:15px;margin:0 0 5px}.setup-card p{font-size:12.5px;color:var(--muted);line-height:1.45;margin:0 0 12px}.setup-card button{width:100%}.setup-actions{margin-top:auto;display:flex;flex-direction:column;gap:6px}.setup-card .linkish{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;padding:2px;cursor:pointer}.agent-config-line{font-size:11.5px;color:var(--muted);margin:-4px 0 10px}.agent-config-line.on{color:#285e42;font-weight:700}.setup-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#666e66;margin-bottom:8px}.setup-privacy{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.setup-privacy div{padding:8px 10px;border-radius:10px;background:#f5f6f2;font-size:12px}.agent-control-intro{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+      .setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.setup-card{border:1px solid var(--line);border-radius:14px;padding:15px;background:#fafbf8;display:flex;flex-direction:column;min-height:205px}.setup-card h3{font-size:15px;margin:0 0 5px}.setup-card p{font-size:12.5px;color:var(--muted);line-height:1.45;margin:0 0 12px}.setup-card button{width:100%}.setup-actions{margin-top:auto;display:flex;flex-direction:column;gap:6px}.setup-card .linkish{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;padding:2px;cursor:pointer}.agent-config-line{font-size:11.5px;color:var(--muted);margin:-4px 0 10px}.agent-config-line.on{color:#285e42;font-weight:700}.setup-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#666e66;margin-bottom:8px}.setup-privacy{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.setup-privacy div{padding:8px 10px;border-radius:10px;background:#f5f6f2;font-size:12px}.agent-control-intro{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
       @media(max-width:1000px){.setup-grid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.setup-grid,.setup-privacy{grid-template-columns:1fr}}
     `;
     document.head.appendChild(style);
@@ -43,20 +42,16 @@
       const section=document.createElement('div');
       section.id='agent-observation-setup';section.className='card connection-section';
       section.innerHTML=`
-        <div class="agent-control-intro"><div><h2>Observe an agent</h2><div class="muted">Instrument an agent's native lifecycle or trace surface so OpenWorkGraph can measure structural execution: runs, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
-        <div class="note" style="margin-top:12px"><strong>Status means telemetry observed.</strong> The green badge appears only when evidence actually arrives. <strong>Connect</strong> adds OpenWorkGraph's entries to that agent's own settings file (a backup is written first and your other settings are kept); <strong>Disconnect</strong> removes only what OpenWorkGraph added.</div>
+        <div class="agent-control-intro"><div><h2>Observe a custom agent</h2><div class="muted">Claude Code and Codex are switched on in <strong>Connections</strong> above. For your own agents, instrument the native lifecycle or telemetry surface so OpenWorkGraph can measure structural execution: runs, models, tools, handoffs, approvals, failures, timings and coverage. Prompts, responses, reasoning, tool arguments and tool results are not collected.</div></div><button id="refreshAgentConnections" class="secondary" type="button">Check telemetry</button></div>
+        <div class="note" style="margin-top:12px"><strong>Status means telemetry observed.</strong> The green badge appears only when evidence actually arrives, not when setup code has merely been copied.</div>
         <div class="setup-grid" style="margin-top:12px">
-          ${setupCard('claude_code','Native hooks','Claude Code','Observe lifecycle, tool use, failures, approval requests and subagent handoffs without capturing prompts or tool contents.')}
-          ${setupCard('codex','OTel trace','Codex','Use Codex trace export only. OpenWorkGraph does not enable the richer diagnostic log stream.')}
-          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor; existing SDK tracing remains active.')}
-          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
+          ${setupCard('openai_agents','Tracing processor','OpenAI Agents SDK','Register OpenWorkGraph as an additional tracing processor for model, tool, handoff, hierarchy, usage and timing signals.')}
+          ${setupCard('otel','Provider-neutral','OpenTelemetry / custom','Send portable GenAI OTLP/HTTP JSON traces or canonical structural events from another agent runtime.')}
         </div>`;
       const anchor=grid||panel.lastElementChild;
       if(anchor&&anchor.parentNode===panel)anchor.insertAdjacentElement('afterend',section);else panel.appendChild(section);
       section.querySelector('#refreshAgentConnections').onclick=()=>refreshObservationStatuses(true);
       section.querySelectorAll('[data-agent-setup]').forEach(button=>button.onclick=()=>openAgentSetup(button.dataset.agentSetup||''));
-      section.querySelectorAll('[data-agent-connect]').forEach(button=>button.onclick=()=>toggleAgentConfig(button.dataset.agentConnect||'',button));
-      refreshConfigState();
     }
   }
 
@@ -70,58 +65,6 @@
       :`<div class="agent-config-line">Added in your own code, so it can't be one-click.</div>`;
     return `<div class="setup-card"><div class="setup-tag">${h(tag)}</div><h3>${h(title)}</h3><div class="agent-connect-status" id="agent-status-${h(kind)}"><span class="dot"></span><span>No telemetry observed</span></div>${configLine}<p>${h(description)}</p><div class="setup-actions">${actions}</div></div>`;
   }
-
-  function renderConfigState(){
-    for(const kind of Object.keys(ONE_CLICK)){
-      const state=configState[kind]||{};
-      const line=document.querySelector(`#agent-config-${kind}`),button=document.querySelector(`#agent-connect-${kind}`);
-      if(line){
-        line.classList.toggle('on',!!state.configured);
-        line.textContent=state.error?'Settings file needs attention — use manual setup':state.configured?'✓ Connected in settings':'Not connected';
-        line.title=state.path||'';
-      }
-      if(button){
-        button.disabled=false;
-        button.textContent=state.configured?'Disconnect':'Connect';
-        button.className=state.configured?'secondary':'';
-      }
-    }
-  }
-
-  async function refreshConfigState(){
-    try{
-      await window.__owgAuthReady;
-      const response=await fetch('/v1/agent-config',{cache:'no-store'});
-      if(response.ok){configState=(await response.json()).integrations||{};renderConfigState();}
-    }catch(_){}
-  }
-
-  async function toggleAgentConfig(kind,button){
-    const label=ONE_CLICK[kind]||'Agent';
-    const action=configState[kind]?.configured?'disconnect':'connect';
-    button.disabled=true;button.textContent=action==='connect'?'Connecting…':'Disconnecting…';
-    try{
-      await window.__owgAuthReady;
-      const response=await fetch('/v1/agent-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:kind,action}),cache:'no-store'});
-      const result=await response.json().catch(()=>({}));
-      if(!response.ok){
-        await refreshConfigState();
-        window.openModal?.(`Couldn't ${action} ${label} automatically`,'Agent observation',`<p>${h(result.detail||'The settings file could not be changed safely.')}</p><div class="note">Nothing was changed. You can still set it up by hand.</div><div class="modal-actions"><button type="button" id="agentManualFallback">Manual setup</button></div>`);
-        const fallback=document.querySelector('#agentManualFallback');if(fallback)fallback.onclick=()=>openAgentSetup(kind);
-        return;
-      }
-      configState[kind]={configured:!!result.configured,path:result.path};
-      renderConfigState();
-      const where=result.path?`<code>${h(result.path)}</code>`:'its settings file';
-      const backup=result.backup?`<div class="note">Backup of the previous file: <code>${h(result.backup)}</code></div>`:'';
-      if(action==='connect')window.openModal?.(`${label} connected`,'Agent observation',`<p>OpenWorkGraph's observation hooks were added to ${where}. ${h(result.note||'')}</p>${backup}<div class="note">The status turns green once the first telemetry arrives. Disconnect removes only OpenWorkGraph's entries.</div>`);
-      else window.openModal?.(`${label} disconnected`,'Agent observation',`<p>OpenWorkGraph's entries were removed from ${where}. Your other settings were left as they were.</p>${backup}`);
-    }catch(_){
-      renderConfigState();
-      window.openModal?.('Agent setup unavailable','Agent observation','<p>Could not reach the local OpenWorkGraph observer. Confirm it is running and reload the dashboard.</p>');
-    }
-  }
-  window.toggleAgentConfig=toggleAgentConfig;
 
   function enhanceAgentsPanel(){
     const panel=document.querySelector('#panel-agents');
@@ -156,10 +99,10 @@
       let title='Observe an agent',body='';
       if(kind==='claude_code'){
         const x=integrations.claude_code||{};title='Observe Claude Code';
-        body=`<p>Prefer the <strong>Connect</strong> button, which does this for you. To do it by hand, merge the <code>hooks</code> object below into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open. If OpenWorkGraph is unavailable, Claude Code continues normally.</div>`;
+        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which does this for you. To do it by hand, merge the shown <code>hooks</code> and <code>env</code> objects into your Claude Code settings.</p>${privacyHtml(payload)}<h3>Dashboard-generated settings</h3>${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}<h3 style="margin-top:16px">Equivalent command</h3>${codeBox(x.command||'python -m adapters.claude_code_hook --print-settings','agentSetupCommand')}<div class="note">Hooks are asynchronous and fail-open; the logs-only OTel feed adds model/token/decision structure. Content-bearing telemetry flags remain disabled.</div>`;
       }else if(kind==='codex'){
         const x=integrations.codex||{};title='Observe Codex';
-        body=`<p>Prefer the <strong>Connect</strong> button, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables trace export only. User prompts, agent responses and guardian assessments remain disabled.</div>`;
+        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables structural OTel logs plus trace export. User prompts, agent responses and guardian assessments remain disabled.</div>`;
       }else if(kind==='openai_agents'){
         const x=integrations.openai_agents||{};title='Observe OpenAI Agents SDK';
         body=`<p>Add OpenWorkGraph as an additional tracing processor in the agent application's Python environment.</p>${privacyHtml(payload)}${codeBox(x.python||'', 'agentSetupCode')}<div class="note">This does not replace existing SDK tracing and does not make OpenWorkGraph a dependency for the agent's control flow.</div>`;
@@ -222,7 +165,7 @@
   function install(){
     installStyle();ensureConnectSections();enhanceAgentsPanel();refreshObservationStatuses(true);
     const connect=document.querySelector('#tab-connect'),agents=document.querySelector('#tab-agents');
-    connect?.addEventListener('click',()=>setTimeout(()=>{refreshObservationStatuses(true);refreshConfigState();},0));
+    connect?.addEventListener('click',()=>setTimeout(()=>refreshObservationStatuses(true),0));
     agents?.addEventListener('click',()=>setTimeout(()=>refreshObservationStatuses(true),0));
     setInterval(()=>{if(!document.hidden)refreshObservationStatuses(false);},5000);
   }

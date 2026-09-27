@@ -1,42 +1,40 @@
 # Native agent adapters
 
-OpenWorkGraph can observe supported agent runtimes through their native lifecycle/telemetry surfaces and project only structural workflow evidence into the same canonical event store used by desktop and browser capture.
+OpenWorkGraph can observe supported agent runtimes through their native lifecycle and telemetry surfaces, then project only structural execution evidence into the canonical event store used by desktop and browser capture.
 
-The native adapters are **optional**. Existing OpenWorkGraph behavior is unchanged until an agent runtime is explicitly configured to send events.
+Native adapters are **optional**. Existing OpenWorkGraph behavior is unchanged until an agent runtime is explicitly configured to send events.
 
 ## Privacy model
 
-Native agent payloads are treated as untrusted, potentially content-bearing input.
+Native agent payloads are treated as untrusted, potentially content-bearing input. OpenWorkGraph stores only structural facts such as runtime identity, run/turn linkage, tool name/category, model identifier, token counters, status, duration, approval provenance when available, and parent/child execution relationships.
 
-OpenWorkGraph stores structural facts such as:
+The adapters deliberately do **not** persist prompts, assistant messages, reasoning/chain-of-thought, tool arguments, tool results/output, transcript paths, working-directory paths, account identifiers, arbitrary OpenTelemetry attributes, arbitrary span names, or raw log bodies.
 
-- agent/runtime identity;
-- run/conversation ID;
-- tool name and coarse tool category;
-- success/failure status;
-- duration;
-- model identifier when safely available;
-- approval outcome only when native evidence establishes its provenance;
-- trace/run relationships.
+Native integrations reuse the dedicated write-only `.agent_ingest_token`. That token can submit evidence but cannot read work history, exports, summaries, agent reports, or MCP context.
 
-The adapters deliberately do **not** persist:
+## Capability semantics
 
-- prompts or assistant messages;
-- chain-of-thought/reasoning content;
-- tool arguments;
-- tool results/output;
-- transcript paths;
-- working-directory paths;
-- account email/account IDs;
-- arbitrary OpenTelemetry attributes or log bodies.
+Agent reports separate **observed count** from **adapter capability**:
 
-Native integrations reuse the dedicated write-only `.agent_ingest_token`. That token can submit agent evidence but cannot read `/v1/events`, exports, summaries, `/v1/agent-workflows`, or agent execution reports.
+- `observable`: the active adapter is designed to expose the signal; `0` means zero matching events were observed in this evidence window.
+- `partial`: the signal is exposed only on some runtime/span paths.
+- `not_observable`: the integration does not expose that signal; the dashboard renders `—`, never a misleading zero.
+- `unknown`: the integration has not declared a portable capability for that signal.
+
+Missing evidence is never treated as proof that an underlying agent action did not occur, and hidden model reasoning is never claimed as observable.
 
 ## Claude Code
 
-Claude Code exposes lifecycle hooks such as `SessionStart`, `PostToolUse`, `PermissionRequest`, `SubagentStart`, and `SessionEnd`. Command hooks receive their native JSON payload on stdin.
+### Rich observation: hooks + stable OpenTelemetry logs
 
-OpenWorkGraph registers only lifecycle points that provide useful structural evidence:
+OpenWorkGraph combines two Claude Code surfaces:
+
+1. **Lifecycle hooks** for session boundaries, completed tools, permission requests, failures, and subagent start/stop.
+2. **Claude Code OpenTelemetry log events** for per-prompt model calls, token usage, model identity, completed tools, permission decisions, retries and subagent completion.
+
+The hook surface remains useful as a fail-open lifecycle/fallback channel. The OTel log surface supplies the signals hooks do not expose, especially model calls and token usage.
+
+OpenWorkGraph registers only content-safe hook points:
 
 ```text
 SessionStart
@@ -50,117 +48,122 @@ SubagentStop
 StopFailure
 ```
 
-Content-heavy events such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, and `Stop` are intentionally not registered.
+Content-heavy hooks such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, and `Stop` are intentionally not registered.
 
-`PermissionRequest` is represented as `human_approval_requested` because the hook fires as Claude Code is about to ask the user for permission and the OpenWorkGraph hook itself never supplies a decision. `PermissionDenied` is different: current Claude Code emits it for an automatic permission denial in auto mode, so OpenWorkGraph records it as a denied execution/error rather than falsely claiming that a human denied the action.
+The Claude OTel adapter recognizes these stable structural events:
+
+```text
+claude_code.user_prompt
+claude_code.api_request
+claude_code.api_error
+claude_code.api_refusal
+claude_code.tool_result
+claude_code.tool_decision
+claude_code.api_retries_exhausted
+claude_code.subagent_completed
+```
+
+`prompt.id` from OTel and `prompt_id` from current Claude Code hooks are used as a structural turn correlation key. This lets a single user request become one observed execution containing its model/tool/handoff sequence instead of collapsing an entire terminal session into one run. Older hook payloads without `prompt_id` safely fall back to the Claude session boundary.
+
+`SubagentStart` produces a parent `handoff` event plus a child run boundary. `subagent_completed` enriches the parent execution from native telemetry. When hooks and OTel report the same completed tool, the read-side report prefers the richer OTel event so the tool is not double-counted.
+
+`PermissionRequest` is `human_approval_requested`. A Claude OTel `tool_decision` becomes `human_approval_received` only when its decision source is explicitly human (`user_temporary`, `user_permanent`, `user_reject`, or `user_abort`). Automated config/hook decisions are not attributed to a person.
 
 ### One-click setup
 
-On the dashboard's **Connect** tab, click **Connect** on the Claude Code card. OpenWorkGraph adds its hooks to `~/.claude/settings.json`: it writes a timestamped `settings.json.owg-backup-*` copy first, keeps every other setting and hook, replaces (never duplicates) earlier OpenWorkGraph hooks, and refuses to touch a file that is not valid JSON. **Disconnect** removes only OpenWorkGraph's handlers. Changes apply to new Claude Code sessions. The card still turns green only when telemetry actually arrives.
+On **Connect → Claude Code**, click **Connect**. OpenWorkGraph adds:
 
-### Generate the settings fragment manually
+- its safe asynchronous hooks; and
+- logs-only OTel settings pointing at the local write-only endpoint.
 
-From the same OpenWorkGraph installation/interpreter that you normally use:
+It writes a timestamped backup first, preserves every unrelated setting/hook, replaces rather than duplicates older OWG hooks, and refuses to overwrite an existing conflicting telemetry destination. Disconnect removes only OWG hooks and telemetry values that still exactly match what OWG wrote; if the user changed a value afterwards, OWG leaves it alone.
 
-```bash
-python -m adapters.claude_code_hook --print-settings
-```
-
-Merge the printed `hooks` object into either:
+The managed Claude settings explicitly keep content logging disabled:
 
 ```text
-~/.claude/settings.json
+OTEL_LOG_USER_PROMPTS=0
+OTEL_LOG_ASSISTANT_RESPONSES=0
+OTEL_LOG_TOOL_DETAILS=0
+OTEL_LOG_TOOL_CONTENT=0
+OTEL_LOG_RAW_API_BODIES=0
 ```
 
-for your local user, or the relevant project `.claude/settings.json` if you intentionally want project-scoped configuration.
+This is defense in depth. The server-side Claude adapter independently uses a strict allowlist and never copies content-bearing attributes even if a user changes upstream logging settings later.
 
-OpenWorkGraph edits Claude Code settings only when you click **Connect** or **Disconnect** on the dashboard; it never does so in the background.
-
-The generated hook is a single shell command that first `cd`s into the OpenWorkGraph installation directory (the `adapters` package is not installed into the venv, and Claude Code runs hooks from the session's project directory) and then runs the interpreter with `-m adapters.claude_code_hook`. Both paths are shell-quoted, so directories containing spaces such as `Application Support` work. It also sets `"async": true`. OpenWorkGraph is observational and never returns a Claude Code control decision, so the bridge runs in the background rather than adding local HTTP latency to the triggering tool or lifecycle event.
-
-### Failure behavior
-
-The hook bridge is fail-open by design. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, or an unexpected adapter exception cannot block or approve Claude Code tool execution. Because the generated command hook is asynchronous, Claude Code proceeds without waiting for the OpenWorkGraph bridge to finish.
-
-Set:
+The dedicated local endpoint is:
 
 ```text
-OWG_AGENT_ADAPTER_DEBUG=1
+POST /agent-ingest/v1/claude-otel
 ```
 
-only when debugging. Even in debug mode the hook prints a fixed notice rather than exception details or native payload content.
+The integration uses Claude's logs exporter only. OWG v0.90 does **not** require Claude's beta detailed-trace exporter.
+
+### Hook failure behavior
+
+Hooks remain asynchronous and fail-open. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, or an adapter exception cannot block or approve Claude Code execution. `OWG_AGENT_ADAPTER_DEBUG=1` prints only a fixed diagnostic notice, never native exception/payload content.
 
 ## Codex
 
-Current Codex builds support OpenTelemetry log, trace, and metrics exporters. OpenWorkGraph's recommended integration uses the **trace exporter only** because Codex's diagnostic log stream may contain richer content such as tool arguments/results, whereas its trace-safe events expose the structural information OpenWorkGraph needs.
+OpenWorkGraph's Codex integration uses **both Codex's structural OTLP log exporter and trace exporter**. The log layer is required for Codex business events such as API requests, completed tools, approval decisions and multi-agent communication; the trace layer supplies native span hierarchy. Content-bearing opt-ins stay disabled, and the server independently strict-allowlists every accepted field.
 
-OpenWorkGraph currently maps these Codex structural events:
+The adapter maps structural evidence for:
 
 ```text
-codex.conversation_starts -> run_started
-codex.tool_result         -> tool_call
-codex.api_request         -> model_call
+conversation start       -> run_started
+API request              -> model_call
+completed tool           -> tool_call
+user-sourced decision    -> human_approval_received
+multi-agent spawn/send   -> handoff
 ```
 
-The parser also understands `codex.tool_decision` if a compatible relay explicitly sends such a record, but the default configuration below does not enable Codex log export merely to obtain approval events. A tool decision is represented as `human_approval_received` only when Codex explicitly marks its decision source as `user`; decisions resolved by an automated reviewer, or records with no decision provenance, are ignored rather than attributed to a person.
+Where available, Codex turn IDs become run boundaries and parent span attributes contribute model identity and token counters. Multi-agent communication is conservative: only a structural `spawn` sent to another agent is treated as a handoff; ordinary inter-agent message/result content is ignored.
+
+Some Codex builds have emitted tracing call-site names in `event.name` rather than the semantic event name. The adapter can infer the supported event class from a small set of low-cardinality structural fields, never from record bodies, arguments, output, message content, or arbitrary span names.
 
 ### One-click setup
 
-On the dashboard's **Connect** tab, click **Connect** on the Codex card. OpenWorkGraph appends a clearly marked, managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a timestamped backup, validates the result as TOML, and restarts nothing: Codex picks it up on its next start. If the file already has its own `[otel]` settings, or is not valid TOML, OpenWorkGraph changes nothing and asks you to merge manually. **Disconnect** removes only the managed block.
+**Connect → Codex** appends a clearly marked managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a backup. If the file already has its own `[otel]` settings or invalid TOML, OWG changes nothing and requests manual merge. Disconnect removes only the managed block.
 
-### Generate a safe trace-exporter snippet manually
-
-Preview a snippet with a placeholder credential:
-
-```bash
-python -m adapters.codex_config
-```
-
-Or explicitly print a complete snippet containing the local **write-only** agent token:
-
-```bash
-python -m adapters.codex_config --with-token
-```
-
-Merge those keys into `~/.codex/config.toml`.
-
-If your Codex config already has an `[otel]` section, merge the generated keys into that existing section rather than adding a second `[otel]` table.
-
-The generated configuration is equivalent to:
-
-```toml
-[otel]
-log_user_prompt = false
-log_agent_responses = false
-log_guardian_assessments = false
-trace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:8787/agent-ingest/v1/codex-otel", headers = { Authorization = "Bearer WRITE_ONLY_TOKEN" }, protocol = "json" } }
-```
-
-No log exporter or metrics exporter is added by OpenWorkGraph.
-
-### Codex ingestion behavior
-
-The dedicated endpoint is:
+The generated configuration explicitly keeps prompt, agent-response and guardian-rationale logging disabled while pointing both the structural log exporter and trace exporter at the same local write-only endpoint:
 
 ```text
 POST /agent-ingest/v1/codex-otel
 ```
 
-It accepts OTLP/HTTP JSON under the same 2 MB request bound as the generic agent-ingest path and processes at most 1,000 log/span-event records per request.
+## OpenAI Agents SDK
 
-The adapter uses an allowlist. OTLP `body`, prompt content, tool arguments/output, account identifiers, arbitrary span attributes, and arbitrary span names are ignored. Stable native request/call identifiers may be hashed solely to make repeated log/trace copies idempotent; the original identifiers are not added as content fields.
+For Python applications using the OpenAI Agents SDK, OWG registers an **additional tracing processor** rather than replacing the application's existing tracing.
 
-## Generic OpenTelemetry trace export
+The processor observes structural trace/run boundaries plus:
 
-For runtimes that expose ordinary OTLP traces rather than a dedicated OpenWorkGraph adapter, the generic structural endpoint is:
+- generation/response/transcription/speech spans as `model_call`;
+- function/MCP spans as `tool_call`;
+- native handoff spans as `handoff`;
+- parent-child span linkage;
+- duration and error state;
+- model identity and token usage where the SDK span exposes them.
+
+Response span usage/model fields are read directly without serializing response content. Approval request/decision events are currently marked `not_observable` for this adapter rather than shown as zero.
+
+Install in the agent application:
+
+```python
+from adapters.openai_agents import install_openai_agents_processor
+
+install_openai_agents_processor()
+```
+
+## Generic OpenTelemetry
+
+For runtimes that expose ordinary GenAI OTLP traces rather than a dedicated OWG adapter:
 
 ```text
 POST /agent-ingest/v1/otel
 ```
 
-It currently accepts **OTLP/HTTP JSON only**. It does not accept protobuf bodies and OpenWorkGraph does not currently expose the conventional `/v1/traces` alias.
+OWG accepts OTLP/HTTP JSON and projects a strict portable subset of GenAI semantic conventions. Portable model calls, tool calls, usage, model identity and timings can be observed when emitted. Provider-specific handoffs and human approvals are **not** guessed; those capabilities remain unavailable unless a native adapter provides them.
 
-For an OpenTelemetry SDK/exporter that supports `http/json`, use the signal-specific standard variables so the endpoint path is used exactly as written:
+Example:
 
 ```bash
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:8787/agent-ingest/v1/otel"
@@ -168,36 +171,16 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/json"
 export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer WRITE_ONLY_AGENT_TOKEN"
 ```
 
-Use the actual local `.agent_ingest_token` value in place of `WRITE_ONLY_AGENT_TOKEN`.
-
-Do **not** set only `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787`: standard OTLP/HTTP exporters construct a signal path such as `/v1/traces` from the generic base endpoint, and that route is not an OpenWorkGraph ingest route. The trace-specific endpoint above is used as-is by compliant exporters.
-
-`http/json` support is optional across OpenTelemetry SDKs. If a particular runtime supports only `http/protobuf` or gRPC, do not send that binary payload to this JSON endpoint; use a JSON-capable exporter/relay or a native adapter instead.
+Use the signal-specific endpoint exactly as shown. The generic endpoint accepts OTLP/HTTP JSON and **does not accept protobuf bodies**. It also **does not currently expose the conventional `/v1/traces` alias**; use `/agent-ingest/v1/otel` exactly.
 
 ## Local-first boundary
 
-The Claude bridge defaults to:
-
-```text
-http://127.0.0.1:8787
-```
-
-and refuses a non-loopback OpenWorkGraph API URL unless `OWG_AGENT_ALLOW_REMOTE=1` is explicitly set. It can only call `/agent-ingest/*` write routes.
-
-The normal OpenWorkGraph launcher binds the local API to `127.0.0.1`, so the native integrations remain local by default.
+The normal OWG launcher binds the observer API to `127.0.0.1`. Native integrations receive only the write-only agent-ingest credential and remain local by default.
 
 When organization Gateway synchronization is enabled, agent evidence remains local unless the endpoint owner separately opts in with `gateway.local_policy.allow_agent_events: true`; see `docs/AGENT_GATEWAY_SHARING.md`.
 
-## What this does not do
+## What these adapters do not do
 
-These adapters do not:
+They do not scrape terminal output or transcripts, alter agent prompts/instructions, inject context into an agent, proxy tool calls, change approval decisions, make OWG a dependency for agent execution, or claim access to internal model reasoning.
 
-- scrape terminal output or transcript files;
-- alter agent prompts or instructions;
-- inject context into an agent;
-- proxy tool calls;
-- change Claude Code/Codex approval decisions;
-- make OpenWorkGraph a dependency for agent execution;
-- claim to observe internal model reasoning.
-
-They provide structural execution evidence. Retrieval of learned organizational workflow context back into agents remains a separate layer built on top of the shared OpenWorkGraph evidence store.
+They provide provider-neutral **structural execution evidence**. Retrieval of learned work context back into agents is a separate layer over the same canonical OpenWorkGraph store.
