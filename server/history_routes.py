@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import HTTPException, Request, Response
@@ -13,9 +12,11 @@ from shared.history_policy import (
     set_ai_history_access,
     update_retention,
 )
+from shared.lifespan import extend_lifespan
 from .history_retention import (
     cleanup_expired_history,
     delete_history_session,
+    initialize_history_retention,
     list_history,
 )
 from .main import ROOT
@@ -39,6 +40,22 @@ class AIHistoryAccessRequest(BaseModel):
     since: str | None = None
     until: str | None = None
     expires_minutes: int | None = 60
+
+
+def _history_startup() -> None:
+    # Runs after the base DB initializer. Stale ephemeral rows from an unclean
+    # shutdown are removed before the dashboard/MCP can expose saved history.
+    initialize_history_retention()
+
+
+def _history_shutdown() -> None:
+    # start.py stops the collector before the API process, so this is the clean
+    # boundary for ephemeral human and agent history. Crash recovery repeats the
+    # same operation on the next startup.
+    cleanup_expired_history(startup=True)
+
+
+extend_lifespan(app, startup=_history_startup, shutdown=_history_shutdown)
 
 
 @app.get("/v1/history-policy")
