@@ -30,9 +30,11 @@ An organization can force Redacted through Gateway policy
 import contextvars
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from . import presentation as _presentation
 from .contextual_redaction import CachedRedactor, Detector, Settings
@@ -50,17 +52,23 @@ _CONFIG_LOCK = threading.RLock()
 _REDACTOR = CachedRedactor()
 _REGISTRY_CACHE: dict[str, Any] = {"key": None, "data": {}}
 
-# Fields whose string values are identifiers, timestamps, enums or already
-# structured locators: never run name detection on them.
+# Fields whose string values are identifiers, timestamps or enums. Locator
+# fields are handled separately: they may contain human names in path/query
+# components even though the host itself is structural.
 _SKIP_FIELDS = {
     "event_id", "session_id", "device_id", "sensor_id", "organization_id", "actor_id",
     "schema_version", "browser_session_id", "work_session_id", "observed_at", "generated_at",
     "run_started_at", "started_at", "ended_at", "created_at", "updated_at", "range_start",
-    "range_end", "url", "href", "uri", "frame_url", "resource_locator", "origin", "pathname",
-    "hostname", "host", "page_host", "page_path", "event_type", "source", "data_layer",
+    "range_end", "hostname", "host", "page_host", "event_type", "source", "data_layer",
     "detail_level", "family_key", "execution_id", "run_id", "trace_id", "span_id",
     "evidence_event_id", "fingerprint", "sha256",
 }
+_LOCATOR_FIELDS = {
+    "url", "href", "uri", "frame_url", "resource_locator", "origin", "pathname", "page_path",
+}
+_TOKEN_MARKER_RE = re.compile(
+    r"\b(?:OWNER(?:_EMAIL|_PHONE)?|PERSON(?:_[0-9A-F]{4,})?|EMAIL_[0-9A-F]{4,}|PHONE_[0-9A-F]{4,}|PERSONNUMMER_[0-9A-F]{4,}|ID_[0-9A-F]{4,})\b"
+)
 
 
 # --- request scope ----------------------------------------------------------------
@@ -148,29 +156,38 @@ def save_user_settings(
     return effective_detail()
 
 
-def _gateway_forces_redacted(cfg: dict[str, Any]) -> bool:
+def _gateway_redaction_lock(cfg: dict[str, Any]) -> str:
+    """Return the Gateway lock state, failing closed while policy is unknown.
+
+    Once a machine is enrolled, Full must never be exposed merely because the
+    policy cache has not been created/refreshed yet. A successful policy fetch
+    writes an explicit true/false value into SyncState; until that happens the
+    effective AI representation remains Redacted.
+    """
     gateway = cfg.get("gateway") if isinstance(cfg.get("gateway"), dict) else {}
     if not gateway.get("enabled"):
-        return False
+        return ""
     try:
         from connector.state import SyncState
         path = _presentation._data_dir() / "gateway_sync_state.db"
         if not path.exists():
-            return False
-        return SyncState(path).get_bool("org_force_redacted_ai_context", False)
+            return "gateway_policy_unknown"
+        state = SyncState(path)
+        raw = state.get("org_force_redacted_ai_context", "").strip().lower()
+        if not raw:
+            return "gateway_policy_unknown"
+        return "gateway_policy" if raw in {"1", "true", "yes", "on"} else ""
     except Exception:
-        return False
+        return "gateway_policy_unknown"
 
 
 def organization_lock() -> str:
-    """Return why the organization forces Redacted, or '' when it does not."""
+    """Return why the organization forces Redacted, or '' when Full is allowed."""
     cfg = _read_config()
     managed = str(cfg.get("organization_ai_context_detail") or "").strip().lower()
     if managed == DETAIL_REDACTED:
         return "managed_config"
-    if _gateway_forces_redacted(cfg):
-        return "gateway_policy"
-    return ""
+    return _gateway_redaction_lock(cfg)
 
 
 def effective_detail() -> dict[str, Any]:
@@ -267,6 +284,48 @@ def contextual_text_redactor(settings: dict[str, Any] | None = None):
     return _REDACTOR.get(_detector_state(settings), lambda: _build_detector(settings))
 
 
+def _redact_slug_component(component: str, redact) -> str:
+    """Redact a path/query component, including lower-case name slugs."""
+    decoded = unquote(str(component or ""))
+    if not decoded:
+        return component
+    direct = redact(decoded)
+    if direct != decoded:
+        return quote(direct, safe="@:+,._~-")
+
+    # Browser paths commonly lower-case names (anna-svensson). The general
+    # detector intentionally requires capitalization, so probe a title-cased
+    # separator-normalized copy only for locator components. Keep the original
+    # component unchanged unless the probe actually yields a privacy token.
+    probe = re.sub(r"[-_]+", " ", decoded).strip()
+    if not probe:
+        return component
+    probe = " ".join(word[:1].upper() + word[1:] for word in probe.split())
+    detected = redact(probe)
+    if detected == probe or not _TOKEN_MARKER_RE.search(detected):
+        return component
+    return quote(detected.replace(" ", "-"), safe="@:+,._~-")
+
+
+def _redact_locator(value: str, redact) -> str:
+    """Preserve locator structure while redacting sensitive path/query values."""
+    text = str(value or "")
+    if not text:
+        return text
+    try:
+        parts = urlsplit(text)
+        path = "/".join(_redact_slug_component(segment, redact) for segment in parts.path.split("/"))
+        query_items = []
+        for key, child in parse_qsl(parts.query, keep_blank_values=True):
+            query_items.append((key, unquote(_redact_slug_component(quote(child, safe=""), redact))))
+        query = urlencode(query_items, doseq=True) if parts.query else ""
+        fragment = unquote(_redact_slug_component(quote(parts.fragment, safe=""), redact)) if parts.fragment else ""
+        return urlunsplit((parts.scheme, parts.netloc, path, query, fragment))
+    except Exception:
+        # If parsing fails, the fallback still refuses to skip the string.
+        return redact(text)
+
+
 def _apply_contextual(value: Any, redact, field: str = "") -> Any:
     if isinstance(value, dict):
         return {k: _apply_contextual(v, redact, str(k)) for k, v in value.items()}
@@ -274,8 +333,12 @@ def _apply_contextual(value: Any, redact, field: str = "") -> Any:
         return [_apply_contextual(v, redact, field) for v in value]
     if isinstance(value, tuple):
         return tuple(_apply_contextual(v, redact, field) for v in value)
-    if isinstance(value, str) and field.casefold() not in _SKIP_FIELDS:
-        return redact(value)
+    if isinstance(value, str):
+        lowered = field.casefold()
+        if lowered in _LOCATOR_FIELDS:
+            return _redact_locator(value, redact)
+        if lowered not in _SKIP_FIELDS:
+            return redact(value)
     return value
 
 
@@ -287,12 +350,30 @@ def redact_contextually(value: Any, settings: dict[str, Any] | None = None) -> A
     return _apply_contextual(redact_for_display_now(value), contextual_text_redactor(settings))
 
 
+def _annotate_representation(value: Any, level: str) -> Any:
+    """Keep canonical provenance distinct from the text representation sent to AI."""
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    if result.get("data_layer") == "privacy_hardened_raw_rich_evidence":
+        result["evidence_origin"] = "canonical_local_event_store"
+        if level == DETAIL_REDACTED:
+            result["data_layer"] = "privacy_hardened_contextually_redacted_rich_evidence"
+            result["text_representation"] = "contextually_redacted"
+            result["stored_text_modified_for_ai"] = True
+        else:
+            result["text_representation"] = "stored_privacy_hardened"
+            result["stored_text_modified_for_ai"] = False
+    return result
+
+
 def redact_for_ai(value: Any) -> tuple[Any, str]:
     """Return (payload, detail_level) for an AI-context response."""
     detail = effective_detail()
     if detail["detail_level"] == DETAIL_FULL:
-        return value, DETAIL_FULL
-    return redact_contextually(value, {
+        return _annotate_representation(value, DETAIL_FULL), DETAIL_FULL
+    safe = redact_contextually(value, {
         "never_redact": detail["never_redact"],
         "always_redact": detail["always_redact"],
-    }), DETAIL_REDACTED
+    })
+    return _annotate_representation(safe, DETAIL_REDACTED), DETAIL_REDACTED
