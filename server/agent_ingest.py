@@ -10,6 +10,7 @@ from shared.agent_ingress_validation import validate_agent_ingress_event
 from shared.capture_control import filter_recordable
 from shared.claude_otel_adapter import claude_otel_to_agent_events
 from shared.codex_otel_adapter import codex_otel_to_agent_events
+from shared.history_policy import retention_for_kind
 from shared.otel_agent_adapter import otel_payload_to_agent_events
 from .db import insert_events
 
@@ -30,18 +31,36 @@ def _bounded_json_size(value: Any, *, maximum: int = MAX_AGENT_BATCH_BYTES) -> N
 
 
 def _validated_events(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # Validate all untrusted events before projecting or writing any of them. This
-    # preserves the existing all-or-nothing batch behavior for malformed input.
     return [agent_event_to_evidence(validate_agent_ingress_event(item)) for item in payloads]
 
 
+def _closed_agent_sessions(events: list[dict[str, Any]]) -> list[str]:
+    closed: list[str] = []
+    for event in events:
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        if str(metadata.get("operation") or "") != "run_finished":
+            continue
+        session_id = str(event.get("session_id") or "").strip()
+        if session_id:
+            closed.append(session_id)
+    return list(dict.fromkeys(closed))
+
+
 def _insert_recordable(events: list[dict[str, Any]]) -> int:
-    # Agent evidence obeys the same user-controlled Pause/Stop boundaries and
-    # permanent deletion tombstones as desktop/browser evidence. This is applied
-    # immediately before persistence so late or buffered agent delivery cannot
-    # recreate skipped/deleted work.
+    # Agent evidence obeys deletion, retention, Pause/Stop and crash-recovery
+    # boundaries immediately before persistence. For ephemeral agent history, an
+    # observed run_finished boundary closes and purges the corresponding session.
     recordable, _suppressed = filter_recordable(events)
-    return insert_events(recordable) if recordable else 0
+    if not recordable:
+        return 0
+    inserted = insert_events(recordable)
+    if retention_for_kind("agent").get("mode") == "ephemeral":
+        closed = _closed_agent_sessions(recordable)
+        if closed:
+            from .history_retention import cleanup_ephemeral_session
+            for session_id in closed:
+                cleanup_ephemeral_session("agent", session_id)
+    return inserted
 
 
 def ingest_agent_payloads(payloads: list[dict[str, Any]]) -> dict[str, int]:
@@ -62,8 +81,6 @@ def ingest_otel_payload(
     *,
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, int]:
-    # The advertised request bound covers both the OTLP spans and the optional
-    # OpenWorkGraph defaults. Do not let large defaults bypass the same limit.
     _bounded_json_size({"payload": payload, "defaults": defaults or {}})
     projected, stats = otel_payload_to_agent_events(
         payload,
