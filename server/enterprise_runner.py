@@ -29,10 +29,14 @@ def main() -> None:
     import server.context_pulse_routes  # noqa: F401
     import server.browser_signal_routes  # noqa: F401
     import server.agent_dashboard_control_plane  # noqa: F401
+    import server.org_join_routes as org_join_routes
     # Import last so its HTML middleware injects the privacy-safe dashboard loader
     # after the other additive dashboard scripts have been installed.
     import server.dashboard_privacy  # noqa: F401
 
+    # Managed setup is best-effort and never blocks local capture or the dashboard.
+    # Its status is always exposed in the employee UI when a managed config exists.
+    org_join_routes.start_managed_setup_in_background()
     uvicorn.run(SECURE_APP, host=args.host, port=args.port)
 
 
