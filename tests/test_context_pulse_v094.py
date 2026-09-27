@@ -59,7 +59,12 @@ assert first['recent_returned']==2
 assert first['recent_has_more'] is False
 assert any(x['finding_kind']=='repeated_surface_transition' and x['status']=='baseline' for x in first['findings']), first
 assert any(x['finding_kind']=='surface_engagement' and x['status']=='baseline' for x in first['findings']), first
-assert all(x['factual_aggregate'] and not x['task_inference_used'] and not x['advice'] for x in first['findings'])
+assert all(x['factual_aggregate'] and not x['advice'] for x in first['findings'])
+assert all(
+    (not x['task_inference_used'])
+    or (x['finding_kind']=='repeated_workflow' and x.get('needs_review') is True)
+    for x in first['findings']
+)
 
 # Cursor carries only watermarks and opaque finding IDs/versions, never captured labels.
 raw=base64.urlsafe_b64decode(first['next_cursor']+'='*(-len(first['next_cursor'])%4)).decode()
