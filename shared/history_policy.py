@@ -297,6 +297,12 @@ def set_ai_history_access(
     expires = (granted + timedelta(minutes=minutes)).isoformat() if minutes is not None else None
     with _LOCK:
         value = read_policy()
+        previous = dict(value.get("ai_history_access") or {})
+        changed = (
+            str(previous.get("mode") or "off") != selected
+            or (str(previous.get("since") or "") or None) != normalized_since
+            or (str(previous.get("until") or "") or None) != normalized_until
+        )
         value["ai_history_access"] = {
             "mode": selected,
             "since": normalized_since,
@@ -304,6 +310,12 @@ def set_ai_history_access(
             "granted_at": granted.isoformat() if selected != "off" else None,
             "expires_at": expires if selected != "off" else None,
         }
+        if changed:
+            # Pulse cursors remember delivered finding versions. A disclosure-scope
+            # change must rebaseline them so findings hidden under a narrower lease
+            # cannot remain incorrectly marked as already delivered later.
+            value["history_generation"] = int(value.get("history_generation") or 1) + 1
+            value["last_history_change_reason"] = "ai_history_access_changed"
         value["updated_at"] = _now()
         return _write_unlocked(value)["ai_history_access"]
 
