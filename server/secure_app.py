@@ -156,10 +156,11 @@ def _connection_override_script() -> str:
   window.downloadExport = async function(fmt){
     try{
       const raw=rawEnabled();
+      const redactNames=!!document.querySelector('#redactNames')?.checked;
       const d=await jsonCall('/v1/export-ticket',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({format:String(fmt||''),scope:'current',include_raw:raw})
+        body:JSON.stringify({format:String(fmt||''),scope:'current',include_raw:raw,redact_names:redactNames})
       });
       const a=document.createElement('a');
       a.href=d.url;
@@ -391,22 +392,25 @@ async def local_capability_guard(request: Request, call_next):
         export_format = str(payload.get("format") or "").lower()
         scope = str(payload.get("scope") or "current").lower()
         include_raw = bool(payload.get("include_raw", True))
+        redact_names = bool(payload.get("redact_names", False))
         if export_format not in {"json", "xlsx", "csvzip"} or scope not in {"current", "all"}:
             return _json_error("invalid export format or scope", 400)
-        issued = issue_export_ticket(export_format, scope, include_raw)
+        issued = issue_export_ticket(export_format, scope, include_raw, redact_names=redact_names)
         raw = "true" if include_raw else "false"
+        redact = "true" if redact_names else "false"
         ticket = str(issued["ticket"])
         return JSONResponse({
             **issued,
-            "url": f"/v1/export/{export_format}?scope={scope}&include_raw={raw}&ticket={ticket}",
+            "url": f"/v1/export/{export_format}?scope={scope}&include_raw={raw}&redact_names={redact}&ticket={ticket}",
         })
 
     if method == "GET" and path.startswith("/v1/export/") and request.query_params.get("ticket"):
         export_format = path.rsplit("/", 1)[-1].lower()
         scope = str(request.query_params.get("scope") or "current").lower()
         include_raw = str(request.query_params.get("include_raw") or "true").lower() == "true"
+        redact_names = str(request.query_params.get("redact_names") or "false").lower() == "true"
         if not consume_export_ticket(
-            str(request.query_params.get("ticket") or ""), export_format, scope, include_raw
+            str(request.query_params.get("ticket") or ""), export_format, scope, include_raw, redact_names
         ):
             return _json_error("invalid or expired export ticket", 401)
         return await call_next(request)
@@ -553,5 +557,9 @@ extend_lifespan(app, shutdown=stop_optional_http_mcp)
 from .agent_routes import router as _agent_router
 app.include_router(_agent_router)
 
+
+# AI context detail (Redacted/Full) for MCP requests. Imported last so its
+# middleware wraps every route registered above.
+from . import ai_context_routes as _ai_context_routes  # noqa: E402,F401
 
 __all__ = ["app"]

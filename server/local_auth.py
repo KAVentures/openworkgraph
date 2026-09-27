@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
-_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool]] = {}
+_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
 
@@ -185,6 +185,7 @@ def issue_export_ticket(
     scope: str,
     include_raw: bool,
     ttl_seconds: int = 30,
+    redact_names: bool = False,
 ) -> dict[str, int | str]:
     token = secrets.token_urlsafe(32)
     expires = time.time() + ttl_seconds
@@ -193,24 +194,31 @@ def issue_export_ticket(
         for key, value in list(_EXPORT_TICKETS.items()):
             if value[0] < now:
                 _EXPORT_TICKETS.pop(key, None)
-        _EXPORT_TICKETS[token] = (expires, str(export_format), str(scope), bool(include_raw))
+        _EXPORT_TICKETS[token] = (expires, str(export_format), str(scope), bool(include_raw), bool(redact_names))
     return {"ticket": token, "expires_in_seconds": ttl_seconds}
 
 
-def consume_export_ticket(token: str, export_format: str, scope: str, include_raw: bool) -> bool:
+def consume_export_ticket(
+    token: str,
+    export_format: str,
+    scope: str,
+    include_raw: bool,
+    redact_names: bool = False,
+) -> bool:
     if not token:
         return False
     with _LOCK:
         current = _EXPORT_TICKETS.pop(str(token), None)
         if not current:
             return False
-        expiry, expected_format, expected_scope, expected_raw = current
+        expiry, expected_format, expected_scope, expected_raw, expected_redact = current
         if expiry < time.time():
             return False
         return (
             hmac.compare_digest(str(export_format), expected_format)
             and hmac.compare_digest(str(scope), expected_scope)
             and bool(include_raw) is expected_raw
+            and bool(redact_names) is expected_redact
         )
 
 

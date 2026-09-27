@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -15,14 +16,35 @@ API_URL = os.getenv("WORKFLOW_OBSERVER_API", "http://127.0.0.1:8787").rstrip("/"
 _TASK_CONTEXT_PROVENANCE_KEY = "_openworkgraph_task_context_provenance"
 
 
+# Detail levels the server applied to the responses of the current tool call.
+_DETAIL_LEVELS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("owg_mcp_detail_levels", default=())
+
+
 def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {ensure_api_token()}"}
+    # Mark every request as AI context: the server then applies the user's AI
+    # context detail level (Redacted by default) to the whole response.
+    return {"Authorization": f"Bearer {ensure_api_token()}", "X-OpenWorkGraph-Context": "ai"}
+
+
+def _record_detail(response: httpx.Response) -> None:
+    level = str(response.headers.get("X-OpenWorkGraph-Detail-Level") or "").strip().lower()
+    if level:
+        _DETAIL_LEVELS.set(_DETAIL_LEVELS.get() + (level,))
+
+
+def detail_level() -> str | None:
+    levels = _DETAIL_LEVELS.get()
+    if not levels:
+        return None
+    # Report the least-redacted level the AI actually received.
+    return "full" if "full" in levels else "redacted"
 
 
 def secure_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     with httpx.Client(timeout=15, headers=_headers()) as client:
         response = client.get(f"{API_URL}{path}", params=params)
         response.raise_for_status()
+        _record_detail(response)
         return response.json()
 
 
@@ -30,6 +52,7 @@ def secure_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     with httpx.Client(timeout=15, headers=_headers()) as client:
         response = client.post(f"{API_URL}{path}", json=payload)
         response.raise_for_status()
+        _record_detail(response)
         return response.json()
 
 
@@ -86,6 +109,9 @@ def _finish_task_context(tool_name: str, source_result: dict[str, Any]) -> dict[
     """
     source_sha256 = _snapshot_sha256(source_result)
     protected = core.protect_observed_payload(source_result)
+    detail = detail_level()
+    if detail:
+        protected["detail_level"] = detail
     protected_sha256 = _snapshot_sha256(protected)
     protected[_TASK_CONTEXT_PROVENANCE_KEY] = {
         "schema_version": "1.0",
@@ -111,6 +137,7 @@ def _client_id() -> str:
 
 
 def authorize_tool(tool_name: str) -> None:
+    _DETAIL_LEVELS.set(())
     client = _client_id()
     try:
         state = secure_get("/v1/ai-access", {"client": client} if client else None)
@@ -142,6 +169,7 @@ def audit_tool(tool_name: str, result: dict[str, Any]) -> None:
 core._get = secure_get
 core._authorize_tool = authorize_tool
 core._audit_tool = audit_tool
+core._detail_level = detail_level
 
 
 @core.mcp.tool()

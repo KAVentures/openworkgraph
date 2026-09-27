@@ -16,6 +16,7 @@ Identity policy:
 
 import json
 import re
+import threading
 from typing import Any
 
 AMBIGUOUS_SINGLE_NAME_WORDS = {
@@ -36,10 +37,52 @@ PROTECTED_FIELDS = {
 }
 
 
+# Identities learned while *serving* data (read paths never write the registry
+# file) are kept here, per data directory, for the life of the process. Without
+# this, "Anna Svensson <anna@...>" shown in one response was forgotten by the
+# next response, so a later title containing "Anna Svensson" leaked.
+_MEMORY_LOCK = threading.RLock()
+_MEMORY_REGISTRY: dict[str, dict[str, set[str]]] = {}
+_MEMORY_VERSION = [0]
+
+
+def memory_registry(presentation: Any) -> dict[str, set[str]]:
+    with _MEMORY_LOCK:
+        return {k: set(v) for k, v in _MEMORY_REGISTRY.get(str(presentation._data_dir()), {}).items()}
+
+
+def memory_version() -> int:
+    return _MEMORY_VERSION[0]
+
+
+def clear_memory_registry(presentation: Any | None = None) -> None:
+    with _MEMORY_LOCK:
+        if presentation is None:
+            _MEMORY_REGISTRY.clear()
+        else:
+            _MEMORY_REGISTRY.pop(str(presentation._data_dir()), None)
+        _MEMORY_VERSION[0] += 1
+
+
+def _remember_in_memory(presentation: Any, key: str, token: str) -> None:
+    with _MEMORY_LOCK:
+        scoped = _MEMORY_REGISTRY.setdefault(str(presentation._data_dir()), {})
+        tokens = scoped.setdefault(key, set())
+        if token not in tokens:
+            tokens.add(token)
+            _MEMORY_VERSION[0] += 1
+
+
 def build_redactor(presentation: Any, *, persist_registry: bool = False):
     """Build the first-name redactor without mutating module globals."""
 
     def load_registry() -> dict[str, set[str]]:
+        out = load_file_registry()
+        for key, tokens in memory_registry(presentation).items():
+            out.setdefault(key, set()).update(tokens)
+        return out
+
+    def load_file_registry() -> dict[str, set[str]]:
         try:
             data = json.loads(presentation._people_registry_path().read_text(encoding="utf-8"))
             if not isinstance(data, dict):
@@ -90,8 +133,14 @@ def build_redactor(presentation: Any, *, persist_registry: bool = False):
             if token not in tokens:
                 tokens.add(token)
                 changed = True
+            if not persist_registry:
+                _remember_in_memory(presentation, key, token)
         if changed and persist_registry:
-            save_registry(registry)
+            # Persist only file-backed entries; memory-only aliases stay in memory.
+            file_registry = load_file_registry()
+            for variant in variants:
+                file_registry.setdefault(presentation._alias_hash(variant), set()).add(token)
+            save_registry(file_registry)
 
     def registry_replacement(alias: str, registry: dict[str, set[str]]) -> str | None:
         tokens = registry.get(presentation._alias_hash(alias)) or set()

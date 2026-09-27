@@ -145,6 +145,13 @@ Review rich exports before sharing them outside the intended analysis context.
 
 ## Stable privacy tokens
 
+Every MCP response has `detail_level`:
+
+- `redacted` (default): people, emails, phone numbers, personnummer and long IDs are replaced in place by stable tokens. The rest of each title or label is original, so `Re: Contract for PERSON_1A2B3C - Gmail` still tells you it was a contract reply in Gmail. The same person has the same token across apps and sessions on this installation.
+- `full`: raw labels and titles, as chosen by the user.
+
+Do not try to re-identify tokens; ask the user if a real name is needed.
+
 - `PERSON`: an unnamed or deliberately non-linkable person.
 - `PERSON_x`: the same pseudonymized person each time that stable token appears.
 - `EMAIL_x`, `IBAN_x`, `PAYMENT_CARD_x`, `SENSITIVE_NUMBER_x`, `SECRET_x`: masked values that remain stable within the installation/export context.

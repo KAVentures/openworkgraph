@@ -35,6 +35,16 @@
       #owgConnections .linkish{min-height:0;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;padding:2px;cursor:pointer}
       #owgConnections .cli{margin-top:14px;font-size:12.5px}
       #owgConnections .cli code{display:block;margin-top:6px;padding:8px 10px;border-radius:8px;background:#f3f4f0;overflow-x:auto;white-space:pre;font-size:12px}
+      #owgConnections .ai-detail{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+      #owgConnections .ai-detail h3{font-size:14px;margin:0 0 4px}
+      #owgConnections .ai-opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+      #owgConnections .ai-opt{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:9px 10px;font-size:12.5px;cursor:pointer;background:#fafbf8}
+      #owgConnections .ai-opt input{margin-top:2px}
+      #owgConnections .ai-opt code{font-size:11.5px}
+      #owgConnections .ai-lists{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+      #owgConnections .ai-lists textarea{width:100%;min-height:64px;font:inherit;font-size:12.5px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;box-sizing:border-box}
+      #owgConnections .ai-lock{font-size:12px;color:#8a5a00;margin-top:4px}
+      @media(max-width:700px){#owgConnections .ai-opts,#owgConnections .ai-lists{grid-template-columns:1fr}}
       #owgMoreWays{margin-top:6px}
       #owgMoreWays>summary{cursor:pointer;font-weight:700;padding:10px 2px;color:var(--muted)}
       #owgConnTable{overflow-x:auto;max-width:100%}
@@ -50,7 +60,7 @@
     if(!card){
       card=document.createElement('div');
       card.id='owgConnections';card.className='card';
-      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
+      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div id="owgAiDetail" class="ai-detail"></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
       panel.insertBefore(card,panel.firstChild);
     }
     // Everything the table already covers moves into one collapsed section.
@@ -198,10 +208,57 @@
     await refresh();
   }
 
+  // --- AI context detail -----------------------------------------------------------
+  let aiDetail=null;
+  let aiDetailDirty=false;
+
+  function renderAiDetail(){
+    const host=document.querySelector('#owgAiDetail');if(!host||!aiDetail)return;
+    if(aiDetailDirty&&host.childElementCount)return;
+    const locked=!!aiDetail.locked_by_organization;
+    const level=aiDetail.detail_level;
+    host.innerHTML=`<h3>AI context detail</h3>
+      <div class="muted">What connected AI apps see when they read your work context. Your raw evidence always stays on this computer.</div>
+      <div class="ai-opts" role="radiogroup" aria-label="AI context detail">
+        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="redacted" ${level==='redacted'?'checked':''}><span><strong>Redacted</strong> (recommended)<br>Titles and labels keep their context, but people, emails, phone numbers and IDs become stable tokens: <code>Re: Contract for PERSON_1A2B3C - Gmail</code>. The same person gets the same token in every app.</span></label>
+        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Raw labels and titles, including names: <code>Re: Contract for Anna Svensson - Gmail</code>. Use only with an AI you trust with this data.</span></label>
+      </div>
+      ${locked?'<div class="ai-lock">Locked to Redacted by your organization.</div>':''}
+      <div class="ai-lists">
+        <label class="sub">Never redact (company, product or project names, one per line)<textarea id="owgNeverRedact" placeholder="Acme AB&#10;Q3 pipeline">${esc((aiDetail.never_redact||[]).join('\n'))}</textarea></label>
+        <label class="sub">Always redact (names the detector should always hide)<textarea id="owgAlwaysRedact" placeholder="Project Falcon">${esc((aiDetail.always_redact||[]).join('\n'))}</textarea></label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="secondary" type="button" id="owgSaveAiLists">Save lists</button><span class="sub" id="owgAiDetailStatus"></span></div>`;
+    host.querySelectorAll('input[name="owgAiDetail"]').forEach(input=>input.onchange=()=>saveAiDetail({detail:input.value}));
+    host.querySelectorAll('textarea').forEach(t=>t.oninput=()=>{aiDetailDirty=true;});
+    host.querySelector('#owgSaveAiLists').onclick=()=>saveAiDetail({
+      never_redact:host.querySelector('#owgNeverRedact').value.split('\n'),
+      always_redact:host.querySelector('#owgAlwaysRedact').value.split('\n'),
+    });
+  }
+
+  async function refreshAiDetail(){
+    try{aiDetail=await api('/v1/ai-context');renderAiDetail();}catch(_){}
+  }
+
+  async function saveAiDetail(body){
+    const status=document.querySelector('#owgAiDetailStatus');
+    try{
+      aiDetail=await api('/v1/ai-context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      aiDetailDirty=false;renderAiDetail();
+      const s=document.querySelector('#owgAiDetailStatus');
+      if(s)s.textContent=body.detail?`AI context is now ${aiDetail.detail_level==='full'?'Full':'Redacted'}. Applies to the next AI request.`:'Saved.';
+    }catch(error){
+      if(status)status.textContent=error.message||'Could not save.';
+      await refreshAiDetail();
+    }
+  }
+  window.refreshAiContextDetail=refreshAiDetail;
+
   window.refreshConnections=refresh;
 
   function install(){
-    installStyle();ensureLayout();refresh();
+    installStyle();ensureLayout();refresh();refreshAiDetail();
     document.querySelector('#tab-connect')?.addEventListener('click',()=>setTimeout(()=>{ensureLayout();refresh();},0));
     setInterval(()=>{
       const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;

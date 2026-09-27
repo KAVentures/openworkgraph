@@ -5,6 +5,11 @@
   "owner_aliases": [],
   "owner_emails": [],
   "owner_phones": [],
+  "ai_context": {
+    "detail": "redacted",
+    "never_redact": [],
+    "always_redact": []
+  },
   "backend_url": "http://127.0.0.1:8787",
   "poll_seconds": 2,
   "heartbeat_seconds": 5,

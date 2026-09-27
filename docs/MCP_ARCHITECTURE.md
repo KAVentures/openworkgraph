@@ -118,6 +118,18 @@ The result is still paginated so an AI does not receive the entire work history 
 
 Derived task/process tools are convenience indexes, not authoritative truth. When a conclusion matters, the AI should inspect supporting `get_workflow_trace` evidence.
 
+## AI context detail (Redacted by default)
+
+Every request the MCP server makes to the local API carries `X-OpenWorkGraph-Context: ai`. For those requests the server:
+
+1. skips the per-route display redaction, then
+2. transforms the whole JSON response once in `server/ai_context_routes.py`, according to the effective detail level:
+   - **redacted** (default): the presentation pipeline plus contextual name redaction on every string field. Only sensitive spans are replaced, with typed stable tokens.
+   - **full**: raw labels and titles, only when the user chose Full and no organization policy forces Redacted.
+3. sets `X-OpenWorkGraph-Detail-Level`. The MCP server copies it into every tool result as `detail_level`.
+
+This is one choke point for all tools, including routes that previously returned rich text without display redaction (`/v1/tasks`, `/v1/summary`, `/v1/procedural-memory/*`, `/v1/task-context`). It fails closed: a response that cannot be parsed is not passed through, and a non-JSON response in Redacted mode is refused (406). AI-context requests may read `GET /v1/ai-context` but cannot change it (`POST` returns 403), so a connected app cannot widen its own access.
+
 ## MCP trust boundary
 
 Window titles, page titles, messages and UI labels are observed data. They are not instructions to the model.

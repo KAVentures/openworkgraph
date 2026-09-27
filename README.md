@@ -221,7 +221,9 @@ local SQLite
 
 No separate MCP network port is kept open for normal local use.
 
-AI access starts OFF on every OpenWorkGraph launch. The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
+AI access starts OFF on every OpenWorkGraph launch. By default AI apps get **Redacted** context: titles and labels keep their meaning, but people, emails, phone numbers, personnummer and long IDs become stable tokens (`Re: Contract for PERSON_1A2B3C - Gmail`). You can switch to **Full** under Connect → Connections → *AI context detail*; an organization can lock it to Redacted. Every MCP response states its `detail_level`. See [Privacy and data](docs/PRIVACY_AND_DATA.md#three-layers-raw-redacted-safe-allowlist).
+
+The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
 New dashboard-generated connections and the Claude MCP bundle use a compact eight-tool surface so agents have fewer overlapping choices: current context, search, canonical trace, work profile, repeated workflows, task context, descriptive feedback from similar runs, and agent-run inspection. Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool surface; OpenWorkGraph does not silently remove those tools underneath existing clients.
 

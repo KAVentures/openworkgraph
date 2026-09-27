@@ -200,8 +200,13 @@ def _tail_name_candidate(value: str) -> tuple[str, str]:
     return raw, ""
 
 
+def _config_path() -> Path:
+    override = os.getenv("WORKFLOW_OBSERVER_CONFIG", "").strip()
+    return Path(override) if override else ROOT / "config.json"
+
+
 def _load_config() -> dict[str, Any]:
-    path = ROOT / "config.json"
+    path = _config_path()
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
@@ -242,7 +247,7 @@ def _posix_display_name() -> str:
 
 
 def _owner_identity() -> tuple[dict[str, str], set[str], set[str]]:
-    cache_key = str((ROOT / "config.json").resolve()) + "|" + str(_data_dir().resolve())
+    cache_key = str(_config_path().resolve()) + "|" + str(_data_dir().resolve())
     if cache_key in _OWNER_CACHE:
         return _OWNER_CACHE[cache_key]
 

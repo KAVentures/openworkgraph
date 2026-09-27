@@ -52,3 +52,21 @@ test('restart-needed and cloud-app guidance are shown',()=>{
   assert.match(source,/Quit and reopen/);
   assert.match(source,/Lovable/);
 });
+
+test('AI context detail: Redacted default, Full opt-in, organization lock, never/always lists',()=>{
+  assert.match(source,/AI context detail/);
+  assert.match(source,/\/v1\/ai-context/);
+  assert.match(source,/value="redacted"/);
+  assert.match(source,/value="full"/);
+  assert.match(source,/Locked to Redacted by your organization/);
+  assert.match(source,/owgNeverRedact/);
+  assert.match(source,/owgAlwaysRedact/);
+  assert.match(source,/PERSON_1A2B3C/);
+});
+
+test('export offers name redaction with the same redactor (default off)',()=>{
+  const html=fs.readFileSync(path.join(here,'..','..','dashboard','index.html'),'utf8');
+  assert.match(html,/id="redactNames"(?![^>]*checked)/);
+  assert.match(html,/Redact names in export/);
+  assert.match(html,/redact_names=\$\{redact\}/);
+});
