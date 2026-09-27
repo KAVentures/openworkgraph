@@ -4,6 +4,54 @@
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let previewed = null;
 
+  function ensureUi() {
+    if (!$('owgOrgJoinStyles')) {
+      const style = document.createElement('style');
+      style.id = 'owgOrgJoinStyles';
+      style.textContent = '.scope-label{margin-left:10px;font-size:12px;padding:2px 8px;border-radius:99px;background:#eef3ee;color:#2d4a37;white-space:nowrap}.managed-badge{margin-left:8px;font-size:12px;padding:2px 8px;border-radius:99px;background:#e8ecff;color:#1d2566;font-weight:600;white-space:nowrap}.managed-note{border-left:4px solid #2e3a8c}.org-join-list{margin:8px 0;padding-left:0;list-style:none}.org-join-list li{margin:3px 0}.org-join-field{width:100%;min-height:40px;border:1px solid #cfd3cb;border-radius:9px;padding:8px 10px;background:#fff}';
+      document.head.appendChild(style);
+    }
+    const brand = document.querySelector('.brand');
+    if (brand && !$('personalDashboardScope')) {
+      const scope = document.createElement('span');
+      scope.id = 'personalDashboardScope';
+      scope.className = 'scope-label';
+      scope.title = 'This dashboard describes data stored on this computer.';
+      scope.textContent = 'Personal dashboard · this computer';
+      brand.appendChild(scope);
+      const managed = document.createElement('span');
+      managed.id = 'managedBadge';
+      managed.className = 'managed-badge';
+      managed.hidden = true;
+      brand.appendChild(managed);
+    }
+    const panel = $('panel-organization');
+    if (panel && !$('orgJoinCard')) {
+      const managedNote = document.createElement('div');
+      managedNote.id = 'managedNote';
+      managedNote.className = 'card managed-note';
+      managedNote.hidden = true;
+      panel.insertBefore(managedNote, panel.firstChild);
+
+      const card = document.createElement('div');
+      card.id = 'orgJoinCard';
+      card.className = 'card';
+      card.innerHTML = '<h2>Join your organization</h2>' +
+        '<div class="muted">If your IT admin sent you a join code, paste it here. You will see exactly what will be shared before anything is sent.</div>' +
+        '<label for="orgJoinCode" style="display:block;margin-top:10px;font-weight:600">Join code</label>' +
+        '<input id="orgJoinCode" class="org-join-field" autocomplete="off" spellcheck="false" placeholder="owgjoin1.…">' +
+        '<div style="margin-top:10px"><button id="orgJoinPreviewButton" class="secondary">Review what will be shared</button></div>' +
+        '<div id="orgJoinPreview" hidden style="margin-top:12px"><div><b>Organization:</b> <span id="orgJoinOrg"></span></div><div id="orgJoinShares"></div>' +
+        '<label for="orgJoinActor" style="display:block;margin-top:8px;font-weight:600">Your work email or username</label>' +
+        '<input id="orgJoinActor" class="org-join-field" autocomplete="email">' +
+        '<label style="display:flex;gap:8px;margin-top:10px"><input type="checkbox" id="orgJoinConsent"> I reviewed what will be shared with my organization.</label>' +
+        '<div style="margin-top:10px"><button id="orgJoinButton">Join</button></div></div>' +
+        '<div id="orgJoinResult" role="status" aria-live="polite" style="margin-top:8px"></div>';
+      const gatewayPanel = $('gatewayPanel');
+      panel.insertBefore(card, gatewayPanel || managedNote.nextSibling);
+    }
+  }
+
   async function call(url, body) {
     const r = await fetch(url, {
       method: body ? 'POST' : 'GET',
@@ -85,8 +133,7 @@
     try {
       const m = await call('/v1/managed-status');
       const badge = $('managedBadge');
-      if (!badge) return;
-      if (!m.managed) return;
+      if (!badge || !m.managed) return;
       const failed = m.status && m.status !== 'joined';
       badge.hidden = false;
       badge.textContent = failed
@@ -111,6 +158,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    ensureUi();
     const p = $('orgJoinPreviewButton');
     if (p) p.addEventListener('click', preview);
     const j = $('orgJoinButton');
