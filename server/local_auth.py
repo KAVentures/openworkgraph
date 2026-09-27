@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
-_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool]] = {}
+_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
 
