@@ -6,17 +6,21 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.94.0"
+EXPECTED_VERSION = "0.95.0"
 
 
 def test_release_version_sources_are_aligned():
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    sdk_python = tomllib.loads((ROOT / "sdk" / "python" / "pyproject.toml").read_text(encoding="utf-8"))
+    sdk_node = json.loads((ROOT / "sdk" / "typescript" / "package.json").read_text(encoding="utf-8"))
 
     assert version == EXPECTED_VERSION
     assert pyproject["project"]["version"] == EXPECTED_VERSION
     assert manifest["version"] == EXPECTED_VERSION
+    assert sdk_python["project"]["version"] == EXPECTED_VERSION
+    assert sdk_node["version"] == EXPECTED_VERSION
 
 
 def test_release_notes_are_current_and_version_driven():
@@ -35,6 +39,11 @@ def test_release_notes_are_current_and_version_driven():
     assert "stable structural identity layer" in workflow
     assert "Agent setup control plane" in workflow
     assert "telemetry actually observed" in workflow
+    assert "Custom harnesses" in workflow
+    assert "pkg-agent-sdk" in workflow
+    assert "OpenWorkGraph-Agent-Python.py" in workflow
+    assert "OpenWorkGraph-Agent-Node.mjs" in workflow
+    assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
