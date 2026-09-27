@@ -1,4 +1,6 @@
 (() => {
+  // Shared with the other Agents-tab script: both must request the same run list.
+  const agentHistoryParam=()=>{try{return localStorage.getItem('owg_show_disconnected_agents')==='1'?'':'&hide_disconnected=true';}catch(_){return '&hide_disconnected=true';}};
   const KNOWN = [
     [/mail\.google\.com|\bgmail\b/i, 'Gmail'],
     [/docs\.google\.com\/spreadsheets|google sheets|\bsheets\b/i, 'Google Sheets'],
@@ -275,7 +277,7 @@
     agentLoading=true;
     try {
       await window.__owgAuthReady;
-      const response=await fetch('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=100',{cache:'no-store'});
+      const response=await fetch('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=100'+agentHistoryParam(),{cache:'no-store'});
       if (!response.ok) throw new Error('agent traces unavailable');
       renderAgentDashboard(await response.json());
     } catch (_) {

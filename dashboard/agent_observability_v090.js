@@ -1,4 +1,6 @@
 (() => {
+  // Shared with the other Agents-tab script: both must request the same run list.
+  const agentHistoryParam=()=>{try{return localStorage.getItem('owg_show_disconnected_agents')==='1'?'':'&hide_disconnected=true';}catch(_){return '&hide_disconnected=true';}};
   let latest=null;
   let loading=false;
   let patchScheduled=false;
@@ -139,9 +141,17 @@
     note.textContent=`${base}${base?' ':''}0 = observed zero. — = this integration cannot observe that signal; it does not mean zero runtime activity.`;
   }
 
+  function patchHiddenNote(){
+    const note=document.querySelector('#agentHiddenNote');if(!note)return;
+    const names={'claude-code':'Claude Code','codex':'Codex'};
+    const hidden=(latest.hidden_frameworks||[]).map(f=>names[f]||f);
+    note.textContent=hidden.length?`Past runs from ${hidden.join(' and ')} are hidden because Observe is off for ${hidden.length>1?'them':'it'}. Nothing was deleted.`:'';
+  }
+
   function patch(){
     patchScheduled=false;
     if(!latest)return;
+    patchHiddenNote();
     const runs=Array.isArray(latest.executions)?latest.executions:[];
     patchMetrics(runs);patchReports(runs);patchRunRows(runs);patchNote();
   }
@@ -157,10 +167,12 @@
     loading=true;
     try{
       await window.__owgAuthReady;
-      const response=await fetch('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=100',{cache:'no-store'});
+      const response=await fetch('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=100'+agentHistoryParam(),{cache:'no-store'});
       if(response.ok){latest=await response.json();schedulePatch();}
     }finally{loading=false;}
   }
+
+  window.refreshAgentObservability=force=>{latest=null;return refresh(force);};
 
   function install(){
     document.querySelector('#tab-agents')?.addEventListener('click',()=>setTimeout(()=>refresh(true),0));

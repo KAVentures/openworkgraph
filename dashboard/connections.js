@@ -50,7 +50,7 @@
     if(!card){
       card=document.createElement('div');
       card.id='owgConnections';card.className='card';
-      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
+      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
       panel.insertBefore(card,panel.firstChild);
     }
     // Everything the table already covers moves into one collapsed section.
@@ -81,7 +81,20 @@
     return `<div class="cell"><button class="sw" role="switch" aria-checked="${info.on?'true':'false'}" aria-label="${esc(label)}" data-client="${esc(client.id)}" data-kind="${esc(kind)}" ${busy.has(key)?'disabled':''}></button></div>`;
   }
 
+  function restartLine(client){
+    // The app loads this config only at startup and has not restarted since.
+    for(const [kind,label] of [['observe','Observe'],['mcp','Context']]){
+      const r=client[kind]?.restart_needed;if(!r)continue;
+      const since=new Date(r.running_since);
+      const when=Number.isFinite(since.getTime())?since.toLocaleDateString(undefined,{month:'short',day:'numeric'}):'';
+      const quit=/Mac/i.test(navigator.platform||'')?' (⌘Q)':'';
+      return `<div class="sub warn">Quit and reopen ${esc(r.app)}${quit} to finish turning on ${label}${when?` (running since ${esc(when)})`:''}</div>`;
+    }
+    return '';
+  }
+
   function subline(client){
+    const restart=restartLine(client);if(restart)return restart;
     const msg=lastMessage[client.id];
     if(msg)return `<div class="sub${msg.warn?' warn':''}">${esc(msg.text)}</div>`;
     const errors=[client.mcp,client.observe].map(x=>x&&x.error).filter(Boolean);

@@ -71,8 +71,11 @@
     if(!panel||document.querySelector('#agent-control-intro'))return;
     const intro=document.createElement('div');
     intro.id='agent-control-intro';intro.className='card';
-    intro.innerHTML=`<div class="agent-control-intro"><div><h2>Agent observation</h2><div class="muted">Runs appear below when a native hook, tracing processor, OpenTelemetry exporter or custom structural adapter actually sends evidence to this local observer. MCP context access and agent observation are separate connections.</div></div><button id="openAgentSetup" type="button">Set up an agent</button></div>`;
+    intro.innerHTML=`<div class="agent-control-intro"><div><h2>Agent observation</h2><div class="muted">Runs appear below when a native hook, tracing processor, OpenTelemetry exporter or custom structural adapter actually sends evidence to this local observer. MCP context access and agent observation are separate connections.</div><label class="muted" style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:12.5px"><input type="checkbox" id="showDisconnectedAgents"> Show past runs from agents whose Observe is off</label><div class="muted" id="agentHiddenNote" style="font-size:12px;margin-top:4px"></div></div><button id="openAgentSetup" type="button">Set up an agent</button></div>`;
     panel.insertBefore(intro,panel.firstChild);
+    const history=intro.querySelector('#showDisconnectedAgents');
+    try{history.checked=localStorage.getItem('owg_show_disconnected_agents')==='1';}catch(_){}
+    history.onchange=()=>{try{localStorage.setItem('owg_show_disconnected_agents',history.checked?'1':'0');}catch(_){}window.refreshAgentObservability?.(true);window.refreshAgentDashboard?.(true);};
     intro.querySelector('#openAgentSetup').onclick=()=>{window.activateTab?.('connect');setTimeout(()=>document.querySelector('#agent-observation-setup')?.scrollIntoView({behavior:'smooth',block:'start'}),0);};
   }
 
