@@ -48,7 +48,7 @@ export class AgentObserver {
     this.maxQueue=Math.max(1,Math.min(Number(options.maxQueue||512),10000));
     this.batchSize=Math.max(1,Math.min(Number(options.batchSize||32),256));
     this.flushMs=Math.max(20,Math.min(Number(options.flushMs||200),2000));
-    this.queue=[];this.timer=null;this.sending=false;
+    this.queue=[];this.timer=null;this.flushPromise=null;this.closed=false;
     this.counts={accepted:0,dropped:0,sendFailures:0,batchesSent:0};
   }
 
@@ -72,6 +72,7 @@ export class AgentObserver {
   }
 
   _enqueue(operation, fields={}){
+    if(this.closed){this.counts.dropped++;return false;}
     if(!OPERATIONS.has(operation)){this.counts.dropped++;return false;}
     if(this.queue.length>=this.maxQueue){this.counts.dropped++;return false;}
     const event={
@@ -91,15 +92,15 @@ export class AgentObserver {
   }
 
   _schedule(){
-    if(this.timer||this.sending)return;
+    if(this.timer||this.flushPromise||this.closed)return;
     this.timer=setTimeout(()=>{this.timer=null;void this.flush();},this.flushMs);
     this.timer.unref?.();
   }
 
   async flush(){
-    if(this.sending||!this.queue.length)return;
-    this.sending=true;
-    try{
+    if(this.flushPromise)return this.flushPromise;
+    if(!this.queue.length)return;
+    const drain=async()=>{
       while(this.queue.length){
         const batch=this.queue.splice(0,this.batchSize);
         if(!this.token){this.counts.sendFailures++;continue;}
@@ -114,10 +115,19 @@ export class AgentObserver {
         }catch(_){this.counts.sendFailures++;}
         finally{clearTimeout(timeout);}
       }
-    }finally{this.sending=false;if(this.queue.length)this._schedule();}
+    };
+    this.flushPromise=drain();
+    try{await this.flushPromise;}
+    finally{
+      this.flushPromise=null;
+      if(this.queue.length&&!this.closed)this._schedule();
+    }
   }
 
   async shutdown(){
+    // Stop admission first, then await an already-running or newly-started
+    // drain. This prevents shutdown from returning while a fetch is in flight.
+    this.closed=true;
     if(this.timer){clearTimeout(this.timer);this.timer=null;}
     await this.flush();
   }
