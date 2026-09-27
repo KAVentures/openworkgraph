@@ -31,6 +31,7 @@ def _run(code: str, tmp_path: Path, timeout: int = 120) -> str:
 
 def test_public_agent_tool_names_are_readable_and_custom_names_remain_opaque():
     sys.path.insert(0, str(ROOT))
+    from server.agent_execution_trace_routes import _sanitize_tool_names
     from server.agent_tool_labels import readable_tool_name
 
     for name in ("Bash", "Read", "Edit", "Grep", "WebFetch", "apply_patch", "shell", "file_search"):
@@ -43,6 +44,17 @@ def test_public_agent_tool_names_are_readable_and_custom_names_remain_opaque():
     out = readable_tool_name("mcp__gmail__send_email_to_anna_svensson")
     assert out.startswith("mcp__gmail__tool:") and "anna" not in out
     assert readable_tool_name("mcp__erik_lindqvist__read").startswith("tool:")
+
+    payload = {
+        "executions": [{"events": [
+            {"tool": {"name": "Bash", "category": "shell"}},
+            {"tool": {"name": "customer_anna_svensson_export", "category": "other"}},
+        ]}]
+    }
+    safe = _sanitize_tool_names(payload)
+    assert safe["executions"][0]["events"][0]["tool"]["name"] == "Bash"
+    custom = safe["executions"][0]["events"][1]["tool"]["name"]
+    assert custom.startswith("tool:") and "anna" not in custom
 
 
 def test_subagent_execution_is_linked_to_parent(tmp_path):
@@ -131,8 +143,6 @@ for text,keep in (
         if leaked.casefold() in text.casefold():
             assert leaked.casefold() not in result.casefold(), (text,result,leaked)
 
-# Owner/learned tokens can be created by the presentation pass before contextual
-# redaction. The extension must still redact the other person after a slash.
 mock=augment(lambda s: s.replace("Koyar", "PERSON_A1B2C3"), {"never_redact":[]})
 slash=mock("Koyar / Linnea")
 assert "Linnea" not in slash and "PERSON_A1B2C3" in slash, slash
@@ -163,7 +173,6 @@ for i in range(30):
         "event_type":"browser_click","source":"browser","duration_seconds":0,
         "metadata":{"hostname":"mail.google.com","label":"Send"},
     })
-# Two separate Claude runs failing at Bash.
 for run in ("r1","r2"):
     for index,(operation,status) in enumerate((("run_started","running"),("tool_call","error"),("run_finished","error"))):
         rows.append(agent_event_to_evidence({
@@ -176,8 +185,6 @@ for run in ("r1","r2"):
         }))
 insert_events(rows)
 
-# Context events are the privacy-safe structural copy/paste index. Contents are
-# never stored; the transfer id only links copy and paste observations.
 db=sqlite3.connect(DB_PATH)
 for i in range(4):
     t=now-timedelta(minutes=20-i*3)
