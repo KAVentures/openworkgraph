@@ -20,8 +20,38 @@ _CURRENT_TOOL: contextvars.ContextVar[str] = contextvars.ContextVar("owg_compact
 _APPLIED_DERIVED_LIMITS: contextvars.ContextVar[dict[str, int]] = contextvars.ContextVar(
     "owg_compact_derived_limits", default={}
 )
-_REPEATED_WORKFLOW_SCAN_CAP = 5_000
-_PROCEDURAL_DISCOVERY_SCAN_CAP = 1_000
+
+# Compact Context keeps complete history on the canonical, paginated
+# get_workflow_trace surface. Derived convenience/index tools use bounded windows
+# so their recomputation cannot block the MCP transport on slower hosts.
+_TASK_INDEX_CAP = 5_000
+_PROCEDURAL_DISCOVERY_CAP = 1_000
+_TASK_CONTEXT_CAP = 2_000
+_PROCEDURAL_FEEDBACK_CAP = 2_000
+_AGENT_INDEX_CAP = 5_000
+
+_DERIVED_CAPS: dict[str, dict[str, tuple[str, int]]] = {
+    "find_repeated_workflows": {
+        "/v1/tasks": ("limit", _TASK_INDEX_CAP),
+        "/v1/summary": ("limit", _TASK_INDEX_CAP),
+        "/v1/procedural-memory": ("limit", _PROCEDURAL_DISCOVERY_CAP),
+    },
+    "get_task_context": {
+        "/v1/task-context": ("limit", _TASK_CONTEXT_CAP),
+    },
+    "how_did_similar_runs_go": {
+        "/v1/procedural-memory": ("limit", _PROCEDURAL_DISCOVERY_CAP),
+        "/v1/tasks": ("limit", _TASK_CONTEXT_CAP),
+        "/v1/procedural-memory/readable-feedback": ("limit", _PROCEDURAL_FEEDBACK_CAP),
+        "/v1/procedural-memory/similar-runs": ("limit", _PROCEDURAL_FEEDBACK_CAP),
+        "/v1/procedural-memory/failure-patterns": ("limit", _PROCEDURAL_FEEDBACK_CAP),
+        "/v1/procedural-memory/approval-patterns": ("limit", _PROCEDURAL_FEEDBACK_CAP),
+        "/v1/procedural-memory/next-steps": ("limit", _PROCEDURAL_FEEDBACK_CAP),
+    },
+    "get_agent_runs": {
+        "/v1/agent-execution-traces": ("evidence_limit", _AGENT_INDEX_CAP),
+    },
+}
 
 
 def _readable_step_input(value: str) -> bool:
@@ -32,6 +62,16 @@ def _readable_step_input(value: str) -> bool:
     # as human-readable progress so the readable endpoint can return helpful
     # validation instead of leaking an opaque structural parser error.
     return _LEGACY_STEP_RE.fullmatch(text) is None
+
+
+def _bounded_param(params: dict[str, Any], key: str, cap: int) -> int:
+    try:
+        requested = int(params.get(key) or cap)
+    except Exception:
+        requested = cap
+    applied = max(1, min(requested, cap))
+    params[key] = applied
+    return applied
 
 
 class _CompactRuntimeProxy:
@@ -58,29 +98,14 @@ class _CompactRuntimeProxy:
                 "prescriptive": False,
             }
 
-        # Repeated-workflow discovery is a derived convenience surface, not the
-        # canonical evidence path. `/v1/procedural-memory` is materially more
-        # expensive than the task/summary indexes because it reconstructs execution
-        # families, so it gets its own smaller discovery window. This keeps compact
-        # MCP responsive on slower Windows hosts without weakening the complete,
-        # paginated canonical evidence surface (`get_workflow_trace`).
         p = dict(params or {})
-        if _CURRENT_TOOL.get() == "find_repeated_workflows" and path in {
-            "/v1/tasks", "/v1/summary", "/v1/procedural-memory",
-        }:
-            cap = (
-                _PROCEDURAL_DISCOVERY_SCAN_CAP
-                if path == "/v1/procedural-memory"
-                else _REPEATED_WORKFLOW_SCAN_CAP
-            )
-            try:
-                requested = int(p.get("limit") or cap)
-            except Exception:
-                requested = cap
-            applied = max(1, min(requested, cap))
-            p["limit"] = applied
+        tool_name = _CURRENT_TOOL.get()
+        spec = _DERIVED_CAPS.get(tool_name, {}).get(path)
+        if spec:
+            key, cap = spec
+            applied = _bounded_param(p, key, cap)
             limits = dict(_APPLIED_DERIVED_LIMITS.get())
-            limits[path] = applied
+            limits[f"{path}:{key}"] = applied
             _APPLIED_DERIVED_LIMITS.set(limits)
         return self._runtime.secure_get(path, p)
 
@@ -100,18 +125,13 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
         original_begin(tool_name)
 
     def finish(tool_name: str, data: Any) -> dict[str, Any]:
-        if tool_name == "find_repeated_workflows" and isinstance(data, dict):
-            limits = dict(_APPLIED_DERIVED_LIMITS.get())
-            if limits:
-                data = dict(data)
-                data["derived_scan_limits"] = {
-                    "tasks": limits.get("/v1/tasks"),
-                    "summary": limits.get("/v1/summary"),
-                    "procedural_memory": limits.get("/v1/procedural-memory"),
-                }
-                data["derived_scan_bounded"] = True
-                data["complete_history_tool"] = "get_workflow_trace"
-                data["procedural_family_discovery_may_be_incomplete"] = True
+        limits = dict(_APPLIED_DERIVED_LIMITS.get())
+        if limits and isinstance(data, dict):
+            data = dict(data)
+            data["derived_scan_limits"] = limits
+            data["derived_scan_bounded"] = True
+            data["derived_scan_may_be_incomplete"] = True
+            data["complete_history_tool"] = "get_workflow_trace"
         return original_finish(tool_name, data)
 
     compact_module.core._begin = begin
