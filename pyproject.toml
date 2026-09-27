@@ -30,23 +30,20 @@ gateway = [
   "PyJWT[crypto]>=2.10,<3",
 ]
 
-[project.scripts]
-workflow-observer = "server.main:main"
-workflow-observer-gateway = "server.gateway_runner:main"
-workflow-observer-enterprise = "server.enterprise_runner:main"
-workflow-observer-enterprise-gateway = "server.enterprise_gateway_runner:main"
-workflow-observer-agent-auth = "server.agent_auth:main"
-workflow-observer-agent-adapter = "adapters.client:main"
-workflow-observer-claude-hook = "adapters.claude_code_hook:main"
-workflow-observer-codex-export = "adapters.codex_otel:main"
-workflow-observer-openai-agent = "adapters.openai_agents:main"
-workflow-observer-policy = "server.policy_admin:main"
-workflow-observer-policy-proposal = "server.policy_proposal_cli:main"
-workflow-observer-policy-source = "server.policy_source_cli:main"
-workflow-observer-policy-drift = "server.policy_drift_cli:main"
-workflow-observer-gateway-policy = "server.enterprise_policy_admin:main"
-workflow-observer-demo = "server.demo_data:main"
-workflow-observer-gateway-enroll = "server.gateway_enroll:main"
-workflow-observer-mcp = "mcp_server.secure_stdio:main"
-workflow-observer-mcp-compact = "mcp_server.compact_stdio:main"
-workflow-observer-mcp-http = "mcp_server.compact_http:main"
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+# Bundled name lists for contextual AI-context redaction (US Census 1990: public
+# domain; Statistics Sweden 2022: CC0). See server/name_lexicon/README.md.
+server = ["name_lexicon/*.txt", "name_lexicon/README.md"]
+# The enterprise Gateway serves this shell at /admin. Every data/action request
+# still requires the separately configured Gateway admin credential.
+gateway = ["admin_console.html"]
