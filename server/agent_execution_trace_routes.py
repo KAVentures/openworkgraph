@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,6 +19,19 @@ def _require_agent_report_read(request: Request) -> None:
         raise HTTPException(status_code=401, detail="API or dashboard authentication required")
 
 
+def _row_framework(row: dict[str, Any]) -> str:
+    if str(row.get("source") or "") != "agent":
+        return ""
+    meta = row.get("metadata")
+    if meta is None and row.get("metadata_json"):
+        try:
+            meta = json.loads(row["metadata_json"])
+        except (TypeError, ValueError):
+            return ""
+    agent = meta.get("agent") if isinstance(meta, dict) else None
+    return str((agent or {}).get("framework") or "") if isinstance(agent, dict) else ""
+
+
 @router.get("/v1/agent-execution-traces")
 def get_agent_execution_traces(
     request: Request,
@@ -27,14 +41,25 @@ def get_agent_execution_traces(
     evidence_limit: int = 25_000,
     limit: int = 20,
     max_events_per_execution: int = 100,
+    hide_disconnected: bool = False,
 ) -> dict[str, Any]:
-    """Return privacy-safe ordered structural traces for observed agent runs."""
+    """Return privacy-safe ordered structural traces for observed agent runs.
+
+    ``hide_disconnected`` omits stored runs from agents whose Observe connection
+    is currently off or removed (history is kept, only the view is filtered).
+    """
     _require_agent_report_read(request)
+    hidden: set[str] = set()
     try:
         raw = load_recent_evidence(
             limit=max(1, min(int(evidence_limit), 100_000)),
             since=since,
         )
+        if hide_disconnected:
+            from .connections import hidden_frameworks
+            hidden = hidden_frameworks()
+            if hidden:
+                raw = [row for row in raw if _row_framework(row) not in hidden]
         payload = agent_execution_traces(
             raw,
             family_key=family_key,
@@ -48,6 +73,7 @@ def get_agent_execution_traces(
     return {
         **payload,
         "evidence_rows_considered": len(raw),
+        "hidden_frameworks": sorted(hidden),
         "evidence_is_canonical": True,
         "read_only": True,
         "writes_performed": False,

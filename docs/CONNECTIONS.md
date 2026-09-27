@@ -13,11 +13,14 @@ OpenWorkGraph has one list of AI apps, on the dashboard's **Connect** tab under 
 | Claude Desktop | ✓ | – | `claude_desktop_config.json` in Claude's app-support folder |
 | Codex | ✓ | ✓ OTel traces | `~/.codex/config.toml` (or `$CODEX_HOME`) |
 | Cursor | ✓ | – | `~/.cursor/mcp.json` |
-| VS Code | ✓ | – | `mcp.json` in VS Code's user folder |
+| VS Code + GitHub Copilot | ✓ | – | `mcp.json` in VS Code's user folder (Copilot agent mode uses it) |
 | Windsurf | ✓ | – | `~/.codeium/windsurf/mcp_config.json` |
 | Gemini CLI | ✓ | – | `~/.gemini/settings.json` |
+| GitHub Copilot CLI | ✓ | – | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) |
+| Kiro | ✓ | – | `~/.kiro/settings/mcp.json` |
+| Amazon Q Developer | ✓ | – | `~/.aws/amazonq/mcp.json` |
 
-ChatGPT (cloud), other MCP apps and custom agents (OpenAI Agents SDK, OpenTelemetry, custom events) are under **More ways to connect**.
+**Cloud apps** (ChatGPT, Lovable, Microsoft 365 Copilot) run on their own servers and accept only remote HTTP MCP servers, so they cannot reach OpenWorkGraph on this computer directly. They need a secure tunnel to the optional local HTTP endpoint (or an organization Gateway). Other MCP apps and custom agents (OpenAI Agents SDK, OpenTelemetry, custom events) are under **More ways to connect**.
 
 ## How the switches behave
 
@@ -27,6 +30,8 @@ ChatGPT (cloud), other MCP apps and custom agents (OpenAI Agents SDK, OpenTeleme
   - It never duplicates its own entry.
   - It refuses (and changes nothing) if the file is not valid JSON/TOML, or if you already have a hand-written entry it should not overwrite.
 - **Off / on again.** This only flips a switch that OpenWorkGraph checks on every MCP tool call and every incoming agent event. It takes effect **immediately**, with no restart, and the config stays in place.
+- **Restart needed.** Some apps load this config only when they start. The ChatGPT app (Codex engine) does this for Observe, and Claude Desktop does it for Context. If the app has been running since before OpenWorkGraph changed its config, the row says so ("Quit and reopen the ChatGPT app (⌘Q)…"). Opening a new chat is not enough.
+- **Agents tab history.** Runs from an agent whose Observe is off or removed are hidden by default. Tick *Show past runs from agents whose Observe is off* to see them. Nothing is deleted.
 - **Remove** deletes OpenWorkGraph's entry from the app's config file (with a backup).
 - **Context also needs AI access.** The dashboard's **AI access** master switch resets to OFF each time OpenWorkGraph starts. Turning a Context switch on also turns AI access on for the current run.
 

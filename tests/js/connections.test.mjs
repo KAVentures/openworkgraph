@@ -35,3 +35,20 @@ test('conflicts fall back to manual setup without claiming success',()=>{
   assert.match(source,/manual_setup_required/);
   assert.match(source,/Nothing was changed/);
 });
+
+test('both Agents-tab scripts request the same history-filtered run list',()=>{
+  const read=f=>fs.readFileSync(path.join(here,'..','..','dashboard',f),'utf8');
+  for(const f of ['agent_observability_v090.js','v0571_polish.js']){
+    const src=read(f);
+    assert.match(src,/max_events_per_execution=100'\+agentHistoryParam\(\)/,f);
+    assert.match(src,/owg_show_disconnected_agents/,f);
+    assert.match(src,/hide_disconnected=true/,f);
+  }
+  assert.match(read('agent_control_plane.js'),/Show past runs from agents whose Observe is off/);
+});
+
+test('restart-needed and cloud-app guidance are shown',()=>{
+  assert.match(source,/restart_needed/);
+  assert.match(source,/Quit and reopen/);
+  assert.match(source,/Lovable/);
+});

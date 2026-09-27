@@ -80,6 +80,8 @@ def _json_entry(client: str, style: str) -> dict[str, Any]:
         return {"type": "stdio", "command": command, "args": args, "env": {}}
     if style == "vscode":
         return {"type": "stdio", "command": command, "args": args}
+    if style == "copilot_cli":
+        return {"type": "local", "command": command, "args": args, "env": {}, "tools": ["*"]}
     return {"command": command, "args": args}
 
 
@@ -202,16 +204,101 @@ class Target:
     install: Callable[[], dict[str, Any]]
     remove: Callable[[], dict[str, Any]]
     applies: str  # when a fresh install takes effect
+    # Long-running apps load MCP/telemetry config only at startup. When set,
+    # a matching process that started before the install is reported as
+    # "restart needed" instead of silently waiting.
+    process: Callable[[str, list[str]], str] | None = None
 
 
-def _json_target(path_fn: Callable[[], Path], key: str, client: str, style: str, applies: str) -> Target:
+def _json_target(path_fn: Callable[[], Path], key: str, client: str, style: str, applies: str,
+                 process: Callable[[str, list[str]], str] | None = None) -> Target:
     return Target(
         path=path_fn,
         installed=lambda: _json_mcp_installed(path_fn(), key),
         install=lambda: _json_mcp_install(path_fn(), key, _json_entry(client, style)),
         remove=lambda: _json_mcp_remove(path_fn(), key),
         applies=applies,
+        process=process,
     )
+
+
+# --- restart detection ----------------------------------------------------------
+
+def _codex_process(exe: str, cmdline: list[str]) -> str:
+    """Return a human app name if this is a Codex engine process, else ''."""
+    first = cmdline[0] if cmdline else exe
+    if Path(first).name.lower() not in {"codex", "codex.exe"}:
+        return ""
+    return "the ChatGPT app" if "ChatGPT.app" in first else "Codex"
+
+
+def _claude_desktop_process(exe: str, cmdline: list[str]) -> str:
+    first = cmdline[0] if cmdline else exe
+    if first.endswith("Claude.app/Contents/MacOS/Claude") or (
+        "AnthropicClaude" in first and Path(first).name.lower() == "claude.exe"
+    ):
+        return "Claude Desktop"
+    return ""
+
+
+_PROCESS_CACHE: dict[str, Any] = {"at": 0.0, "procs": []}
+
+
+def _processes() -> list[tuple[str, list[str], float]]:
+    """(exe, cmdline, start time) for running processes, cached briefly."""
+    import time
+    now = time.monotonic()
+    if now - _PROCESS_CACHE["at"] < 4.0:
+        return _PROCESS_CACHE["procs"]
+    procs: list[tuple[str, list[str], float]] = []
+    try:
+        import psutil
+        for proc in psutil.process_iter(["exe", "cmdline", "create_time"]):
+            try:
+                info = proc.info
+                procs.append((str(info.get("exe") or ""), [str(x) for x in (info.get("cmdline") or [])],
+                              float(info.get("create_time") or 0)))
+            except Exception:
+                continue
+    except Exception:
+        procs = []
+    _PROCESS_CACHE.update(at=now, procs=procs)
+    return procs
+
+
+def _running_since(match: Callable[[str, list[str]], str]) -> tuple[float, str] | None:
+    """Earliest start time of a running process the matcher recognizes."""
+    found: tuple[float, str] | None = None
+    for exe, cmdline, started in _processes():
+        try:
+            name = match(exe, cmdline)
+        except Exception:
+            continue
+        if name and started and (found is None or started < found[0]):
+            found = (started, name)
+    return found
+
+
+def _installed_at(client_id: str, kind: str, path: Path) -> float | None:
+    recorded = ((_read_switches().get("installed_at") or {}).get(kind) or {}).get(client_id)
+    backups = [p.stat().st_mtime for p in path.parent.glob(f"{path.name}.owg-backup-*") if p.exists()]
+    candidates = [float(recorded)] if recorded else []
+    candidates += [max(backups)] if backups else []
+    return max(candidates) if candidates else None
+
+
+def _restart_needed(client_id: str, kind: str, target: Target) -> dict[str, Any] | None:
+    if target.process is None:
+        return None
+    installed_at = _installed_at(client_id, kind, target.path())
+    running = _running_since(target.process)
+    if installed_at is None or running is None or running[0] >= installed_at:
+        return None
+    from datetime import datetime, timezone
+    return {
+        "app": running[1],
+        "running_since": datetime.fromtimestamp(running[0], timezone.utc).isoformat(),
+    }
 
 
 def _claude_observe() -> Target:
@@ -237,6 +324,7 @@ def _codex_observe() -> Target:
         install=install,
         remove=writer.codex_disconnect,
         applies="the next time Codex starts",
+        process=_codex_process,
     )
 
 
@@ -248,6 +336,11 @@ class Client:
     mcp: Target | None
     observe: Callable[[], Target] | None
     observe_unavailable: str = ""
+
+
+def _copilot_home() -> Path:
+    override = os.getenv("COPILOT_HOME", "").strip()
+    return Path(override) if override and not os.getenv("OWG_CONNECTIONS_HOME") else _home() / ".copilot"
 
 
 def _claude_code_json() -> Path:
@@ -262,16 +355,18 @@ CLIENTS: dict[str, Client] = {
                _claude_observe),
         Client("claude_desktop", "Claude Desktop", lambda: _app_support("Claude"),
                _json_target(lambda: _app_support("Claude", "claude_desktop_config.json"), "mcpServers",
-                            "claude_desktop", "plain", "after you quit and reopen Claude Desktop"),
+                            "claude_desktop", "plain", "after you quit and reopen Claude Desktop",
+                            _claude_desktop_process),
                None, "Claude Desktop has no execution hooks to observe."),
         Client("codex", "Codex", _codex_home,
-               Target(_codex_mcp_path, _codex_mcp_installed, _codex_mcp_install, _codex_mcp_remove, "the next time Codex starts"),
+               Target(_codex_mcp_path, _codex_mcp_installed, _codex_mcp_install, _codex_mcp_remove,
+                      "in new Codex chats"),
                _codex_observe),
         Client("cursor", "Cursor", lambda: _home() / ".cursor",
                _json_target(lambda: _home() / ".cursor" / "mcp.json", "mcpServers", "cursor", "plain",
                             "after Cursor reloads its MCP servers"),
                None, "Cursor does not expose an execution trace to observe."),
-        Client("vscode", "VS Code", lambda: _app_support("Code", "User"),
+        Client("vscode", "VS Code + GitHub Copilot", lambda: _app_support("Code", "User"),
                _json_target(lambda: _app_support("Code", "User", "mcp.json"), "servers", "vscode", "vscode",
                             "after VS Code reloads its MCP servers"),
                None, "VS Code does not expose an execution trace to observe."),
@@ -283,6 +378,18 @@ CLIENTS: dict[str, Client] = {
                _json_target(lambda: _home() / ".gemini" / "settings.json", "mcpServers", "gemini_cli", "plain",
                             "in new Gemini CLI sessions"),
                None, "Gemini CLI observation is not supported yet."),
+        Client("copilot_cli", "GitHub Copilot CLI", _copilot_home,
+               _json_target(lambda: _copilot_home() / "mcp-config.json", "mcpServers", "copilot_cli",
+                            "copilot_cli", "in new Copilot CLI sessions"),
+               None, "Copilot CLI observation is not supported yet."),
+        Client("kiro", "Kiro", lambda: _home() / ".kiro",
+               _json_target(lambda: _home() / ".kiro" / "settings" / "mcp.json", "mcpServers", "kiro", "plain",
+                            "after Kiro reloads its MCP servers"),
+               None, "Kiro observation is not supported yet."),
+        Client("amazon_q", "Amazon Q Developer", lambda: _home() / ".aws" / "amazonq",
+               _json_target(lambda: _home() / ".aws" / "amazonq" / "mcp.json", "mcpServers", "amazon_q", "plain",
+                            "in new Amazon Q Developer sessions"),
+               None, "Amazon Q Developer observation is not supported yet."),
     ]
 }
 
@@ -338,12 +445,41 @@ def _write_switch(client_id: str, kind: str, enabled: bool) -> None:
         _CACHE.update(mtime=mtime, data=json.loads(json.dumps(data)))
 
 
+def _record_install(client_id: str, kind: str) -> None:
+    import time
+    with _LOCK:
+        data = json.loads(json.dumps(_read_switches()))
+        data.setdefault("installed_at", {}).setdefault(kind, {})[client_id] = time.time()
+        writer._atomic_write(_switch_path(), json.dumps(data, indent=2) + "\n")
+        _CACHE.update(mtime=_switch_path().stat().st_mtime_ns, data=data)
+
+
 def is_enabled(client_id: str | None, kind: str) -> bool:
     """Runtime switch; unknown clients and never-touched switches default to on."""
     if not client_id:
         return True
     value = (_read_switches().get(kind) or {}).get(client_id)
     return True if value is None else bool(value)
+
+
+# Agent frameworks whose observation is controlled by a client switch.
+FRAMEWORK_CLIENTS = {"claude-code": "claude_code", "codex": "codex"}
+
+
+def observation_active(client_id: str) -> bool:
+    """True when observation is both installed and switched on for this client."""
+    client = CLIENTS.get(client_id)
+    if client is None or client.observe is None:
+        return True
+    try:
+        return is_enabled(client_id, "observe") and bool(client.observe().installed())
+    except writer.ConfigConflict:
+        return False
+
+
+def hidden_frameworks() -> set[str]:
+    """Frameworks whose stored history the Agents view hides by default."""
+    return {fw for fw, cid in FRAMEWORK_CLIENTS.items() if not observation_active(cid)}
 
 
 # --- public operations ----------------------------------------------------------
@@ -367,6 +503,10 @@ def _kind_status(client: Client, kind: str) -> dict[str, Any]:
     }
     if error:
         status["error"] = error
+    if installed and enabled:
+        restart = _restart_needed(client.id, kind, target)
+        if restart:
+            status["restart_needed"] = restart
     return status
 
 
@@ -416,6 +556,7 @@ def change(client_id: str, action: str, kinds: tuple[str, ...] = KINDS) -> dict[
             if not target.installed():
                 result = target.install()
                 result["takes_effect"] = target.applies
+                _record_install(client.id, kind)
             _write_switch(client.id, kind, True)
         elif action == "off":
             _write_switch(client.id, kind, False)
