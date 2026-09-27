@@ -70,6 +70,15 @@
     return output;
   }
 
+  function transitionFallback(summary){
+    return safeArray(summary?.transitions).slice(0,8).map(row=>({
+      kind:'human',
+      surface:`${String(row?.from||'Work surface')} → ${String(row?.to||'Work surface')}`,
+      action:`Observed transition${n(row?.count)>1?` · ${n(row?.count)} times`:''}`,
+      observed_at:'',count:1,source:'summary-transition'
+    }));
+  }
+
   function agentItems(agentPayload){
     const result=[];
     for(const run of safeArray(agentPayload?.executions)){
@@ -97,7 +106,9 @@
   }
 
   function reconstruction(summary,agentPayload){
-    const combined=[...collapsedEvidence(summary),...agentItems(agentPayload)];
+    let human=collapsedEvidence(summary);
+    if(!human.length)human=transitionFallback(summary);
+    const combined=[...human,...agentItems(agentPayload)];
     combined.sort((a,b)=>{
       const ta=Date.parse(String(a.observed_at||'')),tb=Date.parse(String(b.observed_at||''));
       if(!Number.isFinite(ta)&&!Number.isFinite(tb))return 0;
@@ -116,17 +127,22 @@
   }
 
   function stateFrom(summary,agentPayload){
-    const evidence=recentWindow(summary),surfaces=new Set(evidence.map(surfaceOf).filter(Boolean));
-    let transitions=0,last='';
-    for(const row of evidence){const s=surfaceOf(row);if(last&&s&&s!==last)transitions+=1;if(s)last=s;}
+    const evidence=recentWindow(summary),recentSurfaces=new Set(evidence.map(surfaceOf).filter(Boolean));
+    const summarySurfaceCount=safeArray(summary?.surfaces).length;
+    let recentTransitions=0,last='';
+    for(const row of evidence){const s=surfaceOf(row);if(last&&s&&s!==last)recentTransitions+=1;if(s)last=s;}
+    const summarizedTransitions=safeArray(summary?.transitions).length;
+    const surfaceCount=Math.max(recentSurfaces.size,summarySurfaceCount);
+    const transitions=Math.max(recentTransitions,summarizedTransitions);
+    const totalEvents=Math.max(evidence.length,n(summary?.events));
     const runs=safeArray(agentPayload?.executions);
     const agentEvents=runs.reduce((total,run)=>total+n(run?.event_count_total),0);
-    const ready=(evidence.length>=8&&surfaces.size>=2)||(transitions>=2&&evidence.length>=5)||agentEvents>=3;
+    const ready=(totalEvents>=8&&surfaceCount>=2)||(transitions>=2&&totalEvents>=5)||agentEvents>=3;
     const apps=safeArray(summary?.apps).map(x=>String(x?.app||'').toLowerCase());
     const browserHeavy=apps.some(x=>/(chrome|edge|safari|firefox|arc|brave)/.test(x));
-    const browserConnected=Boolean(summary?.browser_sensor?.connected||summary?.browser_sensor?.paired||summary?.browser_sensor?.active);
+    const browserConnected=Boolean(summary?.browser_sensor?.status==='connected'||summary?.browser_sensor?.connected||summary?.browser_sensor?.paired||summary?.browser_sensor?.active);
     const shallowAgent=runs.some(run=>['os_observed','outcome_only'].includes(String(run?.observation_level||run?.agent?.observation_level||'')));
-    return {evidence_count:evidence.length,surface_count:surfaces.size,transitions,agent_runs:runs.length,agent_events:agentEvents,ready,browserHeavy,browserConnected,shallowAgent};
+    return {evidence_count:totalEvents,surface_count:surfaceCount,transitions,agent_runs:runs.length,agent_events:agentEvents,ready,browserHeavy,browserConnected,shallowAgent};
   }
 
   function aiEnabled(payload){return Boolean(payload?.enabled??payload?.ai_access_enabled??payload?.access?.enabled);}
@@ -174,7 +190,7 @@
   function render(state,summary,agentPayload,aiPayload){
     hideEmptyPlaceholders(summary);
     const card=ensureCard();if(!card)return;
-    card.querySelector('#firstValueProgress').innerHTML=`<span><strong>${state.evidence_count}</strong> recent evidence rows</span><span><strong>${state.surface_count}</strong> work ${state.surface_count===1?'surface':'surfaces'}</span><span><strong>${state.transitions}</strong> cross-surface ${state.transitions===1?'transition':'transitions'}</span><span><strong>${state.agent_runs}</strong> agent ${state.agent_runs===1?'run':'runs'}</span>`;
+    card.querySelector('#firstValueProgress').innerHTML=`<span><strong>${state.evidence_count}</strong> observed events</span><span><strong>${state.surface_count}</strong> work ${state.surface_count===1?'surface':'surfaces'}</span><span><strong>${state.transitions}</strong> observed ${state.transitions===1?'transition':'transitions'}</span><span><strong>${state.agent_runs}</strong> agent ${state.agent_runs===1?'run':'runs'}</span>`;
     const status=card.querySelector('#firstValueStatus'),actions=card.querySelector('#firstValueActions');
     if(state.ready){
       status.className='first-value-ready';status.textContent='OpenWorkGraph has enough observed activity to show a reconstruction. No AI interpretation is required for this view.';
