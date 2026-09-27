@@ -25,6 +25,7 @@ def main() -> None:
     import server.browser_agent_projection  # noqa: F401
     import server.agent_dashboard_control_plane  # noqa: F401
     import server.custom_harness_control_plane  # noqa: F401
+    import server.first_value_activation  # noqa: F401
     import server.org_join_routes as org_join_routes
     import server.dashboard_privacy  # noqa: F401
 
