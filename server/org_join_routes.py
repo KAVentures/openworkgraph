@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from connector.runtime import restart_sync_worker
@@ -205,6 +206,30 @@ def org_join_script() -> Response:
 @app.get("/v1/managed-status")
 def get_managed_status() -> dict[str, Any]:
     return dict(_managed_state) if _managed_state.get("config_path") else apply_managed_config()
+
+
+@app.middleware("http")
+async def inject_org_join_dashboard(request: Request, call_next):
+    response = await call_next(request)
+    if request.method.upper() != "GET" or request.url.path != "/" or response.status_code != 200:
+        return response
+    if "text/html" not in str(response.headers.get("content-type") or ""):
+        return response
+    try:
+        if hasattr(response, "body_iterator"):
+            chunks = [chunk async for chunk in response.body_iterator]
+            body = b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8") for chunk in chunks)
+        else:
+            body = bytes(getattr(response, "body", b""))
+        text = body.decode("utf-8")
+    except Exception:
+        return response
+    marker = '<script src="/org-join.js"></script>'
+    if marker not in text:
+        text = text.replace("</body>", marker + "\n</body>")
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return HTMLResponse(content=text, status_code=response.status_code, headers=headers)
 
 
 def start_managed_setup_in_background() -> None:
