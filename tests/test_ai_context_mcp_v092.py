@@ -28,6 +28,7 @@ LABEL = "Open email from Anna Svensson"
 # Context tools of the compact MCP server (experimental governance tools are off).
 CONTEXT_TOOL_ARGS = {
     "get_current_work_context": {},
+    "get_context_pulse": {},
     "search_work": {"query": "Contract"},
     "get_workflow_trace": {"limit": 50},
     "get_work_profile": {},
