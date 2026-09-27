@@ -62,17 +62,19 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
     @compact_module.mcp.tool()
     def get_context_pulse(
         cursor: str | None = None,
-        recent_limit: int = 100,
-        finding_limit: int = 20,
+        recent_limit: int = 25,
+        finding_limit: int = 10,
         lookback_days: int = 30,
+        recent_detail: str = "compact",
     ) -> dict[str, Any]:
         """Return what changed since the last check plus changed factual findings.
 
         Pass ``next_cursor`` back unchanged on the next call. The recent section is
-        canonical evidence that arrived since this caller's bookmark. Findings are
-        deterministic evidence-backed counts/aggregates over the rolling lookback,
-        never recommendations or task-label guesses. On the first call they are a
-        baseline; later calls omit findings that have not materially changed.
+        canonical-origin evidence that arrived since this caller's bookmark.
+        Findings are deterministic evidence-backed aggregates, never advice. A
+        repeated-workflow finding may use task inference, and says so explicitly.
+        Defaults are small; use ``recent_detail='rich'`` or get_workflow_trace when
+        full canonical rich rows are needed.
         """
         name = "get_context_pulse"
         compact_module.core._begin(name)
@@ -80,6 +82,7 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
             "recent_limit": min(max(1, int(recent_limit)), 500),
             "finding_limit": min(max(0, int(finding_limit)), 50),
             "lookback_days": min(max(7, int(lookback_days)), 90),
+            "recent_detail": "rich" if str(recent_detail).lower() == "rich" else "compact",
         }
         if cursor not in (None, ""):
             params["cursor"] = cursor
@@ -88,8 +91,6 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
             compact_module.secure_runtime.secure_get("/v1/context-pulse", params),
         )
 
-    # Keep the function addressable for direct unit tests/debugging in addition to
-    # registering it with both compact stdio and compact HTTP MCP transports.
     compact_module.get_context_pulse = get_context_pulse
     compact_module._V0873_HARDENING_APPLIED = True
 
