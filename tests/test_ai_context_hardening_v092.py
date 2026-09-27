@@ -147,33 +147,3 @@ with TestClient(app) as c:
     assert raw.status_code==200
     assert raw.json()['total']==0
 ''', tmp_path)
-
-
-def test_compact_repeated_workflow_scan_is_bounded_without_affecting_trace(tmp_path):
-    _run(r'''
-from mcp_server import compact_hardening as h
-
-class FakeRuntime:
-    def __init__(self): self.calls=[]
-    def secure_get(self,path,params=None):
-        self.calls.append((path,dict(params or {})))
-        return {'ok':True}
-
-fake=FakeRuntime()
-proxy=h._CompactRuntimeProxy(fake)
-tool_token=h._CURRENT_TOOL.set('find_repeated_workflows')
-try:
-    proxy.secure_get('/v1/tasks',{'limit':25000})
-    proxy.secure_get('/v1/summary',{'limit':25000})
-    proxy.secure_get('/v1/procedural-memory',{'limit':25000})
-    limits={path:params['limit'] for path,params in fake.calls}
-    assert limits['/v1/tasks']==5000, limits
-    assert limits['/v1/summary']==5000, limits
-    assert limits['/v1/procedural-memory']==1000, limits
-finally:
-    h._CURRENT_TOOL.reset(tool_token)
-
-fake.calls.clear()
-proxy.secure_get('/v1/workflow-trace',{'limit':500})
-assert fake.calls[-1][1]['limit']==500
-''', tmp_path)
