@@ -25,7 +25,7 @@ Hook-based adapters (Claude Code, Cursor) and Codex's log events see a tool call
 
 Arguments, paths, file names, output text and unknown programs are dropped. Every value passes one allowlist gate (`sanitize_detail`) again when it is stored, so a buggy or hostile sender cannot put text in these fields. Quoted text (a commit message, an `echo` string) never counts as a command. Set `OWG_AGENT_TOOL_DETAIL=0` to turn tool detail off.
 
-Each run in the agent traces gets a `work_summary`: commands, git/gh operations, how many test runs and whether the latest observed test result is **passing, failing or unknown**, files edited vs only read, file types, lines changed when available and total tokens. An observed test command with no recognised result summary is `unknown` rather than inheriting an earlier result. MCP `get_agent_runs` returns it.
+Each run in the agent traces gets a `work_summary`: commands, git/gh operations, how many test runs and whether the run **ended** with passing or failing tests, files edited vs only read, file types, lines changed and total tokens. MCP `get_agent_runs` returns it.
 
 Known limits: Codex `apply_patch` paths are relative to the workspace while Claude's are absolute, so the same file can get different refs across the two agents. A shell command that only runs a script (`./deploy.sh`) shows no commands, because script names are not on the allowlist.
 
@@ -108,35 +108,30 @@ On **Connect → Claude Code**, click **Connect**. OpenWorkGraph adds:
 - its safe asynchronous hooks; and
 - logs-only OTel settings pointing at the local write-only endpoint.
 
-It writes a timestamped backup first, preserves every unrelated setting/hook, replaces rather than duplicates older OWG hooks, and refuses to overwrite an existing OTel configuration.
+It writes a timestamped backup first, preserves every unrelated setting/hook, replaces rather than duplicates older OWG hooks, and refuses to overwrite an existing conflicting telemetry destination. Disconnect removes only OWG hooks and telemetry values that still exactly match what OWG wrote; if the user changed a value afterwards, OWG leaves it alone.
 
-**What OWG sets** for Claude Code telemetry:
-
-```text
-OTEL_METRICS_EXPORTER=none
-OTEL_LOGS_EXPORTER=otlp
-OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787/agent-ingest/ov/claude/YOUR_WRITE_ONLY_TOKEN
-SERVICE_NAME=clode-code
-OTEL_RESOURCE_ATTRIBUTES="service.name=claude-code,claude.user_prompts.logEnabled=false,claude.ai_responses.logEnabled=false,claude.tool_arguments.logEnabled=false,claude.tool_results.logEnabled=false,claude.error_messages.logEnabled=false"
-```
-
-The write-only token is a separate local secret from the main API and MCP bearers. It can submit agent evidence but cannot read work history, exports, summaries, or MCP context.
-
-OpenWorkGraph strips the token from Gateway export and never stores it in canonical evidence.
-
-## Agent telemetry diagnostics
-
-OpenWorkGraph keeps a privacy-safe counter for each native telemetry channel. The local endpoint is:
+The managed Claude settings explicitly keep content logging disabled:
 
 ```text
-GET /v1/agent-telemetry/diagnostics
+OTEL_LOG_USER_PROMPTS=0
+OTEL_LOG_ASSISTANT_RESPONSES=0
+OTEL_LOG_TOOL_DETAILS=0
+OTEL_LOG_TOOL_CONTENT=0
+OTEL_LOG_RAW_API_BODIES=0
 ```
 
-For each channel it shows:
+This is defense in depth. The server-side Claude adapter independently uses a strict allowlist and never copies content-bearing attributes even if a user changes upstream logging settings later.
 
-- requests received, with first/last time;
-- rejections by bounded reason code (`disabled`, `protocol`, `content_type`, `body_limit`, `gzip_limit`, `auth`, `path_auth`, `not_an_object`, `adapter_error`);
+The dedicated local endpoint is:
+
+```text
+POST /agent-ingest/v1/claude-otel
+```
+
+**Diagnostics:** `GET /v1/agent-telemetry/diagnostics` (and the Connections row in the dashboard) reports per channel since OpenWorkGraph started:
+
+- requests received and when;
+- rejections by reason (`auth`, `invalid_payload`, `too_large`, `not_an_object`, `adapter_error`);
 - OTel records seen versus ignored;
 - events stored.
 
@@ -173,14 +168,13 @@ The adapter maps structural evidence for:
 ```text
 conversation start       -> run_started
 response.completed       -> model_call (with token usage)
-response.failed          -> model_call (error)
 failed API request       -> model_call (error)
 completed tool           -> tool_call
 user-sourced decision    -> human_approval_received
 multi-agent spawn/send   -> handoff
 ```
 
-Codex reports token usage on its `codex.sse_event` record for `response.completed` (`input_token_count`, `output_token_count`, `cached_token_count`, `tool_token_count` as the total), not on `codex.api_request`. So each completed response becomes one model call with its tokens; `response.failed` becomes an error model call; a successful API request adds nothing (it would count the same call twice), and a failed API attempt is also a model call with status error. Builds that do put usage on the API request are still accepted.
+Codex reports token usage on its `codex.sse_event` record for `response.completed` (`input_token_count`, `output_token_count`, `cached_token_count`, `tool_token_count` as the total), not on `codex.api_request`. So each completed response becomes one model call with its tokens; a successful API request adds nothing (it would count the same call twice), and a failed attempt is a model call with status error. Builds that do put usage on the API request are still accepted.
 
 Codex exports each business event twice, as a log record and as a trace span event with the same event ID. Only the log copy carries the tool's arguments and output, from which tool detail is derived. Whichever copy is stored first, a later copy may add missing tool detail or token usage to the stored row. It never overwrites a stored value.
 
