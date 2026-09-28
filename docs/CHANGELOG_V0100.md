@@ -1,4 +1,4 @@
-# OpenWorkGraph (unreleased, planned v0.100): richer agent work evidence
+# OpenWorkGraph v0.100.0: richer agent work evidence
 
 Builds on v0.99. Agent runs now say what the agent actually did, not only which tools it called. The privacy model is unchanged: structure only, no content.
 
@@ -6,10 +6,10 @@ Builds on v0.99. Agent runs now say what the agent actually did, not only which 
 - **Derived in memory, per tool call:** Claude Code and Cursor hooks and Codex's log events carry a tool's input and output. From them OpenWorkGraph now derives a few structural facts, and nothing else:
   - which well-known programs ran (`pytest`, `git`, `npm`), from a fixed allowlist;
   - git and GitHub CLI operations (`commit`, `push`, `pr_create`);
-  - test pass/fail counts from a recognised runner summary (pytest, jest, vitest, cargo, node --test, unittest);
-  - file types, keyed hashes of file paths, and lines added/removed.
+  - test pass/fail counts from a recognised runner summary (pytest, jest, vitest, cargo, node --test, unittest); a later observed test command with no recognisable summary is reported as `unknown`, not as an earlier passing result;
+  - file types, keyed hashes of file paths, and lines added/removed when those counts are available.
 - **What is never stored:** command text, arguments, paths, file names, contents and output.
-- **One gate:** every value passes one allowlist gate again when it is stored. Quoted text, such as a commit message or an `echo` string, never counts as a command.
+- **One gate:** every value passes one allowlist gate again when it is stored. Quoted text, such as a commit message or an `echo` string, never counts as a command. Malformed quoting fails conservative and does not split later separators into invented commands.
 - **File refs:** keyed with a secret that never leaves the computer. They show "the same file again" and cannot be compared across devices.
 - **Off switch:** `OWG_AGENT_TOOL_DETAIL=0`.
 
@@ -17,14 +17,14 @@ Builds on v0.99. Agent runs now say what the agent actually did, not only which 
 - **What it holds:** each agent run in the traces (and MCP `get_agent_runs`) has a `work_summary`:
   - commands used;
   - git/gh operations;
-  - test runs, and whether the run ended with tests passing or failing;
-  - files edited vs only read;
-  - file types, lines changed and total tokens.
+  - test runs, and whether the latest observed test result is passing, failing or unknown;
+  - files edited vs only read (using the structural tool identity when an edit hook has no line-count patch);
+  - file types, lines changed when available, and total tokens.
 - **Links:** run lists also carry `parent_execution_id` / `child_execution_ids`. The compact MCP view carries `usage_totals` and `models_observed`.
 
 ## Codex token usage
 - **Before:** Codex reports tokens on `response.completed` SSE events, not on API requests, so Codex runs showed no token usage.
-- **Now:** each completed response is one model call with input, output, cached and total tokens. A successful API request no longer adds a second, empty model call. A failed attempt is still a model call with status error.
+- **Now:** each completed response is one model call with input, output, cached and total tokens. A successful API request no longer adds a second, empty model call. HTTP/API failures and Codex `response.failed` SSE events remain error model calls.
 - **Duplicate copies:** Codex sends each event as both a log record and a trace span event, and only the log copy has the tool's arguments and output. Whichever copy is stored first, the later one may fill in missing tool detail or token usage. It never overwrites a stored value.
 
 ## Claude Code subagents are their own runs
