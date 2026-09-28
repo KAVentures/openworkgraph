@@ -156,10 +156,15 @@ def build_brief(framework: str, *, workspace_ref: str = "", now: datetime | None
     if tested:
         failing = sum(1 for t in tested if t.get("ended") == "failing")
         last = tested[-1]
-        lines.append(
-            f"- Tests: {len(tested)} run(s) ran tests; {failing} ended with tests failing. "
-            f"Most recent test result: {last.get('ended')} ({int(last.get('last_passed') or 0)} passed, {int(last.get('last_failed') or 0)} failed)."
-        )
+        ended = str(last.get("ended") or "unknown")
+        if ended == "unknown":
+            latest = "Most recent test result: unknown; no recognized test summary was observed."
+        else:
+            latest = (
+                f"Most recent test result: {ended} "
+                f"({int(last.get('last_passed') or 0)} passed, {int(last.get('last_failed') or 0)} failed)."
+            )
+        lines.append(f"- Tests: {len(tested)} run(s) ran tests; {failing} ended with tests failing. {latest}")
 
     delivered = [r["delivery_outcome"] for r in runs if isinstance(r.get("delivery_outcome"), dict)]
     if delivered:
