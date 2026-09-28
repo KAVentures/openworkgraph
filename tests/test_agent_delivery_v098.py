@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -135,15 +135,22 @@ def test_spooled_events_go_through_normal_ingest_rules(dirs):
     init_db()
     initialize_run("2026-09-28T08:00:00+00:00")
     runtime.tick()
-    before = datetime.now(timezone.utc)
-    assert spool.spool_events(_events("kept-run", "k1"))
-    set_state("pause")
+    # Explicit times: on Windows the clock ticks ~15 ms, so "now" for the pause,
+    # the event and the resume can coincide and leave an empty pause window.
+    t0 = datetime.now(timezone.utc)
+    at = lambda seconds: (t0 + timedelta(seconds=seconds)).isoformat()
+    before = t0 - timedelta(seconds=60)
+    kept = claude_hook_to_agent_events({
+        "session_id": "s-delivery", "prompt_id": "kept-run", "hook_event_name": "PostToolUse", "tool_use_id": "k1", "tool_name": "Read",
+    }, observed_at=at(-5))
+    assert spool.spool_events(kept)
+    set_state("pause", at=at(1))
     paused = claude_hook_to_agent_events({
         "session_id": "s-delivery", "prompt_id": "paused-run", "hook_event_name": "PostToolUse", "tool_use_id": "x", "tool_name": "Read",
-    }, observed_at=datetime.now(timezone.utc).isoformat())
+    }, observed_at=at(2))
     # Written directly (as if spooled a moment before the pause took effect).
     (spool.spool_dir() / "9-late.json").write_text(json.dumps({"data_dir": str(data.resolve()), "spooled_epoch": time.time(), "events": paused}))
-    set_state("resume")
+    set_state("resume", at=at(3))
     runtime._STATE["last_flush"] = None
     runtime.tick()
     assert spool.pending_count() == 0
