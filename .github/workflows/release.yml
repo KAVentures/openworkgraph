@@ -141,6 +141,11 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### First useful reconstruction
+          The local dashboard now has an evidence-driven first-value layer designed to become useful during the first real work session. It watches only the existing privacy-hardened local evidence surfaces and, once enough activity exists, offers a deterministic **Your last few minutes** reconstruction. This is a presentation layer over canonical evidence, not a new inference or capture pipeline.
+
+          The activation layer adds no sensor, OS/browser permission, AI permission, retention permission, Gateway sharing, MCP tool, screenshot capture, filesystem watcher, prompt/response capture or content telemetry. It never auto-enables AI access or saved history. Empty first-run placeholders are suppressed until their underlying features have useful data, while Evidence, History, Agents, Connect, Organization and Export remain available unchanged.
+
           ### Local-first remains the default
           A normal OpenWorkGraph install captures to local SQLite, provides local dashboard/export/API/MCP access, and requires no OpenWorkGraph account or OpenWorkGraph-hosted evidence store. Capture continues locally if an optional customer-controlled Gateway or network is unavailable.
 
@@ -156,7 +161,7 @@ jobs:
           The dashboard now separates giving an AI access to OpenWorkGraph context from observing an agent's own execution. It provides reviewable setup material for Claude Code lifecycle hooks, Codex trace export, OpenAI Agents tracing and generic OpenTelemetry/custom structural adapters. OpenWorkGraph does not silently edit third-party configuration files. An integration is shown as active only when telemetry actually observed by the local evidence store supports that status.
 
           ### Custom harnesses
-          Arbitrary self-built or third-party agent harnesses can now connect in either or both directions. Python and Node/TypeScript helpers, OTLP/HTTP JSON and raw structural HTTP can send privacy-safe execution telemetry through the dedicated write-only agent credential. Any MCP-capable harness can separately read only the OpenWorkGraph context the user has authorized. The setup flow keeps telemetry write permission and context/history read permission explicitly separate.
+          Arbitrary self-built or third-party agent harnesses can connect in either or both directions. Python and Node/TypeScript helpers, OTLP/HTTP JSON and raw structural HTTP can send privacy-safe execution telemetry through the dedicated write-only agent credential. Any MCP-capable harness can separately read only the OpenWorkGraph context the user has authorized. The setup flow keeps telemetry write permission and context/history read permission explicitly separate.
 
           The standalone helpers do not accept or serialize prompt text, model responses, tool arguments/results, returned values, exception text or hidden reasoning. OpenWorkGraph observer failures remain fail-open for the agent. This release publishes **OpenWorkGraph-Agent-Python.py**, **OpenWorkGraph-Agent-Node.mjs** and **OpenWorkGraph-Agent-Node.d.ts** as standalone release assets.
 
