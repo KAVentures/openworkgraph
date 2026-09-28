@@ -17,5 +17,5 @@ test('Connections rows say where each agent telemetry signal stands', () => {
 test('the Recording pill does not hide a blind sensor', () => {
   const js = read('dashboard/gateway_panel.js');
   assert.doesNotThrow(() => new Function(js));
-  assert.ok(js.includes('missing_permissions') && js.includes('permission missing') && js.includes("' · away'"));
+  assert.ok(js.includes('missing_permissions') && js.includes('macOS permission missing') && js.includes("' · away'"));
 });
