@@ -93,10 +93,18 @@ def _strip_keys(value: Any, blocked: set[str]) -> Any:
     return value
 
 
+# Evidence that stays on the employee's computer whatever the organization policy
+# says. Away spans record when someone stepped away; sharing them would turn
+# OpenWorkGraph into presence monitoring.
+LOCAL_ONLY_EVENT_TYPES = frozenset({"away_span"})
+
+
 def prepare_event_for_gateway(event: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any] | None:
     metadata = event.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    if str(event.get("event_type") or "") in LOCAL_ONLY_EVENT_TYPES:
+        return None
     if str(event.get("source") or "") == "agent" and policy.get("allow_agent_events") is not True:
         return None
     if bool(metadata.get("excluded")) and not policy.get("share_excluded", False):

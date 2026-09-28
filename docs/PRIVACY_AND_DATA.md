@@ -52,6 +52,7 @@ Current signals include:
 - active application/window focus spans
 - browser tab activation and navigation when the optional browser sensor is installed
 - foreground, engaged, probable-idle and active-input timing
+- away spans: time with no keyboard or mouse input for 5 minutes (configurable), or with the screen locked. They are read from the operating system's idle clock, which reports only when the last input happened and never which key was pressed. Away spans stay on this computer and are never sent to an organization Gateway, whatever its policy.
 - keypress counts
 - global clicks and throttled scrolls
 - safe native control identity/label metadata through macOS Accessibility or Windows UI Automation, best effort

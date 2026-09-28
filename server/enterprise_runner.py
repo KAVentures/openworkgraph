@@ -29,8 +29,14 @@ def main() -> None:
     import server.org_join_routes as org_join_routes
     import server.dashboard_privacy  # noqa: F401
 
+    import server.agent_capture_runtime as agent_capture_runtime
+
     org_join_routes.start_managed_setup_in_background()
-    uvicorn.run(SECURE_APP, host=args.host, port=args.port)
+    agent_capture_runtime.start()
+    try:
+        uvicorn.run(SECURE_APP, host=args.host, port=args.port)
+    finally:
+        agent_capture_runtime.stop()
 
 
 if __name__ == "__main__":

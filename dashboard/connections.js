@@ -4,6 +4,7 @@
   // /v1/connections, the same code as the owg_connect.py CLI agents can use.
   let state=null;
   let aiAccess=null;
+  let diagnostics=null;
   let busy=new Set();
   let lastMessage={};
 
@@ -103,6 +104,29 @@
     return '';
   }
 
+  // Where each native telemetry signal stands since OpenWorkGraph started:
+  // counts and reason codes only (see /v1/agent-telemetry/diagnostics).
+  const CHANNELS={claude_code:[['claude_code_hooks','Hooks'],['claude_code_otel_logs','OTel logs']],codex:[['codex_otel','OTel']]};
+  function channelText(label,ch){
+    if(!ch||!ch.requests)return {text:`${label}: nothing received since OpenWorkGraph started`,warn:false};
+    const parts=[`${label} ${relativeTime(ch.last_received_at)}`];
+    if(ch.events_stored)parts.push(`${ch.events_stored} stored`);
+    else if(ch.processed&&ch.records_seen&&!ch.events_projected)parts.push('received, but nothing structural in it');
+    const rejected=Object.entries(ch.rejected||{});
+    if(rejected.length)parts.push(`${rejected.reduce((n,[,c])=>n+c,0)} rejected (${rejected.map(([r])=>r.replace(/_/g,' ')).join(', ')})`);
+    if(ch.observation_off)parts.push('arriving while Observe is off');
+    return {text:parts.join(' · '),warn:rejected.length>0};
+  }
+  function diagnosticsLine(client){
+    const channels=CHANNELS[client.id];
+    if(!channels||!diagnostics||!client.observe?.supported||!client.observe.on)return '';
+    const lines=channels.map(([key,label])=>channelText(label,diagnostics.channels?.[key]));
+    const missing=diagnostics.configuration?.[client.id]?.missing_hook_events||[];
+    if(missing.length)lines.push({text:`Hooks out of date (missing ${missing.join(', ')}); restart OpenWorkGraph to update them`,warn:true});
+    const warn=lines.some(l=>l.warn);
+    return `<div class="sub${warn?' warn':''}">${esc(lines.map(l=>l.text).join(' · '))}</div>`;
+  }
+
   function subline(client){
     const restart=restartLine(client);if(restart)return restart;
     const msg=lastMessage[client.id];
@@ -110,12 +134,13 @@
     const errors=[client.mcp,client.observe].map(x=>x&&x.error).filter(Boolean);
     if(errors.length)return `<div class="sub warn">${esc(errors[0])}</div>`;
     if(!client.detected)return '<div class="sub">Not found on this computer</div>';
+    const diag=diagnosticsLine(client);
     // Evidence, not configuration: these only appear once data actually flowed.
     const parts=[];
     if(client.last_used)parts.push(`Context used ${relativeTime(client.last_used)}`);
     if(client.last_observed)parts.push(`Telemetry observed ${relativeTime(client.last_observed)}`);
     else if(client.observe.supported&&client.observe.on)parts.push('No telemetry observed yet');
-    return parts.length?`<div class="sub">${esc(parts.join(' · '))}</div>`:'';
+    return (parts.length?`<div class="sub">${esc(parts.join(' · '))}</div>`:'')+diag;
   }
 
   function render(){
@@ -151,10 +176,12 @@
 
   async function refresh(){
     try{
-      const [connections,access,activity,traces]=await Promise.all([
+      const [connections,access,activity,traces,diag]=await Promise.all([
         api('/v1/connections'),api('/v1/ai-access'),api('/v1/mcp-activity?limit=200').catch(()=>({items:[]})),
         api('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=1').catch(()=>({executions:[]})),
+        api('/v1/agent-telemetry/diagnostics').catch(()=>null),
       ]);
+      diagnostics=diag;
       const lastUsed={},lastObserved={};
       for(const item of activity.items||[]){if(item.client&&item.status==='ok'&&!lastUsed[item.client])lastUsed[item.client]=item.observed_at;}
       for(const run of traces.executions||[]){

@@ -29,16 +29,18 @@ Missing evidence is never treated as proof that an underlying agent action did n
 
 OpenWorkGraph combines two Claude Code surfaces:
 
-1. **Lifecycle hooks** for session boundaries, completed tools, permission requests, failures, and subagent start/stop.
+1. **Lifecycle hooks** for session boundaries, turn boundaries (one prompt = one turn), completed tools, permission requests, failures, and subagent start/stop.
 2. **Claude Code OpenTelemetry log events** for per-prompt model calls, token usage, model identity, completed tools, permission decisions, retries and subagent completion.
 
 The hook surface remains useful as a fail-open lifecycle/fallback channel. The OTel log surface supplies the signals hooks do not expose, especially model calls and token usage.
 
-OpenWorkGraph registers only content-safe hook points:
+OpenWorkGraph registers these hook points:
 
 ```text
 SessionStart
 SessionEnd
+UserPromptSubmit
+Stop
 PostToolUse
 PostToolUseFailure
 PermissionRequest
@@ -48,7 +50,18 @@ SubagentStop
 StopFailure
 ```
 
-Content-heavy hooks such as `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, and `Stop` are intentionally not registered.
+`UserPromptSubmit` and `Stop` carry content: the prompt text and the last assistant message. OpenWorkGraph uses them only as turn boundaries. The adapter reads just `session_id`, `prompt_id` and the event name, and never copies a content field.
+
+| Hook | Becomes |
+|---|---|
+| `SessionStart` / `SessionEnd` | the session starts / finishes (`run_id` = session) |
+| `UserPromptSubmit` / `Stop` | a turn starts / finishes successfully (`run_id` = `prompt_id`, which Claude's tool hooks and OTel share) |
+
+- **No `prompt_id`:** a turn hook without one is ignored. Falling back to the session would make a turn's `Stop` look like the whole session finishing.
+- **Not registered:** `PreToolUse` and `MessageDisplay`.
+- **`PreCompact`:** not mapped yet. It needs a new operation in the agent event schema, and older Gateways would reject that when syncing.
+
+**Existing installs:** when OpenWorkGraph starts with Claude Code Observe on, it adds any hook events its entries are missing. It keeps a backup, keeps your own hooks and env, and never installs hooks you have not turned on.
 
 The Claude OTel adapter recognizes these stable structural events:
 
@@ -96,9 +109,34 @@ The dedicated local endpoint is:
 POST /agent-ingest/v1/claude-otel
 ```
 
+**Diagnostics:** `GET /v1/agent-telemetry/diagnostics` (and the Connections row in the dashboard) reports per channel since OpenWorkGraph started:
+
+- requests received and when;
+- rejections by reason (`auth`, `invalid_payload`, `too_large`, `not_an_object`, `adapter_error`);
+- OTel records seen versus ignored;
+- events stored.
+
+It also shows which exporters and hook events are configured. So "no model calls" can be traced to one of:
+
+- Claude not exporting;
+- a rejected request;
+- records the adapter does not recognise.
+
+It holds counts, timestamps and reason codes only, never payload content.
+
 The integration uses Claude's logs exporter only. OWG v0.90 does **not** require Claude's beta detailed-trace exporter.
 
-### Hook failure behavior
+### Hook failure behavior and delayed delivery
+
+If a hook cannot reach OpenWorkGraph (not running, restarting, busy past the 0.75 s timeout, or a server error), the event may be written to a short local spool and delivered later. This only happens under a recording lease:
+
+- **Who grants it:** a running, recording, non-demo OpenWorkGraph issues the lease. It lasts 90 s and is renewed while recording.
+- **When it ends:** it is revoked immediately on Pause, Stop and exit.
+- **What the hook checks:** the hook also reads the capture state of the data folder that issued the lease, and spools only if it says "recording".
+- **What happens otherwise:** after Stop, or when OpenWorkGraph is not running, agent events are dropped, never collected for later.
+- **What doesn't qualify:** a rejection (4xx) is never spooled.
+- **On delivery:** spooled events go through the normal ingest path again, so Observe switches, deletions, retention and pause windows apply.
+- **Limits:** at most 2,000 files of 256 KB each, and anything older than 24 h is discarded. Files live under `data/auth/agent_spool`, which only your user can read.
 
 Hooks remain asynchronous and fail-open. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, or an adapter exception cannot block or approve Claude Code execution. `OWG_AGENT_ADAPTER_DEBUG=1` prints only a fixed diagnostic notice, never native exception/payload content.
 

@@ -10,6 +10,12 @@ from pathlib import Path
 
 from shared.capture_control import initialize_run, read_state
 
+from .instance_lock import EXIT_ALREADY_RUNNING
+
+# Another collector holds this data directory's lock (for example one left over
+# from an earlier launch). Check again now and then instead of every second.
+ALREADY_RUNNING_RETRY_SECONDS = 15.0
+
 _STOP = False
 
 
@@ -42,6 +48,7 @@ def run_supervisor(config_path: Path) -> int:
     last_state = ""
     restart_not_before = 0.0
     cooperative_stop_started = 0.0
+    reported_other_collector = False
 
     try:
         while not _STOP:
@@ -51,6 +58,12 @@ def run_supervisor(config_path: Path) -> int:
 
             if state == "recording":
                 cooperative_stop_started = 0.0
+                if worker is not None and worker.poll() == EXIT_ALREADY_RUNNING:
+                    if not reported_other_collector:
+                        print("OpenWorkGraph: another collector is already recording this data folder; not starting a second one.")
+                        reported_other_collector = True
+                    restart_not_before = max(restart_not_before, time.monotonic() + ALREADY_RUNNING_RETRY_SECONDS)
+                    worker = None
                 if worker is None or worker.poll() is not None:
                     now = time.monotonic()
                     if now >= restart_not_before:

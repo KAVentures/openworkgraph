@@ -20,6 +20,7 @@ from shared.capture_control import (
     set_state,
 )
 from shared.lifespan import extend_lifespan
+from .collector_status import sensor_state
 from . import main as main_module
 from .context_layers import candidate_tasks, factual_context_timeline
 from .main import CONFIG_PATH, ROOT
@@ -129,6 +130,9 @@ def _capture_status() -> dict[str, Any]:
         pass
     value = public_status(engaged_seconds=engaged)
     value["collector_alive"] = bool(main_module.COLLECTOR_STATUS)
+    # From the collector's own OS preflight: a sensor that is "on" but blind is
+    # reported as such, not as recording.
+    value.update(sensor_state(main_module.COLLECTOR_STATUS))
     value["browser_sensor_alive"] = bool(main_module.BROWSER_STATUS)
     value["demo"] = _demo_mode()
     return value

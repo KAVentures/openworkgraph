@@ -70,3 +70,63 @@ def active_window() -> ActiveWindow:
     if system == "Windows":
         return _windows_active_window()
     return _linux_active_window()
+
+
+def _macos_idle_seconds() -> float | None:
+    try:
+        import Quartz  # type: ignore
+
+        value = Quartz.CGEventSourceSecondsSinceLastEventType(
+            Quartz.kCGEventSourceStateCombinedSessionState, Quartz.kCGAnyInputEventType
+        )
+        return max(0.0, float(value))
+    except Exception:
+        return None
+
+
+def _windows_idle_seconds() -> float | None:
+    try:
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        now = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
+        return max(0.0, ((now - info.dwTime) & 0xFFFFFFFF) / 1000.0)
+    except Exception:
+        return None
+
+
+def system_idle_seconds() -> float | None:
+    """Seconds since the last keyboard/mouse input anywhere in the session.
+
+    Read from the OS input clock, so it needs no Input Monitoring permission and
+    never sees which keys were pressed. ``None`` when the platform cannot say
+    (Linux for now); callers must then not guess that the user is away.
+    """
+    system = _platform.system()
+    if system == "Darwin":
+        return _macos_idle_seconds()
+    if system == "Windows":
+        return _windows_idle_seconds()
+    return None
+
+
+def screen_locked() -> bool | None:
+    """True while the session is locked or switched away from the console."""
+    if _platform.system() != "Darwin":
+        return None
+    try:
+        import Quartz  # type: ignore
+
+        session = Quartz.CGSessionCopyCurrentDictionary()
+        if not session:
+            return None
+        if bool(session.get("CGSSessionScreenIsLocked", False)):
+            return True
+        on_console = session.get("kCGSSessionOnConsoleKey")
+        return False if on_console is None else not bool(on_console)
+    except Exception:
+        return None

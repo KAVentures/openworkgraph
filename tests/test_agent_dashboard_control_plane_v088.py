@@ -53,7 +53,7 @@ assert all(value is False for value in payload['privacy'].values())
 claude=payload['integrations']['claude_code']
 blob=__import__('json').dumps(claude['settings'])
 assert 'SessionStart' in blob and 'PostToolUse' in blob and 'SubagentStart' in blob
-assert 'UserPromptSubmit' not in blob and 'PreToolUse' not in blob
+assert 'UserPromptSubmit' in blob and 'Stop' in blob and 'PreToolUse' not in blob
 assert '"async": true' in blob
 
 codex=payload['integrations']['codex']['config']

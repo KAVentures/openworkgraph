@@ -45,13 +45,38 @@ def test_post_tool_use_keeps_structure_and_drops_native_content():
 
 def test_content_heavy_hooks_are_ignored_instead_of_guessed():
     for hook, extra in (
-        ("UserPromptSubmit", {"prompt": "top secret prompt"}),
         ("PreToolUse", {"tool_input": {"command": "secret"}, "tool_name": "Bash"}),
-        ("Stop", {"last_assistant_message": "secret answer"}),
         ("MessageDisplay", {"message": "secret UI content"}),
+        # Turn hooks without a prompt_id have no turn identity; never fall back
+        # to the session, or a turn's Stop would look like the session ending.
+        ("UserPromptSubmit", {"prompt": "top secret prompt"}),
+        ("Stop", {"last_assistant_message": "secret answer"}),
     ):
         payload = {"session_id": "s1", "hook_event_name": hook, **extra}
         assert claude_hook_to_agent_events(payload, observed_at="2026-09-25T00:00:00Z") == []
+
+
+def test_turn_hooks_bound_one_prompt_without_copying_content():
+    start = claude_hook_to_agent_events({
+        "session_id": "s1", "prompt_id": "p1", "hook_event_name": "UserPromptSubmit",
+        "prompt": "top secret prompt", "transcript_path": "/Users/x/secret.jsonl", "custom_instructions": "private",
+    }, observed_at="2026-09-25T00:00:00Z")
+    stop = claude_hook_to_agent_events({
+        "session_id": "s1", "prompt_id": "p1", "hook_event_name": "Stop",
+        "last_assistant_message": "secret answer", "stop_hook_active": False,
+    }, observed_at="2026-09-25T00:01:00Z")
+    tool = claude_hook_to_agent_events({
+        "session_id": "s1", "prompt_id": "p1", "hook_event_name": "PostToolUse", "tool_use_id": "t", "tool_name": "Read",
+    }, observed_at="2026-09-25T00:00:30Z")
+    session_end = claude_hook_to_agent_events({"session_id": "s1", "hook_event_name": "SessionEnd"}, observed_at="2026-09-25T00:02:00Z")
+    assert [(e["operation"], e["status"], e["run_id"]) for e in start + stop] == [
+        ("run_started", "running", "p1"), ("run_finished", "success", "p1"),
+    ]
+    # The turn groups with its tools; the session keeps its own boundary.
+    assert tool[0]["run_id"] == "p1" and session_end[0]["run_id"] == "s1"
+    serialized = json.dumps(start + stop)
+    for forbidden in ("top secret prompt", "secret answer", "secret.jsonl", "private"):
+        assert forbidden not in serialized
 
 
 def test_session_subagent_permission_and_failure_mappings_are_structural():
@@ -138,7 +163,7 @@ def test_settings_fragment_registers_only_safe_supported_hooks():
     fragment = claude_code_hook.settings_fragment("python")
     hooks = fragment["hooks"]
     assert set(hooks) == set(claude_code_hook.SUPPORTED_EVENTS)
-    assert "UserPromptSubmit" not in hooks
+    assert {"UserPromptSubmit", "Stop"} <= set(hooks)  # turn boundaries; content never read
     assert "PreToolUse" not in hooks
     handler = hooks["PostToolUse"][0]["hooks"][0]
     assert handler["command"] == claude_code_hook.hook_command("python")

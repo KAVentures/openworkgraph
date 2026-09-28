@@ -120,7 +120,11 @@
     }
     const state=String(s.state||'recording');
     if (state==='recording') {
-      label.textContent=`Recording · ${fmtDuration(s.run_elapsed_seconds)}`; dot.style.background='#d25a5a';
+      const names={accessibility:'Accessibility',input_monitoring:'Input Monitoring'};
+      const missing=(s.missing_permissions||[]).map(p=>names[p]||p);
+      label.textContent=`Recording · ${fmtDuration(s.run_elapsed_seconds)}`+(s.away?' · away':'')+(missing.length?` · macOS ${missing.join(' and ')} permission missing`:'');
+      label.title=missing.length?`OpenWorkGraph cannot see everything: allow it under System Settings → Privacy & Security → ${missing.join(' / ')}, then restart OpenWorkGraph.`:'';
+      dot.style.background='#d25a5a';
       buttons.innerHTML='<button class="secondary" id="pauseCapture">Pause</button><button class="secondary" id="stopCapture">Stop</button>';
       buttons.querySelector('#pauseCapture').onclick=()=>captureAction('pause');
       buttons.querySelector('#stopCapture').onclick=()=>captureAction('stop');
