@@ -38,16 +38,16 @@ def test_malformed_shell_quote_does_not_invent_later_commands():
     assert detail == {"commands": ["echo"], "git": [], "gh": [], "runs_tests": False}
 
 
-def test_test_invocation_has_explicit_conservative_status():
+def test_test_invocation_has_explicit_conservative_unknown_status():
     assert td.tool_call_detail(command="pytest -q", output="truncated output") == {
         "commands": ["pytest"],
         "test_status": "unknown",
     }
     passing = td.tool_call_detail(command="pytest -q", output="5 passed in 0.1s")
-    assert passing["test_status"] == "passing"
+    assert "test_status" not in passing
     assert passing["tests_passed"] == 5 and passing["tests_failed"] == 0
     failing = td.tool_call_detail(command="pytest -q", output="2 failed, 3 passed in 0.1s")
-    assert failing["test_status"] == "failing"
+    assert "test_status" not in failing
     assert failing["tests_passed"] == 3 and failing["tests_failed"] == 2
 
 
@@ -61,7 +61,7 @@ def test_latest_unknown_test_run_does_not_inherit_earlier_passing_result():
         {
             "operation": "tool_call",
             "tool": {"name": "Bash", "detail": {
-                "commands": ["pytest"], "test_status": "passing", "tests_passed": 5, "tests_failed": 0,
+                "commands": ["pytest"], "tests_passed": 5, "tests_failed": 0,
             }},
         },
         {
