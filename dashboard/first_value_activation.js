@@ -3,9 +3,12 @@
 
   const DISMISSED_KEY = 'owg_first_value_dismissed_v1';
   const VIEWED_KEY = 'owg_first_value_reconstruction_viewed_at';
-  const POLL_MS = 5000;
+  const POLL_MS = 15000;
+  const AGENT_POLL_MS = 30000;
   let latest = null;
   let busy = false;
+  let agentCache = {executions:[]};
+  let agentCacheAt = 0;
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const n = value => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -17,6 +20,9 @@
   function markDismissed(){
     try{localStorage.setItem(DISMISSED_KEY,'1');}catch(_){}
     document.querySelector('#firstValueCard')?.remove();
+  }
+  function milestone(name){
+    try{const key=`owg_first_value_${name}_at`;if(!localStorage.getItem(key))localStorage.setItem(key,new Date().toISOString());}catch(_){}
   }
   function markViewed(){
     try{if(!localStorage.getItem(VIEWED_KEY))localStorage.setItem(VIEWED_KEY,new Date().toISOString());}catch(_){}
@@ -174,12 +180,16 @@
     return card;
   }
 
-  function hideEmptyPlaceholders(summary){
+  function hideStaticTimelinePlaceholder(){
     const overview=document.querySelector('#panel-overview');if(!overview)return;
     for(const card of overview.querySelectorAll('.card')){
       const text=card.textContent||'';
       if(text.includes('Timeline lanes will activate in the stacked capture/timeline PR. Existing evidence collection is unchanged.'))card.style.display='none';
     }
+  }
+
+  function hideEmptyPlaceholders(summary){
+    hideStaticTimelinePlaceholder();
     const patternList=document.querySelector('#patternList');
     if(patternList){
       const card=patternList.closest('.card');
@@ -189,6 +199,10 @@
 
   function render(state,summary,agentPayload,aiPayload){
     hideEmptyPlaceholders(summary);
+    if(state.evidence_count>0)milestone('first_event');
+    if(state.surface_count>1)milestone('first_cross_surface');
+    if(state.agent_runs>0)milestone('first_agent_run');
+    if(state.ready)milestone('ready');
     const card=ensureCard();if(!card)return;
     card.querySelector('#firstValueProgress').innerHTML=`<span><strong>${state.evidence_count}</strong> observed events</span><span><strong>${state.surface_count}</strong> work ${state.surface_count===1?'surface':'surfaces'}</span><span><strong>${state.transitions}</strong> observed ${state.transitions===1?'transition':'transitions'}</span><span><strong>${state.agent_runs}</strong> agent ${state.agent_runs===1?'run':'runs'}</span>`;
     const status=card.querySelector('#firstValueStatus'),actions=card.querySelector('#firstValueActions');
@@ -231,27 +245,37 @@
     },0);
   }
 
-  async function refresh(){
-    if(busy)return;busy=true;
+  function shouldPoll(force){
+    if(dismissed())return false;
+    if(force)return true;
+    const overview=document.querySelector('#tab-overview');
+    return !document.hidden&&(!overview||overview.getAttribute('aria-selected')==='true');
+  }
+
+  async function refresh(force=false){
+    if(busy||!shouldPoll(force))return;busy=true;
     try{
+      const now=Date.now();
+      const agentPromise=(now-agentCacheAt>=AGENT_POLL_MS)
+        ? getJson('/v1/agent-execution-traces?limit=10&evidence_limit=3000&max_events_per_execution=20')
+        : Promise.resolve(agentCache);
       const [summaryResult,agentResult,aiResult]=await Promise.allSettled([
-        getJson('/v1/summary?scope=current&limit=500'),
-        getJson('/v1/agent-execution-traces?limit=10&evidence_limit=3000&max_events_per_execution=20'),
-        getJson('/v1/ai-access')
+        getJson('/v1/summary?scope=current&limit=500'),agentPromise,getJson('/v1/ai-access')
       ]);
       if(summaryResult.status!=='fulfilled')return;
-      const summary=summaryResult.value,agentPayload=agentResult.status==='fulfilled'?agentResult.value:{executions:[]},aiPayload=aiResult.status==='fulfilled'?aiResult.value:{};
+      if(agentResult.status==='fulfilled'){agentCache=agentResult.value;agentCacheAt=now;}
+      const summary=summaryResult.value,agentPayload=agentCache,aiPayload=aiResult.status==='fulfilled'?aiResult.value:{};
       const state=stateFrom(summary,agentPayload);latest={summary,agentPayload,aiPayload,state};render(state,summary,agentPayload,aiPayload);
     }finally{busy=false;}
   }
 
   function install(){
-    ensureStyle();refresh();
-    document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(refresh,0));
-    setInterval(()=>{if(!document.hidden)refresh();},POLL_MS);
+    ensureStyle();hideStaticTimelinePlaceholder();refresh(true);
+    document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(()=>refresh(true),0));
+    setInterval(()=>refresh(false),POLL_MS);
   }
 
-  window.refreshFirstValue=refresh;
-  window.firstValueReconstruction=()=>latest?openReconstruction(latest.summary,latest.agentPayload,latest.aiPayload,latest.state):refresh();
+  window.refreshFirstValue=()=>refresh(true);
+  window.firstValueReconstruction=()=>latest?openReconstruction(latest.summary,latest.agentPayload,latest.aiPayload,latest.state):refresh(true);
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
