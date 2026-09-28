@@ -22,9 +22,12 @@ CHANNELS = {
     "codex_otel": "Codex OpenTelemetry",
     "agent_events": "Other agent events (SDKs, adapters)",
     "otel_generic": "Generic OpenTelemetry",
+    "copilot_otel": "GitHub Copilot OpenTelemetry",
+    "gemini_otel": "Gemini CLI OpenTelemetry",
+    "cursor_hooks": "Cursor hooks",
     "spool": "Delayed delivery (agent spool)",
 }
-REJECTION_REASONS = ("auth", "invalid_payload", "too_large", "not_an_object", "adapter_error")
+REJECTION_REASONS = ("auth", "invalid_payload", "too_large", "not_an_object", "adapter_error", "protobuf_unsupported")
 
 _LOCK = threading.Lock()
 _STARTED_AT = datetime.now(timezone.utc).isoformat()

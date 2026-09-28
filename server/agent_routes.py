@@ -8,16 +8,18 @@ from pydantic import BaseModel
 
 from shared.agent_evidence import AgentEvidenceError
 from . import agent_telemetry_diagnostics as diagnostics
-from .agent_auth import agent_bearer_matches
+from .agent_auth import agent_bearer_matches, agent_otlp_path_token_matches
 from .agent_ingest import (
     MAX_AGENT_BATCH_BYTES,
     ingest_agent_payloads,
     ingest_claude_otel_payload,
     ingest_codex_otel_payload,
+    ingest_gemini_otel_payload,
+    count_otlp_records,
     ingest_otel_payload,
 )
 from .agent_read_auth import agent_read_authorized
-from .connections import is_enabled
+from .connections import FRAMEWORK_CLIENTS, is_enabled
 from .agent_workflows import agent_workflow_view
 from .agent_execution_trace_routes import router as agent_execution_trace_router
 from .context_execution_routes import router as context_execution_router
@@ -48,12 +50,9 @@ class OTelDefaults(BaseModel):
     workflow_id: str = ""
 
 
-_SWITCHABLE_FRAMEWORKS = {"claude-code": "claude_code", "codex": "codex"}
-
-
 def _observation_enabled_for(event: Any) -> bool:
     framework = str(event.get("framework") or "") if isinstance(event, dict) else ""
-    client = _SWITCHABLE_FRAMEWORKS.get(framework)
+    client = FRAMEWORK_CLIENTS.get(framework)
     return is_enabled(client, "observe") if client else True
 
 
@@ -93,7 +92,7 @@ async def _read_bounded_json(request: Request) -> Any:
 def _events_channel(payload: Any) -> str:
     events = payload.get("events") if isinstance(payload, dict) else None
     first = events[0] if isinstance(events, list) and events and isinstance(events[0], dict) else {}
-    return "claude_code_hooks" if str(first.get("framework") or "") == "claude-code" else "agent_events"
+    return {"claude-code": "claude_code_hooks", "cursor": "cursor_hooks"}.get(str(first.get("framework") or ""), "agent_events")
 
 
 async def _authorized_json(request: Request, channel: str | None) -> Any:
@@ -119,7 +118,7 @@ async def ingest_agent_events(request: Request) -> dict[str, int | str]:
     # The native client names its channel so an auth failure is attributable
     # before the body is read; otherwise classify by the events themselves.
     hint = str(request.headers.get("x-owg-channel") or "")
-    channel = hint if hint in {"claude_code_hooks", "agent_events"} else ""
+    channel = hint if hint in {"claude_code_hooks", "cursor_hooks", "agent_events"} else ""
     payload = await _authorized_json(request, channel or None)
     if not channel:
         channel = _events_channel(payload)
@@ -198,6 +197,90 @@ async def ingest_claude_otel(request: Request) -> Response:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     diagnostics.processed(channel, result)
     return Response(status_code=202)
+
+
+# Clients that can be pointed at an OTLP endpoint from their settings file but
+# cannot send an Authorization header from there. The path carries a separate
+# write-only token instead (server.agent_auth.ensure_agent_otlp_path_token).
+OTLP_SOURCES: dict[str, dict[str, str]] = {
+    "copilot": {"client": "vscode", "framework": "github-copilot", "agent_name": "GitHub Copilot",
+                "provider": "github", "channel": "copilot_otel"},
+    "gemini": {"client": "gemini_cli", "framework": "gemini-cli", "agent_name": "Gemini CLI",
+               "provider": "google", "channel": "gemini_otel"},
+}
+MAX_OTLP_DECOMPRESSED_BYTES = MAX_AGENT_BATCH_BYTES
+
+
+async def _read_otlp_json(request: Request, channel: str) -> Any:
+    content_type = str(request.headers.get("content-type") or "").lower()
+    if "protobuf" in content_type:
+        diagnostics.rejected(channel, "protobuf_unsupported")
+        raise HTTPException(status_code=415, detail="OpenWorkGraph accepts OTLP/HTTP JSON only; use the http/json protocol")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_AGENT_BATCH_BYTES:
+            diagnostics.rejected(channel, "too_large")
+            raise HTTPException(status_code=413, detail=f"agent request exceeds {MAX_AGENT_BATCH_BYTES} bytes")
+    raw = bytes(body)
+    if "gzip" in str(request.headers.get("content-encoding") or "").lower():
+        import zlib
+
+        try:
+            inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            raw = inflater.decompress(raw, MAX_OTLP_DECOMPRESSED_BYTES + 1)
+        except zlib.error as exc:
+            diagnostics.rejected(channel, "invalid_payload")
+            raise HTTPException(status_code=400, detail="invalid gzip body") from exc
+        if len(raw) > MAX_OTLP_DECOMPRESSED_BYTES or inflater.unconsumed_tail:
+            diagnostics.rejected(channel, "too_large")
+            raise HTTPException(status_code=413, detail="decompressed agent request is too large")
+        # A decodable prefix is not a valid gzip request. Reject truncated streams
+        # and concatenated/trailing members rather than accepting partial JSON.
+        if not inflater.eof or inflater.unused_data:
+            diagnostics.rejected(channel, "invalid_payload")
+            raise HTTPException(status_code=400, detail="invalid gzip body")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        diagnostics.rejected(channel, "invalid_payload")
+        raise HTTPException(status_code=400, detail="invalid OTLP JSON payload") from exc
+    if not isinstance(payload, dict):
+        diagnostics.rejected(channel, "not_an_object")
+        raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
+    return payload
+
+
+@router.post("/agent-ingest/otlp/{source}/{token}/v1/{signal}")
+async def ingest_path_token_otlp(source: str, token: str, signal: str, request: Request) -> dict[str, Any]:
+    spec = OTLP_SOURCES.get(source)
+    if spec is None or signal not in {"traces", "logs", "metrics"}:
+        raise HTTPException(status_code=404, detail="unknown OTLP source")
+    channel = spec["channel"]
+    diagnostics.received(channel)
+    if not agent_otlp_path_token_matches(token):
+        diagnostics.rejected(channel, "auth")
+        raise HTTPException(status_code=401, detail="agent ingest authentication required")
+    payload = await _read_otlp_json(request, channel)
+    if not is_enabled(spec["client"], "observe"):
+        diagnostics.observation_off(channel)
+        return {}
+    defaults = {"framework": spec["framework"], "agent_name": spec["agent_name"], "provider": spec["provider"]}
+    try:
+        if signal == "traces":
+            result = ingest_otel_payload(payload, defaults=defaults)
+        elif signal == "logs" and source == "gemini":
+            result = ingest_gemini_otel_payload(payload, defaults=defaults)
+        else:
+            # Metrics, and Copilot's logs (which repeat its spans), are accepted so
+            # the exporter stays healthy, and counted, but nothing is stored.
+            count = count_otlp_records(payload)
+            result = {"records_seen": count, "records_ignored": count, "projected": 0, "inserted": 0}
+    except (AgentEvidenceError, ValueError) as exc:
+        diagnostics.rejected(channel, "adapter_error")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    diagnostics.processed(channel, result)
+    return {}  # the OTLP/HTTP JSON success response
 
 
 @router.get("/v1/agent-telemetry/diagnostics")

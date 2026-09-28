@@ -8,6 +8,16 @@
     {key:'lovable', name:'Lovable', hosts:['lovable.dev']},
     {key:'gemini', name:'Gemini', hosts:['gemini.google.com']},
   ];
+  // Structural signals come first and work in any UI language. Busy/send signals
+  // are scoped to the conversation/composer surface when structure is available,
+  // so an unrelated spinner or feedback form elsewhere on the page cannot start
+  // an agent run. English labels remain only a compatibility fallback.
+  const BUSY_SELECTOR='[aria-busy="true"],[data-is-streaming="true"],button[data-testid*="stop" i]';
+  const SEND_TESTID=/(^|[-_])(send|submit)([-_]|$)/i;
+  const STOP_TESTID=/(^|[-_])(stop|cancel)([-_]|$)/i;
+  const COMPOSER_TESTID=/(composer|prompt|chat[-_]?input|message[-_]?input)/i;
+  const COMPOSER_CONTAINER_SELECTOR='[data-testid*="composer" i],[data-testid*="prompt" i],[data-testid*="chat-input" i],[data-testid*="message-input" i]';
+  const COMPOSER_INPUT_SELECTOR='textarea,[contenteditable="true"],[role="textbox"]';
   const STOP_RE=/^(stop|cancel)( generating| response| task| run)?$/i;
   const SEND_RE=/^(send|submit|ask|run|build|generate)( prompt| message| request)?$/i;
   const APPROVE_RE=/^(allow|approve|confirm|continue|accept)$/i;
@@ -20,23 +30,83 @@
     if(!el)return '';
     return String(el.getAttribute?.('aria-label')||el.getAttribute?.('title')||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,80);
   }
-  function buttonLike(el){return !!el?.closest?.('button,[role="button"],input[type="submit"]');}
+  function controlOf(el){return el?.closest?.('button,[role="button"],input[type="submit"]')||null;}
+  function buttonLike(el){return !!controlOf(el);}
+  function testId(el){return String(el?.getAttribute?.('data-testid')||'');}
+  function usable(el){
+    if(!el)return false;
+    return el.hidden!==true&&String(el.getAttribute?.('aria-hidden')||'').toLowerCase()!=='true'&&el.disabled!==true;
+  }
+  function isComposer(el){
+    if(!el||typeof el.closest!=='function')return false;
+    const tag=String(el.tagName||'').toLowerCase();
+    return tag==='textarea'||el.isContentEditable===true||String(el.getAttribute?.('contenteditable')||'')==='true'
+      ||String(el.getAttribute?.('role')||'')==='textbox';
+  }
+  function formHasComposer(form){
+    if(!form||typeof form.querySelectorAll!=='function')return false;
+    return [...form.querySelectorAll(COMPOSER_INPUT_SELECTOR)].some(isComposer);
+  }
+  function mainHasComposer(main){return !!main&&typeof main.querySelectorAll==='function'&&[...main.querySelectorAll(COMPOSER_INPUT_SELECTOR)].some(isComposer);}
+  function composerSurfaceOf(el){
+    if(!el||typeof el.closest!=='function')return null;
+    const marked=el.closest(COMPOSER_CONTAINER_SELECTOR);
+    if(marked)return marked;
+    const form=el.closest('form');
+    if(form&&formHasComposer(form))return form;
+    const main=el.closest('main,[role="main"]');
+    if(main&&mainHasComposer(main))return main;
+    return null;
+  }
+  function structurallyComposer(el){return isComposer(el)&&!!composerSurfaceOf(el);}
+  function surfaceRoots(doc){
+    if(!doc||typeof doc.querySelectorAll!=='function')return [];
+    const roots=[];
+    for(const composer of doc.querySelectorAll(COMPOSER_INPUT_SELECTOR)){
+      if(!isComposer(composer))continue;
+      const root=composerSurfaceOf(composer);
+      if(root&&!roots.includes(root))roots.push(root);
+    }
+    return roots;
+  }
+  function controlInComposerSurface(control){return !!composerSurfaceOf(control);}
   function hasBusyState(doc){
     if(!doc)return false;
-    if(doc.querySelector('[aria-busy="true"]'))return true;
-    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>STOP_RE.test(accessibleName(el)));
+    // Never treat a page-global aria-busy region as an agent run. Prefer the
+    // nearest structural conversation surface around a real composer.
+    for(const root of surfaceRoots(doc)){
+      if(typeof root.querySelectorAll==='function'&&[...root.querySelectorAll(BUSY_SELECTOR)].some(usable))return true;
+    }
+    // Compatibility fallback: a literal English stop control was the old signal.
+    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&STOP_RE.test(accessibleName(el)));
+  }
+  // Enter is considered a send only in a structurally identified message
+  // composer. This avoids treating unrelated textareas/editors on agent sites as
+  // new runs.
+  function isComposerSend(ev){
+    return ev?.key==='Enter'&&!ev.shiftKey&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey&&!ev.isComposing&&structurallyComposer(ev.target);
   }
   function hasVisibleErrorState(doc){return !!doc?.querySelector?.('[role="alert"][aria-live], [role="alert"]');}
   function hasApprovalState(doc){
     if(!doc)return false;
     for(const root of doc.querySelectorAll('dialog,[role="dialog"]')){
-      if([...root.querySelectorAll('button,[role="button"]')].some(el=>APPROVE_RE.test(accessibleName(el))))return true;
+      if([...root.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&APPROVE_RE.test(accessibleName(el))))return true;
     }
     return false;
   }
-  function isSendControl(el){const control=buttonLike(el);return !!control&&SEND_RE.test(accessibleName(control));}
-  function isStopControl(el){const control=buttonLike(el);return !!control&&STOP_RE.test(accessibleName(control));}
-  function isApprovalControl(el){const control=buttonLike(el);return !!control&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
+  function isSendControl(el){
+    const control=controlOf(el);if(!control||!usable(control))return false;
+    if(SEND_TESTID.test(testId(control))&&controlInComposerSurface(control))return true;
+    const type=String(control.getAttribute?.('type')||'').toLowerCase();
+    if(type==='submit'&&control.form&&formHasComposer(control.form))return true;
+    return SEND_RE.test(accessibleName(control));
+  }
+  function isStopControl(el){
+    const control=controlOf(el);if(!control||!usable(control))return false;
+    if(STOP_TESTID.test(testId(control))&&controlInComposerSurface(control))return true;
+    return STOP_RE.test(accessibleName(control));
+  }
+  function isApprovalControl(el){const control=controlOf(el);return !!control&&usable(control)&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
   function safeRunId(){
     try{return 'web-'+crypto.randomUUID().replaceAll('-','');}catch(_){return 'web-'+Date.now().toString(36)+Math.random().toString(36).slice(2,12);}
   }
@@ -84,14 +154,15 @@
       if(runId&&isStopControl(ev.target)){finish('agent_run_cancelled','stop_control');return;}
       if(runId&&isApprovalControl(ev.target)){sendLifecycle(provider,'agent_approval_received',runId,'approval_control');approvalSent=true;}
     },true);
-    doc.addEventListener('submit',()=>{begin('form_submit');setTimeout(sample,0);},true);
+    doc.addEventListener('submit',ev=>{if(formHasComposer(ev.target)){begin('form_submit');setTimeout(sample,0);}},true);
+    doc.addEventListener('keydown',ev=>{if(isComposerSend(ev)){begin('composer_enter');setTimeout(sample,0);}},true);
     const observer=new MutationObserver(()=>sample());
-    const root=doc.documentElement||doc;observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy','aria-live','role','open','disabled']});
+    const root=doc.documentElement||doc;observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy','aria-live','role','open','disabled','hidden','aria-hidden','data-is-streaming','data-testid']});
     setInterval(()=>{if(!doc.hidden)sample();},1500);
     sample();
   }
 
-  globalThis.__OWG_AGENT_SURFACE_ADAPTERS_FOR_TESTS__={PROVIDERS,providerForHost,accessibleName,hasBusyState,hasVisibleErrorState,hasApprovalState,isSendControl,isStopControl,isApprovalControl,structuralPayload};
+  globalThis.__OWG_AGENT_SURFACE_ADAPTERS_FOR_TESTS__={PROVIDERS,providerForHost,accessibleName,hasBusyState,hasVisibleErrorState,hasApprovalState,isSendControl,isStopControl,isApprovalControl,isComposerSend,structuralPayload};
   if(typeof document!=='undefined'&&typeof MutationObserver!=='undefined'){
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>start(),{once:true});else start();
   }

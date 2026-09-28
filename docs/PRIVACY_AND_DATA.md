@@ -57,7 +57,7 @@ Current signals include:
 - global clicks and throttled scrolls
 - safe native control identity/label metadata through macOS Accessibility or Windows UI Automation, best effort
 - browser semantic events such as interactive clicks, editor/input focus, form submit and control change
-- occurrence of copy/paste
+- occurrence of copy/paste: copy, cut and paste shortcuts, plus clipboard writes without a shortcut (menu, right-click, drag, apps). Writes are noticed from the OS clipboard change counter, which never exposes contents. A write is never recorded as a paste, and nothing is attributed while you are away.
 - derived task/process/effort structures
 
 ## What is deliberately not captured

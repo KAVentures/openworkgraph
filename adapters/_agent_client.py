@@ -67,7 +67,7 @@ def post_agent_events(events: list[dict], *, timeout: float = 0.75, spool: bool 
         return {"status": "ignored", "received": 0}
     try:
         framework = str(events[0].get("framework") or "") if isinstance(events[0], dict) else ""
-        channel = "claude_code_hooks" if framework == "claude-code" else "agent_events"
+        channel = {"claude-code": "claude_code_hooks", "cursor": "cursor_hooks"}.get(framework, "agent_events")
         return post_json("/agent-ingest/v1/events", {"events": events}, timeout=timeout, channel=channel)
     except HTTPError as exc:
         if exc.code < 500 or not spool:

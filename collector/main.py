@@ -8,7 +8,7 @@ import time
 import uuid
 import queue
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -21,6 +21,7 @@ from .interactions import (
     ActivityTracker,
     RawInteraction,
     RawClipboardAction,
+    clipboard_change_token,
 )
 from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
@@ -42,6 +43,18 @@ STOP = False
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _occurred_at(occurred_mono: float) -> str:
+    """Wall time of an input that happened at ``occurred_mono``.
+
+    Interactions are persisted by a worker thread; stamping them when processed
+    would shift them by however long the queue took.
+    """
+    if not occurred_mono:
+        return utcnow()
+    lag = max(0.0, time.monotonic() - float(occurred_mono))
+    return (datetime.now(timezone.utc) - timedelta(seconds=lag)).isoformat()
 
 
 def load_config(path: Path) -> dict:
@@ -80,6 +93,9 @@ def load_config(path: Path) -> dict:
         "keyboard_activity_enabled": True,
         "clipboard_behavior_enabled": True,
         "clipboard_link_max_seconds": 7200,
+        # Notice clipboard writes that no copy/cut shortcut explains (menu,
+        # right-click, drag, apps) from the OS change counter; contents never read.
+        "clipboard_write_detection_enabled": True,
         "activity_active_window_seconds": 5,
         "engaged_grace_seconds": 60,
     }
@@ -412,7 +428,7 @@ def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> di
 
     return {
         "event_id": event_id,
-        "observed_at": utcnow(),
+        "observed_at": _occurred_at(raw.occurred_mono),
         **_identity_fields(cfg),
         "session_id": session_id,
         "app": state["app"],
@@ -441,7 +457,7 @@ def _clipboard_event(
     metadata: dict = {
         "source": "desktop",
         "action": raw.kind,
-        "evidence_channel": "keyboard_shortcut",
+        "evidence_channel": "os_clipboard_sequence" if raw.kind == "write" else "keyboard_shortcut",
         "context_observed_at_interaction": bool(raw.context),
         "clipboard_contents_captured": False,
         "clipboard_source_observed": bool(linked_copy_event_id) if raw.kind == "paste" else True,
@@ -452,6 +468,11 @@ def _clipboard_event(
         },
         "excluded": state["excluded"],
     }
+    if raw.kind == "write":
+        metadata["interpretation"] = (
+            "Something was written to the clipboard without a copy/cut shortcut (menu, right-click, "
+            "drag, an app or a script). Only that fact is recorded; contents are never read. Not a paste."
+        )
     if raw.clipboard_change_token is not None:
         metadata["clipboard_change_token"] = int(raw.clipboard_change_token)
     if transfer_id:
@@ -463,7 +484,7 @@ def _clipboard_event(
 
     return {
         "event_id": event_id,
-        "observed_at": utcnow(),
+        "observed_at": _occurred_at(raw.occurred_mono),
         **_identity_fields(cfg),
         "session_id": session_id,
         "app": state["app"],
@@ -496,7 +517,7 @@ def _interaction_worker(
                 linked_copy_event_id: str | None = None
                 link_age_seconds: float | None = None
 
-                if raw.kind in {"copy", "cut"}:
+                if raw.kind in {"copy", "cut", "write"}:
                     transfer_id = str(uuid.uuid4())
                     last_clipboard_source = {
                         "event_id": event_id,
@@ -623,7 +644,13 @@ def _run_locked(config_path: Path) -> None:
         except queue.Full:
             capture_health["interaction_queue_dropped"] += 1
 
+    # A copy/cut shortcut changes the clipboard counter shortly afterwards; that
+    # change is the shortcut's, not a separate write.
+    clipboard_shortcut_until = [0.0]
+
     def enqueue_clipboard(raw: RawClipboardAction) -> None:
+        if raw.kind in {"copy", "cut"}:
+            clipboard_shortcut_until[0] = raw.occurred_mono + max(3.0, 2 * float(cfg.get("poll_seconds", 2)))
         raw.context = snapshot_context()
         try:
             interaction_q.put(raw, timeout=0.05)
@@ -650,6 +677,9 @@ def _run_locked(config_path: Path) -> None:
             capture_clipboard_shortcuts=cfg.get("clipboard_behavior_enabled", True),
         )
         keyboard_started = keyboard_sensor.start()
+
+    watch_clipboard = bool(cfg.get("clipboard_behavior_enabled", True) and cfg.get("clipboard_write_detection_enabled", True))
+    last_clipboard_token = clipboard_change_token() if watch_clipboard else None
 
     # What each sensor needs on macOS. A started listener is not proof: macOS
     # withholds events from an untrusted process while the thread still runs.
@@ -848,6 +878,18 @@ def _run_locked(config_path: Path) -> None:
                 pending = (pending_doc, pending_count, pending_wall, pending_mono, pending_state)
                 open_span(current_state, current_key, now_wall, now_mono)
                 pending_doc, pending_count, pending_wall, pending_mono, pending_state = pending
+
+        if watch_clipboard:
+            token = clipboard_change_token()
+            if token is not None and last_clipboard_token is not None and token != last_clipboard_token:
+                if away:
+                    pass  # nobody at the computer: an app or sync wrote it, not the person
+                elif now_mono > clipboard_shortcut_until[0]:
+                    enqueue_clipboard(RawClipboardAction(kind="write", occurred_mono=now_mono, clipboard_change_token=token))
+                else:
+                    clipboard_shortcut_until[0] = 0.0
+            if token is not None:
+                last_clipboard_token = token
 
         if now_mono - last_permission_check >= 60:
             permissions = sensor_permissions()

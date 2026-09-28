@@ -111,11 +111,11 @@ def test_claude_code_both_kinds_and_observe_only_where_supported(home):
     result = connections.change("claude_code", "on")
     assert result["mcp"]["on"] and result["observe"]["on"]
     assert (home / ".claude" / "settings.json").exists()
-    assert _status("cursor")["observe"]["supported"] is False
+    assert _status("windsurf")["observe"]["supported"] is False
     with pytest.raises(ValueError):
-        connections.change("cursor", "on", ("observe",))
+        connections.change("windsurf", "on", ("observe",))
     # "both" on a context-only client just does context
-    assert connections.change("cursor", "on")["mcp"]["on"] is True
+    assert connections.change("windsurf", "on")["mcp"]["on"] is True
 
 
 def test_invalid_json_is_never_touched(home):

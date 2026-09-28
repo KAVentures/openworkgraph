@@ -312,6 +312,33 @@ def _claude_observe() -> Target:
     )
 
 
+def _preset_target(path_fn: Callable[[], Path], name: str, applies: str) -> Target:
+    from server import agent_observe_presets as presets
+
+    status = getattr(presets, f"{name}_status")
+    connect = getattr(presets, f"{name}_connect")
+    disconnect = getattr(presets, f"{name}_disconnect")
+    return Target(
+        path=path_fn,
+        installed=lambda: bool(status(path_fn()).get("configured")),
+        install=lambda: connect(path_fn()),
+        remove=lambda: disconnect(path_fn()),
+        applies=applies,
+    )
+
+
+def _copilot_observe() -> Target:
+    return _preset_target(lambda: _app_support("Code", "User", "settings.json"), "copilot", "after VS Code reloads its window")
+
+
+def _gemini_observe() -> Target:
+    return _preset_target(lambda: _home() / ".gemini" / "settings.json", "gemini", "in new Gemini CLI sessions")
+
+
+def _cursor_observe() -> Target:
+    return _preset_target(lambda: _home() / ".cursor" / "hooks.json", "cursor", "after Cursor restarts")
+
+
 def _codex_observe() -> Target:
     def install() -> dict[str, Any]:
         from adapters._agent_client import _base_url
@@ -365,11 +392,11 @@ CLIENTS: dict[str, Client] = {
         Client("cursor", "Cursor", lambda: _home() / ".cursor",
                _json_target(lambda: _home() / ".cursor" / "mcp.json", "mcpServers", "cursor", "plain",
                             "after Cursor reloads its MCP servers"),
-               None, "Cursor does not expose an execution trace to observe."),
+               _cursor_observe),
         Client("vscode", "VS Code + GitHub Copilot", lambda: _app_support("Code", "User"),
                _json_target(lambda: _app_support("Code", "User", "mcp.json"), "servers", "vscode", "vscode",
                             "after VS Code reloads its MCP servers"),
-               None, "VS Code does not expose an execution trace to observe."),
+               _copilot_observe),
         Client("windsurf", "Windsurf", lambda: _home() / ".codeium" / "windsurf",
                _json_target(lambda: _home() / ".codeium" / "windsurf" / "mcp_config.json", "mcpServers",
                             "windsurf", "plain", "after Windsurf refreshes its MCP servers"),
@@ -377,7 +404,7 @@ CLIENTS: dict[str, Client] = {
         Client("gemini_cli", "Gemini CLI", lambda: _home() / ".gemini",
                _json_target(lambda: _home() / ".gemini" / "settings.json", "mcpServers", "gemini_cli", "plain",
                             "in new Gemini CLI sessions"),
-               None, "Gemini CLI observation is not supported yet."),
+               _gemini_observe),
         Client("copilot_cli", "GitHub Copilot CLI", _copilot_home,
                _json_target(lambda: _copilot_home() / "mcp-config.json", "mcpServers", "copilot_cli",
                             "copilot_cli", "in new Copilot CLI sessions"),
@@ -463,7 +490,13 @@ def is_enabled(client_id: str | None, kind: str) -> bool:
 
 
 # Agent frameworks whose observation is controlled by a client switch.
-FRAMEWORK_CLIENTS = {"claude-code": "claude_code", "codex": "codex"}
+FRAMEWORK_CLIENTS = {
+    "claude-code": "claude_code",
+    "codex": "codex",
+    "github-copilot": "vscode",
+    "gemini-cli": "gemini_cli",
+    "cursor": "cursor",
+}
 
 
 def observation_active(client_id: str) -> bool:

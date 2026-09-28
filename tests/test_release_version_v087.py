@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.98.0"
+EXPECTED_VERSION = "0.99.0"
 
 
 def test_release_version_sources_are_aligned():
