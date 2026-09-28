@@ -7,7 +7,9 @@ writing, keep every other setting, never overwrite a setting the user chose for
 themselves, and refuse (changing nothing) when a file is not plain JSON.
 
 * Copilot: VS Code user settings enable Copilot's OpenTelemetry export to
-  OpenWorkGraph with content capture explicitly off.
+  OpenWorkGraph with content capture explicitly off. Copilot environment
+  variables take precedence over user settings, so conflicting overrides that
+  are visible to OpenWorkGraph are detected before configuration is claimed.
 * Gemini CLI: ~/.gemini/settings.json ``telemetry`` block exports OTLP over
   HTTP to OpenWorkGraph with ``logPrompts`` explicitly false (Gemini's default is
   true, which would put prompts and tool arguments into its log events).
@@ -19,6 +21,7 @@ so their endpoint path carries a separate write-only token.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -87,18 +90,63 @@ def copilot_settings() -> dict[str, Any]:
     }
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _false_env(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _copilot_environment_conflict(desired: dict[str, Any]) -> str:
+    """Return a visible Copilot OTel override that would beat OWG's user settings.
+
+    VS Code/Copilot documents these environment variables as higher precedence
+    than user settings. We can only inspect the environment OpenWorkGraph itself
+    inherited; managed enterprise settings or a differently launched VS Code can
+    still differ, which is why actual received telemetry remains the final health
+    signal in Connections.
+    """
+    ours = str(desired["github.copilot.chat.otel.otlpEndpoint"]).rstrip("/")
+    endpoint = str(os.getenv("COPILOT_OTEL_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "").strip().rstrip("/")
+    if endpoint and endpoint != ours:
+        return (
+            "Copilot OTel has an environment endpoint override that takes precedence over VS Code settings; "
+            "OpenWorkGraph will not claim Observe is configured until that override is removed or points to OpenWorkGraph."
+        )
+    if _false_env("COPILOT_OTEL_ENABLED"):
+        return "COPILOT_OTEL_ENABLED disables Copilot telemetry and takes precedence over the VS Code Observe setting."
+    if _truthy_env("COPILOT_OTEL_CAPTURE_CONTENT"):
+        return (
+            "COPILOT_OTEL_CAPTURE_CONTENT is enabled in the environment. OpenWorkGraph refuses to configure Copilot "
+            "while an environment override would make the client transmit prompt/response content."
+        )
+    protocol = str(os.getenv("COPILOT_OTEL_PROTOCOL") or os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") or "").strip().lower()
+    if protocol == "grpc":
+        return "Copilot OTel is forced to gRPC by an environment override; OpenWorkGraph's local Copilot endpoint is OTLP/HTTP."
+    return ""
+
+
 def copilot_status(path: Path) -> dict[str, Any]:
     try:
         data = _load(path, "VS Code settings.json")
     except ConfigConflict as exc:
         return {"configured": False, "path": str(path), "error": str(exc)}
     desired = copilot_settings()
-    return {"configured": all(data.get(k) == v for k, v in desired.items()), "path": str(path)}
+    configured = all(data.get(k) == v for k, v in desired.items())
+    if configured:
+        conflict = _copilot_environment_conflict(desired)
+        if conflict:
+            raise ConfigConflict(conflict)
+    return {"configured": configured, "path": str(path)}
 
 
 def copilot_connect(path: Path) -> dict[str, Any]:
     data = _load(path, "VS Code settings.json")
     desired = copilot_settings()
+    conflict = _copilot_environment_conflict(desired)
+    if conflict:
+        raise ConfigConflict(conflict)
     ours = str(desired["github.copilot.chat.otel.otlpEndpoint"])
     endpoint = data.get("github.copilot.chat.otel.otlpEndpoint")
     # Preserve a user's collector even when Copilot telemetry is currently
@@ -289,7 +337,7 @@ def manual_setup_material() -> dict[str, Any]:
             "method": "copilot_otel_http_json",
             "one_click": True,
             "settings": copilot_settings(),
-            "instructions": "Use the Observe switch on the VS Code + GitHub Copilot row, or merge these keys into VS Code's user settings.json and reload the window. Content capture stays off.",
+            "instructions": "Use the Observe switch on the VS Code + GitHub Copilot row, or merge these keys into VS Code's user settings.json and reload the window. Content capture stays off. Environment or enterprise-managed OTel settings can override user settings; Connections reports whether telemetry actually arrives.",
             "content_logging_enabled": False,
         },
         "gemini_cli": {
