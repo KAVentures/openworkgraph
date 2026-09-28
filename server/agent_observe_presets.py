@@ -34,6 +34,24 @@ def otlp_base_url(source: str) -> str:
     return f"{_base_url()}/agent-ingest/otlp/{source}/{ensure_agent_otlp_path_token()}"
 
 
+def _owned_otlp_endpoint(source: str, value: Any) -> bool:
+    """Whether an endpoint is an OpenWorkGraph endpoint for this source.
+
+    Ownership deliberately ignores the final token segment. The write-only path
+    token can rotate (for example after an auth reset); an older OWG endpoint must
+    remain repairable/removable instead of being mistaken for a foreign collector.
+    The local/base URL and source still have to match exactly.
+    """
+    from adapters._agent_client import _base_url
+
+    endpoint = str(value or "").strip().rstrip("/")
+    prefix = f"{_base_url().rstrip('/')}/agent-ingest/otlp/{source}/"
+    if not endpoint.startswith(prefix):
+        return False
+    token = endpoint[len(prefix):]
+    return bool(token) and "/" not in token
+
+
 def _load(path: Path, what: str) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -83,9 +101,13 @@ def copilot_connect(path: Path) -> dict[str, Any]:
     desired = copilot_settings()
     ours = str(desired["github.copilot.chat.otel.otlpEndpoint"])
     endpoint = data.get("github.copilot.chat.otel.otlpEndpoint")
-    if endpoint not in (None, "", ours) and data.get("github.copilot.chat.otel.enabled") is True:
+    # Preserve a user's collector even when Copilot telemetry is currently
+    # disabled. Disabled is not consent for OWG to replace a configured endpoint.
+    # A stale OWG endpoint, however, is ours and is safely repaired to the current
+    # write-only token below.
+    if endpoint not in (None, "", ours) and not _owned_otlp_endpoint("copilot", endpoint):
         raise ConfigConflict(
-            "VS Code already sends Copilot telemetry to another endpoint; OpenWorkGraph will not redirect it. "
+            "VS Code already points Copilot telemetry at another endpoint; OpenWorkGraph will not redirect it. "
             "Use manual setup or an OTLP collector that forwards to OpenWorkGraph."
         )
     if data.get("github.copilot.chat.otel.captureContent") is True:
@@ -100,7 +122,16 @@ def copilot_connect(path: Path) -> dict[str, Any]:
 def copilot_disconnect(path: Path) -> dict[str, Any]:
     data = _load(path, "VS Code settings.json")
     desired = copilot_settings()
-    removed = [k for k, v in desired.items() if k in data and data[k] == v]
+    endpoint_key = "github.copilot.chat.otel.otlpEndpoint"
+    removed = []
+    for key, value in desired.items():
+        if key not in data:
+            continue
+        if key == endpoint_key:
+            if _owned_otlp_endpoint("copilot", data.get(key)):
+                removed.append(key)
+        elif data.get(key) == value:
+            removed.append(key)
     for key in removed:
         del data[key]
     backup = _write(path, data) if removed else None
@@ -135,10 +166,15 @@ def gemini_connect(path: Path) -> dict[str, Any]:
     if existing is not None and not isinstance(existing, dict):
         raise ConfigConflict(f"'telemetry' in {path} has an unexpected shape; use manual setup")
     existing = dict(existing or {})
-    # Only take over a telemetry block that is ours, empty, or switched off.
+    # Only take over a telemetry block that is ours, empty, or switched off. An
+    # old OWG endpoint remains ours after path-token rotation and is repairable.
     foreign = sorted(
         k for k, v in existing.items()
-        if desired.get(k) != v and not (k == "enabled" and v is False)
+        if not (
+            desired.get(k) == v
+            or (k == "enabled" and v is False)
+            or (k == "otlpEndpoint" and _owned_otlp_endpoint("gemini", v))
+        )
     )
     if foreign:
         raise ConfigConflict(
@@ -156,7 +192,15 @@ def gemini_disconnect(path: Path) -> dict[str, Any]:
     if telemetry is None:
         return {"configured": False, "path": str(path), "removed": 0, "backup": None}
     desired = gemini_telemetry()
-    removed = [k for k, v in desired.items() if telemetry.get(k) == v]
+    removed = []
+    for key, value in desired.items():
+        if key not in telemetry:
+            continue
+        if key == "otlpEndpoint":
+            if _owned_otlp_endpoint("gemini", telemetry.get(key)):
+                removed.append(key)
+        elif telemetry.get(key) == value:
+            removed.append(key)
     for key in removed:
         del telemetry[key]
     if not telemetry:
