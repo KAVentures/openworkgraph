@@ -235,6 +235,11 @@ async def _read_otlp_json(request: Request, channel: str) -> Any:
         if len(raw) > MAX_OTLP_DECOMPRESSED_BYTES or inflater.unconsumed_tail:
             diagnostics.rejected(channel, "too_large")
             raise HTTPException(status_code=413, detail="decompressed agent request is too large")
+        # A decodable prefix is not a valid gzip request. Reject truncated streams
+        # and concatenated/trailing members rather than accepting partial JSON.
+        if not inflater.eof or inflater.unused_data:
+            diagnostics.rejected(channel, "invalid_payload")
+            raise HTTPException(status_code=400, detail="invalid gzip body")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception as exc:
