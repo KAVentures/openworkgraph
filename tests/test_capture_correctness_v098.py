@@ -327,3 +327,12 @@ def test_untrusted_process_blocks_mouse_and_keyboard_too(tmp_path, monkeypatch, 
     assert "Screen interaction capture: BLOCKED (macOS accessibility permission" in out
     assert "Keyboard activity: BLOCKED (macOS accessibility permission" in out
     assert heartbeats[0]["keyboard_sensor"] is False
+
+
+def test_document_change_seen_at_a_checkpoint_never_emits_an_empty_span(tmp_path, monkeypatch):
+    # The new title first appears in the same poll as the 120 s checkpoint.
+    events, _ = drive(tmp_path, monkeypatch, lambda t: ("Word", "A.docx" if t < 120 else "B.docx", 0.0, False), end=200)
+    focus = spans(events, "focus_span")
+    assert all(e["duration_seconds"] > 0 for e in focus), [(seconds(e), e["duration_seconds"]) for e in focus]
+    assert [(seconds(e), e["window_title"]) for e in focus] == [(0, "A.docx"), (120, "B.docx")]
+    assert_no_overlap_and_no_hole(events, 200)

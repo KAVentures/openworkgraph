@@ -832,7 +832,11 @@ def _run_locked(config_path: Path) -> None:
                     boundary_mono = max(pending_mono, current_started_mono)
                     boundary_wall = pending_wall if pending_mono >= current_started_mono else current_started_wall
                     first_state = pending_state
-                    emit_focus(boundary_mono, "document_change")
+                    if boundary_mono > current_started_mono:
+                        emit_focus(boundary_mono, "document_change")
+                    # else: the new title appeared exactly when the current span
+                    # began (a checkpoint), so relabel it rather than emit an
+                    # empty span for the old document.
                     diagnostics["document_boundary_count"] += 1
                     open_span(first_state, key, boundary_wall, boundary_mono)
             else:
