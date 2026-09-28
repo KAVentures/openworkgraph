@@ -172,6 +172,7 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "tool_category_counts",
             # What the run did: commands, git/gh, how tests ended, files, lines, tokens.
             "work_summary",
+            "delivery_outcome",
             "parent_execution_id",
             "child_execution_ids",
             "usage_totals",

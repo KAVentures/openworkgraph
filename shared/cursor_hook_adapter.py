@@ -157,6 +157,15 @@ def cursor_hook_to_agent_events(payload: dict[str, Any], *, observed_at: str | N
         detail = _tool_detail(tool, payload)
         if detail:
             projected["tool_detail"] = detail
+        try:
+            from .tool_detail import pr_refs
+
+            tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+            watch = pr_refs(command=tool_input.get("command"), tool_name=str(payload.get("tool_name") or ""), output=payload.get("tool_output"))
+        except Exception:
+            watch = []
+        if watch:
+            projected["pr_watch"] = watch
         return [projected]
     if hook == "subagentStop":
         kind = _label(payload.get("subagent_type"), default="subagent", limit=80)

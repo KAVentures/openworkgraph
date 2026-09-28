@@ -181,6 +181,19 @@ def _tool_detail(tool_name: str, attrs: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _pr_watch(tool_name: str, attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull requests a shell call opened (local-only outcome tracking)."""
+    from .tool_detail import pr_refs
+
+    raw_args = attrs.get("arguments") if isinstance(attrs.get("arguments"), str) else ""
+    try:
+        parsed = json.loads(raw_args) if raw_args.strip().startswith("{") else {}
+        command = parsed.get("command") if parsed.get("command") is not None else parsed.get("cmd")
+        return pr_refs(command=command, tool_name=tool_name, output=attrs.get("output"))
+    except Exception:
+        return []
+
+
 def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> str:
     if event_name == "codex.conversation_starts":
         discriminator = "conversation-start"
@@ -403,6 +416,9 @@ def codex_otel_to_agent_events(
             detail = _tool_detail(tool_name, attrs)
             if projected is not None and detail:
                 projected["tool_detail"] = detail
+            watch = _pr_watch(tool_name, attrs)
+            if projected is not None and watch:
+                projected["pr_watch"] = watch
 
         elif event_name == "codex.tool_decision":
             source = _text(attrs.get("source"), 80).lower()

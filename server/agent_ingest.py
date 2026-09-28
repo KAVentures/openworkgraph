@@ -32,7 +32,19 @@ def _bounded_json_size(value: Any, *, maximum: int = MAX_AGENT_BATCH_BYTES) -> N
 
 
 def _validated_events(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [agent_event_to_evidence(validate_agent_ingress_event(item)) for item in payloads]
+    events: list[dict[str, Any]] = []
+    for item in payloads:
+        # Pull requests a tool call opened travel beside the event, never in it:
+        # they go only to the local outcome watch list (server/outcome_tracker.py).
+        watch = None
+        if isinstance(item, dict) and "pr_watch" in item:
+            item = dict(item)
+            watch = item.pop("pr_watch")
+        event = agent_event_to_evidence(validate_agent_ingress_event(item))
+        if watch:
+            event["_pr_watch"] = watch
+        events.append(event)
+    return events
 
 
 def _closed_agent_sessions(events: list[dict[str, Any]]) -> list[str]:
@@ -56,10 +68,15 @@ def _insert_recordable(events: list[dict[str, Any]]) -> int:
     # Agent evidence obeys deletion, retention, Pause/Stop and crash-recovery
     # boundaries immediately before persistence. For ephemeral agent history, an
     # observed run_finished boundary closes and purges the corresponding session.
+    watches = {str(e.get("event_id")): e.pop("_pr_watch") for e in events if "_pr_watch" in e}
     recordable, _suppressed = filter_recordable(events)
     if not recordable:
         return 0
     inserted = insert_events(recordable)
+    if watches:
+        from . import outcome_tracker
+
+        outcome_tracker.register([(str(e.get("event_id")), watches[str(e.get("event_id"))]) for e in recordable if str(e.get("event_id")) in watches])
     if retention_for_kind("agent").get("mode") == "ephemeral":
         closed = _closed_agent_sessions(recordable)
         if closed:
