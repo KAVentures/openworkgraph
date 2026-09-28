@@ -87,6 +87,9 @@ def _default(*, has_existing_evidence: bool) -> dict[str, Any]:
         "agent_retention": _retention(initial),
         "history_generation": 1,
         "session_tombstones": [],
+        # New installs see this choice during onboarding. Existing policy files
+        # that predate run memory are migrated separately in _normalize so an
+        # explicit old "ephemeral" choice is never silently widened.
         "run_memory": _run_memory(True, RUN_MEMORY_DEFAULT_DAYS),
         "ai_history_access": {
             "mode": "off",
@@ -126,8 +129,22 @@ def _normalize(value: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             result[key] = _retention("ephemeral")
     result["history_generation"] = max(1, int(result.get("history_generation") or 1))
-    memory = result.get("run_memory") if isinstance(result.get("run_memory"), dict) else {}
-    result["run_memory"] = _run_memory(memory.get("enabled", True), memory.get("days", RUN_MEMORY_DEFAULT_DAYS))
+
+    raw_memory = result.get("run_memory")
+    if isinstance(raw_memory, dict):
+        result["run_memory"] = _run_memory(raw_memory.get("enabled", True), raw_memory.get("days", RUN_MEMORY_DEFAULT_DAYS))
+    else:
+        # Upgrade from a policy created before run memory existed. Respect an
+        # existing "don't keep after session" choice: if both human and agent
+        # history were explicitly ephemeral, derived run memory starts OFF.
+        # Users who already kept some history are not made more private/less
+        # functional by the upgrade, so memory can follow the disclosed default.
+        kept_history = any(
+            str((result.get(key) or {}).get("mode") or "ephemeral") != "ephemeral"
+            for key in ("human_retention", "agent_retention")
+        )
+        result["run_memory"] = _run_memory(kept_history, RUN_MEMORY_DEFAULT_DAYS)
+
     tombstones = result.get("session_tombstones") if isinstance(result.get("session_tombstones"), list) else []
     safe_tombstones: list[dict[str, str]] = []
     for item in tombstones[-_MAX_SESSION_TOMBSTONES:]:
