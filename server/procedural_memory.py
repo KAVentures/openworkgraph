@@ -330,6 +330,8 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "authoritative": False,
             "needs_review": True,
             "_approval_points": [],
+            "_run_material": f"human|{task.get('task_id') or session_id}",
+            "_session_ids": [session_id] if session_id else [],
         })
 
     agent_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -383,7 +385,19 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "authoritative": False,
             "needs_review": True,
             "_approval_points": _approval_points(events),
+            "_run_material": f"agent|{actor}|{native_run}",
+            "_session_ids": sorted({str(e.get("session_id") or "") for e in events if e.get("session_id")}),
         })
+
+    # Runs whose raw evidence retention already removed, kept as content-free
+    # run memory (see server/run_memory.py). A run still present in raw evidence
+    # is always derived from the evidence itself.
+    memory = getattr(raw_events, "memory_runs", None)
+    if memory:
+        from .run_memory import run_key
+
+        live = {run_key(item["_run_material"]) for item in output if item.get("_run_material")}
+        output.extend(dict(item) for item in memory if item.get("_run_key") not in live)
 
     output.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
     return output
@@ -394,7 +408,7 @@ def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
         "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
         "duration_seconds", "outcome_status", "outcome_basis", "steps", "observation_level",
         "evidence_refs", "evidence_window", "derived", "authoritative", "needs_review",
-    )}
+    )} | ({"source": execution["source"]} if execution.get("source") else {})
 
 
 def _sequence_similarity(query: list[str], candidate: list[str]) -> float:

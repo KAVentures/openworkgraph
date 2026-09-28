@@ -18,7 +18,7 @@ from shared.history_policy import (
     read_policy,
     retention_for_kind,
 )
-from . import analytics
+from . import analytics, run_memory
 from .agent_execution_traces import agent_execution_traces
 from .context_layers import factual_context_timeline
 from .db import DATA_DIR, connect
@@ -127,6 +127,7 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
     # Tombstone first so late native/browser/outbox delivery cannot recreate a
     # session while cleanup is in progress or after a crash between cleanup steps.
     add_session_tombstones(selected, sorted(ids), reason=reason)
+    user_deleted = reason.startswith("user_")
 
     with connect() as conn:
         rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
@@ -138,9 +139,21 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
             if ("agent" if _is_agent(item) else "human") != selected:
                 continue
             chosen.append(raw)
+        chosen_events = [_event(row) for row in chosen]
         event_ids = [str(row["event_id"]) for row in chosen]
         local_ids = [int(row["id"]) for row in chosen]
         screenshots = [str(row["screenshot_path"]) for row in chosen if row["screenshot_path"]]
+    # Retention keeps a content-free record of each run (run memory) before the
+    # raw evidence goes; a person deleting the session deletes that memory too.
+    memory_kept = memory_deleted = 0
+    try:
+        if user_deleted:
+            memory_deleted = run_memory.forget_sessions(ids)
+        elif chosen_events:
+            memory_kept = run_memory.remember(chosen_events)
+    except Exception:
+        memory_kept = 0
+    with connect() as conn:
         if event_ids:
             _delete_ids(conn, "context_events", event_ids)
             _delete_ids(conn, "normalized_events", event_ids)
@@ -163,6 +176,8 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
         "gateway_local_rows_marked_never_share": skipped_gateway,
         "screenshots_removed": screenshots_removed,
         "late_delivery_suppressed": True,
+        "run_memory_kept": memory_kept,
+        "run_memory_deleted": memory_deleted,
     }
 
 
@@ -198,7 +213,11 @@ def cleanup_expired_history(*, startup: bool = False) -> dict[str, Any]:
                     delete_ids.append(sid)
         if delete_ids:
             results.append(delete_sessions(kind, delete_ids, reason="retention_expired"))
-    return {"startup": startup, "cleanups": results}
+    try:
+        memory_pruned = run_memory.prune(now=now)
+    except Exception:
+        memory_pruned = 0
+    return {"startup": startup, "cleanups": results, "run_memory_pruned": memory_pruned}
 
 
 def cleanup_ephemeral_session(kind: str, session_id: str) -> dict[str, Any]:
@@ -360,6 +379,10 @@ def delete_history_session(history_session_id: str) -> dict[str, Any]:
     payload = agent_execution_traces(rows, execution_id=raw, limit=1, max_events_per_execution=1000)
     executions = list(payload.get("executions") or [])
     if not executions:
+        # Raw history already gone: the run may survive only as run memory.
+        forgotten = run_memory.forget_execution(raw)
+        if forgotten:
+            return {"kind": "agent", "sessions_deleted": 0, "events_deleted": 0, "local_ids": [], "run_memory_deleted": forgotten}
         raise ValueError("history session not found")
     event_ids = {str(event.get("event_id") or "") for event in executions[0].get("events") or [] if event.get("event_id")}
     native_sessions = sorted({str(row.get("session_id") or "") for row in rows if str(row.get("event_id") or "") in event_ids and row.get("session_id")})

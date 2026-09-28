@@ -64,6 +64,18 @@ def _retention(mode: str, days: int | None = None) -> dict[str, Any]:
     return {"mode": selected, "days": None}
 
 
+RUN_MEMORY_DEFAULT_DAYS = 90
+
+
+def _run_memory(enabled: Any, days: Any) -> dict[str, Any]:
+    """Content-free run memory: one summary per run, kept after raw history is gone."""
+    try:
+        amount = int(days)
+    except Exception:
+        amount = RUN_MEMORY_DEFAULT_DAYS
+    return {"enabled": bool(enabled), "days": max(1, min(amount, 3650))}
+
+
 def _default(*, has_existing_evidence: bool) -> dict[str, Any]:
     # Existing installations must never lose history merely by upgrading. New
     # installations start ephemeral until the person makes an informed choice.
@@ -75,6 +87,7 @@ def _default(*, has_existing_evidence: bool) -> dict[str, Any]:
         "agent_retention": _retention(initial),
         "history_generation": 1,
         "session_tombstones": [],
+        "run_memory": _run_memory(True, RUN_MEMORY_DEFAULT_DAYS),
         "ai_history_access": {
             "mode": "off",
             "since": None,
@@ -113,6 +126,8 @@ def _normalize(value: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             result[key] = _retention("ephemeral")
     result["history_generation"] = max(1, int(result.get("history_generation") or 1))
+    memory = result.get("run_memory") if isinstance(result.get("run_memory"), dict) else {}
+    result["run_memory"] = _run_memory(memory.get("enabled", True), memory.get("days", RUN_MEMORY_DEFAULT_DAYS))
     tombstones = result.get("session_tombstones") if isinstance(result.get("session_tombstones"), list) else []
     safe_tombstones: list[dict[str, str]] = []
     for item in tombstones[-_MAX_SESSION_TOMBSTONES:]:
@@ -203,6 +218,21 @@ def update_retention(
         value["human_retention"] = _retention(human_mode, human_days)
         value["agent_retention"] = _retention(agent_mode, agent_days)
         value["onboarding_complete"] = bool(onboarding_complete)
+        value["updated_at"] = _now()
+        return _write_unlocked(value)
+
+
+def run_memory_policy(*, policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    return dict((policy or read_policy())["run_memory"])
+
+
+def update_run_memory(*, enabled: bool, days: int) -> dict[str, Any]:
+    amount = int(days)
+    if amount < 1 or amount > 3650:
+        raise ValueError("run memory days must be between 1 and 3650")
+    with _LOCK:
+        value = read_policy()
+        value["run_memory"] = _run_memory(bool(enabled), amount)
         value["updated_at"] = _now()
         return _write_unlocked(value)
 
@@ -348,6 +378,8 @@ def active_ai_history_access(*, now: datetime | None = None) -> dict[str, Any]:
 
 
 __all__ = [
+    "run_memory_policy",
+    "update_run_memory",
     "active_ai_history_access",
     "add_session_tombstones",
     "bump_history_generation",

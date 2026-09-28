@@ -8,9 +8,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from shared.evidence import rich_evidence_row
-from shared.history_policy import active_ai_history_access, read_policy, set_ai_history_access, update_retention
+from shared.history_policy import active_ai_history_access, read_policy, set_ai_history_access, update_retention, update_run_memory
 from shared.lifespan import extend_lifespan
 from .db import connect
+from . import run_memory
 from .history_retention import cleanup_expired_history, delete_history_session, initialize_history_retention, list_history
 from .main import ROOT
 from .privacy_pipeline import redact_for_display
@@ -25,6 +26,12 @@ class RetentionChoice(BaseModel):
     onboarding_complete: bool = True
 
 class HistoryDeleteRequest(BaseModel): history_session_id: str
+class RunMemoryChoice(BaseModel):
+    enabled: bool
+    days: int = 90
+class RunMemoryForget(BaseModel):
+    execution_id: str | None = None
+    all: bool = False
 class AIHistoryAccessRequest(BaseModel):
     mode: str
     since: str | None = None
@@ -40,7 +47,7 @@ extend_lifespan(app, startup=_history_startup, shutdown=_history_shutdown)
 @app.get("/v1/history-policy")
 def get_history_policy() -> dict[str, Any]:
     value=read_policy()
-    return {"onboarding_complete":bool(value.get("onboarding_complete")),"human_retention":value.get("human_retention"),"agent_retention":value.get("agent_retention"),"history_generation":int(value.get("history_generation") or 1),"upgrade_preserved_existing_history":bool(value.get("upgrade_preserved_existing_history")),"tradeoff":{"ephemeral":"Live context works, but completed sessions are deleted and cannot support later month/week comparisons.","saved":"Saved history stays on this computer until its retention period expires or you delete it.","ai_access_separate":True}}
+    return {"onboarding_complete":bool(value.get("onboarding_complete")),"human_retention":value.get("human_retention"),"agent_retention":value.get("agent_retention"),"history_generation":int(value.get("history_generation") or 1),"upgrade_preserved_existing_history":bool(value.get("upgrade_preserved_existing_history")),"run_memory":value.get("run_memory"),"tradeoff":{"ephemeral":"Live context works, but completed sessions are deleted and cannot support later month/week comparisons.","run_memory":"Unless turned off, a content-free summary of each run (steps, outcome, commands, test results, counts, tokens; no titles, paths or content) is kept on this computer for the chosen number of days, even after its session is deleted by retention. Deleting a session or time range yourself deletes its summary too.","saved":"Saved history stays on this computer until its retention period expires or you delete it.","ai_access_separate":True}}
 
 @app.put("/v1/history-policy")
 def set_history_policy(request: RetentionChoice) -> dict[str, Any]:
@@ -49,6 +56,25 @@ def set_history_policy(request: RetentionChoice) -> dict[str, Any]:
         cleanup=cleanup_expired_history(startup=False)
     except (TypeError,ValueError) as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     return {"status":"saved","human_retention":value.get("human_retention"),"agent_retention":value.get("agent_retention"),"onboarding_complete":bool(value.get("onboarding_complete")),"cleanup":cleanup}
+
+@app.get("/v1/run-memory")
+def get_run_memory(limit:int=200)->dict[str,Any]:
+    return run_memory.summary(limit=max(1,min(int(limit),1000)))
+
+@app.put("/v1/run-memory/policy")
+def set_run_memory_policy(request:RunMemoryChoice)->dict[str,Any]:
+    try: value=update_run_memory(enabled=request.enabled,days=request.days)
+    except (TypeError,ValueError) as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
+    # Turning memory off deletes it; a shorter period deletes what is now expired.
+    return {"status":"saved","run_memory":value.get("run_memory"),"pruned":run_memory.prune()}
+
+@app.post("/v1/run-memory/forget")
+def forget_run_memory(request:RunMemoryForget)->dict[str,Any]:
+    if request.all: return {"status":"deleted","run_memory_deleted":run_memory.forget_all()}
+    if not request.execution_id: raise HTTPException(status_code=400,detail="execution_id or all is required")
+    deleted=run_memory.forget_execution(request.execution_id)
+    if not deleted: raise HTTPException(status_code=404,detail="run not found in run memory")
+    return {"status":"deleted","run_memory_deleted":deleted}
 
 @app.get("/v1/history")
 def get_history(since:str|None=None,until:str|None=None,limit:int=200)->dict[str,Any]:

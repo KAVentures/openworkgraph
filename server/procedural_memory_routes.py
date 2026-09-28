@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .local_auth import bearer_matches
 from .procedural_context_pack import build_context_pack
+from .run_memory import with_memory
 from .procedural_feedback import readable_feedback
 from .procedural_memory import (
     approval_patterns,
@@ -28,7 +29,9 @@ def _require_api_read_bearer(request: Request) -> None:
 
 def _raw(limit: int, since: str | None) -> list[dict[str, Any]]:
     try:
-        return load_recent_evidence(limit=limit, since=since)
+        # Include content-free run memory for runs whose raw evidence retention
+        # already removed (server/run_memory.py).
+        return with_memory(load_recent_evidence(limit=limit, since=since), since=since)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="invalid procedural-memory query") from exc
 
