@@ -1,19 +1,24 @@
-# OpenWorkGraph (unreleased, planned v0.106): playbooks
+# OpenWorkGraph v0.107 stack slice: playbooks
 
-Builds on v0.105. What OpenWorkGraph learns about a kind of work can now travel between people, devices and agents, without the work itself.
+This unreleased slice makes structural workflow knowledge portable between people, devices and agents without carrying the work itself.
 
 ## Playbooks
 - **Export:** History → Playbooks → Export turns one repeated workflow (at least 2 runs, from raw history or run memory) into a small JSON file. It holds:
-  - the typical readable steps;
-  - the commands and git/gh operations used;
-  - how tests ended;
-  - pull request outcomes;
-  - how often the person reworked the result, and the time to the next prompt;
-  - the typical files, lines and tokens.
-- **What it never holds:** titles, paths, prompts, tool content, device-keyed file or workspace hashes, execution IDs or evidence references. Its name is the only free text, and it must be short and plain and must not look like an instruction.
-- **Import:** another person imports the file through one strict gate. Unknown keys are dropped, and commands and git operations must be on the allowlists. The gate runs again on every read. Re-importing the same playbook keeps one entry.
-- **Agents:** they read imported playbooks through the new MCP tool `get_playbooks`, now part of the default compact tool set and the MCPB manifest. With `include_my_workflows=true` they also see the person's own repeated workflows, which needs "All saved history" AI access. Imported playbooks need only normal AI access.
-- **Run memory** now also keeps each run's readable steps and family, so playbooks work with "Don't keep after session".
+  - canonical readable structural steps;
+  - allowlisted commands and git/gh operations;
+  - test and pull-request outcomes;
+  - how often the person reworked the immediately preceding agent turn, and time to the next prompt;
+  - typical files, lines and tokens.
+- **What it never holds:** titles, paths, prompts, tool content, device-keyed file/workspace refs, execution IDs or evidence references. Its name is the only free text and must be short, plain and not instruction-like.
+- **Import is an untrusted agent-visible boundary:** another person's file goes through one strict gate on import and again on every read.
+  - `typical_steps` must match the actual OpenWorkGraph structural grammar (`model_call`, approvals/errors, or canonical `tool:<category>:<safe-label>[:failure]`). A safe character set alone is not accepted, so strings such as `ignore_previous_instructions` or `run_rm_rf` are dropped.
+  - Device-local opaque prefixes (`f:`, `w:`, `event:`, `execution:`, `run:`, `s:`) cannot survive portable step validation.
+  - Family keys must be actual generated `agent:workflow:<hex>` or `agent:structure:<hex>` values; framework labels are restricted to known structural runtimes.
+  - Commands/git/gh operations are allowlisted; numbers/rates are bounded; unknown keys are dropped; total size is capped at 32 KB.
+- **Agents:** imported playbooks are available through compact-MCP `get_playbooks`. `include_my_workflows=true` separately requires "All saved history" AI access. The legacy 24-tool server remains frozen.
+- **Run memory** keeps readable structural steps and family so playbooks can work after raw ephemeral history is purged.
 
 ## API
 - `GET /v1/playbooks/local`, `GET /v1/playbooks/export?family_key=&name=`, `POST /v1/playbooks/import`, `GET /v1/playbooks/imported`, `DELETE /v1/playbooks/imported/{id}`.
+
+This slice does not publish a separate v0.106 release; the completed stack publishes as v0.107.0.
