@@ -385,6 +385,9 @@ def agent_execution_traces(
     groups = [events for events in _agent_groups(raw_events) if events]
     links = _parent_child_links(groups)
     materials = [_run_material(events) for events in groups]
+    from .human_agent_join import human_context
+
+    human = human_context(groups, raw_events)
     try:
         from .outcome_tracker import delivery_outcomes
 
@@ -401,6 +404,8 @@ def agent_execution_traces(
         candidate["child_execution_ids"] = list(link.get("children") or [])
         if materials[index] in outcomes:
             candidate["delivery_outcome"] = outcomes[materials[index]]
+        if index in human:
+            candidate["human_context"] = human[index]
         if family and candidate.get("observed_family_key") != family:
             continue
         if execution and candidate.get("execution_id") != execution:

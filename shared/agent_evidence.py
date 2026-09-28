@@ -281,6 +281,25 @@ def _shadow_enforcement(payload: dict[str, Any], *, operation: str) -> dict[str,
     }
 
 
+def _between_turns(raw: Any) -> dict[str, Any]:
+    """Counts of files changed between an agent's turns (see shared/workspace_rework.py)."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("head_moved"), bool):
+        return {}
+    out: dict[str, Any] = {"head_moved": raw["head_moved"]}
+    for key in ("files_changed", "agent_files_changed"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100_000:
+            out[key] = value
+    if isinstance(raw.get("incomplete"), bool):
+        out["incomplete"] = raw["incomplete"]
+    gap = raw.get("gap_seconds")
+    if isinstance(gap, (int, float)) and not isinstance(gap, bool) and 0 <= gap <= 30 * 86400:
+        out["gap_seconds"] = round(float(gap), 1)
+    if out.get("agent_files_changed", 0) > out.get("files_changed", 0):
+        out.pop("agent_files_changed")
+    return out
+
+
 def _assert_no_content_fields(value: Any, *, path: str = "event") -> None:
     """Fail closed if an adapter tries to send content-bearing fields.
 
@@ -389,6 +408,11 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
         if detail:
             metadata["tool"]["detail"] = detail
     from .tool_detail import valid_workspace_ref
+
+    if operation == "run_started":
+        between = _between_turns(payload.get("between_turns"))
+        if between:
+            metadata["between_turns"] = between
 
     workspace = valid_workspace_ref(payload.get("workspace_ref"))
     if workspace:

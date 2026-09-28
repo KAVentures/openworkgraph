@@ -123,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(payload, dict):
             return 0
         events = claude_hook_to_agent_events(payload)
+        try:
+            # Files changed between turns (content-free counts on the next turn's start).
+            from shared.workspace_rework import process_claude_hook
+
+            process_claude_hook(payload, events)
+        except Exception:
+            pass
         if events:
             post_agent_events(events)
     except Exception:

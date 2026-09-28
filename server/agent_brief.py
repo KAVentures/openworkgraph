@@ -169,6 +169,15 @@ def build_brief(framework: str, *, workspace_ref: str = "", now: datetime | None
         ci_failing = sum(1 for d in delivered if d.get("ci") == "failing")
         lines.append(f"- Pull requests opened: {prs}; merged {merged}, closed without merge {closed}; CI failing on {ci_failing}.")
 
+    afters = [((r.get("human_context") or {}).get("after") or {}) for r in runs]
+    compared = [a["between_turns"] for a in afters if isinstance(a.get("between_turns"), dict)
+                and a["between_turns"].get("head_moved") is False and "files_changed" in a["between_turns"]]
+    if compared:
+        reworked = sum(1 for b in compared if int(b.get("agent_files_changed") or 0) > 0)
+        gaps = [int(a.get("gap_seconds") or 0) for a in afters if a.get("gap_seconds")]
+        gap = f"; median time to the next prompt: {max(1, round(statistics.median(gaps) / 60))} min" if gaps else ""
+        lines.append(f"- After a turn, the person changed files the agent had just edited in {reworked} of {len(compared)} turn(s){gap}.")
+
     commands: Counter[str] = Counter()
     for s in summaries:
         for name, count in (s.get("commands") or {}).items():
