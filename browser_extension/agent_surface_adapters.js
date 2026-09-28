@@ -8,13 +8,16 @@
     {key:'lovable', name:'Lovable', hosts:['lovable.dev']},
     {key:'gemini', name:'Gemini', hosts:['gemini.google.com']},
   ];
-  // Structural signals come first and work in any UI language: aria-busy,
-  // streaming markers, stable data-testid tokens and submit semantics. English
-  // labels remain only a fallback. No prompt/response text is read.
+  // Structural signals come first and work in any UI language. Busy/send signals
+  // are scoped to the conversation/composer surface when structure is available,
+  // so an unrelated spinner or feedback form elsewhere on the page cannot start
+  // an agent run. English labels remain only a compatibility fallback.
   const BUSY_SELECTOR='[aria-busy="true"],[data-is-streaming="true"],button[data-testid*="stop" i]';
   const SEND_TESTID=/(^|[-_])(send|submit)([-_]|$)/i;
   const STOP_TESTID=/(^|[-_])(stop|cancel)([-_]|$)/i;
   const COMPOSER_TESTID=/(composer|prompt|chat[-_]?input|message[-_]?input)/i;
+  const COMPOSER_CONTAINER_SELECTOR='[data-testid*="composer" i],[data-testid*="prompt" i],[data-testid*="chat-input" i],[data-testid*="message-input" i]';
+  const COMPOSER_INPUT_SELECTOR='textarea,[contenteditable="true"],[role="textbox"]';
   const STOP_RE=/^(stop|cancel)( generating| response| task| run)?$/i;
   const SEND_RE=/^(send|submit|ask|run|build|generate)( prompt| message| request)?$/i;
   const APPROVE_RE=/^(allow|approve|confirm|continue|accept)$/i;
@@ -34,11 +37,6 @@
     if(!el)return false;
     return el.hidden!==true&&String(el.getAttribute?.('aria-hidden')||'').toLowerCase()!=='true'&&el.disabled!==true;
   }
-  function hasBusyState(doc){
-    if(!doc)return false;
-    if([...doc.querySelectorAll(BUSY_SELECTOR)].some(usable))return true;
-    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&STOP_RE.test(accessibleName(el)));
-  }
   function isComposer(el){
     if(!el||typeof el.closest!=='function')return false;
     const tag=String(el.tagName||'').toLowerCase();
@@ -47,19 +45,44 @@
   }
   function formHasComposer(form){
     if(!form||typeof form.querySelectorAll!=='function')return false;
-    return [...form.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')].some(isComposer);
+    return [...form.querySelectorAll(COMPOSER_INPUT_SELECTOR)].some(isComposer);
   }
-  function structurallyComposer(el){
-    if(!isComposer(el))return false;
-    const form=el.closest?.('form');
-    if(form&&formHasComposer(form))return true;
-    const marked=el.closest?.('[data-testid]');
-    return !!marked&&COMPOSER_TESTID.test(testId(marked));
+  function mainHasComposer(main){return !!main&&typeof main.querySelectorAll==='function'&&[...main.querySelectorAll(COMPOSER_INPUT_SELECTOR)].some(isComposer);}
+  function composerSurfaceOf(el){
+    if(!el||typeof el.closest!=='function')return null;
+    const marked=el.closest(COMPOSER_CONTAINER_SELECTOR);
+    if(marked)return marked;
+    const form=el.closest('form');
+    if(form&&formHasComposer(form))return form;
+    const main=el.closest('main,[role="main"]');
+    if(main&&mainHasComposer(main))return main;
+    return null;
+  }
+  function structurallyComposer(el){return isComposer(el)&&!!composerSurfaceOf(el);}
+  function surfaceRoots(doc){
+    if(!doc||typeof doc.querySelectorAll!=='function')return [];
+    const roots=[];
+    for(const composer of doc.querySelectorAll(COMPOSER_INPUT_SELECTOR)){
+      if(!isComposer(composer))continue;
+      const root=composerSurfaceOf(composer);
+      if(root&&!roots.includes(root))roots.push(root);
+    }
+    return roots;
+  }
+  function controlInComposerSurface(control){return !!composerSurfaceOf(control);}
+  function hasBusyState(doc){
+    if(!doc)return false;
+    // Never treat a page-global aria-busy region as an agent run. Prefer the
+    // nearest structural conversation surface around a real composer.
+    for(const root of surfaceRoots(doc)){
+      if(typeof root.querySelectorAll==='function'&&[...root.querySelectorAll(BUSY_SELECTOR)].some(usable))return true;
+    }
+    // Compatibility fallback: a literal English stop control was the old signal.
+    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&STOP_RE.test(accessibleName(el)));
   }
   // Enter is considered a send only in a structurally identified message
   // composer. This avoids treating unrelated textareas/editors on agent sites as
-  // new runs. Busy-state detection remains the fallback when a site has no such
-  // structural marker.
+  // new runs.
   function isComposerSend(ev){
     return ev?.key==='Enter'&&!ev.shiftKey&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey&&!ev.isComposing&&structurallyComposer(ev.target);
   }
@@ -73,14 +96,14 @@
   }
   function isSendControl(el){
     const control=controlOf(el);if(!control||!usable(control))return false;
-    if(SEND_TESTID.test(testId(control)))return true;
+    if(SEND_TESTID.test(testId(control))&&controlInComposerSurface(control))return true;
     const type=String(control.getAttribute?.('type')||'').toLowerCase();
     if(type==='submit'&&control.form&&formHasComposer(control.form))return true;
     return SEND_RE.test(accessibleName(control));
   }
   function isStopControl(el){
     const control=controlOf(el);if(!control||!usable(control))return false;
-    if(STOP_TESTID.test(testId(control)))return true;
+    if(STOP_TESTID.test(testId(control))&&controlInComposerSurface(control))return true;
     return STOP_RE.test(accessibleName(control));
   }
   function isApprovalControl(el){const control=controlOf(el);return !!control&&usable(control)&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
