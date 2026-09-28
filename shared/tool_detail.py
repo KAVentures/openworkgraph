@@ -12,6 +12,8 @@ and nothing else:
   (``commit``, ``push``, ``pr_create``), again allowlisted.
 * ``tests_passed`` / ``tests_failed``: counts parsed from a recognised test
   runner's summary line. Only the numbers leave this module.
+* ``test_status``: passing/failing when a recognised summary exists, otherwise
+  unknown for an observed test invocation.
 * ``file_types``: allowlisted file extensions (``py``, ``ts``, ``md``).
 * ``file_refs``: keyed hashes of file paths. They show "the same file again"
   without revealing the path; the key never leaves this computer.
@@ -71,6 +73,7 @@ FILE_TYPES = frozenset({
     "scss", "vue", "svelte", "json", "yaml", "yml", "toml", "ini", "cfg", "env", "xml", "md", "mdx", "rst",
     "txt", "csv", "tsv", "lock", "dockerfile", "makefile", "tf", "proto", "graphql", "r", "jl", "lua",
 })
+TEST_STATUSES = frozenset({"passing", "failing", "unknown"})
 _WRAPPERS = {"sudo", "time", "env", "nohup", "exec", "command", "builtin", "nice"}
 _WRAPPER_VALUE_OPTIONS = {
     "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"},
@@ -78,7 +81,6 @@ _WRAPPER_VALUE_OPTIONS = {
     "nice": {"-n"},
     "exec": {"-a"},
 }
-_SEPARATORS = re.compile(r"(?:&&|\|\||;|\||\n)")
 
 
 # ------------------------------------------------------------------ commands
@@ -112,7 +114,11 @@ def _command_segments(command: Any) -> list[list[str]]:
                 segments[-1].append(token)
         return [words for words in segments if words]
     except ValueError:
-        return [w for w in (_words(part) for part in _SEPARATORS.split(text)) if w]
+        # Malformed quoting is untrusted input. Do not regex-split separators,
+        # because a separator may be inside the unterminated quote and would
+        # invent a command that never actually executed.
+        words = text.split()
+        return [words] if words else []
 
 
 def _program(words: list[str]) -> tuple[str, list[str]]:
@@ -343,6 +349,9 @@ def sanitize_detail(raw: Any) -> dict[str, Any]:
     listed("gh", GH_OPS)
     listed("file_types", FILE_TYPES)
     listed("file_refs", pattern=_FILE_REF_RE)
+    test_status = str(raw.get("test_status") or "")
+    if test_status in TEST_STATUSES:
+        out["test_status"] = test_status
     for key in ("lines_added", "lines_removed", "tests_passed", "tests_failed"):
         value = raw.get(key)
         if isinstance(value, bool):
@@ -368,7 +377,12 @@ def tool_call_detail(
         info = command_detail(command)
         detail.update({k: info[k] for k in ("commands", "git", "gh") if info[k]})
         if info["runs_tests"]:
-            detail.update(test_counts(output))
+            counts = test_counts(output)
+            detail.update(counts)
+            if counts:
+                detail["test_status"] = "failing" if int(counts.get("tests_failed") or 0) else "passing"
+            else:
+                detail["test_status"] = "unknown"
     paths = [p for p in paths if p]
     if paths:
         try:
