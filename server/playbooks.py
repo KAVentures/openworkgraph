@@ -31,9 +31,21 @@ MAX_STEPS = 24
 MIN_RUNS = 2
 LOOKBACK_DAYS = 180
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,()\-]{0,79}$")
-_STEP_RE = re.compile(r"^[A-Za-z0-9:_.\-]{1,120}$")
-_FAMILY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
-_FRAMEWORK_RE = re.compile(r"^[a-z0-9._-]{1,60}$")
+_FAMILY_RE = re.compile(r"^agent:(?:workflow|structure):[0-9a-f]{16}$")
+_HASHED_TOOL_RE = re.compile(r"^tool:[0-9a-f]{12}$")
+_APPROVAL_STEP_RE = re.compile(r"^approval_received:(?:success|denied|cancelled|observed)$")
+_ERROR_STEP_RE = re.compile(r"^error:(?:error|failed|denied|cancelled|timeout)$")
+_TOOL_CATEGORIES = frozenset({
+    "filesystem", "shell", "browser", "code", "search", "network", "database",
+    "messaging", "issue_tracker", "deployment", "mcp", "other", "none",
+})
+_FAILURE_STATES = frozenset({"error", "failed", "denied", "cancelled", "timeout"})
+_SIMPLE_STEPS = frozenset({"model_call", "handoff", "approval_request"})
+_LOCAL_REF_PREFIXES = ("f:", "w:", "event:", "execution:", "run:", "s:")
+_SAFE_FRAMEWORKS = frozenset({
+    "claude-code", "codex", "cursor", "copilot", "gemini-cli", "openai-agents-python",
+    "openclaw", "langgraph", "langchain", "semantic-kernel", "autogen",
+})
 _TABLE = """
 CREATE TABLE IF NOT EXISTS playbooks (
   playbook_id TEXT PRIMARY KEY,
@@ -76,22 +88,66 @@ def _name(value: Any) -> str:
     return text
 
 
+def _structural_step(value: Any) -> str | None:
+    """Accept only values OpenWorkGraph itself can generate as structural steps.
+
+    A fixed character set is not a security boundary: strings such as
+    ``ignore_previous_instructions`` are syntactically simple but still arbitrary
+    agent-visible text. Portable playbooks therefore accept only the canonical
+    structural grammar, and never device-local opaque references.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    low = text.lower()
+    if not text or len(text) > 120 or low.startswith(_LOCAL_REF_PREFIXES):
+        return None
+    if text in _SIMPLE_STEPS or _APPROVAL_STEP_RE.fullmatch(text) or _ERROR_STEP_RE.fullmatch(text):
+        return text
+    if not text.startswith("tool:"):
+        return None
+    body = text[5:]
+    category, sep, tail = body.partition(":")
+    if not sep or category not in _TOOL_CATEGORIES or not tail:
+        return None
+    status = ""
+    label = tail
+    for candidate in _FAILURE_STATES:
+        suffix = ":" + candidate
+        if tail.endswith(suffix):
+            status = candidate
+            label = tail[:-len(suffix)]
+            break
+    if not label or label.lower().startswith(_LOCAL_REF_PREFIXES):
+        return None
+    if _HASHED_TOOL_RE.fullmatch(label):
+        canonical = label
+    else:
+        from server.agent_tool_labels import readable_tool_name
+
+        canonical = readable_tool_name(label)
+    if canonical != label:
+        return None
+    return f"tool:{category}:{label}" + (f":{status}" if status else "")
+
+
 def sanitize(raw: Any) -> dict[str, Any]:
     """The single gate for every playbook, exported or imported. Unknown keys are dropped."""
     from shared.tool_detail import COMMANDS, GIT_OPS, GH_OPS
 
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         raise PlaybookError(f"not an OpenWorkGraph playbook (format must be {FORMAT})")
-    family = str(raw.get("family_key") or "")
+    family = str(raw.get("family_key") or "").lower()
     if not _FAMILY_RE.fullmatch(family):
         raise PlaybookError("invalid family_key")
     out: dict[str, Any] = {"format": FORMAT, "name": _name(raw.get("name")), "family_key": family}
-    out["agent_frameworks"] = sorted({str(f) for f in raw.get("agent_frameworks") or [] if _FRAMEWORK_RE.fullmatch(str(f))})[:8]
+    out["agent_frameworks"] = sorted({str(f).lower() for f in raw.get("agent_frameworks") or [] if str(f).lower() in _SAFE_FRAMEWORKS})[:8]
     runs = _int(raw.get("runs_observed"))
     if runs is None or runs < 1:
         raise PlaybookError("runs_observed must be a positive number")
     out["runs_observed"] = runs
-    out["typical_steps"] = [str(s) for s in raw.get("typical_steps") or [] if isinstance(s, str) and _STEP_RE.fullmatch(s)][:MAX_STEPS]
+    steps = [_structural_step(s) for s in raw.get("typical_steps") or []]
+    out["typical_steps"] = [s for s in steps if s][:MAX_STEPS]
     out["commands"] = [str(c) for c in raw.get("commands") or [] if str(c) in COMMANDS][:12]
     out["git"] = [str(g) for g in raw.get("git") or [] if str(g) in GIT_OPS][:12]
     out["gh"] = [str(g) for g in raw.get("gh") or [] if str(g) in GH_OPS][:12]
