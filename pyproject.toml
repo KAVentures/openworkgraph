@@ -1,6 +1,6 @@
 [project]
 name = "workflow-observer"
-version = "0.96.0"
+version = "0.97.0"
 description = "Local-first work evidence, self-hosted organizational context gateway, REST API, and MCP access."
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -44,6 +44,6 @@ where = ["."]
 # Bundled name lists for contextual AI-context redaction (US Census 1990: public
 # domain; Statistics Sweden 2022: CC0). See server/name_lexicon/README.md.
 server = ["name_lexicon/*.txt", "name_lexicon/README.md"]
-# The enterprise Gateway serves this shell at /admin. Every data/action request
-# still requires the separately configured Gateway admin credential.
-gateway = ["admin_console.html"]
+# The enterprise Gateway serves these identity/admin shells. Every data/action
+# request is still authenticated independently by the Gateway.
+gateway = ["admin_console.html", "me_page.html", "join_verify.html", "landing.html"]

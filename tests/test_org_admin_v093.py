@@ -280,4 +280,6 @@ def test_employee_join_asset_is_explicitly_personal_and_managed_visible():
 def test_admin_console_is_packaged():
     root = Path(__file__).resolve().parents[1]
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'gateway = ["admin_console.html"]' in pyproject
+    import tomllib
+    packaged = tomllib.loads(pyproject)["tool"]["setuptools"]["package-data"]["gateway"]
+    assert {"admin_console.html", "me_page.html", "join_verify.html", "landing.html"} <= set(packaged)

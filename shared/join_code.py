@@ -16,7 +16,8 @@ from urllib.parse import urlparse
 
 PREFIX = "owgjoin1."
 _MAX_CODE_CHARS = 4096
-_TOKEN_RE = re.compile(r"^owg_enroll_link_[A-Za-z0-9._~-]{16,400}$")
+# Reusable organization links and personal (identity-bound) invitations.
+_TOKEN_RE = re.compile(r"^owg_enroll_(?:link|person)_[A-Za-z0-9._~-]{16,400}$")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
