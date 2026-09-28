@@ -159,6 +159,23 @@ If a hook cannot reach OpenWorkGraph (not running, restarting, busy past the 0.7
 
 Hooks remain asynchronous and fail-open. Invalid JSON, an unavailable OpenWorkGraph server, authentication failure, or an adapter exception cannot block or approve Claude Code execution. `OWG_AGENT_ADAPTER_DEBUG=1` prints only a fixed diagnostic notice, never native exception/payload content.
 
+### Session-start briefs (off by default)
+
+When the person turns on "Brief agents at session start" for Claude Code (History tab), OpenWorkGraph adds one **synchronous** `SessionStart` hook (`adapters.claude_code_brief`), separate from the async observation hooks.
+
+- **What it does:** on a new, cleared or compacted session (not a resumed one), the hook asks the local server for a brief and returns it as `additionalContext`.
+- **What the brief holds:**
+  - past runs in the same project, matched by a keyed hash of the working directory (`workspace_ref`), or across all projects if this one has none;
+  - how tests usually end;
+  - pull request outcomes;
+  - the most-used allowlisted commands;
+  - typical size and tokens.
+- **What it never holds:** titles, paths, prompts or content. It says it is observational, not instructions.
+- **Token:** the hook uses its own `.agent_brief_token`, which can fetch briefs and nothing else. The write-only ingest token cannot read briefs.
+- **Failure:** the hook times out after 2 seconds and never prints anything on failure.
+- **Log:** each delivery is logged locally (when, scope, size) and counted in the dashboard. Deleting the session deletes its log rows.
+- **Off:** turning briefs off removes only that hook. It never touches the observation hooks or your own hooks.
+
 ## Codex
 
 OpenWorkGraph's Codex integration uses **both Codex's structural OTLP log exporter and trace exporter**. The log layer is required for Codex business events such as API requests, completed tools, approval decisions and multi-agent communication; the trace layer supplies native span hierarchy. Content-bearing opt-ins stay disabled, and the server independently strict-allowlists every accepted field.

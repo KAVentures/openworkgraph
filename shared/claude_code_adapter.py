@@ -192,7 +192,20 @@ def _base_event(
         "tool_name": tool_name,
         "tool_category": _tool_category(tool_name),
         "duration_seconds": _duration_seconds(payload),
-    }
+    } | _workspace(payload)
+
+
+def _workspace(payload: dict[str, Any]) -> dict[str, str]:
+    """Keyed hash of the session's working directory (no path leaves memory)."""
+    from .tool_detail import enabled, workspace_ref
+
+    if not enabled() or not payload.get("cwd"):
+        return {}
+    try:
+        ref = workspace_ref(payload.get("cwd"))
+    except Exception:
+        return {}
+    return {"workspace_ref": ref} if ref else {}
 
 
 def claude_hook_to_agent_events(
