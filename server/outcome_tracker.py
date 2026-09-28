@@ -5,8 +5,8 @@ from __future__ import annotations
 Off by default. When a person turns it on:
 
 * A pull request an agent opens (``gh pr create`` or a create-pull-request
-  tool) is added to a local watch list, keyed to the run. Only host, owner,
-  repository and number are kept, never in stored events, and never synced.
+  tool) is added to a local watch list, keyed to the run. Only github.com PRs
+  are accepted today; arbitrary hosts never become network targets.
 * Every few minutes the local ``gh`` CLI (the person's own GitHub login, read
   only) is asked for the pull request's state and CI result.
 * Each run gets a content-free ``delivery_outcome``: how many PRs it opened,
@@ -36,7 +36,6 @@ POLL_LOOP_SECONDS = 60
 MAX_CHECKS_PER_POLL = 20
 GH_TIMEOUT_SECONDS = 20
 
-_HOST_RE = re.compile(r"^[a-z0-9.-]{1,100}$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _TABLE = """
 CREATE TABLE IF NOT EXISTS outcome_watch (
@@ -118,7 +117,12 @@ def _valid_ref(ref: Any) -> tuple[str, str, str, int] | None:
         number = int(ref.get("number"))
     except Exception:
         return None
-    if not (_HOST_RE.fullmatch(host) and _NAME_RE.fullmatch(owner) and _NAME_RE.fullmatch(repo) and 0 < number < 10**9):
+    # The PR URL comes from untrusted tool output. Do not let a syntactically
+    # valid arbitrary hostname widen OWG's network boundary. GHES can be added
+    # later through an explicit trusted-host configuration instead of inference.
+    if host != "github.com":
+        return None
+    if not (_NAME_RE.fullmatch(owner) and _NAME_RE.fullmatch(repo) and 0 < number < 10**9):
         return None
     return host, owner, repo, number
 
@@ -141,7 +145,9 @@ def register(pairs: Iterable[tuple[str, Any]]) -> int:
     with connect() as conn:
         _ensure(conn)
         for event_id, refs in pairs:
-            row = conn.execute("SELECT actor_id, session_id, metadata_json FROM events WHERE event_id = ?", (event_id,)).fetchone()
+            row = conn.execute(
+                "SELECT actor_id, session_id, metadata_json, observed_at FROM events WHERE event_id = ?", (event_id,)
+            ).fetchone()
             if row is None:
                 continue
             try:
@@ -151,6 +157,11 @@ def register(pairs: Iterable[tuple[str, Any]]) -> int:
             trace = meta.get("trace") if isinstance(meta.get("trace"), dict) else {}
             rkey = run_key(run_material(row["actor_id"], trace, row["session_id"]), key=key)
             sref = _session_ref(str(row["session_id"] or ""), key=key)
+            observed = _parse(row["observed_at"])
+            # created_at is the run evidence time, not delayed spool/ingest time.
+            # That keeps range deletion and the 30-day watch horizon aligned to
+            # the work the person actually asked to forget.
+            created_at = observed.isoformat() if observed is not None else now
             for ref in (refs if isinstance(refs, list) else [])[:4]:
                 valid = _valid_ref(ref)
                 if valid is None:
@@ -159,7 +170,7 @@ def register(pairs: Iterable[tuple[str, Any]]) -> int:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO outcome_watch(pr_key, run_key, session_ref, host, owner, repo, number, created_at)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (_pr_key(host, owner, repo, number), rkey, sref, host, owner, repo, number, now),
+                    (_pr_key(host, owner, repo, number), rkey, sref, host, owner, repo, number, created_at),
                 )
                 added += int(cur.rowcount or 0)
     return added
@@ -393,8 +404,8 @@ def status(*, runner: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
         "last_poll_at": _STATUS.get("last_poll_at"),
         "last_error": _STATUS.get("last_error"),
         "check_every_seconds": CHECK_EVERY_SECONDS,
-        "stored": "host, owner, repository and number of pull requests agents opened, until resolved or 30 days",
-        "contacts": "GitHub, through your local gh CLI login, read-only, only while this is on",
+        "stored": "github.com owner, repository and PR number agents opened, until resolved or 30 days",
+        "contacts": "github.com, through your local gh CLI login, read-only, only while this is on",
     }
 
 
