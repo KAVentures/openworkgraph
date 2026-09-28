@@ -10,14 +10,15 @@ and compares. Files that differ were changed by something other than this
 agent's turn: usually the person reviewing and fixing its work.
 
 What is recorded on the next turn's start: counts only (files changed, how many
-of them this agent had edited in the last 24 hours, whether HEAD moved, the gap).
-No paths, names or contents leave this computer; the snapshot itself stays in a
-small local state file, keyed by the project's hash, for at most 7 days.
+of them the immediately preceding agent turn edited, whether HEAD moved, the
+gap). No paths, names or contents leave this computer; the snapshot itself stays
+in a small local state file, keyed by the project's hash, for at most 7 days.
 
 Safety: runs only while OpenWorkGraph holds a recording lease (so never while
 paused or stopped), with a short timeout, with git's fsmonitor disabled so a
 repository cannot make it run configured commands, and without taking git's
-optional index lock (so it never blocks the agent's own git).
+optional index lock (so it never blocks the agent's own git). Concurrent async
+hook processes are serialized with a cross-platform atomic lock file.
 """
 
 import hashlib
@@ -35,7 +36,8 @@ MAX_FILE_BYTES = 2_000_000
 MAX_TOTAL_BYTES = 50_000_000
 GIT_TIMEOUT_SECONDS = 2.0
 STATE_TTL_SECONDS = 7 * 24 * 3600
-AGENT_REF_TTL_SECONDS = 24 * 3600
+LOCK_WAIT_SECONDS = 2.0
+LOCK_STALE_SECONDS = 30.0
 EDIT_TOOLS = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
 
 
@@ -141,27 +143,55 @@ def _state_path(workspace: str) -> Path:
 
 
 class _Locked:
-    """Serialize concurrent async hooks for one project (best effort off POSIX)."""
+    """Serialize concurrent async hook processes on POSIX and Windows.
+
+    ``fcntl`` is unavailable on Windows, so use O_EXCL creation instead. Locks
+    are tiny and short-lived; stale files are recoverable after a generous
+    timeout. A per-acquisition token prevents one process from deleting a lock
+    that has already been replaced by another.
+    """
 
     def __init__(self, path: Path):
         self.lock_path = path.with_suffix(".lock")
-        self.handle = None
+        self.token = f"{os.getpid()}:{time.time_ns()}"
+        self.acquired = False
 
     def __enter__(self):
-        self.handle = open(self.lock_path, "a+")
-        try:
-            import fcntl
-
-            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
-        except Exception:
-            pass
-        return self
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(fd, self.token.encode("utf-8"))
+                finally:
+                    os.close(fd)
+                self.acquired = True
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - self.lock_path.stat().st_mtime > LOCK_STALE_SECONDS:
+                        self.lock_path.unlink(missing_ok=True)
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("workspace state lock timed out")
+                time.sleep(0.01)
 
     def __exit__(self, *exc):
+        if not self.acquired:
+            return
         try:
-            self.handle.close()
-        except Exception:
+            if self.lock_path.read_text(encoding="utf-8") == self.token:
+                self.lock_path.unlink(missing_ok=True)
+        except FileNotFoundError:
             pass
+        except Exception:
+            # A stale lock is safer than deleting another process's lock; the
+            # next acquisition can recover it after LOCK_STALE_SECONDS.
+            pass
+        finally:
+            self.acquired = False
 
 
 def _load(path: Path, now: float) -> dict[str, Any]:
@@ -192,7 +222,8 @@ def prune(now: float | None = None) -> int:
         for path in _state_dir().glob("*.json"):
             if current - path.stat().st_mtime > STATE_TTL_SECONDS:
                 path.unlink(missing_ok=True)
-                path.with_suffix(".lock").unlink(missing_ok=True)
+                # Do not remove .lock here: another async process may currently
+                # own it. _Locked performs its own stale-lock recovery.
                 removed += 1
     except Exception:
         pass
@@ -225,29 +256,49 @@ def process_claude_hook(payload: dict[str, Any], events: list[dict[str, Any]], *
     path = _state_path(workspace_ref(cwd, key=key))
     with _Locked(path):
         state = _load(path, current)
-        agent_refs = {ref: at for ref, at in (state.get("agent_refs") or {}).items() if current - float(at) < AGENT_REF_TTL_SECONDS}
+        current_refs = state.get("current_turn_agent_refs") if isinstance(state.get("current_turn_agent_refs"), dict) else {}
+        current_refs = {str(ref): float(at) for ref, at in current_refs.items() if str(ref)}
+
         if hook == "PostToolUse" and str(payload.get("tool_name") or "") in EDIT_TOOLS:
             tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
             target = tool_input.get("file_path") or tool_input.get("notebook_path")
             if target:
                 # realpath on both sides: git reports resolved paths (/private/tmp, not /tmp).
-                agent_refs[file_ref(os.path.realpath(str(target)), key=key)] = current
+                current_refs[file_ref(os.path.realpath(str(target)), key=key)] = current
+
         elif hook == "Stop":
+            # A Stop closes exactly one turn. Never carry an older turn's file
+            # refs into this snapshot: that would turn a rolling overlap signal
+            # into a false claim of immediate human rework.
+            state.pop("stop_snapshot", None)
+            state.pop("stop_agent_refs", None)
+            state.pop("stop_at", None)
             snap = snapshot(cwd, key=key)
             if snap is not None:
-                state["stop_snapshot"], state["stop_at"] = snap, current
+                state["stop_snapshot"] = snap
+                state["stop_agent_refs"] = sorted(current_refs)
+                state["stop_at"] = current
+            current_refs = {}
+
         elif hook == "UserPromptSubmit" or (hook == "SessionStart" and str(payload.get("source") or "startup") == "startup"):
             before = state.pop("stop_snapshot", None)
+            stop_refs = set(str(ref) for ref in state.pop("stop_agent_refs", []) if str(ref))
+            stop_at = float(state.pop("stop_at", current) or current)
             if before:
                 after = snapshot(cwd, key=key)
                 if after is not None:
-                    between = compare(before, after, agent_refs=set(agent_refs))
-                    between["gap_seconds"] = round(max(0.0, current - float(state.get("stop_at") or current)), 1)
+                    between = compare(before, after, agent_refs=stop_refs)
+                    between["gap_seconds"] = round(max(0.0, current - stop_at), 1)
                     for event in events:
                         if event.get("operation") == "run_started":
                             event["between_turns"] = between
                             break
-        state["agent_refs"] = agent_refs
+            # A prompt starts a new turn even if no previous Stop was available.
+            current_refs = {}
+
+        state["current_turn_agent_refs"] = current_refs
+        # Drop the old rolling key on upgrade so it cannot contaminate the next turn.
+        state.pop("agent_refs", None)
         _save(path, state, current)
 
 
