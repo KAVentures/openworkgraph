@@ -142,8 +142,10 @@ def gemini_otel_to_agent_events(
                 server = _safe_label(attrs.get("mcp_server_name"), default="", limit=80)
                 tool = f"mcp__{server}__{tool}" if server else f"mcp__{tool}"
             call_key = "tool:" + _hash(f"{prompt_id}|{tool}|{_observed_at(attrs, native)}")
-            success = str(_value(attrs.get("success"))).lower()
-            events.append(base("tool_call", "success" if success == "true" else "error", tool_name=tool, span_id=call_key))
+            raw_success = _value(attrs.get("success"))
+            success = str(raw_success).lower() if raw_success is not None else ""
+            tool_status = "success" if success == "true" else "error" if success == "false" else "unknown"
+            events.append(base("tool_call", tool_status, tool_name=tool, span_id=call_key))
             decision = _text(attrs.get("decision"), 40).lower()
             if decision in _HUMAN_DECISIONS:
                 events.append(base(
