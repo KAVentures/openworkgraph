@@ -287,3 +287,34 @@ def test_manual_setup_material_matches_the_switches():
     assert material["gemini_cli"]["settings"]["telemetry"]["logPrompts"] is False
     assert set(material["cursor"]["settings"]["hooks"]) == set(SUPPORTED_EVENTS)
     assert all(item["content_logging_enabled"] is False for item in material.values())
+
+
+def test_ephemeral_history_keeps_cursor_and_copilot_sessions_across_turns(app_client):
+    """Turn finishes (Cursor stop, Copilot invoke_agent) must not purge the session."""
+    from server.agent_ingest import ingest_agent_payloads
+    from server.db import init_db, rows
+    from shared.history_policy import update_retention
+
+    init_db()
+    update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
+
+    def cursor(hook, **extra):
+        return cursor_hook_to_agent_events({"hook_event_name": hook, "conversation_id": "eph-cur", **extra})
+
+    def count(session):
+        return len([r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == session])
+
+    ingest_agent_payloads(cursor("sessionStart") + cursor("beforeSubmitPrompt", generation_id="g1") + cursor("stop", generation_id="g1", status="completed"))
+    ingest_agent_payloads(cursor("beforeSubmitPrompt", generation_id="g2"))
+    assert count("eph-cur") == 4
+    ingest_agent_payloads(cursor("sessionEnd", final_status="completed"))
+    assert count("eph-cur") == 0
+
+    app_client.post(_url("copilot"), json=copilot_traces())
+    second = copilot_traces()
+    for span in second["resourceSpans"][0]["scopeSpans"][0]["spans"]:
+        span["traceId"] = "b" * 32
+    app_client.post(_url("copilot"), json=second)
+    # Two agent invocations in one conversation: both kept in full (the root span
+    # carries the conversation; its model/tool spans are grouped by trace).
+    assert count("conv-1") == 4 and count("a" * 32) == 2 and count("b" * 32) == 2
