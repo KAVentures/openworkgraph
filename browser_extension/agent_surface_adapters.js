@@ -9,11 +9,12 @@
     {key:'gemini', name:'Gemini', hosts:['gemini.google.com']},
   ];
   // Structural signals come first and work in any UI language: aria-busy,
-  // streaming markers, stable data-testid tokens, submit semantics and Enter in
-  // the message box. The English labels below are only a last fallback.
+  // streaming markers, stable data-testid tokens and submit semantics. English
+  // labels remain only a fallback. No prompt/response text is read.
   const BUSY_SELECTOR='[aria-busy="true"],[data-is-streaming="true"],button[data-testid*="stop" i]';
   const SEND_TESTID=/(^|[-_])(send|submit)([-_]|$)/i;
   const STOP_TESTID=/(^|[-_])(stop|cancel)([-_]|$)/i;
+  const COMPOSER_TESTID=/(composer|prompt|chat[-_]?input|message[-_]?input)/i;
   const STOP_RE=/^(stop|cancel)( generating| response| task| run)?$/i;
   const SEND_RE=/^(send|submit|ask|run|build|generate)( prompt| message| request)?$/i;
   const APPROVE_RE=/^(allow|approve|confirm|continue|accept)$/i;
@@ -26,12 +27,17 @@
     if(!el)return '';
     return String(el.getAttribute?.('aria-label')||el.getAttribute?.('title')||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,80);
   }
-  function buttonLike(el){return !!el?.closest?.('button,[role="button"],input[type="submit"]');}
+  function controlOf(el){return el?.closest?.('button,[role="button"],input[type="submit"]')||null;}
+  function buttonLike(el){return !!controlOf(el);}
   function testId(el){return String(el?.getAttribute?.('data-testid')||'');}
+  function usable(el){
+    if(!el)return false;
+    return el.hidden!==true&&String(el.getAttribute?.('aria-hidden')||'').toLowerCase()!=='true'&&el.disabled!==true;
+  }
   function hasBusyState(doc){
     if(!doc)return false;
-    if(doc.querySelector(BUSY_SELECTOR))return true;
-    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>STOP_RE.test(accessibleName(el)));
+    if([...doc.querySelectorAll(BUSY_SELECTOR)].some(usable))return true;
+    return [...doc.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&STOP_RE.test(accessibleName(el)));
   }
   function isComposer(el){
     if(!el||typeof el.closest!=='function')return false;
@@ -39,33 +45,45 @@
     return tag==='textarea'||el.isContentEditable===true||String(el.getAttribute?.('contenteditable')||'')==='true'
       ||String(el.getAttribute?.('role')||'')==='textbox';
   }
-  // Enter without modifiers in the message box sends on these chat surfaces.
-  // Only the key and target type are inspected; the text is never read.
+  function formHasComposer(form){
+    if(!form||typeof form.querySelectorAll!=='function')return false;
+    return [...form.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')].some(isComposer);
+  }
+  function structurallyComposer(el){
+    if(!isComposer(el))return false;
+    const form=el.closest?.('form');
+    if(form&&formHasComposer(form))return true;
+    const marked=el.closest?.('[data-testid]');
+    return !!marked&&COMPOSER_TESTID.test(testId(marked));
+  }
+  // Enter is considered a send only in a structurally identified message
+  // composer. This avoids treating unrelated textareas/editors on agent sites as
+  // new runs. Busy-state detection remains the fallback when a site has no such
+  // structural marker.
   function isComposerSend(ev){
-    return ev?.key==='Enter'&&!ev.shiftKey&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey&&!ev.isComposing&&isComposer(ev.target);
+    return ev?.key==='Enter'&&!ev.shiftKey&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey&&!ev.isComposing&&structurallyComposer(ev.target);
   }
   function hasVisibleErrorState(doc){return !!doc?.querySelector?.('[role="alert"][aria-live], [role="alert"]');}
   function hasApprovalState(doc){
     if(!doc)return false;
     for(const root of doc.querySelectorAll('dialog,[role="dialog"]')){
-      if([...root.querySelectorAll('button,[role="button"]')].some(el=>APPROVE_RE.test(accessibleName(el))))return true;
+      if([...root.querySelectorAll('button,[role="button"]')].some(el=>usable(el)&&APPROVE_RE.test(accessibleName(el))))return true;
     }
     return false;
   }
-  function controlOf(el){return el?.closest?.('button,[role="button"],input[type="submit"]')||null;}
   function isSendControl(el){
-    const control=controlOf(el);if(!control)return false;
+    const control=controlOf(el);if(!control||!usable(control))return false;
     if(SEND_TESTID.test(testId(control)))return true;
     const type=String(control.getAttribute?.('type')||'').toLowerCase();
-    if(type==='submit'&&control.form&&[...control.form.elements||[]].some(isComposer))return true;
+    if(type==='submit'&&control.form&&formHasComposer(control.form))return true;
     return SEND_RE.test(accessibleName(control));
   }
   function isStopControl(el){
-    const control=controlOf(el);if(!control)return false;
+    const control=controlOf(el);if(!control||!usable(control))return false;
     if(STOP_TESTID.test(testId(control)))return true;
     return STOP_RE.test(accessibleName(control));
   }
-  function isApprovalControl(el){const control=buttonLike(el);return !!control&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
+  function isApprovalControl(el){const control=controlOf(el);return !!control&&usable(control)&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
   function safeRunId(){
     try{return 'web-'+crypto.randomUUID().replaceAll('-','');}catch(_){return 'web-'+Date.now().toString(36)+Math.random().toString(36).slice(2,12);}
   }
@@ -113,10 +131,10 @@
       if(runId&&isStopControl(ev.target)){finish('agent_run_cancelled','stop_control');return;}
       if(runId&&isApprovalControl(ev.target)){sendLifecycle(provider,'agent_approval_received',runId,'approval_control');approvalSent=true;}
     },true);
-    doc.addEventListener('submit',()=>{begin('form_submit');setTimeout(sample,0);},true);
+    doc.addEventListener('submit',ev=>{if(formHasComposer(ev.target)){begin('form_submit');setTimeout(sample,0);}},true);
     doc.addEventListener('keydown',ev=>{if(isComposerSend(ev)){begin('composer_enter');setTimeout(sample,0);}},true);
     const observer=new MutationObserver(()=>sample());
-    const root=doc.documentElement||doc;observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy','aria-live','role','open','disabled']});
+    const root=doc.documentElement||doc;observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy','aria-live','role','open','disabled','hidden','aria-hidden','data-is-streaming','data-testid']});
     setInterval(()=>{if(!doc.hidden)sample();},1500);
     sample();
   }
