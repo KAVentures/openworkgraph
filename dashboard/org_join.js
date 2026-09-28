@@ -42,13 +42,50 @@
         '<input id="orgJoinCode" class="org-join-field" autocomplete="off" spellcheck="false" placeholder="owgjoin1.…">' +
         '<div style="margin-top:10px"><button id="orgJoinPreviewButton" class="secondary">Review what will be shared</button></div>' +
         '<div id="orgJoinPreview" hidden style="margin-top:12px"><div><b>Organization:</b> <span id="orgJoinOrg"></span></div><div id="orgJoinShares"></div>' +
-        '<label for="orgJoinActor" style="display:block;margin-top:8px;font-weight:600">Your work email or username</label>' +
-        '<input id="orgJoinActor" class="org-join-field" autocomplete="email">' +
+        '<div id="orgJoinIdentity" hidden style="margin-top:8px"></div>' +
+        '<div id="orgJoinActorBox"><label for="orgJoinActor" style="display:block;margin-top:8px;font-weight:600">Your work email or username</label>' +
+        '<input id="orgJoinActor" class="org-join-field" autocomplete="email"></div>' +
         '<label style="display:flex;gap:8px;margin-top:10px"><input type="checkbox" id="orgJoinConsent"> I reviewed what will be shared with my organization.</label>' +
         '<div style="margin-top:10px"><button id="orgJoinButton">Join</button></div></div>' +
         '<div id="orgJoinResult" role="status" aria-live="polite" style="margin-top:8px"></div>';
       const gatewayPanel = $('gatewayPanel');
       panel.insertBefore(card, gatewayPanel || managedNote.nextSibling);
+
+      const meCard = document.createElement('div');
+      meCard.id = 'orgMeCard';
+      meCard.className = 'card';
+      meCard.hidden = true;
+      meCard.innerHTML = '<h2>What your organization holds about you</h2>' +
+        '<div class="muted">Open a page on your organization\'s Gateway that shows exactly what it received from your computers, who can read it, and every recorded read. The link is personal, works once and expires in two minutes.</div>' +
+        '<div style="margin-top:10px"><button id="orgMeButton" class="secondary">See what your organization holds about you</button></div>' +
+        '<div id="orgMeResult" role="status" aria-live="polite" class="muted" style="margin-top:6px"></div>';
+      panel.insertBefore(meCard, card);
+    }
+  }
+
+  async function refreshMe() {
+    try {
+      const st = await call('/v1/gateway-status');
+      const card = $('orgMeCard');
+      if (card) card.hidden = !st.enrolled;
+    } catch (_) { /* local-only */ }
+  }
+
+  async function openMe() {
+    $('orgMeResult').textContent = '';
+    // Open the tab during the click; browsers block popups opened after an await.
+    const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
+    try {
+      const r = await call('/v1/org-me-link', {});
+      if (tab) { tab.location.replace(r.url); return; }
+      const a = document.createElement('a');
+      a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = 'Open your page (the link works once, for two minutes)';
+      $('orgMeResult').replaceChildren(a);
+    } catch (e) {
+      if (tab) tab.close();
+      $('orgMeResult').textContent = e.message;
     }
   }
 
@@ -91,6 +128,22 @@
       previewed = await call('/v1/org-join/preview', {join_code: code});
       $('orgJoinPreview').hidden = false;
       $('orgJoinOrg').textContent = previewed.organization_name;
+      const id = previewed.identity || {};
+      const needsConfirm = !!(id.locked && id.require_sso && !id.sso_verified);
+      $('orgJoinActorBox').hidden = !!id.locked;
+      $('orgJoinIdentity').hidden = !id.locked;
+      if (id.locked) {
+        $('orgJoinIdentity').innerHTML = `<div><b>You will join as:</b> ${esc(id.display_name || id.email)} (${esc(id.email)})</div>` +
+          '<div class="muted">This invitation is personal: it can only connect computers as this person.</div>' +
+          (needsConfirm
+            ? '<div style="margin-top:8px"><b>First confirm it\'s you</b> with your company account. <button id="orgJoinConfirm" class="secondary">Confirm with company account</button> <button id="orgJoinRecheck" class="secondary">I confirmed, check again</button></div>'
+            : (id.require_sso ? '<div style="margin-top:6px">✓ Confirmed with your company account.</div>' : ''));
+        const c = $('orgJoinConfirm');
+        if (c) c.addEventListener('click', () => window.open(id.verify_url, '_blank', 'noopener'));
+        const r = $('orgJoinRecheck');
+        if (r) r.addEventListener('click', preview);
+      }
+      $('orgJoinButton').disabled = needsConfirm;
       $('orgJoinShares').innerHTML = sharingList(previewed.sharing) +
         '<p class="muted"><b>Never shared:</b> ' + esc((previewed.never_shared || []).join(', ')) + '.</p>' +
         '<p class="muted"><b>You can:</b> ' + esc((previewed.you_can || []).join(', ')) + '.</p>';
@@ -103,8 +156,9 @@
 
   async function join() {
     if (!previewed) return;
-    const actor = $('orgJoinActor').value.trim();
-    if (!actor) {
+    const locked = !!(previewed.identity && previewed.identity.locked);
+    const actor = locked ? '' : $('orgJoinActor').value.trim();
+    if (!locked && !actor) {
       $('orgJoinResult').textContent = 'Enter your work email or username.';
       return;
     }
@@ -121,6 +175,7 @@
       });
       previewed = null;
       $('orgJoinCard').innerHTML = `<h2>Joined ${esc(r.organization_name)}</h2><div class="muted">Sharing starts from enrollment forward. Anything recorded before joining stays on this computer. You can pause or disconnect in the Organization section.</div>`;
+      refreshMe();
       if (typeof window.refreshGatewayPanel === 'function') window.refreshGatewayPanel();
     } catch (e) {
       $('orgJoinResult').textContent = e.message;
@@ -163,6 +218,9 @@
     if (p) p.addEventListener('click', preview);
     const j = $('orgJoinButton');
     if (j) j.addEventListener('click', join);
+    const m = $('orgMeButton');
+    if (m) m.addEventListener('click', openMe);
     setTimeout(refreshManaged, 300);
+    setTimeout(refreshMe, 300);
   });
 })();

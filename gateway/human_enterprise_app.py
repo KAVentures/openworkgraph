@@ -8,6 +8,7 @@ from .auth import env_token_matches
 from .enterprise_app import _take_get_endpoint, create_enterprise_app
 from .hardening import HardeningSettings, PooledGatewayDB
 from .human_access import HumanAccessSettings, install_human_access
+from .identity_routes import install_roster_mapping
 from .settings import PRODUCT_VERSION, GatewaySettings
 
 GATEWAY_VERSION = PRODUCT_VERSION
@@ -50,6 +51,8 @@ def create_human_enterprise_app(
         require_admin=require_admin,
         verifier=verifier,
     )
+
+    install_roster_mapping(app, db)
 
     previous_health = _take_get_endpoint(app, "/health")
     previous_capabilities = _take_get_endpoint(app, "/v1/capabilities")

@@ -46,4 +46,4 @@ where = ["."]
 server = ["name_lexicon/*.txt", "name_lexicon/README.md"]
 # The enterprise Gateway serves this shell at /admin. Every data/action request
 # still requires the separately configured Gateway admin credential.
-gateway = ["admin_console.html"]
+gateway = ["admin_console.html", "me_page.html", "join_verify.html", "landing.html"]
