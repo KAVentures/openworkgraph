@@ -17,6 +17,10 @@ from .procedural_memory import _event_ref
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 _EXECUTION_ID_RE = re.compile(r"^execution:[0-9a-f]{16}$")
 _FAILURE_STATUSES = frozenset({"error", "cancelled", "denied"})
+_EDIT_TOOL_NAMES = frozenset({
+    "edit", "multiedit", "write", "notebookedit", "edit_file", "write_file", "delete_file",
+    "file_edit", "file_write", "file_delete", "apply_patch",
+})
 
 
 def _opaque_ref(prefix: str, value: Any) -> str | None:
@@ -70,25 +74,34 @@ def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
     edited: set[str] = set()
     read_only: set[str] = set()
     lines_added = lines_removed = 0
-    test_runs: list[dict[str, int]] = []
+    test_runs: list[dict[str, Any]] = []
     tokens = 0
     for item in projected:
         usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
         tokens += int(usage.get("total_tokens") or 0) or int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
-        detail = ((item.get("tool") or {}).get("detail") or {}) if item.get("operation") == "tool_call" else {}
+        tool = item.get("tool") if isinstance(item.get("tool"), dict) else {}
+        detail = (tool.get("detail") or {}) if item.get("operation") == "tool_call" else {}
         if not detail:
             continue
         commands.update(detail.get("commands") or [])
         git_ops.update(detail.get("git") or [])
         gh_ops.update(detail.get("gh") or [])
         file_types.update(detail.get("file_types") or [])
-        changed = "lines_added" in detail or "lines_removed" in detail
+        tool_name = str(tool.get("name") or "").strip().lower()
+        changed = "lines_added" in detail or "lines_removed" in detail or tool_name in _EDIT_TOOL_NAMES
         for ref in detail.get("file_refs") or []:
             (edited if changed else read_only).add(ref)
         lines_added += int(detail.get("lines_added") or 0)
         lines_removed += int(detail.get("lines_removed") or 0)
-        if "tests_passed" in detail or "tests_failed" in detail:
-            test_runs.append({"passed": int(detail.get("tests_passed") or 0), "failed": int(detail.get("tests_failed") or 0)})
+        test_status = str(detail.get("test_status") or "")
+        if not test_status and ("tests_passed" in detail or "tests_failed" in detail):
+            test_status = "failing" if int(detail.get("tests_failed") or 0) else "passing"
+        if test_status in {"passing", "failing", "unknown"}:
+            test_runs.append({
+                "passed": int(detail.get("tests_passed") or 0),
+                "failed": int(detail.get("tests_failed") or 0),
+                "status": test_status,
+            })
     summary: dict[str, Any] = {}
     if commands:
         summary["commands"] = dict(commands.most_common(12))
@@ -98,13 +111,15 @@ def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
         summary["gh"] = dict(gh_ops.most_common())
     if test_runs:
         last = test_runs[-1]
-        summary["tests"] = {
+        tests: dict[str, Any] = {
             "runs": len(test_runs),
-            "runs_with_failures": sum(1 for t in test_runs if t["failed"]),
-            "last_passed": last["passed"],
-            "last_failed": last["failed"],
-            "ended": "failing" if last["failed"] else "passing",
+            "runs_with_failures": sum(1 for t in test_runs if t["status"] == "failing" or t["failed"]),
+            "ended": last["status"],
         }
+        if last["status"] != "unknown":
+            tests["last_passed"] = last["passed"]
+            tests["last_failed"] = last["failed"]
+        summary["tests"] = tests
     if edited or read_only:
         summary["files"] = {"edited": len(edited), "read_only": len(read_only - edited)}
     if file_types:
