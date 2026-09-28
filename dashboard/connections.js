@@ -106,7 +106,8 @@
 
   // Where each native telemetry signal stands since OpenWorkGraph started:
   // counts and reason codes only (see /v1/agent-telemetry/diagnostics).
-  const CHANNELS={claude_code:[['claude_code_hooks','Hooks'],['claude_code_otel_logs','OTel logs']],codex:[['codex_otel','OTel']]};
+  const CHANNELS={claude_code:[['claude_code_hooks','Hooks'],['claude_code_otel_logs','OTel logs']],codex:[['codex_otel','OTel']],
+    vscode:[['copilot_otel','Copilot OTel']],gemini_cli:[['gemini_otel','OTel']],cursor:[['cursor_hooks','Hooks']]};
   function channelText(label,ch){
     if(!ch||!ch.requests)return {text:`${label}: nothing received since OpenWorkGraph started`,warn:false};
     const parts=[`${label} ${relativeTime(ch.last_received_at)}`];
@@ -186,7 +187,7 @@
       for(const item of activity.items||[]){if(item.client&&item.status==='ok'&&!lastUsed[item.client])lastUsed[item.client]=item.observed_at;}
       for(const run of traces.executions||[]){
         const agent=run?.agent||{},text=`${agent.name||''} ${agent.framework||''}`.toLowerCase();
-        const id=text.includes('claude')?'claude_code':text.includes('codex')?'codex':'';
+        const id=text.includes('claude')?'claude_code':text.includes('codex')?'codex':text.includes('copilot')?'vscode':text.includes('gemini')?'gemini_cli':text.includes('cursor')?'cursor':'';
         const at=run.ended_at||run.started_at||'';
         if(id&&(!lastObserved[id]||String(at)>String(lastObserved[id])))lastObserved[id]=at;
       }

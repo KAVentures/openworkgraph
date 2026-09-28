@@ -106,6 +106,9 @@
       }else if(kind==='codex'){
         const x=integrations.codex||{};title='Observe Codex';
         body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which adds this for you unless you already have your own <code>[otel]</code> settings. To do it by hand, merge these keys into your existing <code>[otel]</code> section. The dashboard includes only the dedicated local write-only telemetry credential; it does not grant access to your OWG history.</p>${privacyHtml(payload)}${codeBox(x.config||'', 'agentSetupCode')}<div class="note">OpenWorkGraph enables structural OTel logs plus trace export. User prompts, agent responses and guardian assessments remain disabled.</div>`;
+      }else if(kind==='vscode'||kind==='gemini_cli'||kind==='cursor'){
+        const x=integrations[kind]||{};title=`Observe ${x.label||kind}`;
+        body=`<p>Prefer the <strong>Observe</strong> switch under Connections, which does this for you and never overwrites telemetry you set up yourself. ${h(x.instructions||'')}</p>${privacyHtml(payload)}${codeBox(JSON.stringify(x.settings||{},null,2),'agentSetupCode')}${kind==='cursor'?'<div class="note">Hooks answer immediately with a reply that never blocks, then record. OpenWorkGraph never uses a permission hook.</div>':'<div class="note">The endpoint path carries a separate write-only token because this app cannot send an Authorization header from its settings file. It cannot read anything.</div>'}`;
       }else if(kind==='openai_agents'){
         const x=integrations.openai_agents||{};title='Observe OpenAI Agents SDK';
         body=`<p>Add OpenWorkGraph as an additional tracing processor in the agent application's Python environment.</p>${privacyHtml(payload)}${codeBox(x.python||'', 'agentSetupCode')}<div class="note">This does not replace existing SDK tracing and does not make OpenWorkGraph a dependency for the agent's control flow.</div>`;
@@ -129,6 +132,9 @@
     const text=`${agent.name||''} ${agent.provider||''} ${agent.framework||''}`.toLowerCase();
     if(text.includes('claude'))return 'claude_code';
     if(text.includes('codex'))return 'codex';
+    if(text.includes('copilot'))return 'vscode';
+    if(text.includes('gemini'))return 'gemini_cli';
+    if(text.includes('cursor'))return 'cursor';
     if(text.includes('openai-agents')||text.includes('openai agents'))return 'openai_agents';
     return 'otel';
   }

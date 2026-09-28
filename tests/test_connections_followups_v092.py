@@ -91,9 +91,10 @@ def test_claude_desktop_matcher_ignores_helpers_and_claude_code():
 
 
 def test_hidden_frameworks_follow_observe_switch(home):
-    assert connections.hidden_frameworks() == {"claude-code", "codex"}  # nothing installed
+    everything = {"claude-code", "codex", "github-copilot", "gemini-cli", "cursor"}
+    assert connections.hidden_frameworks() == everything  # nothing installed
     connections.change("claude_code", "on", ("observe",))
-    assert connections.hidden_frameworks() == {"codex"}
+    assert connections.hidden_frameworks() == everything - {"claude-code"}
     connections.change("claude_code", "off", ("observe",))
     assert "claude-code" in connections.hidden_frameworks()
 

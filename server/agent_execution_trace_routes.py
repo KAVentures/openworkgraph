@@ -74,7 +74,10 @@ def get_agent_execution_traces(
             raw = [row for row in raw if (_parse(row.get("observed_at")) is not None and _parse(row.get("observed_at")) < end)]
         if hide_disconnected:
             from .connections import hidden_frameworks
-            hidden = hidden_frameworks()
+            switched_off = hidden_frameworks()
+            # Report only frameworks whose runs were actually hidden, not every
+            # connector that happens to be off or never installed.
+            hidden = {fw for fw in switched_off if any(_row_framework(row) == fw for row in raw)}
             if hidden: raw = [row for row in raw if _row_framework(row) not in hidden]
         payload = agent_execution_traces(raw, family_key=family_key, execution_id=execution_id, limit=limit, max_events_per_execution=max_events_per_execution)
         payload = enrich_agent_execution_payload(payload, raw)

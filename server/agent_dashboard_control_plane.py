@@ -41,6 +41,8 @@ def _claude_settings(request: Request) -> dict[str, Any]:
 
 
 def agent_setup_payload(request: Request) -> dict[str, Any]:
+    from .agent_observe_presets import manual_setup_material
+
     base_url = _base_url(request)
     token = ensure_agent_ingest_token()
     otel_endpoint = f"{base_url}/agent-ingest/v1/otel"
@@ -78,7 +80,7 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
                 "otel_endpoint": f"{base_url}/agent-ingest/v1/claude-otel",
                 "telemetry_depth": "rich_structural",
                 "events": [
-                    "SessionStart", "SessionEnd", "PostToolUse", "PostToolUseFailure",
+                    "SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "PostToolUse", "PostToolUseFailure",
                     "PermissionRequest", "PermissionDenied", "SubagentStart", "SubagentStop",
                     "StopFailure", "claude_code.user_prompt", "claude_code.api_request",
                     "claude_code.api_error", "claude_code.api_refusal", "claude_code.tool_result",
@@ -102,6 +104,7 @@ def agent_setup_payload(request: Request) -> dict[str, Any]:
                 "content_logging_enabled": False,
                 "telemetry_depth": "rich_native_events_plus_trace",
             },
+            **manual_setup_material(),
             "openai_agents": {
                 "label": "OpenAI Agents SDK",
                 "method": "additional_tracing_processor",

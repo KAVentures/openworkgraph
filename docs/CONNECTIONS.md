@@ -12,15 +12,45 @@ OpenWorkGraph has one list of AI apps, on the dashboard's **Connect** tab under 
 | Claude Code | ✓ | ✓ hooks | `~/.claude.json` (MCP), `~/.claude/settings.json` (hooks) |
 | Claude Desktop | ✓ | – | `claude_desktop_config.json` in Claude's app-support folder |
 | Codex | ✓ | ✓ OTel traces | `~/.codex/config.toml` (or `$CODEX_HOME`) |
-| Cursor | ✓ | – | `~/.cursor/mcp.json` |
-| VS Code + GitHub Copilot | ✓ | – | `mcp.json` in VS Code's user folder (Copilot agent mode uses it) |
+| Cursor | ✓ | ✓ hooks | `~/.cursor/mcp.json` (MCP), `~/.cursor/hooks.json` (hooks) |
+| VS Code + GitHub Copilot | ✓ | ✓ OTel traces | `mcp.json` (MCP) and `settings.json` (telemetry) in VS Code's user folder |
 | Windsurf | ✓ | – | `~/.codeium/windsurf/mcp_config.json` |
-| Gemini CLI | ✓ | – | `~/.gemini/settings.json` |
+| Gemini CLI | ✓ | ✓ OTel logs | `~/.gemini/settings.json` (`mcpServers` and `telemetry`) |
 | GitHub Copilot CLI | ✓ | – | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) |
 | Kiro | ✓ | – | `~/.kiro/settings/mcp.json` |
 | Amazon Q Developer | ✓ | – | `~/.aws/amazonq/mcp.json` |
 
 **Cloud apps** (ChatGPT, Lovable, Microsoft 365 Copilot) run on their own servers and accept only remote HTTP MCP servers, so they cannot reach OpenWorkGraph on this computer directly. They need a secure tunnel to the optional local HTTP endpoint (or an organization Gateway). Other MCP apps and custom agents (OpenAI Agents SDK, OpenTelemetry, custom events) are under **More ways to connect**.
+
+## How Copilot, Gemini CLI and Cursor are observed
+
+**GitHub Copilot (VS Code)**
+- **Settings written:** Copilot's own OpenTelemetry export, pointed at OpenWorkGraph (`github.copilot.chat.otel.*`), with `captureContent` false.
+- **What becomes evidence:** Copilot's agent, model-call and tool spans. Tool arguments and results are never read.
+- **When it applies:** after VS Code reloads its window.
+- **Refuses (changes nothing) if:**
+  - Copilot telemetry already goes to your own collector;
+  - content capture is on;
+  - `settings.json` contains comments (VS Code allows them, OpenWorkGraph does not rewrite them). Manual setup shows the four keys to add.
+
+**Gemini CLI**
+- **Settings written:** a `telemetry` block in `~/.gemini/settings.json`: `target` local, `otlpProtocol` http, and `logPrompts` **false**. Gemini's default is true, which would put prompts and tool arguments into its log events.
+- **What becomes evidence:** turn starts, model calls (model, duration, token counts), tool calls, and human accept/reject decisions. Nothing else is read, even if prompt logging is later turned back on.
+- **Refuses (changes nothing) if** you already have your own telemetry settings.
+
+**Cursor**
+- **Hooks added:** OpenWorkGraph's hooks in `~/.cursor/hooks.json`, next to yours:
+  - `sessionStart` / `sessionEnd`
+  - `beforeSubmitPrompt` / `stop` (one turn per generation)
+  - `postToolUse` / `postToolUseFailure`
+  - `subagentStop`
+- **Never blocks:** Cursor runs hooks synchronously, so the hook answers first with a reply that never blocks (`{"continue": true}` for `beforeSubmitPrompt`, `{}` otherwise), then records. Permission hooks (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`, `subagentStart`) are never used, so OpenWorkGraph can never approve or deny anything.
+- **Never read:** prompts, agent text, tool input/output, file edits, commands, error messages, your email and workspace paths.
+
+**Authentication without headers**
+- Copilot and Gemini CLI cannot send an Authorization header from a settings file, so their endpoint is `/agent-ingest/otlp/<source>/<token>/v1/…`. The path token is separate and write-only: it can only add structural agent events and cannot read anything.
+- The server's access log shows the path as `[redacted]`.
+- Only OTLP/HTTP JSON is accepted. Protobuf gets a clear 415, and the diagnostics line reports it.
 
 ## How the switches behave
 
