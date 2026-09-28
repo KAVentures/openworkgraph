@@ -17,6 +17,10 @@ from server.local_auth import ensure_api_token
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+# This test launches a real localhost Uvicorn process. Windows hosted runners can
+# be heavily contended; use the same scheduling allowance as the readiness wait.
+# This is a test-harness timeout, not a product latency/SLO assertion.
+LIVE_HTTP_TIMEOUT = 15.0
 
 
 def _free_port() -> int:
@@ -25,7 +29,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_http(url: str, process: subprocess.Popen, timeout: float = 15.0) -> None:
+def _wait_http(url: str, process: subprocess.Popen, timeout: float = LIVE_HTTP_TIMEOUT) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if process.poll() is not None:
@@ -146,7 +150,7 @@ def test_production_server_exposes_aggregate_noncausal_analytics_only_to_api_rea
             base + "/agent-ingest/v1/events",
             json={"events": events},
             headers=write_headers,
-            timeout=5,
+            timeout=LIVE_HTTP_TIMEOUT,
         )
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["inserted"] == len(events)
@@ -156,10 +160,10 @@ def test_production_server_exposes_aggregate_noncausal_analytics_only_to_api_rea
             + "/v1/task-context/outcome-associations"
             + "?min_group_support=2&min_known_outcomes=1&min_stratum_support=1"
         )
-        assert httpx.get(endpoint, timeout=5).status_code == 401
-        assert httpx.get(endpoint, headers=write_headers, timeout=5).status_code == 401
+        assert httpx.get(endpoint, timeout=LIVE_HTTP_TIMEOUT).status_code == 401
+        assert httpx.get(endpoint, headers=write_headers, timeout=LIVE_HTTP_TIMEOUT).status_code == 401
 
-        response = httpx.get(endpoint, headers=api_headers, timeout=5)
+        response = httpx.get(endpoint, headers=api_headers, timeout=LIVE_HTTP_TIMEOUT)
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["read_only"] is True
