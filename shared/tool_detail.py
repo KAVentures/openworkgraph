@@ -12,8 +12,8 @@ and nothing else:
   (``commit``, ``push``, ``pr_create``), again allowlisted.
 * ``tests_passed`` / ``tests_failed``: counts parsed from a recognised test
   runner's summary line. Only the numbers leave this module.
-* ``test_status``: passing/failing when a recognised summary exists, otherwise
-  unknown for an observed test invocation.
+* ``test_status``: ``unknown`` only when a test invocation was observed but no
+  recognised result summary was available; known pass/fail is derived from counts.
 * ``file_types``: allowlisted file extensions (``py``, ``ts``, ``md``).
 * ``file_refs``: keyed hashes of file paths. They show "the same file again"
   without revealing the path; the key never leaves this computer.
@@ -378,9 +378,8 @@ def tool_call_detail(
         detail.update({k: info[k] for k in ("commands", "git", "gh") if info[k]})
         if info["runs_tests"]:
             counts = test_counts(output)
-            detail.update(counts)
             if counts:
-                detail["test_status"] = "failing" if int(counts.get("tests_failed") or 0) else "passing"
+                detail.update(counts)
             else:
                 detail["test_status"] = "unknown"
     paths = [p for p in paths if p]
