@@ -21,6 +21,8 @@ _FULL_HISTORY_PATHS = {
 _RANGELESS_HISTORICAL_PREFIXES = (
     "/v1/procedural-memory",
     "/v1/run-memory",
+    "/v1/playbooks/local",
+    "/v1/playbooks/export",
     "/v1/task-context",
 )
 _SESSION_PREFIXES = (

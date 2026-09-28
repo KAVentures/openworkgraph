@@ -158,6 +158,7 @@ find_repeated_workflows
 get_task_context
 how_did_similar_runs_go
 get_agent_runs
+get_playbooks
 ```
 
 `OWG_EXPERIMENTAL_GOVERNANCE=1` adds the explicitly experimental governance tools documented in `EXPERIMENTAL_GOVERNANCE.md`. The flag controls MCP exposure; it does not remove the underlying governance REST implementation.
