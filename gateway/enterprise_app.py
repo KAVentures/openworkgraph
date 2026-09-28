@@ -14,6 +14,7 @@ from .hardening import (
     SlidingWindowRateLimiter,
     bearer_fingerprint,
 )
+from .identity_hardening import install_identity_security_hardening
 from .identity_routes import install_identity
 from .organization_admin import install_organization_admin
 from .settings import PRODUCT_VERSION, GatewaySettings
@@ -59,6 +60,7 @@ def create_enterprise_app(
     install_declared_policy_distribution(app, db=db, settings=settings)
     install_organization_admin(app, db=db, settings=settings)
     install_identity(app, db=db, settings=settings)
+    install_identity_security_hardening()
 
     core_health = _take_get_endpoint(app, "/health")
     core_capabilities = _take_get_endpoint(app, "/v1/capabilities")
