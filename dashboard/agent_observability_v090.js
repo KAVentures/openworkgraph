@@ -143,9 +143,9 @@
 
   function patchHiddenNote(){
     const note=document.querySelector('#agentHiddenNote');if(!note)return;
-    const names={'claude-code':'Claude Code','codex':'Codex'};
+    const names={'claude-code':'Claude Code','codex':'Codex','github-copilot':'GitHub Copilot','gemini-cli':'Gemini CLI','cursor':'Cursor'};
     const hidden=(latest.hidden_frameworks||[]).map(f=>names[f]||f);
-    note.textContent=hidden.length?`Past runs from ${hidden.join(' and ')} are hidden because Observe is off for ${hidden.length>1?'them':'it'}. Nothing was deleted.`:'';
+    note.textContent=hidden.length?`Past runs from ${(hidden.length>1?hidden.slice(0,-1).join(', ')+' and '+hidden[hidden.length-1]:hidden[0])} are hidden because Observe is off for ${hidden.length>1?'them':'it'}. Nothing was deleted.`:'';
   }
 
   function patch(){

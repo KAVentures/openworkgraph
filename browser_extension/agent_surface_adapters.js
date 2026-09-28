@@ -8,6 +8,12 @@
     {key:'lovable', name:'Lovable', hosts:['lovable.dev']},
     {key:'gemini', name:'Gemini', hosts:['gemini.google.com']},
   ];
+  // Structural signals come first and work in any UI language: aria-busy,
+  // streaming markers, stable data-testid tokens, submit semantics and Enter in
+  // the message box. The English labels below are only a last fallback.
+  const BUSY_SELECTOR='[aria-busy="true"],[data-is-streaming="true"],button[data-testid*="stop" i]';
+  const SEND_TESTID=/(^|[-_])(send|submit)([-_]|$)/i;
+  const STOP_TESTID=/(^|[-_])(stop|cancel)([-_]|$)/i;
   const STOP_RE=/^(stop|cancel)( generating| response| task| run)?$/i;
   const SEND_RE=/^(send|submit|ask|run|build|generate)( prompt| message| request)?$/i;
   const APPROVE_RE=/^(allow|approve|confirm|continue|accept)$/i;
@@ -21,10 +27,22 @@
     return String(el.getAttribute?.('aria-label')||el.getAttribute?.('title')||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,80);
   }
   function buttonLike(el){return !!el?.closest?.('button,[role="button"],input[type="submit"]');}
+  function testId(el){return String(el?.getAttribute?.('data-testid')||'');}
   function hasBusyState(doc){
     if(!doc)return false;
-    if(doc.querySelector('[aria-busy="true"]'))return true;
+    if(doc.querySelector(BUSY_SELECTOR))return true;
     return [...doc.querySelectorAll('button,[role="button"]')].some(el=>STOP_RE.test(accessibleName(el)));
+  }
+  function isComposer(el){
+    if(!el||typeof el.closest!=='function')return false;
+    const tag=String(el.tagName||'').toLowerCase();
+    return tag==='textarea'||el.isContentEditable===true||String(el.getAttribute?.('contenteditable')||'')==='true'
+      ||String(el.getAttribute?.('role')||'')==='textbox';
+  }
+  // Enter without modifiers in the message box sends on these chat surfaces.
+  // Only the key and target type are inspected; the text is never read.
+  function isComposerSend(ev){
+    return ev?.key==='Enter'&&!ev.shiftKey&&!ev.altKey&&!ev.ctrlKey&&!ev.metaKey&&!ev.isComposing&&isComposer(ev.target);
   }
   function hasVisibleErrorState(doc){return !!doc?.querySelector?.('[role="alert"][aria-live], [role="alert"]');}
   function hasApprovalState(doc){
@@ -34,8 +52,19 @@
     }
     return false;
   }
-  function isSendControl(el){const control=buttonLike(el);return !!control&&SEND_RE.test(accessibleName(control));}
-  function isStopControl(el){const control=buttonLike(el);return !!control&&STOP_RE.test(accessibleName(control));}
+  function controlOf(el){return el?.closest?.('button,[role="button"],input[type="submit"]')||null;}
+  function isSendControl(el){
+    const control=controlOf(el);if(!control)return false;
+    if(SEND_TESTID.test(testId(control)))return true;
+    const type=String(control.getAttribute?.('type')||'').toLowerCase();
+    if(type==='submit'&&control.form&&[...control.form.elements||[]].some(isComposer))return true;
+    return SEND_RE.test(accessibleName(control));
+  }
+  function isStopControl(el){
+    const control=controlOf(el);if(!control)return false;
+    if(STOP_TESTID.test(testId(control)))return true;
+    return STOP_RE.test(accessibleName(control));
+  }
   function isApprovalControl(el){const control=buttonLike(el);return !!control&&APPROVE_RE.test(accessibleName(control))&&!!control.closest('dialog,[role="dialog"]');}
   function safeRunId(){
     try{return 'web-'+crypto.randomUUID().replaceAll('-','');}catch(_){return 'web-'+Date.now().toString(36)+Math.random().toString(36).slice(2,12);}
@@ -85,13 +114,14 @@
       if(runId&&isApprovalControl(ev.target)){sendLifecycle(provider,'agent_approval_received',runId,'approval_control');approvalSent=true;}
     },true);
     doc.addEventListener('submit',()=>{begin('form_submit');setTimeout(sample,0);},true);
+    doc.addEventListener('keydown',ev=>{if(isComposerSend(ev)){begin('composer_enter');setTimeout(sample,0);}},true);
     const observer=new MutationObserver(()=>sample());
     const root=doc.documentElement||doc;observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy','aria-live','role','open','disabled']});
     setInterval(()=>{if(!doc.hidden)sample();},1500);
     sample();
   }
 
-  globalThis.__OWG_AGENT_SURFACE_ADAPTERS_FOR_TESTS__={PROVIDERS,providerForHost,accessibleName,hasBusyState,hasVisibleErrorState,hasApprovalState,isSendControl,isStopControl,isApprovalControl,structuralPayload};
+  globalThis.__OWG_AGENT_SURFACE_ADAPTERS_FOR_TESTS__={PROVIDERS,providerForHost,accessibleName,hasBusyState,hasVisibleErrorState,hasApprovalState,isSendControl,isStopControl,isApprovalControl,isComposerSend,structuralPayload};
   if(typeof document!=='undefined'&&typeof MutationObserver!=='undefined'){
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>start(),{once:true});else start();
   }

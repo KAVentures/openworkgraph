@@ -30,6 +30,9 @@ def main() -> None:
     import server.dashboard_privacy  # noqa: F401
 
     import server.agent_capture_runtime as agent_capture_runtime
+    import server.log_redaction as log_redaction
+
+    log_redaction.install()
 
     org_join_routes.start_managed_setup_in_background()
     agent_capture_runtime.start()

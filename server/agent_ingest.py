@@ -10,6 +10,7 @@ from shared.agent_ingress_validation import validate_agent_ingress_event
 from shared.capture_control import filter_recordable
 from shared.claude_otel_adapter import claude_otel_to_agent_events
 from shared.codex_otel_adapter import codex_otel_to_agent_events
+from shared.gemini_otel_adapter import gemini_otel_to_agent_events
 from shared.history_policy import retention_for_kind
 from shared.otel_agent_adapter import otel_payload_to_agent_events
 from .db import insert_events
@@ -145,3 +146,37 @@ def ingest_claude_otel_payload(
         "projected": len(events),
         "inserted": inserted,
     }
+
+
+def ingest_gemini_otel_payload(
+    payload: dict[str, Any],
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Ingest Gemini CLI OTLP logs through a strict structural allowlist."""
+    _bounded_json_size({"payload": payload, "defaults": defaults or {}})
+    projected, stats = gemini_otel_to_agent_events(payload, defaults=defaults, max_records=MAX_CLAUDE_OTEL_RECORDS)
+    if len(projected) > MAX_AGENT_EVENTS * 2:
+        raise AgentEvidenceError("Gemini CLI OpenTelemetry projection produced too many agent events")
+    events = _validated_events(projected)
+    inserted = _insert_recordable(events)
+    return {
+        "records_seen": int(stats.get("records_seen") or 0),
+        "records_ignored": int(stats.get("records_ignored") or 0),
+        "projected": len(events),
+        "inserted": inserted,
+    }
+
+
+def count_otlp_records(payload: dict[str, Any]) -> int:
+    """Records in an OTLP JSON body of any signal (for signals we accept but do not store)."""
+    total = 0
+    for key, scopes, items in (
+        ("resourceSpans", "scopeSpans", "spans"),
+        ("resourceLogs", "scopeLogs", "logRecords"),
+        ("resourceMetrics", "scopeMetrics", "metrics"),
+    ):
+        for resource in payload.get(key) or []:
+            for scope in (resource or {}).get(scopes) or [] if isinstance(resource, dict) else []:
+                total += len((scope or {}).get(items) or []) if isinstance(scope, dict) else 0
+    return total
