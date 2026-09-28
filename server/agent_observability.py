@@ -68,7 +68,7 @@ def _capabilities(events: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         for key in ("model_call", "tool_call", "handoff", "human_approval_received", "model_identity", "duration"):
             caps[key] = _capability("observable", "codex_otel")
         caps["human_approval_requested"] = _capability("not_observable", "codex_otel_decision_surface_has_no_request_event")
-        caps["token_usage"] = _capability("partial", "codex_usage_is_span_or_turn_dependent")
+        caps["token_usage"] = _capability("observable", "codex_response_completed_event")
         return caps
 
     if framework.startswith("openai-agents"):

@@ -38,6 +38,10 @@ def _run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "operation_counts",
             "observed_operation_counts",
             "tool_category_counts",
+            # What the run did: commands, git/gh, how tests ended, files, lines, tokens.
+            "work_summary",
+            "parent_execution_id",
+            "child_execution_ids",
             "structural_steps",
             "structural_steps_truncated",
             "approval_request_count",

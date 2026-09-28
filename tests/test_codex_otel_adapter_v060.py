@@ -88,6 +88,14 @@ def test_codex_logs_map_structural_events_and_drop_sensitive_content():
                 "auth.agent_id": "private-agent-id",
             },
         ),
+        # Current Codex reports the tokens when the response completes; the
+        # successful request above is represented by this event.
+        _record(
+            "codex.sse_event",
+            timestamp="2026-09-25T00:00:02.200Z",
+            **{"event.kind": "response.completed", "input_token_count": 90, "output_token_count": 10,
+               "cached_token_count": 40, "reasoning_token_count": 4, "tool_token_count": 100},
+        ),
         _record(
             "codex.user_prompt",
             timestamp="2026-09-25T00:00:02.500Z",
@@ -95,7 +103,7 @@ def test_codex_logs_map_structural_events_and_drop_sensitive_content():
         ),
     ]
     events, stats = codex_otel_to_agent_events(_logs(records))
-    assert stats == {"records_seen": 5, "records_ignored": 1, "agent_events": 4}
+    assert stats == {"records_seen": 6, "records_ignored": 2, "agent_events": 4}
     assert [event["operation"] for event in events] == [
         "run_started",
         "tool_call",
@@ -108,6 +116,7 @@ def test_codex_logs_map_structural_events_and_drop_sensitive_content():
     assert events[1]["duration_seconds"] == 0.25
     assert events[2]["status"] == "denied"
     assert events[3]["status"] == "success"
+    assert events[3]["usage"] == {"input_tokens": 90, "output_tokens": 10, "cached_input_tokens": 40, "total_tokens": 100}
 
     canonical = [agent_event_to_evidence(event) for event in events]
     serialized = json.dumps(canonical, ensure_ascii=False)

@@ -108,7 +108,10 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
     )
     assert [event["operation"] for event in started_events] == ["handoff", "run_started"]
     handoff, started = started_events
-    assert handoff["run_id"] == started["run_id"] == "prompt-turn-1"
+    # The delegation belongs to the parent turn; the subagent runs as its own
+    # child run (linked to the turn by the handoff span).
+    assert handoff["run_id"] == "prompt-turn-1"
+    assert started["run_id"] == "s:sub:child" and started["span_id"] == handoff["span_id"]
     assert handoff["agent_name"] == "Claude Code"
     assert handoff["tool_name"] == "subagent:Explore"
     assert started["agent_name"] == "Claude Code/Explore"
@@ -125,7 +128,7 @@ def test_session_subagent_permission_and_failure_mappings_are_structural():
         },
         observed_at="2026-09-25T00:00:05Z",
     )
-    assert stopped["run_id"] == "prompt-turn-1"
+    assert stopped["run_id"] == "s:sub:child"  # finishes the child run, not the turn
     assert stopped["operation"] == "run_finished"
     assert stopped["agent_name"] == "Claude Code/Explore"
     assert "do not store this" not in json.dumps(stopped)

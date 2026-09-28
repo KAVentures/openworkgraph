@@ -75,6 +75,25 @@ def _category(name: str) -> str:
     return "other" if name else "none"
 
 
+def _tool_detail(tool: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Structural facts from the tool input/output, derived in memory only."""
+    from .tool_detail import enabled, tool_call_detail
+
+    if not enabled():
+        return {}
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    try:
+        if tool_input.get("command"):
+            output = f"{payload.get('tool_output') or ''}\n{payload.get('error_message') or ''}"
+            return tool_call_detail(command=tool_input.get("command"), output=output)
+        path = tool_input.get("file_path") or tool_input.get("target_file") or tool_input.get("path")
+        if path and any(t in tool.lower() for t in ("read", "edit", "write", "delete", "file")):
+            return tool_call_detail(paths=[path])
+    except Exception:
+        return {}
+    return {}
+
+
 def cursor_hook_to_agent_events(payload: dict[str, Any], *, observed_at: str | None = None) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -134,7 +153,11 @@ def cursor_hook_to_agent_events(payload: dict[str, Any], *, observed_at: str | N
             status = "denied"
         else:
             status = "error"
-        return [event("tool_call", status, generation, hook, tool=tool, span=span)]
+        projected = event("tool_call", status, generation, hook, tool=tool, span=span)
+        detail = _tool_detail(tool, payload)
+        if detail:
+            projected["tool_detail"] = detail
+        return [projected]
     if hook == "subagentStop":
         kind = _label(payload.get("subagent_type"), default="subagent", limit=80)
         status = _STATUS.get(_text(payload.get("status"), 40).lower(), "unknown")

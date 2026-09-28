@@ -380,6 +380,14 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
             "clipboard_contents": False,
         },
     }
+    # Content-free structural detail (allowlisted commands, test counts, file
+    # types, hashed file refs, line counts). Re-sanitized here whatever sent it.
+    if operation == "tool_call":
+        from .tool_detail import sanitize_detail
+
+        detail = sanitize_detail(payload.get("tool_detail"))
+        if detail:
+            metadata["tool"]["detail"] = detail
     task_context = _task_context(payload, operation=operation)
     if task_context:
         metadata["task_context"] = task_context
