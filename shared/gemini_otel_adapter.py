@@ -4,18 +4,23 @@ from __future__ import annotations
 
 Gemini CLI emits one log record per event, named by the ``event.name``
 attribute. With ``logPrompts`` on (Gemini's default), the same records also
-carry the prompt, request/response text and tool arguments. OpenWorkGraph turns
+carry prompt, request/response text and tool arguments. OpenWorkGraph turns
 ``logPrompts`` off when it configures Gemini CLI, and independently reads only
 the allowlisted attributes below, so content never enters OpenWorkGraph even if
 a user re-enables prompt logging.
 
 Mapped:
-    gemini_cli.user_prompt    -> run_started   (turn = prompt_id)
-    gemini_cli.api_response   -> model_call    (model, duration, token counts)
-    gemini_cli.api_error      -> model_call    (status error)
-    gemini_cli.tool_call      -> tool_call     (+ human_approval_received when a
-                                                person accepted/rejected/modified)
-Everything else is counted as ignored.
+    gemini_cli.user_prompt           -> run_started (turn marker = prompt_id)
+    gemini_cli.api_response          -> model_call  (model, duration, token counts)
+    gemini_cli.api_error             -> model_call  (status error)
+    gemini_cli.tool_call             -> tool_call   (+ human approval decision)
+    gemini_cli.agent.start/finish    -> nested run lifecycle (agent_id)
+    gemini_cli.conversation_finished -> session run_finished (session.id)
+
+Gemini currently does not expose a reliable per-prompt "turn finished" log.
+OpenWorkGraph therefore does not manufacture one from an API response: a model
+response can be followed by tools and more model calls. Session and explicit
+agent-run finishes are recorded when Gemini emits them.
 """
 
 import hashlib
@@ -37,6 +42,9 @@ _SUPPORTED = {
     "gemini_cli.api_response",
     "gemini_cli.api_error",
     "gemini_cli.tool_call",
+    "gemini_cli.conversation_finished",
+    "gemini_cli.agent.start",
+    "gemini_cli.agent.finish",
 }
 # Gemini's ToolCallDecision: accept/reject/modify are a person's choice;
 # auto_accept is policy and is not a human decision.
@@ -79,6 +87,18 @@ def _event_name(attrs: dict[str, Any]) -> str:
     return raw if raw.startswith("gemini_cli.") else (f"gemini_cli.{raw}" if raw else "")
 
 
+def _finish_status(reason: Any) -> str:
+    """Use only explicit failure/cancellation words; otherwise do not overclaim success."""
+    low = _text(reason, 80).lower()
+    if any(token in low for token in ("error", "fail", "exception")):
+        return "error"
+    if any(token in low for token in ("cancel", "abort", "interrupt")):
+        return "cancelled"
+    if any(token in low for token in ("deny", "reject")):
+        return "denied"
+    return "unknown"
+
+
 def gemini_otel_to_agent_events(
     payload: dict[str, Any],
     *,
@@ -99,20 +119,30 @@ def gemini_otel_to_agent_events(
             continue
         session_id = _text(attrs.get("session.id") or resource_attrs.get("session.id"), 128)
         prompt_id = _text(attrs.get("prompt_id"), 128)
-        run_id = prompt_id or session_id
-        if not run_id:
+        default_run_id = prompt_id or session_id
+        if not session_id and not default_run_id:
             ignored += 1
             continue
 
-        def base(operation: str, status: str, *, tool_name: str = "", span_id: str = "", key: str = name) -> dict[str, Any]:
+        def base(
+            operation: str,
+            status: str,
+            *,
+            run_id: str | None = None,
+            tool_name: str = "",
+            span_id: str = "",
+            key: str = name,
+            duration_ms: Any | None = None,
+        ) -> dict[str, Any]:
+            rid = _text(run_id or default_run_id, 128)
             return {
-                "event_id": _event_id(run_id, key, attrs, native),
+                "event_id": _event_id(rid, key, attrs, native),
                 "observed_at": _observed_at(attrs, native),
                 "organization_id": _text(defaults.get("organization_id"), 128),
                 "actor_id": _text(defaults.get("actor_id"), 128),
                 "device_id": _text(defaults.get("device_id"), 128) or "gemini-local",
                 "sensor_id": "agent:gemini-cli-otel",
-                "session_id": session_id or run_id,
+                "session_id": session_id or rid,
                 "agent_name": "Gemini CLI",
                 "provider": "google",
                 "framework": "gemini-cli",
@@ -120,17 +150,20 @@ def gemini_otel_to_agent_events(
                 "operation": operation,
                 "status": status,
                 "observation_level": "native_trace",
-                "run_id": run_id,
-                "trace_id": session_id or run_id,
+                "run_id": rid,
+                "trace_id": session_id or rid,
                 "span_id": span_id,
                 "tool_name": tool_name,
                 "tool_category": _tool_category(tool_name, attrs) if tool_name else "none",
-                "duration_seconds": _duration_seconds(attrs.get("duration_ms")),
+                "duration_seconds": _duration_seconds(attrs.get("duration_ms") if duration_ms is None else duration_ms),
                 "usage": _usage(attrs) if operation == "model_call" else {},
             }
 
         if name == "gemini_cli.user_prompt":
-            events.append(base("run_started", "running"))
+            if not prompt_id:
+                ignored += 1
+                continue
+            events.append(base("run_started", "running", run_id=prompt_id))
         elif name == "gemini_cli.api_response":
             code = _int(attrs.get("status_code"))
             events.append(base("model_call", "success" if code in (None, 200) else "error"))
@@ -152,6 +185,28 @@ def gemini_otel_to_agent_events(
                     "human_approval_received", _HUMAN_DECISIONS[decision],
                     tool_name=tool, span_id=call_key, key=name + ":decision",
                 ))
+        elif name == "gemini_cli.conversation_finished":
+            if not session_id:
+                ignored += 1
+                continue
+            events.append(base("run_finished", "unknown", run_id=session_id))
+        elif name == "gemini_cli.agent.start":
+            agent_id = _text(attrs.get("agent_id"), 128)
+            if not agent_id:
+                ignored += 1
+                continue
+            events.append(base("run_started", "running", run_id=agent_id))
+        elif name == "gemini_cli.agent.finish":
+            agent_id = _text(attrs.get("agent_id"), 128)
+            if not agent_id:
+                ignored += 1
+                continue
+            events.append(base(
+                "run_finished",
+                _finish_status(attrs.get("terminate_reason")),
+                run_id=agent_id,
+                duration_ms=attrs.get("duration_ms"),
+            ))
 
     unique: dict[str, dict[str, Any]] = {}
     for event in events:
