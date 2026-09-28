@@ -1,6 +1,6 @@
-# OpenWorkGraph (unreleased, planned v0.104): human work joined to agent runs
+# OpenWorkGraph v0.107 stack slice: human work joined to agent runs
 
-Builds on v0.103. Human capture and agent observation were recorded side by side but never connected. Each agent run now says what the person did around it.
+This unreleased slice builds on the session-brief stack. Human capture and agent observation were recorded side by side but never connected; each agent run can now describe what the person did around it without adding content capture.
 
 ## What the person did during and after a run
 - **Measures:** traces, run memory and MCP run lists gain `human_context`:
@@ -9,21 +9,22 @@ Builds on v0.103. Human capture and agent observation were recorded side by side
 - **No capture is not zero:** without human capture in a window, it says `human_capture_observed: false`.
 - **Subagents:** runs inside a turn are not treated as the "next turn".
 
-## Did the person rework the agent's files?
-- **How it works:** the Claude Code hook snapshots the project's changed files, as keyed hashes of paths and contents, when a turn ends, and compares at the next prompt. The next turn records only counts (`between_turns`):
-  - files changed;
-  - how many of them the agent had edited in the last 24 hours;
-  - whether HEAD moved (a commit, pull or checkout is reported as that, not guessed at);
-  - the gap.
-- **Where it shows:** it is attributed to the run it followed (`human_context.after.between_turns`), shown in History ("you changed 2 of its files after"), and summarized in session briefs ("changed files the agent had just edited in 3 of 10 turns; median time to the next prompt: 4 min").
+## Did the person rework the immediately preceding agent turn?
+- **How it works:** the Claude Code hook tracks file refs edited in the current turn, snapshots the project's changed files as keyed hashes of paths and contents when that turn ends, and compares at the next prompt.
+- `between_turns.agent_files_changed` counts only changed files the **immediately preceding turn** edited. Older edits are not carried forward through a rolling 24-hour set, avoiding false attribution to a later turn.
+- The next turn records only counts: files changed, immediately-prior-turn overlap, whether HEAD moved, and the gap.
+- **Where it shows:** it is attributed to the run it followed (`human_context.after.between_turns`), shown in History and summarized in session briefs.
+- **Cross-platform correctness:** concurrent async Claude hooks are serialized with an atomic lock file that works on Windows, macOS and Linux. Lock ownership is tokenized, stale locks recover, and cleanup never removes another process's active lock.
 - **Safety:**
   - runs only under a recording lease;
-  - git's fsmonitor is disabled, so a repository cannot make it run commands (tested);
+  - git's fsmonitor is disabled, so a repository cannot make it run commands;
   - it never takes git's index lock;
-  - there is a 2 s timeout;
-  - it is bounded to 200 files and 50 MB;
-  - its state is local, keyed by the project's hash, and expires after 7 days.
+  - git calls have a 2 s timeout;
+  - snapshots are bounded to 200 files and 50 MB;
+  - state is local, keyed by the project's hash, and expires after 7 days.
 - **Off switch:** `OWG_AGENT_REWORK=0`.
 
-## Not yet
-- Rework after the *last* turn of a session is only compared when the next session in the same project starts. It is recorded, but not yet attributed back across sessions.
+## Verification
+The regression suite includes a real temporary git repository, fsmonitor trap, symlink handling, sanitization, human-context joining, previous-turn-only attribution and a separate Python process that holds the workspace lock so Windows/macOS/Linux CI exercise cross-process contention.
+
+This slice does not publish a separate v0.104 release; the completed stack publishes as v0.107.0.
