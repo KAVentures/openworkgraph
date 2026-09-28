@@ -141,60 +141,46 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
-          ### First useful reconstruction
-          The local dashboard now has an evidence-driven first-value layer designed to become useful during the first real work session. It watches only the existing privacy-hardened local evidence surfaces and, once enough activity exists, offers a deterministic **Your last few minutes** reconstruction. This is a presentation layer over canonical evidence, not a new inference or capture pipeline.
+          ### v0.107: the agent learning loop
+          This release turns structural observation into a bounded learning loop without making inferred summaries the source of truth. Canonical evidence remains primary.
 
-          The activation layer adds no sensor, OS/browser permission, AI permission, retention permission, Gateway sharing, MCP tool, screenshot capture, filesystem watcher, prompt/response capture or content telemetry. It never auto-enables AI access or saved history. Empty first-run placeholders are suppressed until their underlying features have useful data, while Evidence, History, Agents, Connect, Organization and Export remain available unchanged.
+          - **Run memory:** content-free structural run summaries can survive raw-history retention. Existing installations whose human and agent history were both explicitly ephemeral do not silently gain persistent run memory on upgrade.
+          - **Outcome tracking:** optional github.com pull-request and CI outcomes are polled through the user's local gh login. Tool-provided arbitrary hosts cannot become network targets, and watch timing follows the observed work event rather than delayed ingestion.
+          - **Session briefs:** optional Claude Code SessionStart briefs feed bounded structural facts from prior runs back into the agent. Unknown test results remain unknown; OpenWorkGraph does not invent zero pass/fail counts.
+          - **Human + agent join:** coarse human activity can be aligned around agent runs. Rework overlap refers only to files edited by the immediately preceding turn, with cross-platform process locking for concurrent async hooks.
+          - **Brief evaluation:** optional randomized holdout uses an explicit trial ID and sticky per-trial session assignment. Historical ordinary briefs are excluded, and open pull requests are right-censored from merge-rate denominators.
+          - **Playbooks:** portable workflow summaries use strict canonical structural grammar. Prompt-like strings and device-local opaque refs are rejected at import and rechecked on read.
+          - **Setup diagnostics:** Connect cards report specific evidence-based next steps without claiming an unobserved cause; telemetry actually observed remains the basis for active-state claims.
+
+          ### First useful reconstruction
+          The local dashboard includes an evidence-driven first-value layer that reconstructs the current session from existing privacy-hardened evidence. It adds no sensor, OS/browser permission, AI permission, retention permission, Gateway sharing, screenshot capture, filesystem watcher, prompt/response capture or content telemetry.
 
           ### Local-first remains the default
-          A normal OpenWorkGraph install captures to local SQLite, provides local dashboard/export/API/MCP access, and requires no OpenWorkGraph account or OpenWorkGraph-hosted evidence store. Capture continues locally if an optional customer-controlled Gateway or network is unavailable.
+          A normal OpenWorkGraph install captures to local SQLite and provides local dashboard/export/API/MCP access without requiring an OpenWorkGraph account or hosted evidence store. Capture continues locally if an optional customer-controlled Gateway or network is unavailable.
 
           ### Human + agent execution evidence
-          Human desktop/browser evidence and provider-neutral structural agent execution evidence coexist in the canonical local evidence store. Agent evidence can describe observed lifecycle boundaries, model calls, tool calls, handoffs, approvals, errors, duration, token usage and context linkage when those signals are available.
-
-          Missing agent signals mean **not observed**, not proof that the underlying runtime did not perform the action. OpenWorkGraph does not claim to observe hidden model reasoning.
-
-          ### Agent observability
-          The local dashboard includes an Agents view with run-level reports and structural execution traces. REST/MCP surfaces provide privacy-safe run inspection for authorized human/AI clients. The write-only agent-ingest token cannot read work history or reports.
+          Human desktop/browser evidence and provider-neutral structural agent execution evidence coexist in the canonical local evidence store. Missing agent signals mean not observed, not proof that the runtime did not perform the action; hidden reasoning is not observed.
 
           ### Agent setup control plane
-          The dashboard now separates giving an AI access to OpenWorkGraph context from observing an agent's own execution. It provides reviewable setup material for Claude Code lifecycle hooks, Codex trace export, OpenAI Agents tracing and generic OpenTelemetry/custom structural adapters. OpenWorkGraph does not silently edit third-party configuration files. An integration is shown as active only when telemetry actually observed by the local evidence store supports that status.
+          The dashboard separates giving an AI access to OpenWorkGraph context from observing an agent's own execution. Setup material covers Claude Code hooks, Codex telemetry, OpenAI Agents tracing and generic structural adapters. OpenWorkGraph does not silently edit third-party configuration files. An integration is shown as active only when telemetry actually observed by the local evidence store supports that status.
 
           ### Custom harnesses
-          Arbitrary self-built or third-party agent harnesses can connect in either or both directions. Python and Node/TypeScript helpers, OTLP/HTTP JSON and raw structural HTTP can send privacy-safe execution telemetry through the dedicated write-only agent credential. Any MCP-capable harness can separately read only the OpenWorkGraph context the user has authorized. The setup flow keeps telemetry write permission and context/history read permission explicitly separate.
-
-          The standalone helpers do not accept or serialize prompt text, model responses, tool arguments/results, returned values, exception text or hidden reasoning. OpenWorkGraph observer failures remain fail-open for the agent. This release publishes **OpenWorkGraph-Agent-Python.py**, **OpenWorkGraph-Agent-Node.mjs** and **OpenWorkGraph-Agent-Node.d.ts** as standalone release assets.
+          Arbitrary agent harnesses can send structural telemetry with a dedicated write-only credential and separately read authorized context through MCP. The standalone helpers remain fail-open and do not accept or serialize prompt text, model responses, tool arguments/results, returned values, exception text or hidden reasoning. Release assets include **OpenWorkGraph-Agent-Python.py**, **OpenWorkGraph-Agent-Node.mjs** and **OpenWorkGraph-Agent-Node.d.ts** through the **pkg-agent-sdk** package job.
 
           ### Compact MCP for new connections
-          New dashboard-generated connections, the Claude MCP bundle and the on-demand local HTTP bridge expose a compact MCP surface focused on current context, search, canonical evidence, repeated workflows, task context, prior-run feedback and agent execution inspection. Overlapping tools are consolidated so AI clients have fewer competing tool definitions.
-
-          Existing saved configurations that explicitly launch mcp_server.secure_stdio keep the legacy 24-tool compatibility surface. OpenWorkGraph does not silently remove those tools underneath existing clients. Normative governance tools are experimental on the compact surface and are exposed only when OWG_EXPERIMENTAL_GOVERNANCE is enabled; underlying REST APIs remain available for compatibility.
-
-          ### Readable procedural feedback
-          Human prior-run feedback now adds privacy-safe semantic steps such as Gmail · Open email and Salesforce · Open account. These readable labels do not replace the stable structural identity layer or change existing family keys. Unknown web applications remain pseudonymized, and arbitrary names, emails, URLs and UI text are not copied into the readable procedure. The compact current-work overview is also smaller, while get_workflow_trace keeps the canonical rich-row contract with explicit pagination and larger requested pages still available.
-
-          ### Safer agent ingestion
-          Agent evidence obeys the same Pause/Stop and permanent deletion boundaries as other local evidence. Untrusted structural identifiers and timestamps are validated, far-future timestamps are rejected, and agent-ingest authentication/size limits are applied before request bodies are fully buffered.
-
-          Prompts, model-response content, tool arguments/results, transcript paths and chain-of-thought/reasoning content are outside the agent evidence contract.
+          New connections use the compact MCP surface. Existing saved configurations that explicitly launch the legacy secure server keep the **legacy 24-tool** compatibility surface. The compact surface includes **Readable procedural feedback** while preserving the **stable structural identity layer** underneath it.
 
           ### Explicit organization sharing
-          The optional organization Gateway remains customer-controlled and outbound-only from the endpoint. Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in by setting gateway.local_policy.allow_agent_events=true; organization policy may narrow that opt-in but cannot broaden a local restriction. The policy layer itself also fails closed when an endpoint-local agent-sharing key is missing.
-
-          ### Native integrations and OTLP
-          OpenWorkGraph includes privacy-minimized integrations for Claude Code, Codex telemetry, OpenAI Agents and generic structural agent ingestion. Claude Code observer hooks are asynchronous so observation does not add tool-call latency. The generic OTLP endpoint currently accepts OTLP/HTTP JSON; exact exporter configuration is documented in **docs/NATIVE_AGENT_ADAPTERS.md**.
+          Agent evidence is local-only by default even when Gateway synchronization is enabled for other evidence. The endpoint owner must explicitly opt in by setting gateway.local_policy.allow_agent_events=true; organization policy may narrow that choice but cannot broaden a local restriction.
 
           ### Exports
-          JSON, CSV ZIP and XLSX exports include a dedicated privacy-safe agent-run table derived from canonical agent evidence. It uses opaque OpenWorkGraph execution references and does not expose native run/trace/span identifiers or agent content payloads.
+          JSON, CSV ZIP and XLSX exports include a **dedicated privacy-safe agent-run table** derived from canonical agent evidence. It uses opaque OpenWorkGraph references and does not expose native run/trace/span identifiers or agent content payloads.
 
           ### macOS / Windows testers
-          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. The standalone desktop product remains usable without an organization Gateway. **AI_GUIDE.md** and **PROMPT.md** are included.
-
-          ### Claude Desktop
-          **OpenWorkGraph-Claude.mcpb** uses the compact local stdio MCP surface for an existing OpenWorkGraph installation. Local AI access starts OFF on each OpenWorkGraph launch and can be disabled from the local dashboard.
+          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. **OpenWorkGraph-Claude.mcpb** provides the compact Claude Desktop MCP surface for an existing local installation.
 
           ### Security note
-          Self-hosted production deployments should use customer-controlled TLS/network access, secret management, retention/backups and identity infrastructure appropriate to their environment. OpenWorkGraph's local-first and customer-hosted deployment options do not remove those operational responsibilities.
+          Production/self-hosted deployments should still use customer-controlled TLS/network access, secret management, retention/backups, identity infrastructure and endpoint controls appropriate to their environment.
           EOF
 
           gh release create "$TAG" \
