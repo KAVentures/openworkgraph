@@ -3,13 +3,16 @@ from __future__ import annotations
 """Do session briefs help? A randomized comparison, computed locally.
 
 With evaluation on, ``agent_brief.deliver`` holds the brief back from a random
-1 in 5 sessions that would have received one ("control"), sticky per session.
-This module compares the two arms on per-session outcomes observed *after* the
-brief was (or would have been) delivered:
+1 in 5 sessions that would have received one ("control"), sticky per session
+*and per trial*. This module compares only sessions assigned inside the selected
+trial; ordinary briefs delivered before evaluation are never treated as a
+randomized arm.
+
+Outcomes are observed after assignment:
 
 * ``test_fail_rate``: share of test-running turns whose tests ended failing (lower is better)
 * ``rework_rate``: share of turns after which the person changed files the agent had just edited (lower is better)
-* ``pr_merge_rate``: share of opened pull requests that merged (higher is better; needs outcome tracking)
+* ``pr_merge_rate``: share of resolved pull requests that merged (higher is better; open/pending PRs are excluded)
 * ``tokens_per_turn``: median tokens per turn (lower is better)
 * ``turns``: turns in the session (reported, no better/worse direction)
 
@@ -40,14 +43,22 @@ METRICS = {
 
 
 def _sessions() -> dict[str, dict[str, Any]]:
-    from .agent_brief import _LOG_TABLE
+    from .agent_brief import _ensure_trial_table, evaluation_state
 
+    state = evaluation_state()
+    trial_id = str(state.get("trial_id") or "")
+    if not trial_id:
+        return {}
     with connect() as conn:
-        conn.execute(_LOG_TABLE)
-        rows = conn.execute("SELECT session_ref, arm, delivered_at FROM agent_brief_log WHERE session_ref != '' ORDER BY id").fetchall()
+        _ensure_trial_table(conn)
+        rows = conn.execute(
+            "SELECT session_ref, arm, assigned_at FROM agent_brief_trial_assignment WHERE trial_id = ? ORDER BY assigned_at",
+            (trial_id,),
+        ).fetchall()
     sessions: dict[str, dict[str, Any]] = {}
-    for session_ref, arm, delivered_at in rows:
-        sessions.setdefault(session_ref, {"arm": arm, "delivered_at": delivered_at})
+    for session_ref, arm, assigned_at in rows:
+        if session_ref and arm in {"brief", "control"}:
+            sessions[str(session_ref)] = {"arm": str(arm), "delivered_at": str(assigned_at), "trial_id": trial_id}
     return sessions
 
 
@@ -97,13 +108,15 @@ def _session_metrics(runs: list[dict[str, Any]], delivered_at: str) -> dict[str,
     compared = [((r.get("human_context") or {}).get("after") or {}).get("between_turns") for r in turns]
     compared = [b for b in compared if isinstance(b, dict) and b.get("head_moved") is False and "files_changed" in b]
     prs = [r["delivery_outcome"] for r in turns if isinstance(r.get("delivery_outcome"), dict)]
-    opened = sum(int(d.get("prs") or 0) for d in prs)
+    merged = sum(int(d.get("merged") or 0) for d in prs)
+    closed = sum(int(d.get("closed_unmerged") or 0) for d in prs)
+    resolved = merged + closed
     tokens = [int(r["work_summary"].get("total_tokens") or 0) for r in turns if r["work_summary"].get("total_tokens")]
     return {
         "turns": float(len(turns)) if turns else None,
         "test_fail_rate": (sum(1 for t in tested if t.get("ended") == "failing") / len(tested)) if tested else None,
         "rework_rate": (sum(1 for b in compared if int(b.get("agent_files_changed") or 0) > 0) / len(compared)) if compared else None,
-        "pr_merge_rate": (sum(int(d.get("merged") or 0) for d in prs) / opened) if opened else None,
+        "pr_merge_rate": (merged / resolved) if resolved else None,
         "tokens_per_turn": float(statistics.median(tokens)) if tokens else None,
     }
 
@@ -120,20 +133,25 @@ def _bootstrap_difference(treated: list[float], control: list[float], *, seed: i
 
 
 def report() -> dict[str, Any]:
-    from .agent_brief import HOLDOUT_PERCENT, evaluation_enabled
+    from .agent_brief import HOLDOUT_PERCENT, evaluation_state
 
+    state = evaluation_state()
     sessions = _sessions()
     arms = {"brief": 0, "control": 0}
     for s in sessions.values():
         arms[s["arm"]] = arms.get(s["arm"], 0) + 1
     result: dict[str, Any] = {
-        "evaluation_enabled": evaluation_enabled(),
+        "evaluation_enabled": bool(state.get("enabled")),
+        "trial_id": state.get("trial_id") or None,
+        "trial_started_at": state.get("started_at"),
+        "trial_ended_at": state.get("ended_at"),
         "holdout_percent": HOLDOUT_PERCENT,
         "sessions": arms,
         "min_sessions_per_arm": MIN_SESSIONS,
         "metrics": {},
-        "method": "sessions randomized to brief or held back (control); difference in per-session means, briefed minus control, "
-                  "with a bootstrap 95% interval; exploratory (several metrics, no multiple-comparison correction)",
+        "method": "sessions explicitly assigned within one randomized trial to brief or held-back control; difference in per-session means, "
+                  "briefed minus control, with a bootstrap 95% interval; exploratory (several metrics, no multiple-comparison correction). "
+                  "PR merge rate uses resolved PRs only; open/pending PRs are right-censored and excluded.",
     }
     if not sessions:
         result["status"] = "no_sessions_yet"
