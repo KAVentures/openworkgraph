@@ -203,7 +203,8 @@ def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> s
             "" if request_hash else _text(attrs.get("event.timestamp"), 80),
         ])
     elif event_name == "codex.sse_event":
-        discriminator = "sse-completed|" + "|".join([
+        discriminator = "sse|" + "|".join([
+            _text(attrs.get("event.kind"), 80),
             _text(attrs.get("turn.id"), 128),
             _text(attrs.get("event.timestamp"), 80),
         ])
@@ -343,6 +344,7 @@ def _base(
         "actor_id": _text(defaults.get("actor_id"), 128),
         "device_id": _text(defaults.get("device_id"), 128) or "codex-local",
         "sensor_id": "agent:codex-otel",
+        "session_id": conversation_id,
         "agent_name": _safe_label(defaults.get("agent_name"), default="Codex", limit=160),
         "provider": "openai",
         "framework": "codex",
@@ -442,10 +444,11 @@ def codex_otel_to_agent_events(
             )
 
         elif event_name == "codex.sse_event":
-            if _text(attrs.get("event.kind"), 80) != "response.completed":
+            kind = _text(attrs.get("event.kind"), 80)
+            if kind not in {"response.completed", "response.failed"}:
                 ignored += 1
                 continue
-            failed = bool(_text(attrs.get("error.message"), 1))
+            failed = kind == "response.failed" or bool(_text(attrs.get("error.message"), 1))
             projected = _base(
                 attrs, native, defaults=defaults, event_name=event_name,
                 operation="model_call",
