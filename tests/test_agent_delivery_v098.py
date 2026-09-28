@@ -27,6 +27,7 @@ def dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(data))
     monkeypatch.setattr(runtime, "_demo", lambda: False)
     runtime._STATE.update(lease_active=False, lease_valid_until=None, last_flush=None)
+    runtime._STOP.clear()
     return auth, data
 
 
@@ -322,3 +323,21 @@ def test_ephemeral_history_survives_turns_and_is_purged_at_session_end(dirs):
     assert len(stored()) == 6, "turns and subagents must not purge the running session"
     ingest_agent_payloads(hook("SessionEnd"))
     assert stored() == [], "the end of the session itself still purges ephemeral history"
+
+
+def test_no_lease_is_issued_after_stop(dirs):
+    from shared.capture_control import initialize_run
+
+    initialize_run("2026-09-28T08:00:00+00:00")
+    runtime.tick()
+    assert spool.valid_lease() is not None
+    runtime.stop()
+    runtime.tick()  # a tick already in flight when stop() ran must not bring it back
+    assert spool.valid_lease() is None
+
+
+def test_real_launcher_revokes_the_lease_on_a_normal_quit():
+    """uvicorn re-raises SIGTERM after shutdown, so finally/atexit never run; the
+    revoke must happen in the app's shutdown step."""
+    source = (Path(__file__).resolve().parents[1] / "server" / "enterprise_runner.py").read_text()
+    assert "extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)" in source

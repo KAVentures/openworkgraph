@@ -33,6 +33,14 @@ def main() -> None:
 
     org_join_routes.start_managed_setup_in_background()
     agent_capture_runtime.start()
+    # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
+    # the process before a finally/atexit block can run. Revoke the recording
+    # lease in the app's own shutdown step so a normal quit stops agent spooling
+    # at once (a hard kill is still bounded by the lease's short TTL).
+    from shared.lifespan import extend_lifespan
+    from server.secure_app import app as secure_app
+
+    extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
     try:
         uvicorn.run(SECURE_APP, host=args.host, port=args.port)
     finally:

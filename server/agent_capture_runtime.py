@@ -66,7 +66,8 @@ def tick(now: float | None = None) -> None:
     from shared.capture_control import read_state
 
     current = _time.time() if now is None else now
-    recording = not _demo() and read_state().get("state") == "recording"
+    # Never re-issue a lease once stop() has run (the loop may be mid-tick).
+    recording = not _STOP.is_set() and not _demo() and read_state().get("state") == "recording"
     if recording:
         valid_until = _STATE.get("lease_valid_until") or 0.0
         if not _STATE["lease_active"] or valid_until - current < LEASE_RENEW_BEFORE_SECONDS:
