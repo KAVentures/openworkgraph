@@ -32,6 +32,7 @@ def _isolate_agent_ingestion_database(request):
         "test_agent_ingestion_v059.py",
         "test_agent_native_routes_v060.py",
         "test_agent_ingress_boundaries_v084.py",
+        "test_agent_delivery_v098.py",
     }
     if Path(str(request.fspath)).name not in isolated_modules:
         yield

@@ -21,7 +21,7 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 CLAUDE_HOOK_MARKER = "adapters.claude_code_hook"
 CODEX_BLOCK_START = "# >>> OpenWorkGraph agent observation (managed; remove via dashboard) >>>"
@@ -156,6 +156,35 @@ def _claude_hooks_configured(data: dict[str, Any]) -> bool:
         for group in groups if isinstance(group, dict)
         for h in (group.get("hooks") or []) if isinstance(group.get("hooks"), list)
     )
+
+
+def claude_owg_hook_events(data: dict[str, Any]) -> set[str]:
+    """Hook events that currently have an OpenWorkGraph handler."""
+    found: set[str] = set()
+    for event, groups in (data.get("hooks") or {}).items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            if isinstance(handlers, list) and any(_is_owg_handler(h) for h in handlers):
+                found.add(str(event))
+    return found
+
+
+def claude_missing_hook_events(required: Iterable[str]) -> list[str]:
+    """Required events missing from an existing OpenWorkGraph hook install.
+
+    Empty when OpenWorkGraph's hooks are not installed at all: that is "off", not
+    "outdated", and must not be turned on behind the user's back.
+    """
+    try:
+        data = _load_claude(claude_settings_path())
+    except ConfigConflict:
+        return []
+    present = claude_owg_hook_events(data)
+    if not present:
+        return []
+    return sorted(set(required) - present)
 
 
 def _claude_env_matches(data: dict[str, Any], managed_env: dict[str, str]) -> bool:

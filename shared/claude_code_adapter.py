@@ -16,6 +16,8 @@ from typing import Any
 _SUPPORTED_EVENTS = frozenset({
     "SessionStart",
     "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
     "PostToolUse",
     "PostToolUseFailure",
     "PermissionRequest",
@@ -172,6 +174,25 @@ def claude_hook_to_agent_events(
             status="unknown",
             observed_at=timestamp,
             run_id=session_id,
+            trace_id=trace_id,
+            event_key=hook,
+        )]
+
+    if hook in {"UserPromptSubmit", "Stop"}:
+        # One turn = one prompt: it starts when the prompt is submitted and
+        # finishes when Claude stops responding. These payloads carry the prompt
+        # text and the last assistant message; neither is ever read here. Without
+        # a prompt_id there is no turn identity, and falling back to the session
+        # would make a turn's Stop look like the whole session finishing.
+        prompt_id = _text(payload.get("prompt_id"), 128)
+        if not prompt_id:
+            return []
+        return [_base_event(
+            payload,
+            operation="run_started" if hook == "UserPromptSubmit" else "run_finished",
+            status="running" if hook == "UserPromptSubmit" else "success",
+            observed_at=timestamp,
+            run_id=prompt_id,
             trace_id=trace_id,
             event_key=hook,
         )]

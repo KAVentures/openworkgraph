@@ -20,6 +20,8 @@ from shared.claude_code_adapter import claude_hook_to_agent_events
 SUPPORTED_EVENTS = [
     "SessionStart",
     "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
     "PostToolUse",
     "PostToolUseFailure",
     "PermissionRequest",

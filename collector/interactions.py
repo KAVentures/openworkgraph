@@ -99,6 +99,10 @@ class ActivityTracker:
             while self._events and self._events[0][0] < cutoff:
                 self._events.popleft()
 
+    def last_input_mono(self) -> float | None:
+        with self._lock:
+            return self._events[-1][0] if self._events else None
+
     def summarize(
         self,
         start_mono: float,

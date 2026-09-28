@@ -92,10 +92,11 @@ def main() -> None:
     monitor = threading.Thread(target=_watch_capture_state, args=(generation, done), daemon=True)
     monitor.start()
     try:
-        base.run(Path(args.config).resolve())
+        code = base.run(Path(args.config).resolve())
     finally:
         done.set()
         monitor.join(timeout=1)
+    raise SystemExit(code or 0)
 
 
 if __name__ == "__main__":

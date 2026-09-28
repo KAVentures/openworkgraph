@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from shared.agent_evidence import AgentEvidenceError
+from . import agent_telemetry_diagnostics as diagnostics
 from .agent_auth import agent_bearer_matches
 from .agent_ingest import (
     MAX_AGENT_BATCH_BYTES,
@@ -89,69 +90,123 @@ async def _read_bounded_json(request: Request) -> Any:
         raise HTTPException(status_code=400, detail="invalid agent JSON payload") from exc
 
 
+def _events_channel(payload: Any) -> str:
+    events = payload.get("events") if isinstance(payload, dict) else None
+    first = events[0] if isinstance(events, list) and events and isinstance(events[0], dict) else {}
+    return "claude_code_hooks" if str(first.get("framework") or "") == "claude-code" else "agent_events"
+
+
+async def _authorized_json(request: Request, channel: str | None) -> Any:
+    """Authenticate and read the body, recording the outcome for diagnostics."""
+    if channel:
+        diagnostics.received(channel)
+    try:
+        _require_agent_write_bearer(request)
+    except HTTPException:
+        if channel:
+            diagnostics.rejected(channel, "auth")
+        raise
+    try:
+        return await _read_bounded_json(request)
+    except HTTPException as exc:
+        if channel:
+            diagnostics.rejected(channel, "too_large" if exc.status_code == 413 else "invalid_payload")
+        raise
+
+
 @router.post(AGENT_EVENT_PATH)
 async def ingest_agent_events(request: Request) -> dict[str, int | str]:
-    _require_agent_write_bearer(request)
-    payload = await _read_bounded_json(request)
+    # The native client names its channel so an auth failure is attributable
+    # before the body is read; otherwise classify by the events themselves.
+    hint = str(request.headers.get("x-owg-channel") or "")
+    channel = hint if hint in {"claude_code_hooks", "agent_events"} else ""
+    payload = await _authorized_json(request, channel or None)
+    if not channel:
+        channel = _events_channel(payload)
+        diagnostics.received(channel)
     if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+        diagnostics.rejected(channel, "invalid_payload")
         raise HTTPException(status_code=422, detail="events must be a list")
     events = [event for event in payload["events"] if _observation_enabled_for(event)]
     if not events:
+        diagnostics.observation_off(channel)
         return {"received": 0, "status": "observation_off"}
     try:
         result = ingest_agent_payloads(events)
     except AgentEvidenceError as exc:
+        diagnostics.rejected(channel, "invalid_payload")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    diagnostics.processed(channel, result)
     return {**result, "status": "ok"}
 
 
 @router.post(AGENT_OTEL_PATH)
 async def ingest_agent_otel(request: Request) -> dict[str, int | str]:
-    _require_agent_write_bearer(request)
-    payload = await _read_bounded_json(request)
+    channel = "otel_generic"
+    payload = await _authorized_json(request, channel)
     if not isinstance(payload, dict):
+        diagnostics.rejected(channel, "not_an_object")
         raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
     defaults_raw = payload.pop("openworkgraph", {})
     try:
         defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
         result = ingest_otel_payload(payload, defaults=defaults)
     except (AgentEvidenceError, ValueError) as exc:
+        diagnostics.rejected(channel, "adapter_error")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    diagnostics.processed(channel, result)
     return {**result, "status": "ok"}
 
 
 @router.post(AGENT_CODEX_OTEL_PATH, status_code=202)
 async def ingest_codex_otel(request: Request) -> Response:
-    _require_agent_write_bearer(request)
-    payload = await _read_bounded_json(request)
+    channel = "codex_otel"
+    payload = await _authorized_json(request, channel)
     if not isinstance(payload, dict):
+        diagnostics.rejected(channel, "not_an_object")
         raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
     if not is_enabled("codex", "observe"):
+        diagnostics.observation_off(channel)
         return Response(status_code=202)
     defaults_raw = payload.pop("openworkgraph", {})
     try:
         defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
-        ingest_codex_otel_payload(payload, defaults=defaults)
+        result = ingest_codex_otel_payload(payload, defaults=defaults)
     except (AgentEvidenceError, ValueError) as exc:
+        diagnostics.rejected(channel, "adapter_error")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    diagnostics.processed(channel, result)
     return Response(status_code=202)
 
 
 @router.post(AGENT_CLAUDE_OTEL_PATH, status_code=202)
 async def ingest_claude_otel(request: Request) -> Response:
-    _require_agent_write_bearer(request)
-    payload = await _read_bounded_json(request)
+    channel = "claude_code_otel_logs"
+    payload = await _authorized_json(request, channel)
     if not isinstance(payload, dict):
+        diagnostics.rejected(channel, "not_an_object")
         raise HTTPException(status_code=422, detail="OpenTelemetry payload must be an object")
     if not is_enabled("claude_code", "observe"):
+        diagnostics.observation_off(channel)
         return Response(status_code=202)
     defaults_raw = payload.pop("openworkgraph", {})
     try:
         defaults = OTelDefaults.model_validate(defaults_raw if isinstance(defaults_raw, dict) else {}).model_dump()
-        ingest_claude_otel_payload(payload, defaults=defaults)
+        result = ingest_claude_otel_payload(payload, defaults=defaults)
     except (AgentEvidenceError, ValueError) as exc:
+        diagnostics.rejected(channel, "adapter_error")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    diagnostics.processed(channel, result)
     return Response(status_code=202)
+
+
+@router.get("/v1/agent-telemetry/diagnostics")
+def get_agent_telemetry_diagnostics(request: Request) -> dict[str, Any]:
+    """Per-channel delivery counts so a missing signal can be located, not guessed."""
+    _require_api_read_bearer(request)
+    from .agent_capture_runtime import configuration_state
+
+    return {**diagnostics.snapshot(), "configuration": configuration_state()}
 
 
 @router.get("/v1/agent-workflows")

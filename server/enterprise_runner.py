@@ -29,8 +29,22 @@ def main() -> None:
     import server.org_join_routes as org_join_routes
     import server.dashboard_privacy  # noqa: F401
 
+    import server.agent_capture_runtime as agent_capture_runtime
+
     org_join_routes.start_managed_setup_in_background()
-    uvicorn.run(SECURE_APP, host=args.host, port=args.port)
+    agent_capture_runtime.start()
+    # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
+    # the process before a finally/atexit block can run. Revoke the recording
+    # lease in the app's own shutdown step so a normal quit stops agent spooling
+    # at once (a hard kill is still bounded by the lease's short TTL).
+    from shared.lifespan import extend_lifespan
+    from server.secure_app import app as secure_app
+
+    extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
+    try:
+        uvicorn.run(SECURE_APP, host=args.host, port=args.port)
+    finally:
+        agent_capture_runtime.stop()
 
 
 if __name__ == "__main__":
