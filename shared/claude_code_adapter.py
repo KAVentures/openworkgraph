@@ -85,6 +85,59 @@ def _prompt_run_id(payload: dict[str, Any], session_id: str) -> str:
     return _text(payload.get("prompt_id"), 128) or session_id
 
 
+def _child_run_id(session_id: str, agent_id: str) -> str:
+    """A subagent's own run (IDs are at most 128 chars).
+
+    Keyed on the session and the subagent's id only: the subagent's own hooks
+    need not carry the parent's prompt_id. The parent turn is linked through the
+    handoff span, which equals the child's run_started span.
+    """
+    candidate = f"{session_id}:sub:{agent_id}"
+    if len(candidate) <= 128 and re.fullmatch(r"[A-Za-z0-9_.:\-]+", candidate):
+        return candidate
+    return "sub:" + hashlib.sha256(f"{session_id}\x1f{agent_id}".encode("utf-8")).hexdigest()[:40]
+
+
+def _run_id(payload: dict[str, Any], session_id: str) -> str:
+    """The turn, or the subagent's own run when the hook fired inside a subagent."""
+    agent_id = _text(payload.get("agent_id"), 128)
+    return _child_run_id(session_id, agent_id) if agent_id else _prompt_run_id(payload, session_id)
+
+
+def _tool_detail(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Structural facts from the tool's input/output, derived in memory only.
+
+    The input and response are read here and never copied: only allowlisted
+    command names, test counts, file types, keyed file hashes and line counts
+    come out (see shared.tool_detail).
+    """
+    from .tool_detail import enabled, tool_call_detail
+
+    if not enabled():
+        return {}
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    response = payload.get("tool_response")
+    response = response if isinstance(response, dict) else {"stdout": response} if isinstance(response, str) else {}
+    try:
+        if tool_name in {"Bash", "BashOutput"} and tool_input.get("command"):
+            output = "\n".join(str(response.get(k) or "") for k in ("stdout", "stderr"))
+            output += "\n" + str(payload.get("error") or "")
+            return tool_call_detail(command=tool_input.get("command"), output=output)
+        path = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if tool_name in {"Edit", "MultiEdit", "Write", "NotebookEdit"} and path:
+            patch = response.get("structuredPatch")
+            if isinstance(patch, list) and patch:
+                return tool_call_detail(paths=[path], patch=patch)
+            if tool_name == "Write" and str(response.get("type") or "") == "create":
+                return tool_call_detail(paths=[path], new_file_text=tool_input.get("content") or "")
+            return tool_call_detail(paths=[path])
+        if tool_name == "Read" and path:
+            return tool_call_detail(paths=[path])
+    except Exception:
+        return {}
+    return {}
+
+
 def _hook_agent_name(payload: dict[str, Any]) -> str:
     agent_id = _text(payload.get("agent_id"), 128)
     if not agent_id:
@@ -152,7 +205,8 @@ def claude_hook_to_agent_events(
         return []
     timestamp = _text(observed_at, 80) or _now_iso()
     trace_id = session_id
-    prompt_run_id = _prompt_run_id(payload, session_id)
+    prompt_run_id = _run_id(payload, session_id)
+    parent_run_id = _prompt_run_id(payload, session_id)
     agent_name = _hook_agent_name(payload)
 
     if hook == "SessionStart":
@@ -200,7 +254,7 @@ def claude_hook_to_agent_events(
     if hook in {"PostToolUse", "PostToolUseFailure"}:
         tool_use_id = _text(payload.get("tool_use_id"), 128)
         tool_name = _safe_label(payload.get("tool_name"), default="unknown-tool", limit=160)
-        return [_base_event(
+        event = _base_event(
             payload,
             operation="tool_call",
             status="success" if hook == "PostToolUse" else "error",
@@ -211,7 +265,11 @@ def claude_hook_to_agent_events(
             event_key=hook,
             tool_name=tool_name,
             agent_name=agent_name,
-        )]
+        )
+        detail = _tool_detail(tool_name, payload)
+        if detail:
+            event["tool_detail"] = detail
+        return [event]
 
     if hook == "PermissionRequest":
         tool_use_id = _text(payload.get("tool_use_id"), 128)
@@ -262,7 +320,7 @@ def claude_hook_to_agent_events(
                 operation="handoff",
                 status="running",
                 observed_at=timestamp,
-                run_id=prompt_run_id,
+                run_id=parent_run_id,
                 trace_id=trace_id,
                 span_id=child_id,
                 event_key="SubagentHandoff",
@@ -274,7 +332,7 @@ def claude_hook_to_agent_events(
                 operation="run_started",
                 status="running",
                 observed_at=timestamp,
-                run_id=prompt_run_id,
+                run_id=_child_run_id(session_id, child_id),
                 trace_id=trace_id,
                 span_id=child_id,
                 event_key=hook,
@@ -292,7 +350,7 @@ def claude_hook_to_agent_events(
             operation="run_finished",
             status="unknown",
             observed_at=timestamp,
-            run_id=prompt_run_id,
+            run_id=_child_run_id(session_id, child_id),
             trace_id=trace_id,
             span_id=child_id,
             event_key=hook,

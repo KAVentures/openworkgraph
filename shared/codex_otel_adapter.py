@@ -10,6 +10,7 @@ canonical evidence.
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import re
 from typing import Any, Iterator
 
@@ -19,6 +20,7 @@ _SUPPORTED_EVENTS = frozenset({
     "codex.tool_result",
     "codex.tool_decision",
     "codex.api_request",
+    "codex.sse_event",
     "codex.agent_communication",
 })
 _SAFE_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]{0,199}$")
@@ -137,6 +139,48 @@ def _event_name(attrs: dict[str, Any]) -> str:
     return ""
 
 
+def _sse_usage(attrs: dict[str, Any]) -> dict[str, int]:
+    """Token counts Codex reports when a model response completes."""
+    out: dict[str, int] = {}
+    for target, source in (
+        ("input_tokens", "input_token_count"),
+        ("output_tokens", "output_token_count"),
+        ("cached_input_tokens", "cached_token_count"),
+        ("total_tokens", "tool_token_count"),  # Codex puts usage.total_tokens here
+    ):
+        amount = _int(attrs.get(source))
+        if amount is not None:
+            out[target] = amount
+    if "total_tokens" not in out and ("input_tokens" in out or "output_tokens" in out):
+        out["total_tokens"] = out.get("input_tokens", 0) + out.get("output_tokens", 0)
+    return out
+
+
+def _tool_detail(tool_name: str, attrs: dict[str, Any]) -> dict[str, Any]:
+    """Structural facts from a tool call's arguments/output, derived in memory only."""
+    from .tool_detail import apply_patch_detail, enabled, sanitize_detail, tool_call_detail
+
+    if not enabled():
+        return {}
+    raw_args = attrs.get("arguments")
+    raw_args = raw_args if isinstance(raw_args, str) else ""
+    try:
+        parsed = json.loads(raw_args) if raw_args.strip().startswith("{") else None
+    except Exception:
+        parsed = None
+    try:
+        if tool_name == "apply_patch":
+            patch = parsed.get("input") if isinstance(parsed, dict) else raw_args
+            return sanitize_detail(apply_patch_detail(patch))
+        if isinstance(parsed, dict):
+            command = parsed.get("command") if parsed.get("command") is not None else parsed.get("cmd")
+            if command:
+                return tool_call_detail(command=command, output=attrs.get("output"))
+    except Exception:
+        return {}
+    return {}
+
+
 def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> str:
     if event_name == "codex.conversation_starts":
         discriminator = "conversation-start"
@@ -157,6 +201,12 @@ def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> s
             request_hash,
             _text(attrs.get("attempt"), 40),
             "" if request_hash else _text(attrs.get("event.timestamp"), 80),
+        ])
+    elif event_name == "codex.sse_event":
+        discriminator = "sse|" + "|".join([
+            _text(attrs.get("event.kind"), 80),
+            _text(attrs.get("turn.id"), 128),
+            _text(attrs.get("event.timestamp"), 80),
         ])
     elif event_name == "codex.agent_communication":
         discriminator = "agent-communication|" + "|".join([
@@ -294,6 +344,7 @@ def _base(
         "actor_id": _text(defaults.get("actor_id"), 128),
         "device_id": _text(defaults.get("device_id"), 128) or "codex-local",
         "sensor_id": "agent:codex-otel",
+        "session_id": conversation_id,
         "agent_name": _safe_label(defaults.get("agent_name"), default="Codex", limit=160),
         "provider": "openai",
         "framework": "codex",
@@ -351,6 +402,9 @@ def codex_otel_to_agent_events(
                 tool_category=_tool_category(tool_name, namespace),
                 span_id=("call:" + _hash_part(attrs.get("call_id"))) if attrs.get("call_id") else "",
             )
+            detail = _tool_detail(tool_name, attrs)
+            if projected is not None and detail:
+                projected["tool_detail"] = detail
 
         elif event_name == "codex.tool_decision":
             source = _text(attrs.get("source"), 80).lower()
@@ -372,14 +426,36 @@ def codex_otel_to_agent_events(
             )
 
         elif event_name == "codex.api_request":
+            # Current Codex reports tokens on the completed response
+            # (codex.sse_event), not on the request, so a successful request
+            # without usage is represented by that event; counting both would
+            # double every model call. A request that carries usage itself (other
+            # builds) is still the model call. Failed attempts always stay.
             status_code = _int(attrs.get("http.response.status_code"))
             has_error = bool(_text(attrs.get("error.message"), 1))
             success = status_code is not None and 200 <= status_code <= 299 and not has_error
+            if success and not _usage(attrs):
+                ignored += 1
+                continue
             projected = _base(
                 attrs, native, defaults=defaults, event_name=event_name,
                 operation="model_call",
                 status="success" if success else "error" if has_error or (status_code or 0) >= 400 else "unknown",
             )
+
+        elif event_name == "codex.sse_event":
+            kind = _text(attrs.get("event.kind"), 80)
+            if kind not in {"response.completed", "response.failed"}:
+                ignored += 1
+                continue
+            failed = kind == "response.failed" or bool(_text(attrs.get("error.message"), 1))
+            projected = _base(
+                attrs, native, defaults=defaults, event_name=event_name,
+                operation="model_call",
+                status="error" if failed else "success",
+            )
+            if projected is not None and not failed:
+                projected["usage"] = _sse_usage(attrs)
 
         elif event_name == "codex.agent_communication":
             # Inter-agent messages/results are communication, not necessarily a

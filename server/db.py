@@ -352,10 +352,61 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
         for raw in events:
             e = sanitize_event_identifiers(dict(raw))
             e = minimize_browser_title_at_rest(e)
-            inserted += _insert_event(conn, "events", e)
-            _insert_event(conn, "normalized_events", normalize_event(e))
+            added = _insert_event(conn, "events", e)
+            inserted += added
+            normalized = normalize_event(e)
+            if not _insert_event(conn, "normalized_events", normalized) and not added:
+                _merge_agent_structure(conn, "normalized_events", normalized)
+            if not added:
+                _merge_agent_structure(conn, "events", e)
             _insert_context(conn, contextualize_event(e))
     return inserted
+
+
+def _merge_agent_structure(conn: sqlite3.Connection, table: str, e: dict[str, Any]) -> None:
+    """Fill structural fields a duplicate copy of an agent event lacked.
+
+    Some exporters send the same event twice (Codex: once as a log record with
+    tool detail and token usage, once as a trace span event without them), and
+    either copy may arrive first. The first write wins the row, so a later copy
+    may only add ``tool.detail`` or ``usage`` where the stored row has none. It
+    never overwrites a value, and only merges into the same agent operation of
+    the same session.
+    """
+    meta = e.get("metadata") if isinstance(e.get("metadata"), dict) else {}
+    if str(meta.get("source") or "") != "agent":
+        return
+    tool = meta.get("tool") if isinstance(meta.get("tool"), dict) else {}
+    detail = tool.get("detail") if isinstance(tool.get("detail"), dict) else None
+    usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else None
+    if not detail and not usage:
+        return
+    row = conn.execute(
+        f"SELECT event_type, session_id, metadata_json FROM {table} WHERE event_id = ?",
+        (e["event_id"],),
+    ).fetchone()
+    if row is None or row[0] != e["event_type"] or row[1] != str(e.get("session_id") or ""):
+        return
+    try:
+        stored = json.loads(row[2] or "{}")
+    except Exception:
+        return
+    if not isinstance(stored, dict) or stored.get("source") != "agent" or stored.get("operation") != meta.get("operation"):
+        return
+    changed = False
+    stored_tool = stored.get("tool") if isinstance(stored.get("tool"), dict) else {}
+    if detail and not stored_tool.get("detail") and stored_tool.get("name") == tool.get("name"):
+        stored_tool["detail"] = detail
+        stored["tool"] = stored_tool
+        changed = True
+    if usage and not stored.get("usage"):
+        stored["usage"] = usage
+        changed = True
+    if changed:
+        conn.execute(
+            f"UPDATE {table} SET metadata_json = ? WHERE event_id = ?",
+            (json.dumps(stored, ensure_ascii=False), e["event_id"]),
+        )
 
 
 def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

@@ -10,6 +10,25 @@ Native agent payloads are treated as untrusted, potentially content-bearing inpu
 
 The adapters deliberately do **not** persist prompts, assistant messages, reasoning/chain-of-thought, tool arguments, tool results/output, transcript paths, working-directory paths, account identifiers, arbitrary OpenTelemetry attributes, arbitrary span names, or raw log bodies.
 
+### Tool detail (content-free)
+
+Hook-based adapters (Claude Code, Cursor) and Codex's log events see a tool call's input and output in memory. From them, and only in memory, OpenWorkGraph derives a few structural facts per tool call (`shared/tool_detail.py`):
+
+| Field | What it holds | Example |
+|---|---|---|
+| `commands` | well-known programs that ran, from a fixed allowlist | `["pytest", "git"]` |
+| `git` / `gh` | allowlisted git / GitHub CLI operations | `["commit"]`, `["pr_create"]` |
+| `tests_passed` / `tests_failed` | numbers from a recognised test-runner summary (pytest, jest, vitest, cargo, node --test, unittest), only when a test command ran | `9` / `2` |
+| `file_types` | allowlisted extensions | `["py", "md"]` |
+| `file_refs` | keyed hashes of file paths (`f:` + 16 hex). They show "the same file again" without revealing the path. The key (`.agent_file_ref_key`) never leaves this computer, so refs cannot be compared across devices | `["f:3a9c…"]` |
+| `lines_added` / `lines_removed` | counts from the edit's patch | `2` / `1` |
+
+Arguments, paths, file names, output text and unknown programs are dropped. Every value passes one allowlist gate (`sanitize_detail`) again when it is stored, so a buggy or hostile sender cannot put text in these fields. Quoted text (a commit message, an `echo` string) never counts as a command. Set `OWG_AGENT_TOOL_DETAIL=0` to turn tool detail off.
+
+Each run in the agent traces gets a `work_summary`: commands, git/gh operations, how many test runs and whether the run **ended** with passing or failing tests, files edited vs only read, file types, lines changed and total tokens. MCP `get_agent_runs` returns it.
+
+Known limits: Codex `apply_patch` paths are relative to the workspace while Claude's are absolute, so the same file can get different refs across the two agents. A shell command that only runs a script (`./deploy.sh`) shows no commands, because script names are not on the allowlist.
+
 Native integrations reuse the dedicated write-only `.agent_ingest_token`. That token can submit evidence but cannot read work history, exports, summaries, agent reports, or MCP context.
 
 ## Capability semantics
@@ -148,11 +167,16 @@ The adapter maps structural evidence for:
 
 ```text
 conversation start       -> run_started
-API request              -> model_call
+response.completed       -> model_call (with token usage)
+failed API request       -> model_call (error)
 completed tool           -> tool_call
 user-sourced decision    -> human_approval_received
 multi-agent spawn/send   -> handoff
 ```
+
+Codex reports token usage on its `codex.sse_event` record for `response.completed` (`input_token_count`, `output_token_count`, `cached_token_count`, `tool_token_count` as the total), not on `codex.api_request`. So each completed response becomes one model call with its tokens; a successful API request adds nothing (it would count the same call twice), and a failed attempt is a model call with status error. Builds that do put usage on the API request are still accepted.
+
+Codex exports each business event twice, as a log record and as a trace span event with the same event ID. Only the log copy carries the tool's arguments and output, from which tool detail is derived. Whichever copy is stored first, a later copy may add missing tool detail or token usage to the stored row. It never overwrites a stored value.
 
 Where available, Codex turn IDs become run boundaries and parent span attributes contribute model identity and token counters. Multi-agent communication is conservative: only a structural `spawn` sent to another agent is treated as a handoff; ordinary inter-agent message/result content is ignored.
 

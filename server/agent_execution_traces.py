@@ -8,6 +8,8 @@ import re
 from typing import Any
 
 from .agent_tool_labels import readable_structural_step
+from shared.tool_detail import sanitize_detail
+
 from .context_execution_linkage import _agent_groups, _meta, _one_execution
 from .procedural_memory import _event_ref
 
@@ -15,6 +17,10 @@ from .procedural_memory import _event_ref
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 _EXECUTION_ID_RE = re.compile(r"^execution:[0-9a-f]{16}$")
 _FAILURE_STATUSES = frozenset({"error", "cancelled", "denied"})
+_EDIT_TOOL_NAMES = frozenset({
+    "edit", "multiedit", "write", "notebookedit", "edit_file", "write_file", "delete_file",
+    "file_edit", "file_write", "file_delete", "apply_patch",
+})
 
 
 def _opaque_ref(prefix: str, value: Any) -> str | None:
@@ -58,6 +64,73 @@ def _safe_usage(meta: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the run did, from content-free tool detail: commands, git/gh
+    operations, test results (including how the run ended), files and lines."""
+    commands: Counter[str] = Counter()
+    git_ops: Counter[str] = Counter()
+    gh_ops: Counter[str] = Counter()
+    file_types: Counter[str] = Counter()
+    edited: set[str] = set()
+    read_only: set[str] = set()
+    lines_added = lines_removed = 0
+    test_runs: list[dict[str, Any]] = []
+    tokens = 0
+    for item in projected:
+        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+        tokens += int(usage.get("total_tokens") or 0) or int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+        tool = item.get("tool") if isinstance(item.get("tool"), dict) else {}
+        detail = (tool.get("detail") or {}) if item.get("operation") == "tool_call" else {}
+        if not detail:
+            continue
+        commands.update(detail.get("commands") or [])
+        git_ops.update(detail.get("git") or [])
+        gh_ops.update(detail.get("gh") or [])
+        file_types.update(detail.get("file_types") or [])
+        tool_name = str(tool.get("name") or "").strip().lower()
+        changed = "lines_added" in detail or "lines_removed" in detail or tool_name in _EDIT_TOOL_NAMES
+        for ref in detail.get("file_refs") or []:
+            (edited if changed else read_only).add(ref)
+        lines_added += int(detail.get("lines_added") or 0)
+        lines_removed += int(detail.get("lines_removed") or 0)
+        test_status = str(detail.get("test_status") or "")
+        if not test_status and ("tests_passed" in detail or "tests_failed" in detail):
+            test_status = "failing" if int(detail.get("tests_failed") or 0) else "passing"
+        if test_status in {"passing", "failing", "unknown"}:
+            test_runs.append({
+                "passed": int(detail.get("tests_passed") or 0),
+                "failed": int(detail.get("tests_failed") or 0),
+                "status": test_status,
+            })
+    summary: dict[str, Any] = {}
+    if commands:
+        summary["commands"] = dict(commands.most_common(12))
+    if git_ops:
+        summary["git"] = dict(git_ops.most_common())
+    if gh_ops:
+        summary["gh"] = dict(gh_ops.most_common())
+    if test_runs:
+        last = test_runs[-1]
+        tests: dict[str, Any] = {
+            "runs": len(test_runs),
+            "runs_with_failures": sum(1 for t in test_runs if t["status"] == "failing" or t["failed"]),
+            "ended": last["status"],
+        }
+        if last["status"] != "unknown":
+            tests["last_passed"] = last["passed"]
+            tests["last_failed"] = last["failed"]
+        summary["tests"] = tests
+    if edited or read_only:
+        summary["files"] = {"edited": len(edited), "read_only": len(read_only - edited)}
+    if file_types:
+        summary["file_types"] = dict(file_types.most_common(8))
+    if lines_added or lines_removed:
+        summary["lines"] = {"added": lines_added, "removed": lines_removed}
+    if tokens:
+        summary["total_tokens"] = tokens
+    return summary
+
+
 def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
     meta, trace = _meta(event)
     agent = meta.get("agent") if isinstance(meta.get("agent"), dict) else {}
@@ -94,6 +167,9 @@ def _event_projection(event: dict[str, Any]) -> dict[str, Any]:
             "name": tool_name or None,
             "category": tool_category,
         }
+        detail = sanitize_detail(tool.get("detail"))
+        if detail:
+            item["tool"]["detail"] = detail
 
     usage = _safe_usage(meta)
     if usage:
@@ -162,6 +238,7 @@ def _observed_coverage(
         ),
         "duration": any(float(item.get("duration_seconds") or 0.0) > 0 for item in projected),
         "token_usage": any(isinstance(item.get("usage"), dict) and bool(item.get("usage")) for item in projected),
+        "tool_detail": any(bool((item.get("tool") or {}).get("detail")) for item in projected),
         "structural_step": any(bool(item.get("structural_step")) for item in projected),
         "task_context_linkage": any(isinstance(item.get("task_context"), dict) for item in projected),
         "context_handoff_assertion": any(
@@ -222,6 +299,7 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
         "observed_family_basis": base.get("observed_family_basis"),
         "run_start_observed": run_start_observed,
         "run_finish_observed": run_finish_observed,
+        "work_summary": _work_summary(projected),
         "complete_boundary_observed": run_start_observed and run_finish_observed,
         "event_count_total": len(projected),
         "event_count_returned": len(bounded_events),
@@ -241,13 +319,17 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
 
 
 def _native_keys(events: list[dict[str, Any]]) -> tuple[str, set[str], set[str]]:
-    """Return native run plus parent handoff and child run-start span identifiers."""
+    """Return the native trace (session) plus parent handoff and child run-start spans.
+
+    A child run (a subagent) has its own run id but shares the parent's trace, so
+    parent and child are matched within one trace rather than one run.
+    """
     run = ""
     handoff_spans: set[str] = set()
     start_spans: set[str] = set()
     for event in events:
         meta, trace = _meta(event)
-        run = run or str(trace.get("run_id") or trace.get("trace_id") or event.get("session_id") or "")
+        run = run or str(trace.get("trace_id") or trace.get("run_id") or event.get("session_id") or "")
         span = str(trace.get("span_id") or "")
         if not span:
             continue
