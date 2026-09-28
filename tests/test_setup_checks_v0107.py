@@ -28,15 +28,21 @@ def test_healthy_setup_has_no_checks():
     assert checks(snap, {"claude_code": CONFIGURED}, now=NOW) == []
 
 
-def test_sessions_that_predate_telemetry_are_explained():
+def test_recent_hooks_without_telemetry_are_reported_without_inventing_the_cause():
     snap = _snapshot(claude_code_hooks={"requests": 5, "last_received_at": (NOW - timedelta(minutes=2)).isoformat()},
                      claude_code_otel_logs={"requests": 0})
     [check] = checks(snap, {"claude_code": CONFIGURED}, now=NOW)
-    assert check["id"] == "claude_sessions_predate_telemetry" and check["client"] == "claude_code"
-    assert "new Claude Code session" in check["action"]
-    # Old hook traffic alone (nothing recent) is not evidence of open sessions.
+    assert check["id"] == "claude_telemetry_missing" and check["client"] == "claude_code"
+    assert "cannot prove the cause" in check["message"] and "new Claude Code session" in check["action"]
+    # Old hook traffic alone (nothing recent) is not evidence of a current delivery problem.
     stale = _snapshot(claude_code_hooks={"requests": 5, "last_received_at": (NOW - timedelta(hours=3)).isoformat()})
     assert checks(stale, {"claude_code": CONFIGURED}, now=NOW) == []
+
+
+def test_exactly_current_hook_timestamp_is_recent_not_falsy():
+    snap = _snapshot(claude_code_hooks={"requests": 1, "last_received_at": NOW.isoformat()},
+                     claude_code_otel_logs={"requests": 0})
+    assert _ids(checks(snap, {"claude_code": CONFIGURED}, now=NOW)) == ["claude_telemetry_missing"]
 
 
 def test_outdated_hooks_and_missing_telemetry():

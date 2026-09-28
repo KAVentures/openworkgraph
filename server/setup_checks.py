@@ -42,7 +42,8 @@ def checks(snapshot: dict[str, Any], configuration: dict[str, Any], *, extras: d
 
     claude = configuration.get("claude_code") if isinstance(configuration.get("claude_code"), dict) else {}
     hooks, otel = channel("claude_code_hooks"), channel("claude_code_otel_logs")
-    hooks_recent = (_age(hooks.get("last_received_at"), current) or 1e12) < RECENT_SECONDS
+    hooks_age = _age(hooks.get("last_received_at"), current)
+    hooks_recent = hooks_age is not None and 0 <= hooks_age < RECENT_SECONDS
     if claude.get("hook_events"):
         if claude.get("missing_hook_events"):
             out.append(_check(
@@ -56,10 +57,10 @@ def checks(snapshot: dict[str, Any], configuration: dict[str, Any], *, extras: d
                 "In Connect, switch Observe for Claude Code off and on again."))
         elif hooks_recent and not otel.get("requests"):
             out.append(_check(
-                "claude_sessions_predate_telemetry", "claude_code", "warn",
-                "Hooks are arriving but no Claude Code telemetry: the open sessions started before telemetry was turned on "
-                "(it applies to new sessions only), so their model calls and tokens are missing.",
-                "Start a new Claude Code session, or restart the open ones."))
+                "claude_telemetry_missing", "claude_code", "warn",
+                "Claude Code hooks are arriving, but no model/token telemetry has arrived since OpenWorkGraph started. "
+                "A common reason is that the open Claude sessions started before telemetry was enabled; this signal alone cannot prove the cause.",
+                "Start a new Claude Code session. If telemetry is still absent, switch Observe off and on again and re-check."))
     for name, client in (("claude_code_hooks", "claude_code"), ("claude_code_otel_logs", "claude_code"), ("codex_otel", "codex"),
                          ("cursor_hooks", "cursor"), ("copilot_otel", "vscode"), ("gemini_otel", "gemini_cli")):
         rejected = channel(name).get("rejected") or {}
