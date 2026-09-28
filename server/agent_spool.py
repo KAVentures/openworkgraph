@@ -4,16 +4,16 @@ from __future__ import annotations
 
 Native agent hooks (Claude Code) run outside OpenWorkGraph and POST each event
 once. If that POST fails, the event may be kept on disk and delivered later,
-but only under a recording lease:
+but only under a recording lease and while its framework's Observe switch is on:
 
 * Only a running, recording, non-demo OpenWorkGraph issues the lease. It is short
   (``LEASE_TTL_SECONDS``), renewed while recording, and revoked immediately on
   Pause, Stop and shutdown. A crashed OpenWorkGraph stops granting it within the
   TTL.
-* A hook spools only while the lease is valid *and* the capture state file of
-  the data folder that issued it says "recording" (read directly, never
-  defaulted). So after the user presses Stop or quits OpenWorkGraph, agent
-  events are dropped, never quietly collected for later.
+* A hook spools only while the lease is valid, the capture state file of the data
+  folder that issued it says "recording" (read directly, never defaulted), and
+  every switch-controlled framework in the batch still has Observe enabled.
+  So Pause, Stop, quit, or switching Observe off prevents new durable agent data.
 * Flushing goes through the normal ingest path, which applies the Observe
   switches, deletion tombstones, retention and pause/stop windows again.
 * The spool is bounded by file count, file size and age.
@@ -133,9 +133,31 @@ def valid_lease(now: float | None = None) -> dict[str, Any] | None:
     return lease
 
 
+def _observe_switch_allows(events: list[dict[str, Any]]) -> bool:
+    """Fail closed for durable buffering when a framework's Observe switch is off.
+
+    This is intentionally checked before anything is written to disk. Normal
+    direct delivery is still rechecked by the ingest route, and flush rechecks it
+    again, so a switch-off is enforced at every persistence boundary.
+    """
+    try:
+        from .connections import FRAMEWORK_CLIENTS, is_enabled
+
+        for event in events:
+            framework = str(event.get("framework") or "") if isinstance(event, dict) else ""
+            client = FRAMEWORK_CLIENTS.get(framework)
+            if client and not is_enabled(client, "observe"):
+                return False
+        return True
+    except Exception:
+        # Spooling is optional reliability, not a reason to risk capturing after
+        # consent/state can no longer be verified.
+        return False
+
+
 def spool_events(events: list[dict[str, Any]], *, now: float | None = None) -> bool:
-    """Keep events for later delivery if, and only if, recording is leased."""
-    if not events:
+    """Keep events only while recording is leased and Observe still allows it."""
+    if not events or not _observe_switch_allows(events):
         return False
     lease = valid_lease(now)
     if lease is None:
