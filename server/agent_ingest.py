@@ -42,7 +42,12 @@ def _closed_agent_sessions(events: list[dict[str, Any]]) -> list[str]:
         if str(metadata.get("operation") or "") != "run_finished":
             continue
         session_id = str(event.get("session_id") or "").strip()
-        if session_id:
+        trace = metadata.get("trace") if isinstance(metadata.get("trace"), dict) else {}
+        run_id = str(trace.get("run_id") or "").strip()
+        # Only the end of the session itself closes it. A turn (Claude Stop,
+        # Cursor stop) or a subagent finishing is a run *inside* the session;
+        # purging then would delete the session mid-way and tombstone the rest.
+        if session_id and (not run_id or run_id == session_id):
             closed.append(session_id)
     return list(dict.fromkeys(closed))
 

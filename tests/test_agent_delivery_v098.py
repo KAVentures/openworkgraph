@@ -293,3 +293,32 @@ def test_capture_status_reports_blind_sensors_and_away():
     assert sensor_state({"activity": {"permissions": {"accessibility": None}}})["missing_permissions"] == []  # unknown is not "missing"
     source = (Path(__file__).resolve().parents[1] / "server" / "enterprise_app.py").read_text()
     assert "value.update(sensor_state(main_module.COLLECTOR_STATUS))" in source
+
+
+def test_ephemeral_history_survives_turns_and_is_purged_at_session_end(dirs):
+    """A turn's Stop must not close the session in ephemeral mode (it used to purge
+    the whole session and tombstone every later turn)."""
+    from server.agent_ingest import ingest_agent_payloads
+    from server.db import init_db, rows
+    from shared.capture_control import initialize_run
+    from shared.history_policy import update_retention
+
+    init_db()
+    initialize_run("2026-09-28T08:00:00+00:00")
+    update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
+
+    def hook(name, prompt=None, **extra):
+        payload = {"session_id": "eph-s", "hook_event_name": name, **extra}
+        if prompt:
+            payload["prompt_id"] = prompt
+        return claude_hook_to_agent_events(payload, observed_at=datetime.now(timezone.utc).isoformat())
+
+    def stored():
+        return [r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == "eph-s"]
+
+    ingest_agent_payloads(hook("SessionStart") + hook("UserPromptSubmit", "t1") + hook("Stop", "t1"))
+    ingest_agent_payloads(hook("UserPromptSubmit", "t2") + hook("PostToolUse", "t2", tool_use_id="x", tool_name="Read"))
+    ingest_agent_payloads(hook("SubagentStop", "t2", agent_id="a1", agent_type="explore"))
+    assert len(stored()) == 6, "turns and subagents must not purge the running session"
+    ingest_agent_payloads(hook("SessionEnd"))
+    assert stored() == [], "the end of the session itself still purges ephemeral history"
