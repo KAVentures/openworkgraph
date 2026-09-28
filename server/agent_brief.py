@@ -213,15 +213,57 @@ def _demo() -> bool:
         return False
 
 
+HOLDOUT_PERCENT = 20
+
+
+def evaluation_enabled() -> bool:
+    return bool((_settings().get("evaluation") or {}).get("enabled"))
+
+
+def set_evaluation(value: bool) -> dict[str, Any]:
+    data = _settings()
+    data["evaluation"] = {"enabled": bool(value), "holdout_percent": HOLDOUT_PERCENT, "changed_at": _now().isoformat()}
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return data["evaluation"]
+
+
+def _arm(session_ref: str) -> str:
+    """Randomized per session, and sticky: /clear or compaction keeps the session's arm."""
+    import secrets
+
+    if session_ref:
+        try:
+            with connect() as conn:
+                conn.execute(_LOG_TABLE)
+                row = conn.execute("SELECT arm FROM agent_brief_log WHERE session_ref = ? ORDER BY id LIMIT 1", (session_ref,)).fetchone()
+            if row and row[0] in {"brief", "control"}:
+                return str(row[0])
+        except Exception:
+            pass
+    return "control" if secrets.randbelow(100) < HOLDOUT_PERCENT else "brief"
+
+
 def deliver(framework: str, *, session_id: str = "", workspace_ref: str = "") -> dict[str, Any]:
-    """What the SessionStart hook receives. Empty when off, in demo mode, or without history."""
+    """What the SessionStart hook receives. Empty when off, in demo mode, or without history.
+
+    With evaluation on, a random 1 in 5 sessions that would have received a brief
+    are held back (logged as "control"), so briefed and unbriefed sessions can be
+    compared fairly (server/brief_evaluation.py).
+    """
     if not enabled(framework) or _demo():
         return {"text": ""}
     brief = build_brief(framework, workspace_ref=workspace_ref)
     if not brief["text"]:
         return {"text": ""}
-    _log(framework, session_id=session_id, workspace_ref=workspace_ref, brief=brief)
-    return {"text": brief["text"]}
+    arm = "brief"
+    if evaluation_enabled() and session_id:
+        from .run_memory import _key, _session_ref
+
+        arm = _arm(_session_ref(session_id, key=_key()))
+    _log(framework, session_id=session_id, workspace_ref=workspace_ref, brief=brief, arm=arm)
+    return {"text": brief["text"] if arm == "brief" else ""}
 
 
 def _log(framework: str, *, session_id: str, workspace_ref: str, brief: dict[str, Any], arm: str = "brief") -> None:
@@ -266,6 +308,7 @@ def status() -> dict[str, Any]:
             for fw, name in FRAMEWORKS.items()
         },
         "briefs_delivered": delivered,
+        "evaluation": {"enabled": evaluation_enabled(), "holdout_percent": HOLDOUT_PERCENT},
         "last_delivered_at": last,
         "lookback_days": LOOKBACK_DAYS,
         "content_free": True,

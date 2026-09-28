@@ -47,6 +47,22 @@ def set_agent_brief(body: BriefChoice) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class EvaluationChoice(BaseModel):
+    enabled: bool
+
+
+@app.get("/v1/agent-brief/evaluation")
+def get_brief_evaluation() -> dict[str, Any]:
+    from .brief_evaluation import report
+
+    return report()
+
+
+@app.put("/v1/agent-brief/evaluation")
+def set_brief_evaluation(body: EvaluationChoice) -> dict[str, Any]:
+    return {"status": "saved", "evaluation": agent_brief.set_evaluation(body.enabled)}
+
+
 @app.get("/v1/agent-brief/preview")
 def preview_agent_brief(framework: str = "claude-code") -> dict[str, Any]:
     """Exactly what an agent would receive now (for a session outside any known project)."""
