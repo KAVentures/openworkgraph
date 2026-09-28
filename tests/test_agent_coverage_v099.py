@@ -289,8 +289,10 @@ def test_manual_setup_material_matches_the_switches():
     assert all(item["content_logging_enabled"] is False for item in material.values())
 
 
-def test_ephemeral_history_keeps_cursor_and_copilot_sessions_across_turns(app_client):
+def test_ephemeral_history_keeps_cursor_and_copilot_sessions_across_turns(app_client, tmp_path, monkeypatch):
     """Turn finishes (Cursor stop, Copilot invoke_agent) must not purge the session."""
+    # Own data folder: the retention setting must not leak into later tests.
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path / "data"))
     from server.agent_ingest import ingest_agent_payloads
     from server.db import init_db, rows
     from shared.history_policy import update_retention
