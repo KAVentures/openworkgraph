@@ -122,7 +122,8 @@
     if (state==='recording') {
       const names={accessibility:'Accessibility',input_monitoring:'Input Monitoring'};
       const missing=(s.missing_permissions||[]).map(p=>names[p]||p);
-      label.textContent=`Recording · ${fmtDuration(s.run_elapsed_seconds)}`+(s.away?' · away':'')+(missing.length?` · macOS ${missing.join(' and ')} permission missing`:'');
+      // Short enough for the header; the hover text names each missing permission.
+      label.textContent=`Recording · ${fmtDuration(s.run_elapsed_seconds)}`+(s.away?' · away':'')+(missing.length?' · macOS permission missing':'');
       label.title=missing.length?`OpenWorkGraph cannot see everything: allow it under System Settings → Privacy & Security → ${missing.join(' / ')}, then restart OpenWorkGraph.`:'';
       dot.style.background='#d25a5a';
       buttons.innerHTML='<button class="secondary" id="pauseCapture">Pause</button><button class="secondary" id="stopCapture">Stop</button>';
