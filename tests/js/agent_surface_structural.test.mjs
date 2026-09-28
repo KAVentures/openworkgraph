@@ -48,7 +48,7 @@ test('stop and busy state come from structure first', () => {
   assert.equal(api.isStopControl(el({attrs: {'aria-label': 'Stoppa'}})), false);
   const streaming = {querySelectorAll: (sel) => (sel.includes('data-is-streaming') ? [{}] : [])};
   assert.equal(api.hasBusyState(streaming), true);
-  const idle = {querySelectorAll: () => [el({attrs: {'aria-label': 'Skicka'}})]};
+  const idle = {querySelectorAll: (sel) => (sel.includes('button') && !sel.includes('data-is-streaming') ? [el({attrs: {'aria-label': 'Skicka'}})] : [])};
   assert.equal(api.hasBusyState(idle), false);
 });
 
