@@ -56,6 +56,18 @@ curl http://127.0.0.1:8790/health
 
 Production deployments should terminate TLS at a customer-controlled reverse proxy/load balancer and restrict network access according to the organization's security policy. Do not place an unencrypted Gateway directly on the public internet.
 
+Then open `https://<your-gateway>/admin` to create the first administrator with `OWG_GATEWAY_ADMIN_TOKEN`, and follow [ORGANIZATION_ROLLOUT.md](ORGANIZATION_ROLLOUT.md). Employees see what the Gateway holds about them at `https://<your-gateway>/me`.
+
+Identity settings (all optional, also listed in `deploy/.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `OWG_GATEWAY_PUBLIC_URL` | The Gateway's public HTTPS address; used for company sign-in redirects and invitation links |
+| `OWG_GATEWAY_SSO_ISSUER` | OpenID Connect issuer for company sign-in (defaults to `OWG_GATEWAY_OIDC_ISSUER`) |
+| `OWG_GATEWAY_SSO_CLIENT_ID` / `OWG_GATEWAY_SSO_CLIENT_SECRET` | The Gateway's client registration; redirect URI `<public URL>/sso/callback` |
+| `OWG_GATEWAY_SSO_ALLOWED_DOMAINS` | Comma-separated email domains allowed to sign in |
+| `OWG_GATEWAY_ADMIN_TOKEN_API` | `disabled` stops the bootstrap token from calling admin APIs once named administrators exist |
+
 ## Enroll an endpoint
 
 ### Preferred: single-use organization-bound enrollment code
@@ -232,4 +244,11 @@ For automated tests and local development the Gateway also supports a SQLite URL
 
 ## Enterprise identity
 
-v0.54 uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants so the data-plane boundary is testable without requiring a vendor cloud account. In larger deployments the Gateway can be placed behind the customer's OIDC/OAuth-aware reverse proxy/identity layer. Native enterprise SSO/group provisioning can be layered on without changing the core self-hosted data plane.
+The Gateway uses explicit device credentials, scoped service credentials, and preferred single-use enrollment grants, so the data-plane boundary is testable without a vendor cloud account.
+
+- **Administrators:** named accounts with password and authenticator app, or company sign-in (OpenID Connect).
+- **Employees:** a roster; personal invitations tie each computer to one employee.
+- **Employee access:** employees open `/me` from their own OpenWorkGraph, or with company sign-in.
+- **Human access API:** see [HUMAN_ACCESS.md](HUMAN_ACCESS.md).
+
+Setup is in [ORGANIZATION_ROLLOUT.md](ORGANIZATION_ROLLOUT.md). SCIM provisioning is not included.

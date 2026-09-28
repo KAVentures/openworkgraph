@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenWorkGraph · Confirm your invitation</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#172014;background:#f5f7f2}
+.card{max-width:540px;margin:64px auto;background:#fff;border:1px solid #e1e6dc;border-radius:14px;padding:26px 28px}h1{font-size:19px;margin:0 0 8px}.muted{color:#5d6659}
+button{font:inherit;border-radius:8px;border:1px solid #2f6b3f;background:#2f6b3f;color:#fff;padding:9px 16px;cursor:pointer}button:focus-visible{outline:3px solid #8fc59c;outline-offset:1px}
+.ok{color:#1f7a4d;font-weight:600}.bad{color:#b3261e;font-weight:600}.box{background:#f5f7f2;border-radius:10px;padding:12px 14px;margin:14px 0}
+</style>
+</head>
+<body>
+<div class="card" id="card"><h1>Confirm your OpenWorkGraph invitation</h1><p class="muted" id="body">Loading…</p></div>
+<script nonce="__NONCE__">
+(() => {
+const card=document.getElementById('card'),body=document.getElementById('body');
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const frag=new URLSearchParams(location.hash.slice(1));if(location.hash)history.replaceState(null,'',location.pathname);
+// A link pasted into this already-open tab only changes the fragment; reload so it is read and removed.
+addEventListener('hashchange',()=>location.reload());
+function show(html){body.outerHTML='<div id="body">'+html+'</div>'}
+function decode(code){const c=String(code||'').replace(/\s+/g,'');if(!c)throw new Error('This link has no invitation in it.');if(c.startsWith('owg_enroll_person_'))return c;if(!c.startsWith('owgjoin1.'))throw new Error('This is not an OpenWorkGraph invitation.');const b=c.slice(9).replace(/-/g,'+').replace(/_/g,'/');const j=JSON.parse(decodeURIComponent(escape(atob(b+'='.repeat((4-b.length%4)%4)))));return j.t}
+async function call(method,path,body,auth){const h={'Content-Type':'application/json'};if(auth)h.Authorization='Bearer '+auth;const r=await fetch(path,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||('HTTP '+r.status));return d}
+(async()=>{
+if(frag.get('verified')){show(`<p class="ok">Confirmed as ${esc(frag.get('verified'))}.</p><p>Go back to <b>OpenWorkGraph → Organization → Join your organization</b> and click <b>Join</b>. You can close this tab.</p>`);return}
+if(frag.get('error')){show(`<p class="bad">${esc(frag.get('error'))}</p><p class="muted">Open the confirmation link from OpenWorkGraph again, or ask your IT admin.</p>`);return}
+let token='';try{token=decode(frag.get('code'))}catch(e){show(`<p class="bad">${esc(e.message||'This link is incomplete.')}</p><p class="muted">Open it from OpenWorkGraph → Organization → Join your organization.</p>`);return}
+try{const p=await call('GET','/v1/devices/join-preview',undefined,token);const id=p.identity||{};
+if(!id.locked){show('<p>This invitation does not need a confirmation. Go back to OpenWorkGraph to join.</p>');return}
+if(id.sso_verified){show(`<p class="ok">Already confirmed as ${esc(id.email)}.</p><p>Go back to OpenWorkGraph and click <b>Join</b>.</p>`);return}
+const intro=`<p><b>${esc(p.organization_name)}</b> invited <b>${esc(id.display_name||id.email)}</b> (${esc(id.email)}) to connect OpenWorkGraph.</p>`;
+if(!id.require_sso){
+// Nothing to confirm. Offer the optional company sign-in only when the Gateway has one.
+const sso=await call('GET','/v1/admin/auth/state').then(s=>!!s.sso_enabled).catch(()=>false);
+show(intro+`<p>This invitation does not need a confirmation: paste it into <b>OpenWorkGraph → Organization → Join your organization</b> and click <b>Join</b>. Your computer will join as ${esc(id.email)}.</p>`+(sso?`<div class="box">Optional: sign in with your company account <b>${esc(id.email)}</b> first, so the computer is marked as verified.</div><p><button id="go">Confirm with company account</button></p>`:''));
+if(!sso)return}
+else show(intro+`<div class="box">Sign in with your company account <b>${esc(id.email)}</b> to confirm it is you. If you are not ${esc(id.email)}, close this page and tell your IT admin.</div><p><button id="go">Confirm with company account</button></p>`);
+document.getElementById('go').onclick=async()=>{try{const r=await call('POST','/v1/sso/start',{purpose:'join',invite_token:token});location.href=r.redirect_url}catch(e){show(`<p class="bad">${esc(e.message)}</p>`)}};
+}catch(e){show(`<p class="bad">${esc(e.message)}</p>`)}})();
+})();
+</script>
+</body>
+</html>

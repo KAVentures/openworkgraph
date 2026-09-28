@@ -387,6 +387,13 @@ class GatewayDB:
         action: str,
         details: dict[str, Any] | None = None,
     ) -> None:
+        if principal_id == "gateway-admin":
+            # Record the named administrator behind a shared admin check.
+            from .admin_accounts import current_admin
+
+            admin = current_admin()
+            if admin is not None:
+                principal_id = admin.audit_id
         with self.connect() as conn:
             self._execute(
                 conn,

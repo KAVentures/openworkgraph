@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenWorkGraph · What your organization holds about you</title>
+<style>
+:root{--ink:#172014;--muted:#5d6659;--line:#e1e6dc;--bg:#f5f7f2;--card:#fff;--brand:#2f6b3f;--ok:#1f7a4d;--warn:#9a6200;--bad:#b3261e;--chip:#eef3ea}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}
+header{background:#24452f;color:#fff;padding:14px 28px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}header h1{font-size:17px;margin:0;font-weight:650}.tag{background:#cfe9d6;color:#123a1f;font-weight:700;font-size:11px;letter-spacing:.08em;padding:4px 10px;border-radius:99px}header .who{margin-left:auto;font-size:13px;opacity:.9}header button{background:transparent;color:#fff;border:1px solid #ffffff66}
+main{padding:22px 28px;max-width:1080px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}.card h2{font-size:16px;margin:0 0 6px}.help{color:var(--muted);margin:0 0 12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}.stat b{display:block;font-size:24px}.stat span{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:600}code{font:12px/1.4 ui-monospace,Menlo,monospace;word-break:break-all}
+button{font:inherit;border-radius:8px;border:1px solid var(--line);background:#fff;padding:7px 12px;cursor:pointer}button.primary{background:var(--brand);border-color:var(--brand);color:#fff}button:focus-visible{outline:3px solid #8fc59c;outline-offset:1px}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:var(--chip)}.pill.ok{background:#e3f4ea;color:var(--ok)}.pill.warn{background:#fff1d6;color:var(--warn)}.yes::before{content:"✓ ";color:var(--ok)}.no::before{content:"✕ ";color:var(--muted)}ul.list{list-style:none;padding:0;margin:0}ul.list li{padding:4px 0}
+#signin{max-width:520px;margin:56px auto}#msg{position:fixed;right:20px;bottom:20px;background:#172014;color:#fff;padding:10px 14px;border-radius:10px;display:none;max-width:440px}.muted{color:var(--muted)}
+@media(max-width:700px){header,main{padding-left:14px;padding-right:14px}table{min-width:640px}.card{overflow:auto}}
+</style>
+</head>
+<body>
+<header><span class="tag">YOU</span><h1>What your organization holds about you</h1><span class="who" id="who"></span><button id="out" hidden>Sign out</button></header>
+<div id="signin" class="card">
+<h2>See what your organization holds about you</h2>
+<p class="help">Open this page from <b>OpenWorkGraph → Organization → See what your organization holds about you</b> on your own computer. That link signs you in for this page only.</p>
+<p id="ssoBox" hidden><button class="primary" id="sso">Sign in with your company account</button></p>
+<p class="muted">This page shows your own data only. Nobody else can open it with your link.</p>
+</div>
+<main id="app" hidden>
+<div class="grid" id="stats"></div>
+<div class="card" style="margin-top:16px"><h2>What your computers share with the organization</h2><p class="help">Set by your organization as a ceiling. Your own OpenWorkGraph can always share less, pause, or disconnect.</p><ul class="list" id="shared"></ul></div>
+<div class="card"><h2>Who can read your evidence</h2><ul class="list" id="readers"></ul></div>
+<div class="card"><h2>Your computers</h2><table><thead><tr><th>Computer</th><th>How it is linked to you</th><th>Joined</th><th>Last evidence</th><th>Events</th></tr></thead><tbody id="devs"></tbody></table></div>
+<div class="card"><h2>Recorded reads and changes about you</h2><table><thead><tr><th>When</th><th>What</th><th>By</th></tr></thead><tbody id="log"></tbody></table></div>
+<div class="card"><h2>Your evidence on the Gateway</h2><p class="help">Exactly what the Gateway stored from your computers, oldest first. Viewing it here is also recorded as a read by you.</p><table><thead><tr><th>Time</th><th>App</th><th>Title</th><th>Type</th></tr></thead><tbody id="ev"></tbody></table><p><button id="more" hidden>Load more</button></p></div>
+</main>
+<div id="msg" role="status" aria-live="polite"></div>
+<script nonce="__NONCE__">
+(() => {
+const $=id=>document.getElementById(id),S=sessionStorage;let session=S.getItem('owg_me_session')||'',cursor=null;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when=v=>v?new Date(v).toLocaleString():'—';
+const ago=v=>{if(!v)return'never';const s=(Date.now()-new Date(v))/1000;return s<90?'just now':s<5400?Math.round(s/60)+' min ago':s<172800?Math.round(s/3600)+' h ago':Math.round(s/86400)+' days ago'};
+function toast(t){const m=$('msg');m.textContent=t;m.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>m.style.display='none',6000)}
+async function call(method,path,body,auth){const h={'Content-Type':'application/json'};if(auth)h.Authorization='Bearer '+auth;const r=await fetch(path,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});const d=await r.json().catch(()=>({}));if(!r.ok){const e=new Error(d.detail||('HTTP '+r.status));e.status=r.status;throw e}return d}
+async function api(method,path){try{return await call(method,path,undefined,session)}catch(e){if(e.status===401)signedOut(e.message);throw e}}
+function signedOut(reason){S.removeItem('owg_me_session');session='';$('app').hidden=true;$('signin').hidden=false;$('out').hidden=true;$('who').textContent='';if(reason)toast(reason)}
+const SRC={sso_verified:['ok','confirmed with your company account'],personal_invite:['ok','joined with your personal invitation'],admin_linked:['','linked to you by an administrator'],self_reported:['warn','identity typed when joining (not verified)']};
+async function load(){const o=await api('GET','/v1/me/overview');$('signin').hidden=true;$('app').hidden=false;$('out').hidden=false;
+$('who').textContent=`${o.you.display_name||o.you.email} · ${o.organization_id}`;
+$('stats').innerHTML=[['Events in the last 7 days',o.evidence.last_7_days],['Events in the last 30 days',o.evidence.last_30_days],['All events held',o.evidence.total],['Kept for',o.retention_days?o.retention_days+' days':'no limit set']].map(([k,v])=>`<div class="stat"><b>${esc(v)}</b><span>${k}</span></div>`).join('');
+const w=o.what_is_shared;$('shared').innerHTML=[[w.window_and_page_titles,'Window and page titles'],[w.structural_details,'Structural details: actions, durations, counts'],[w.ai_agent_activity_permitted,'AI-agent activity (only if you also allow it on your computer)'],[w.excluded_apps,'Activity in apps you excluded']].map(([v,t])=>`<li class="${v?'yes':'no'}">${t}${v?'':' — not shared'}</li>`).join('')+(w.limited_to_event_types.length?`<li class="muted">Limited to: ${w.limited_to_event_types.map(esc).join(', ')}</li>`:'')+`<li class="no">Never: ${o.never_shared.map(esc).join(', ')}</li>`;
+const r=o.who_can_read;$('readers').innerHTML=`<li class="yes">You</li>`+(r.team_leads_of_your_teams.length?`<li class="yes">Team leads with access to your teams: ${r.team_leads_of_your_teams.map(t=>`<span class="pill">${esc(t)}</span>`).join(' ')}</li>`:'<li class="no">Team leads: you are not in any team</li>')+(r.integrations_with_organization_read_access?`<li class="yes">${r.integrations_with_organization_read_access} approved integration${r.integrations_with_organization_read_access===1?'':'s'} with organization-wide read access</li>`:'<li class="no">No integrations with organization-wide read access</li>')+`<li class="muted">${esc(r.note)}</li>`;
+$('devs').innerHTML=o.computers.map(d=>{const[c,l]=SRC[d.identity_source]||SRC.self_reported;return `<tr><td><code>${esc(d.device_id)}</code></td><td><span class="pill ${c}">${l}</span></td><td>${when(d.joined_at)}</td><td>${ago(d.last_evidence_at)}</td><td>${d.events}</td></tr>`}).join('')||'<tr><td colspan="5" class="muted">No connected computers.</td></tr>';
+// Evidence first: viewing it is itself a recorded read, which the log below then shows.
+cursor=null;$('ev').innerHTML='';await more();
+const log=await api('GET','/v1/me/access-log');$('log').innerHTML=log.items.map(x=>`<tr><td>${when(x.at)}</td><td>${esc(x.what)}${x.rows_returned!=null?` <span class="muted">(${x.rows_returned} row${x.rows_returned===1?'':'s'})</span>`:''}</td><td>${esc(x.by)}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">Nothing recorded yet.</td></tr>';}
+async function more(){const d=await api('GET','/v1/me/evidence?limit=50'+(cursor?'&cursor='+encodeURIComponent(cursor):''));$('ev').insertAdjacentHTML('beforeend',(d.rows||[]).map(x=>`<tr><td>${when(x.observed_at)}</td><td>${esc(x.app||'')}</td><td>${esc(x.window_title||'')}</td><td>${esc(x.event_type||'')}</td></tr>`).join(''));if(!$('ev').children.length)$('ev').innerHTML='<tr><td colspan="4" class="muted">The Gateway holds no evidence from you.</td></tr>';cursor=d.next_cursor||null;$('more').hidden=!d.has_more}
+document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t)return;try{if(t.id==='more')await more();if(t.id==='out'){await call('POST','/v1/me/logout',undefined,session).catch(()=>{});signedOut('Signed out')}if(t.id==='sso'){const r=await call('POST','/v1/sso/start',{purpose:'me'});location.href=r.redirect_url}}catch(err){toast(err.message)}});
+const frag=new URLSearchParams(location.hash.slice(1));if(location.hash)history.replaceState(null,'',location.pathname);
+// A link pasted into this already-open tab only changes the fragment; reload so it is read and removed.
+addEventListener('hashchange',()=>location.reload());
+(async()=>{try{const st=await call('GET','/v1/admin/auth/state');$('ssoBox').hidden=!st.sso_enabled}catch(_){}
+try{if(frag.get('code')){const r=await call('POST','/v1/me/session',{code:frag.get('code')});session=r.session_token;S.setItem('owg_me_session',session)}else if(frag.get('session')){session=frag.get('session');S.setItem('owg_me_session',session)}else if(frag.get('error')){toast(frag.get('error'))}
+if(session)await load()}catch(e){signedOut(e.message)}})();
+})();
+</script>
+</body>
+</html>

@@ -302,7 +302,13 @@ context:read
 transfers:read
 ```
 
-For larger deployments the Gateway can sit behind customer-controlled OAuth/OIDC/SSO infrastructure. Native enterprise identity provisioning is layered separately from the core data plane.
+Administrators use named accounts at `https://<your-gateway>/admin`: password plus authenticator app, or company sign-in (OpenID Connect).
+
+- **Roles:** owner, admin or read-only viewer.
+- **Employees:** a roster, with personal invitations that tie each computer to one employee.
+- **Employee view:** each employee can see what the Gateway holds about them, and every recorded read, at `/me`.
+
+See [docs/ORGANIZATION_ROLLOUT.md](docs/ORGANIZATION_ROLLOUT.md).
 
 ---
 

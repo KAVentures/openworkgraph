@@ -36,7 +36,8 @@ class JoinCodeRequest(BaseModel):
 
 class JoinRequest(BaseModel):
     join_code: str
-    actor_id: str
+    # Ignored for personal invitations: the Gateway binds the invited employee.
+    actor_id: str = ""
     accept_sharing: bool = False
 
 
@@ -63,12 +64,24 @@ def _preview(code: str) -> dict[str, Any]:
     organization_id = str(data.get("organization_id") or info["organization_id"])
     if organization_id != info["organization_id"]:
         raise HTTPException(status_code=400, detail="The Gateway returned a different organization than the join code")
+    identity = data.get("identity") if isinstance(data.get("identity"), dict) else {"locked": False}
+    identity = dict(identity)
+    if identity.get("locked") and identity.get("require_sso"):
+        # Built from the Gateway address in the join code, never from Gateway-supplied URLs.
+        from urllib.parse import quote
+        identity["verify_url"] = f"{info['gateway_url']}/join/verify#code={quote(re_code(code))}"
+    identity.pop("verify_path", None)
     return {
         "organization_name": str(data.get("organization_name") or info["organization_name"]),
         "organization_id": organization_id,
         "gateway_url": info["gateway_url"],
+        "identity": identity,
         **{k: data.get(k) for k in ("expires_at", "seats_left", "sharing", "never_shared", "you_can")},
     }
+
+
+def re_code(code: str) -> str:
+    return "".join(str(code or "").split())
 
 
 def _join(code: str, actor_id: str) -> dict[str, Any]:
@@ -110,7 +123,17 @@ def org_join(request: JoinRequest) -> dict[str, Any]:
         # immediately before the enrollment request is made.
         with _lock:
             preview = _preview(request.join_code)
-            result = _join(request.join_code, request.actor_id)
+            identity = preview.get("identity") or {}
+            if identity.get("locked"):
+                if identity.get("require_sso") and not identity.get("sso_verified"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Confirm it's you with your company account first (use the Confirm button), then join.",
+                    )
+                actor = str(identity.get("actor_id") or identity.get("email") or "")
+            else:
+                actor = request.actor_id
+            result = _join(request.join_code, actor)
         return {**result, "organization_name": preview["organization_name"], **_combined_status()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -118,6 +141,36 @@ def org_join(request: JoinRequest) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Joining failed: {str(exc)[:300]}") from exc
+
+
+@app.post("/v1/org-me-link")
+def org_me_link() -> dict[str, Any]:
+    """One-time link to the Gateway page showing what the organization holds about you."""
+    from connector.config import load_device_token, load_gateway_settings
+    from connector.control import _paths
+
+    if _demo_mode():
+        raise HTTPException(status_code=409, detail="Not available in demo mode")
+    _data_dir, auth_dir = _paths(CONFIG_PATH)
+    settings = load_gateway_settings(CONFIG_PATH, auth_dir=auth_dir)
+    token = load_device_token(settings)
+    if not settings.enabled or not settings.url or not token:
+        raise HTTPException(status_code=409, detail="This computer is not connected to an organization")
+    try:
+        with httpx.Client(timeout=10.0, verify=settings.verify_tls) as client:
+            response = client.post(f"{settings.url}/v1/devices/me-link", headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach your organization's Gateway at {settings.url}") from exc
+    if response.status_code != 200:
+        try:
+            detail = response.json().get("detail")
+        except Exception:
+            detail = None
+        raise HTTPException(status_code=502, detail=detail or "The Gateway did not accept this computer")
+    path = str(response.json().get("path") or "")
+    if not path.startswith("/me#code="):
+        raise HTTPException(status_code=502, detail="Unexpected response from the Gateway")
+    return {"url": settings.url.rstrip("/") + path, "expires_in_seconds": response.json().get("expires_in_seconds")}
 
 
 # --- Managed (zero-touch) setup -------------------------------------------------------
