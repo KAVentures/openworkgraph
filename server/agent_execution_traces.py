@@ -344,6 +344,13 @@ def _parent_child_links(groups: list[list[dict[str, Any]]]) -> dict[int, dict[st
     return links
 
 
+def _run_material(events: list[dict[str, Any]]) -> str:
+    from .outcome_tracker import run_material
+
+    _meta_value, trace = _meta(events[0])
+    return run_material(events[0].get("actor_id"), trace, events[0].get("session_id"))
+
+
 def agent_execution_traces(
     raw_events: list[dict[str, Any]],
     *,
@@ -364,6 +371,13 @@ def agent_execution_traces(
     event_limit = max(1, min(int(max_events_per_execution), 500))
     groups = [events for events in _agent_groups(raw_events) if events]
     links = _parent_child_links(groups)
+    materials = [_run_material(events) for events in groups]
+    try:
+        from .outcome_tracker import delivery_outcomes
+
+        outcomes = delivery_outcomes(materials)
+    except Exception:
+        outcomes = {}
 
     traces: list[dict[str, Any]] = []
     considered = 0
@@ -372,6 +386,8 @@ def agent_execution_traces(
         link = links.get(index, {})
         candidate["parent_execution_id"] = link.get("parent")
         candidate["child_execution_ids"] = list(link.get("children") or [])
+        if materials[index] in outcomes:
+            candidate["delivery_outcome"] = outcomes[materials[index]]
         if family and candidate.get("observed_family_key") != family:
             continue
         if execution and candidate.get("execution_id") != execution:
