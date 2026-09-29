@@ -50,7 +50,8 @@ _RECORD_KEYS = (
     "duration_seconds", "outcome_status", "outcome_basis", "positive_example", "explicit_failure",
     "steps", "observation_level", "evidence_window", "_approval_points", "workspace_ref",
 )
-_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome", "human_context")
+_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome", "human_context",
+               "structural_steps", "observed_family_key")
 
 
 def _key() -> bytes:

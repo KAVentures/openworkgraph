@@ -18,7 +18,8 @@
     {"name":"find_repeated_workflows","description":"Find repeated-work candidates and exact procedural-memory family keys for follow-up."},
     {"name":"get_task_context","description":"Read a bounded task-context bundle with provenance and authority separation."},
     {"name":"how_did_similar_runs_go","description":"Read descriptive prior-run feedback with privacy-safe human step labels, failure points, approval hotspots and observed next steps."},
-    {"name":"get_agent_runs","description":"List privacy-safe structural agent runs; saved-history leases bound historical date access."}
+    {"name":"get_agent_runs","description":"List privacy-safe structural agent runs; saved-history leases bound historical date access."},
+    {"name":"get_playbooks","description":"Read shared content-free playbooks (how a kind of work usually went); own workflows need saved-history access."}
   ],
   "compatibility": {"platforms":["darwin","win32"],"runtimes":{"node":">=18.0.0"}},
   "keywords":["workflow","context","local","mcp","history","agents"],

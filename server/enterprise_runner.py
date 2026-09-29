@@ -30,6 +30,7 @@ def main() -> None:
     import server.dashboard_privacy  # noqa: F401
     import server.outcome_routes  # noqa: F401
     import server.agent_brief_routes  # noqa: F401
+    import server.playbook_routes  # noqa: F401
 
     import server.agent_capture_runtime as agent_capture_runtime
     import server.log_redaction as log_redaction
