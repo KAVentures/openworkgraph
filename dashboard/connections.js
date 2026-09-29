@@ -122,10 +122,11 @@
     const channels=CHANNELS[client.id];
     if(!channels||!diagnostics||!client.observe?.supported||!client.observe.on)return '';
     const lines=channels.map(([key,label])=>channelText(label,diagnostics.channels?.[key]));
-    const missing=diagnostics.configuration?.[client.id]?.missing_hook_events||[];
-    if(missing.length)lines.push({text:`Hooks out of date (missing ${missing.join(', ')}); restart OpenWorkGraph to update them`,warn:true});
     const warn=lines.some(l=>l.warn);
-    return `<div class="sub${warn?' warn':''}">${esc(lines.map(l=>l.text).join(' · '))}</div>`;
+    // Specific next steps from /v1/agent-telemetry/diagnostics "checks" (server/setup_checks.py), one per line.
+    const steps=(diagnostics.checks||[]).filter(c=>c.client===client.id)
+      .map(c=>`<div class="sub${c.status==='warn'?' warn':''}">${esc(c.message)} <strong>${esc(c.action)}</strong></div>`).join('');
+    return `<div class="sub${warn?' warn':''}">${esc(lines.map(l=>l.text).join(' · '))}</div>${steps}`;
   }
 
   function subline(client){

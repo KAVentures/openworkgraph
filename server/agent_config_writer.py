@@ -288,6 +288,85 @@ def claude_disconnect(managed_env: dict[str, str] | None = None) -> dict[str, An
     }
 
 
+# --- Claude Code: the synchronous SessionStart brief hook ----------------------
+# Separate from the observational hooks above (which run async, so Claude Code
+# ignores their output): this one returns additionalContext, and exists only
+# while the person has turned on briefs for Claude Code.
+
+CLAUDE_BRIEF_MARKER = "adapters.claude_code_brief"
+
+
+def _is_brief_handler(handler: Any) -> bool:
+    return isinstance(handler, dict) and CLAUDE_BRIEF_MARKER in str(handler.get("command", ""))
+
+
+def _brief_groups(data: dict[str, Any]) -> list[Any]:
+    hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
+    groups = hooks.get("SessionStart")
+    return groups if isinstance(groups, list) else []
+
+
+def claude_brief_installed() -> bool:
+    try:
+        data = _load_claude(claude_settings_path())
+    except ConfigConflict:
+        return False
+    return any(
+        _is_brief_handler(h)
+        for group in _brief_groups(data) if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for h in group["hooks"]
+    )
+
+
+def _strip_brief(data: dict[str, Any]) -> int:
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict) or not isinstance(hooks.get("SessionStart"), list):
+        return 0
+    removed = 0
+    kept = []
+    for group in hooks["SessionStart"]:
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+            before = len(group["hooks"])
+            group["hooks"] = [h for h in group["hooks"] if not _is_brief_handler(h)]
+            removed += before - len(group["hooks"])
+            if not group["hooks"]:
+                continue
+        kept.append(group)
+    if kept:
+        hooks["SessionStart"] = kept
+    else:
+        del hooks["SessionStart"]
+    if not hooks:
+        data.pop("hooks", None)
+    return removed
+
+
+def claude_brief_connect(handler_factory: Callable[[], dict]) -> dict[str, Any]:
+    path = claude_settings_path()
+    data = _load_claude(path)
+    _strip_brief(data)
+    hooks = data.setdefault("hooks", {})
+    existing = hooks.setdefault("SessionStart", [])
+    if not isinstance(existing, list):
+        raise ConfigConflict(f"hooks.SessionStart in {path} has an unexpected shape; use manual setup")
+    existing.append({"hooks": [handler_factory()]})
+    backup = _backup(path)
+    _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return {"installed": True, "path": str(path), "backup": backup, "note": "Takes effect in new Claude Code sessions."}
+
+
+def claude_brief_disconnect() -> dict[str, Any]:
+    path = claude_settings_path()
+    if not path.exists():
+        return {"installed": False, "path": str(path), "backup": None}
+    data = _load_claude(path)
+    if not _strip_brief(data):
+        return {"installed": False, "path": str(path), "backup": None}
+    backup = _backup(path)
+    _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return {"installed": False, "path": str(path), "backup": backup}
+
+
 # --- Codex: [otel] in ~/.codex/config.toml ------------------------------------
 
 def _strip_codex_block(

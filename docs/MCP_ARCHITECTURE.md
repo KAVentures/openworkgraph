@@ -38,6 +38,7 @@ find_repeated_workflows
 get_task_context
 how_did_similar_runs_go
 get_agent_runs
+get_playbooks
 ```
 
 The smaller menu reduces overlapping tool definitions without deleting underlying capabilities:
@@ -48,6 +49,7 @@ The smaller menu reduces overlapping tool definitions without deleting underlyin
 - `find_repeated_workflows` combines repeated patterns, automation candidates and representative process examples;
 - `how_did_similar_runs_go` combines similar prior runs, explicit failure patterns, observed approval-request hotspots, frequently observed next steps and a bounded observational context pack;
 - `get_agent_runs` lists agent executions and accepts an optional opaque `execution_id` to retrieve one structural trace.
+- `get_playbooks` returns imported, content-free playbooks (how a kind of work usually went), and with `include_my_workflows=true` the person's own repeated workflows (saved-history access required).
 
 The consolidated tools preserve the same interpretation boundaries. Repeated behavior is not policy or authorization. Human completion is not silently promoted to validated success. Missing agent signals mean **not observed**, not proof that an action did not happen.
 

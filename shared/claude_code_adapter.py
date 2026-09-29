@@ -138,6 +138,18 @@ def _tool_detail(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _pr_watch(tool_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull requests this tool call opened (local-only outcome tracking)."""
+    from .tool_detail import pr_refs
+
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    try:
+        return pr_refs(command=tool_input.get("command"), tool_name=str(payload.get("tool_name") or tool_name),
+                       output=payload.get("tool_response"))
+    except Exception:
+        return []
+
+
 def _hook_agent_name(payload: dict[str, Any]) -> str:
     agent_id = _text(payload.get("agent_id"), 128)
     if not agent_id:
@@ -180,7 +192,20 @@ def _base_event(
         "tool_name": tool_name,
         "tool_category": _tool_category(tool_name),
         "duration_seconds": _duration_seconds(payload),
-    }
+    } | _workspace(payload)
+
+
+def _workspace(payload: dict[str, Any]) -> dict[str, str]:
+    """Keyed hash of the session's working directory (no path leaves memory)."""
+    from .tool_detail import enabled, workspace_ref
+
+    if not enabled() or not payload.get("cwd"):
+        return {}
+    try:
+        ref = workspace_ref(payload.get("cwd"))
+    except Exception:
+        return {}
+    return {"workspace_ref": ref} if ref else {}
 
 
 def claude_hook_to_agent_events(
@@ -269,6 +294,9 @@ def claude_hook_to_agent_events(
         detail = _tool_detail(tool_name, payload)
         if detail:
             event["tool_detail"] = detail
+        watch = _pr_watch(tool_name, payload)
+        if watch:
+            event["pr_watch"] = watch
         return [event]
 
     if hook == "PermissionRequest":
