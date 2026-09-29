@@ -389,6 +389,20 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "_session_ids": sorted({str(e.get("session_id") or "") for e in events if e.get("session_id")}),
         })
 
+    # Did the work hold up (pull request merged, CI)? Only when outcome tracking
+    # recorded something for these runs (server/outcome_tracker.py).
+    agent_materials = [item["_run_material"] for item in output if item.get("actor_kind") == "agent" and item.get("_run_material")]
+    if agent_materials:
+        try:
+            from .outcome_tracker import delivery_outcomes
+
+            outcomes = delivery_outcomes(agent_materials)
+        except Exception:
+            outcomes = {}
+        for item in output:
+            if item.get("_run_material") in outcomes:
+                item["delivery_outcome"] = outcomes[item["_run_material"]]
+
     # Runs whose raw evidence retention already removed, kept as content-free
     # run memory (see server/run_memory.py). A run still present in raw evidence
     # is always derived from the evidence itself.
@@ -408,7 +422,9 @@ def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
         "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
         "duration_seconds", "outcome_status", "outcome_basis", "steps", "observation_level",
         "evidence_refs", "evidence_window", "derived", "authoritative", "needs_review",
-    )} | ({"source": execution["source"]} if execution.get("source") else {})
+    )} | ({"source": execution["source"]} if execution.get("source") else {}) | (
+        {"delivery_outcome": execution["delivery_outcome"]} if execution.get("delivery_outcome") else {}
+    )
 
 
 def _sequence_similarity(query: list[str], candidate: list[str]) -> float:
@@ -441,7 +457,15 @@ def _family_summary(family_key: str, executions: list[dict[str, Any]]) -> dict[s
         dominant, dominant_support = sequence_counts.most_common(1)[0]
     basis = Counter(str(item.get("family_basis") or "unknown") for item in executions).most_common(1)[0][0]
     confidence = "medium" if len(positive) >= 5 and basis in {"canonical_task_family", "explicit_workflow_id"} else "low"
-    return {
+    delivered = [item["delivery_outcome"] for item in executions if isinstance(item.get("delivery_outcome"), dict)]
+    delivery = {
+        "runs_with_prs": len(delivered),
+        "prs": sum(int(d.get("prs") or 0) for d in delivered),
+        "merged": sum(int(d.get("merged") or 0) for d in delivered),
+        "closed_unmerged": sum(int(d.get("closed_unmerged") or 0) for d in delivered),
+        "runs_with_failing_ci": sum(1 for d in delivered if d.get("ci") == "failing"),
+    } if delivered else None
+    return ({"delivery": delivery} if delivery else {}) | {
         "family_key": family_key,
         "actor_kind": executions[0].get("actor_kind") if executions else "unknown",
         "family_basis": basis,

@@ -50,7 +50,7 @@ _RECORD_KEYS = (
     "duration_seconds", "outcome_status", "outcome_basis", "positive_example", "explicit_failure",
     "steps", "observation_level", "evidence_window", "_approval_points",
 )
-_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids")
+_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome")
 
 
 def _key() -> bytes:
@@ -170,7 +170,7 @@ def memory_runs(*, since: str | None = None, limit: int = 5000) -> list[dict[str
     return output
 
 
-def _delete_where(predicate) -> int:
+def _delete_where(predicate, *, with_outcomes: bool = True) -> int:
     with connect() as conn:
         _ensure(conn)
         rows = conn.execute("SELECT run_key, started_at, ended_at, session_refs, record_json FROM run_memory").fetchall()
@@ -178,6 +178,10 @@ def _delete_where(predicate) -> int:
         for offset in range(0, len(doomed), 500):
             chunk = doomed[offset:offset + 500]
             conn.execute(f"DELETE FROM run_memory WHERE run_key IN ({','.join('?' for _ in chunk)})", tuple(chunk))
+    if doomed and with_outcomes:
+        from .outcome_tracker import forget_run_keys
+
+        forget_run_keys(doomed)
     return len(doomed)
 
 
@@ -194,7 +198,11 @@ def forget_sessions(session_ids: Iterable[str]) -> int:
         except Exception:
             return False
 
-    return _delete_where(hit)
+    removed = _delete_where(hit)
+    from .outcome_tracker import forget_sessions as forget_watches
+
+    forget_watches(refs)
+    return removed
 
 
 def forget_range(since: str, until: str) -> int:
@@ -209,6 +217,9 @@ def forget_range(since: str, until: str) -> int:
             return False
         return began < end and (ended or began) >= start
 
+    from .outcome_tracker import forget_range as forget_watches
+
+    forget_watches(start, end)
     return _delete_where(overlaps)
 
 

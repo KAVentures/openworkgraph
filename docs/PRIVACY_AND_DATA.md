@@ -90,6 +90,18 @@ History retention ("Don't keep after session", or a number of days) deletes raw 
 - **Where it stays:** on this computer. The Gateway connector syncs only the events table.
 - **AI access:** MCP reads it only through procedural memory, which requires saved-history AI access to be set to "All saved history".
 
+## Outcome tracking (off by default)
+
+When you turn on "Did agent work hold up?" in History:
+
+- **What is kept:** for a pull request an agent opened (`gh pr create` or a create-pull-request tool), only its host, owner, repository and number. They go to a local watch list keyed to the run, never into stored events, and are never synced.
+- **What is contacted:** every 10 minutes your local `gh` CLI (your own login, read-only) is asked for the PR's state and CI result.
+- **What each run gets:** a content-free `delivery_outcome`: PRs opened, merged, closed without merge or open, and the CI result.
+- **When the link goes:** once the PR is merged or closed with final CI, or after 30 days. Only the outcome counts remain.
+- **Errors:** stored as codes (`gh_failed`, `timeout`, `gh_not_found`), never as text.
+- **Turning it off:** stops every GitHub call and deletes all stored links. Deleting a session or date range deletes its watches.
+- **Before the server sees it:** while tracking is off, hooks still pass a PR reference to the local server with the event, and the server drops it. It exists only in memory and, if delivery is delayed, in the short-lived local agent spool.
+
 ## Screenshots
 
 Screenshot capture exists as disabled code/config support but is disabled in the normal configuration and is not part of the current product direction or standard exports. The current privacy strategy assumes useful workflow inference should work without continuous screenshots or recording.

@@ -2,7 +2,7 @@
   'use strict';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmt=s=>{s=Math.max(0,Number(s)||0);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}m`:`${m}m`;};
-  let policy=null, history=null, access=null, memory=null;
+  let policy=null, history=null, access=null, memory=null, outcomes=null;
 
   async function call(url,options={}){
     await window.__owgAuthReady;
@@ -28,6 +28,7 @@
     panel.innerHTML=`
       <div class="card"><h2>History & retention</h2><div class="muted">Capture, keeping history, and letting an AI read saved history are separate choices. Saved history stays on this computer unless you explicitly export or share it.</div><div id="historyPolicyMount" style="margin-top:14px"></div></div>
       <div class="card"><h2>Run memory</h2><div class="muted">A small, content-free summary of each run: steps, outcome, commands used, test results, file and line counts, tokens. No titles, paths, prompts or content. It is kept even after retention deletes the session, so OpenWorkGraph can still learn repeated workflows. Deleting a session or date range yourself deletes its summary too. It never leaves this computer.</div><div id="runMemoryMount" style="margin-top:14px"></div></div>
+      <div class="card"><h2>Did agent work hold up?</h2><div class="muted">Off by default. When on, pull requests your agents open are checked through your own <code>gh</code> login (read-only) for merged/closed and CI status, so runs are judged by what happened to the work, not only by how the agent ended. Only the pull request link is kept, on this computer, until it is resolved or 30 days pass. Turning this off deletes every stored link.</div><div id="outcomeMount" style="margin-top:14px"></div></div>
       <div class="card"><h2>AI access to saved history</h2><div class="muted">Current-session AI access does not automatically include older saved work.</div><div id="historyAiMount" style="margin-top:14px"></div></div>
       <div class="card"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><div><h2>Saved sessions</h2><div class="muted">A human session is one recording run. Long idle breaks stay inside it as activity blocks. Agent sessions use observed execution boundaries.</div></div><button class="secondary" id="historyExportAll">Export retained history JSON</button></div><div id="historySessions" style="margin-top:12px"></div></div>`;
     const exportPanel=document.querySelector('#panel-export');main.insertBefore(panel,exportPanel||null);
@@ -65,7 +66,7 @@
     host.querySelector('#saveHistoryAccess').onclick=async()=>{const m=host.querySelector('#historyAccessMode').value;let since=null,until=null;if(m==='selected_range'){const a=host.querySelector('#historySince').value,b=host.querySelector('#historyUntil').value;if(!a||!b){if(typeof window.toast==='function')window.toast('Choose both history dates.');return;}since=new Date(a+'T00:00:00Z').toISOString();until=new Date(b+'T00:00:00Z').toISOString();}await call('/v1/history/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m,since,until,expires_minutes:Number(host.querySelector('#historyExpiry').value)})});if(typeof window.toast==='function')window.toast('Saved-history AI access updated.');await refresh();};
   }
 
-  function memoryLine(r){const w=r.work_summary||{},bits=[];if(w.tests)bits.push(`tests ${w.tests.ended}`);if(w.git)bits.push(Object.keys(w.git).map(k=>'git '+k).join(', '));if(w.files&&w.files.edited)bits.push(`${w.files.edited} file${w.files.edited===1?'':'s'} edited`);if(w.total_tokens)bits.push(`${w.total_tokens} tokens`);return bits.join(' · ');}
+  function memoryLine(r){const w=r.work_summary||{},bits=[];if(w.tests)bits.push(`tests ${w.tests.ended}`);if(w.git)bits.push(Object.keys(w.git).map(k=>'git '+k).join(', '));if(w.files&&w.files.edited)bits.push(`${w.files.edited} file${w.files.edited===1?'':'s'} edited`);if(w.total_tokens)bits.push(`${w.total_tokens} tokens`);const d=r.delivery_outcome;if(d&&d.prs)bits.push(`PR ${d.merged?'merged':d.closed_unmerged?'closed unmerged':d.open?'open':'unknown'}${d.ci&&d.ci!=='none'?`, CI ${d.ci}`:''}`);return bits.join(' · ');}
   function renderMemory(){
     const host=document.querySelector('#runMemoryMount');if(!host||!memory)return;const p=memory.policy||{enabled:true,days:90},rows=memory.runs||[];
     const dayOpts=[30,90,180,365].map(d=>`<option value="${d}" ${Number(p.days)===d?'selected':''}>${d} days</option>`).join('');
@@ -73,6 +74,14 @@
     host.querySelector('#saveRunMemory').onclick=async()=>{const on=host.querySelector('#runMemoryOn').checked;if(!on&&!confirm('Turn off run memory? All remembered runs are deleted.'))return;await call('/v1/run-memory/policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on,days:Number(host.querySelector('#runMemoryDays').value)})});if(typeof window.toast==='function')window.toast('Run memory updated.');await refresh();};
     host.querySelector('#forgetRunMemory').onclick=async()=>{if(!confirm('Delete all run memory from this computer?'))return;await call('/v1/run-memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({all:true})});await refresh();};
     host.querySelectorAll('[data-forget]').forEach(b=>b.onclick=async()=>{const r=rows[Number(b.dataset.forget)];await call('/v1/run-memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({execution_id:r.execution_id})});await refresh();});
+  }
+
+  function renderOutcomes(){
+    const host=document.querySelector('#outcomeMount');if(!host||!outcomes)return;const o=outcomes;
+    const gh=!o.gh_found?'The GitHub CLI (gh) was not found on this computer.':o.enabled&&o.gh_logged_in===false?'gh is installed but not logged in (run gh auth login).':'';
+    host.innerHTML=`<div class="filter-row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="outcomeOn" ${o.enabled?'checked':''}> Track pull request outcomes</label><button id="saveOutcome" class="secondary">Save</button>${o.enabled?'<button id="checkOutcome" class="ghost">Check now</button>':''}</div><div class="muted">${o.enabled?`${Number(o.watching||0)} pull requests being watched · ${Number(o.resolved||0)} resolved${o.last_poll_at?` · last check ${esc(String(o.last_poll_at).replace('T',' ').slice(0,16))}`:''}${o.last_error?` · last problem: ${esc(o.last_error)}`:''}`:'Off: OpenWorkGraph never contacts GitHub.'}${gh?` <strong>${esc(gh)}</strong>`:''}</div>`;
+    host.querySelector('#saveOutcome').onclick=async()=>{const on=host.querySelector('#outcomeOn').checked;if(!on&&o.enabled&&!confirm('Turn off outcome tracking? Stored pull request links are deleted.'))return;await call('/v1/outcome-tracking',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});if(typeof window.toast==='function')window.toast('Outcome tracking updated.');await refresh();};
+    const now=host.querySelector('#checkOutcome');if(now)now.onclick=async()=>{await call('/v1/outcome-tracking/check-now',{method:'POST'});await refresh();};
   }
 
   function sessionLabel(s){if(s.kind==='agent'){const a=s.agent||{};return `${a.framework||a.provider||a.name||'Agent'} · ${s.observation_level||'partial observation'}`;}return `Human recording · ${fmt(s.engaged_seconds)}`;}
@@ -91,7 +100,7 @@
 
   async function refresh(){
     ensureUI();
-    try{[policy,history,access,memory]=await Promise.all([call('/v1/history-policy'),call('/v1/history?limit=200'),call('/v1/history/ai-access'),call('/v1/run-memory?limit=20').catch(()=>null)]);access=access.access||{mode:'off'};renderPolicy();renderAccess();renderMemory();renderSessions();onboarding();}catch(e){const host=document.querySelector('#historySessions');if(host)host.innerHTML=`<div class="off">${esc(e.message)}</div>`;}
+    try{[policy,history,access,memory,outcomes]=await Promise.all([call('/v1/history-policy'),call('/v1/history?limit=200'),call('/v1/history/ai-access'),call('/v1/run-memory?limit=20').catch(()=>null),call('/v1/outcome-tracking').catch(()=>null)]);access=access.access||{mode:'off'};renderPolicy();renderAccess();renderMemory();renderOutcomes();renderSessions();onboarding();}catch(e){const host=document.querySelector('#historySessions');if(host)host.innerHTML=`<div class="off">${esc(e.message)}</div>`;}
   }
   window.refreshHistory=refresh;
   document.addEventListener('DOMContentLoaded',()=>{ensureUI();refresh();});

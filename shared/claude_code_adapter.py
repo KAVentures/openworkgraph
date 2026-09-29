@@ -138,6 +138,18 @@ def _tool_detail(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _pr_watch(tool_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull requests this tool call opened (local-only outcome tracking)."""
+    from .tool_detail import pr_refs
+
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    try:
+        return pr_refs(command=tool_input.get("command"), tool_name=str(payload.get("tool_name") or tool_name),
+                       output=payload.get("tool_response"))
+    except Exception:
+        return []
+
+
 def _hook_agent_name(payload: dict[str, Any]) -> str:
     agent_id = _text(payload.get("agent_id"), 128)
     if not agent_id:
@@ -269,6 +281,9 @@ def claude_hook_to_agent_events(
         detail = _tool_detail(tool_name, payload)
         if detail:
             event["tool_detail"] = detail
+        watch = _pr_watch(tool_name, payload)
+        if watch:
+            event["pr_watch"] = watch
         return [event]
 
     if hook == "PermissionRequest":
