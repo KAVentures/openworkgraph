@@ -84,8 +84,13 @@ OpenWorkGraph $VERSION — macOS tester build
 ============================================
 
 1. Unzip this folder.
-2. Right-click START_OPENWORKGRAPH.command and choose Open.
-3. Confirm Open if macOS asks.
+2. Double-click START_OPENWORKGRAPH.command. This tester build is not yet signed
+   by Apple, so macOS blocks it the first time:
+   - macOS 15 (Sequoia) and later: click Done, open System Settings > Privacy &
+     Security, scroll to the message about START_OPENWORKGRAPH.command, click
+     Open Anyway, and confirm with Open Anyway and your password or Touch ID.
+   - macOS 14 and earlier: right-click the file, choose Open, then Open again.
+3. You only need to do this once.
 4. On first launch, OpenWorkGraph unpacks its embedded payload, downloads its
    own private runtime, and installs itself under your user Library. You do not
    need to install Python manually.

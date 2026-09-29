@@ -1,237 +1,135 @@
-# OpenWorkGraph v0.57 — nontechnical testing guide
+# OpenWorkGraph — testing guide for new testers
 
-This is the recommended practical test path for the current public prototype.
+This is the recommended way to try OpenWorkGraph and check that it works. It follows the dashboard as it is today. The version you are running is shown next to the name in the dashboard's top bar.
 
-## Start OpenWorkGraph
+Plan on about 30 minutes for the first pass (steps 1–6) and a normal working day for the rest.
+
+## 1. Install and start
 
 ### macOS
 
-1. Download `OpenWorkGraph-macOS.zip` from the latest GitHub Release.
-2. Unzip it.
-3. Right-click `START_OPENWORKGRAPH.command` → **Open**.
-4. Confirm **Open** if macOS asks.
-5. Approve Accessibility/Input Monitoring if requested.
-6. The local dashboard should open automatically at `http://127.0.0.1:8787`.
-
-No manual Python installation is required.
+1. Download **OpenWorkGraph-macOS.zip** from the [latest release](https://github.com/KAVentures/openworkgraph/releases/latest) and unzip it.
+2. Double-click **`START_OPENWORKGRAPH.command`**. This tester build is not yet signed by Apple, so macOS blocks it the first time:
+   - **macOS 15 (Sequoia) and later:**
+     1. Click **Done**.
+     2. Open **System Settings → Privacy & Security** and scroll down to the message about `START_OPENWORKGRAPH.command`.
+     3. Click **Open Anyway**, then confirm with **Open Anyway** and your password or Touch ID.
+   - **macOS 14 and earlier:** right-click the file → **Open**, then **Open** again.
+3. You only do this once. A Terminal window shows the first-time setup: OpenWorkGraph downloads its own private runtime, so you don't need Python.
+4. Approve **Accessibility** and **Input Monitoring** when asked (System Settings → Privacy & Security). If a permission is missing, the recording pill in the dashboard says so.
+5. The dashboard opens in your browser at `http://127.0.0.1:8787`.
 
 ### Windows
 
-1. Download `OpenWorkGraph-Windows.zip` from the latest GitHub Release.
-2. Unzip it.
-3. Double-click `START_OPENWORKGRAPH.cmd`.
-4. Review/accept the early-prototype security warning only if you trust the repository.
-5. The local dashboard should open automatically.
+1. Download **OpenWorkGraph-Windows.zip** from the [latest release](https://github.com/KAVentures/openworkgraph/releases/latest) and unzip it.
+2. Double-click **`START_OPENWORKGRAPH.cmd`**.
+3. This tester build is not yet signed, so SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**, but only for a file you downloaded from the OpenWorkGraph Releases page.
+4. The first start downloads a private runtime (no Python needed). The dashboard then opens at `http://127.0.0.1:8787`.
 
-No manual Python installation is required.
+**Expected:** the dashboard opens with a dark top bar showing **Recording**, and tabs **Overview, Evidence, Agents, Connect, Organization, History, Export**. Nothing needs an account.
 
-## Add the browser sensor
+## 2. Add the browser sensor (recommended)
 
-The browser sensor is optional but strongly recommended for browser-heavy work.
+Without it, OpenWorkGraph sees "Google Chrome". With it, it can tell Gmail from Google Sheets from Salesforce.
 
-On macOS, run `ADD_BROWSER_SENSOR.command`. On Windows, run `ADD_BROWSER_SENSOR.cmd` from the release package and follow the browser instructions.
+1. Run **`ADD_BROWSER_SENSOR.command`** on macOS or **`ADD_BROWSER_SENSOR.cmd`** on Windows. It opens a folder and your browser's extensions page.
+2. Turn on **Developer mode**, click **Load unpacked**, and choose the folder that opened.
+3. In the dashboard, the "Browser sensor" chip should turn green. If it doesn't, use **Pair / repair browser sensor**.
 
-The sensor is important because desktop observation alone can identify the browser application but cannot reliably separate Gmail, Google Docs, Salesforce, ChatGPT and other web tools.
+## 3. Work normally, then look at Overview
 
-## v0.57 dashboard checks
+Work for 10–15 minutes as you normally would: email, a spreadsheet, a CRM, documents.
 
-### 1. Dashboard should be data-first
+**Expected on Overview:**
 
-Expected on launch:
+- **See what OpenWorkGraph understands:** a first reconstruction of what you just did, with friendly names (Gmail, Google Sheets) rather than web addresses.
+- **Keep this beyond today?:** directly under it. New installs start with "Don't keep after session". Choose **Keep 90 days** if you want OpenWorkGraph to learn patterns across days. You can change this at any time in **History**.
+- Separate lanes per tool in the timeline, with time and effort that look plausible.
 
-- a dark top bar with OpenWorkGraph and recording state;
-- compact AI / organization / browser-sensor status chips;
-- tabs for **Overview**, **Evidence**, **Connect AI**, **Organization**, and **Export**;
-- work evidence visible immediately rather than below setup/marketing panels.
+## 4. Check what is stored (privacy)
 
-Switch tabs and reload the page.
+Open **Evidence** and look at recent rows.
 
-Expected: the active tab is remembered for the current browser session and search/expanded-row state is not reset by the 5-second refresh loop.
+**Expected:**
 
-### 2. Recording controls must be real
+- **Context is kept:** titles such as `Re: Contract renewal Q4 - Gmail`, `Q4 pipeline - Customer tracker - Google Sheets`, `Acme Logistics AB | Account | Salesforce`.
+- **Personal details are tokens:** people's names, email addresses, phone numbers and personal identity numbers appear as tokens such as `PERSON_1A2B3C`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`. The same person always gets the same token.
+- **Typed text is never shown**, only counts.
 
-In live mode, use **Pause**.
+Safe tests you can do (use fake data only):
 
-Expected: recording state changes to `Paused · not recording`; desktop and browser evidence from the paused interval must not later appear after Resume.
+| Put this in a document title or email subject | Expected in Evidence |
+|---|---|
+| `Meeting with Anna Svensson about Q3` | `Meeting with PERSON_… about Q3` |
+| `Call +46 70 123 45 67` | `Call PHONE_…` |
+| `Card 4111 1111 1111 1111` (a standard test number) | `Card PAYMENT_CARD_…` |
+| `DATABASE_PASSWORD=fake-test-password-123` | the value replaced with `SECRET_…` |
+| `Sprint board: In Progress column` | unchanged (not a person) |
 
-Then Resume, Stop, and Start new run.
+Never use real card numbers, passwords or other people's personal numbers for testing.
 
-Expected:
+## 5. Recording controls
 
-- Resume records only new evidence after resume;
-- Stop keeps the dashboard/API running and preserves existing local data;
-- Start new run begins a new run scope without reviving the stopped interval.
+Use **Pause**, work for a minute, then **Resume**.
 
-### 3. Timeline and repeated workflows
+**Expected:** nothing from the paused minute appears, even later. **Stop** keeps the dashboard running and your data intact. **Start new run** begins fresh.
 
-Use several work surfaces and complete a repeatable task at least twice.
+## 6. Connect your AI (Connect tab)
 
-Expected:
+**Expected:** apps found on this computer are listed first under **Recommended**, and the rest are folded under "Other apps". Each app has up to three switches:
 
-- Overview timeline shows separate work-surface lanes rather than double-counting browser semantic events as extra time;
-- browser focus is attributed to the logical site/tool when known;
-- repeated completed workflow executions are grouped into one pattern row;
-- pattern labels remain suggestions and display `Needs review`/confidence information;
-- expanding a pattern shows the individual run windows and evidence boundaries.
+- **Context:** your AI can read the work context you allow. Try it: turn on Context for Claude Desktop or Claude Code, restart that app, and ask it *"What have I been working on today?"*.
+- **Observe** (coding agents): OpenWorkGraph records how the agent works (steps, tests, files changed, tokens), never your prompts or its answers.
+- **Brief** (Claude Code): new sessions start with a short summary of how past runs in the same project went.
 
-### 4. Delete local evidence
+The card under each app says what to do if something isn't arriving (for example "Start a new Claude Code session").
 
-In **Evidence**, choose **Delete last 15 minutes**, **Delete last 1 hour**, or a custom range and review the inline confirmation.
+**AI context detail** (further down) is **Redacted** by default. Leave it there.
 
-Expected:
+## 7. Agents tab (if you use a coding agent)
 
-- the confirmation clearly states that deletion is irreversible on this computer;
-- the selected local evidence disappears from the dashboard;
-- late desktop/browser delivery from the deleted interval does not recreate it;
-- unsent deleted rows are never synchronized later to an organization Gateway;
-- evidence that was already synchronized to a Gateway is **not** claimed to be automatically recalled.
+With **Observe** on, run a coding agent (Claude Code, Codex, Cursor) for a few tasks.
 
-Do this only with disposable test evidence.
+**Expected:** each run shows what it did (commands, tests passing or failing, files edited) and, when Human capture is on, what you did during and after it. Under **Agent learning** you'll find:
 
-## Core functional checks
+- **Session briefs:** "Preview brief" shows exactly what an agent would receive. "Measure whether briefs help" holds the brief back from a random 1 in 5 sessions and compares outcomes. It says "not enough data yet" until each group has 10 sessions.
+- **Did agent work hold up?** (off by default): checks whether pull requests your agents opened were merged and whether CI passed, using your own `gh` login.
+- **Playbooks:** export a repeated workflow as a small file someone else (or their AI) can use, or import one.
 
-### 5. Brief navigation must appear without a later click
+## 8. History
 
-Open a new tab, type a URL, press Enter, stay on the page for only 1–2 seconds, then switch away without scrolling or clicking.
+**Expected:** your retention choices for human and agent work, **Run memory** (a small content-free summary of each run, kept 90 days, which you can turn off or delete), **AI access to saved history** (off by default), and a list of saved sessions you can export or delete.
 
-Expected: the site appears in browser semantic/raw activity evidence. Capture must not depend on a later interaction.
+Delete one session. **Expected:** it disappears and does not come back.
 
-### 6. Browser work surfaces should stay separate
+## 9. Export
 
-Use several web tools such as Gmail, Google Docs and ChatGPT.
+On **Export**, download the **XLSX** or **CSV ZIP**.
 
-Expected: work-surface views attribute effort to logical browser surfaces instead of collapsing everything into `Google Chrome`/`Microsoft Edge`.
+**Expected:**
 
-### 7. Native controls should be semantic when available
+- **Redacted** is on by default. The file keeps titles, tools, timing and repeated workflows, and contains no names, email addresses, phone numbers or personal numbers.
+- Business context such as customer, company and project names stays in the file. Review it before sharing outside your organization.
 
-Click ordinary buttons/menus in a native application.
-
-Expected: where macOS Accessibility or Windows UI Automation exposes safe metadata, OpenWorkGraph should record role/label context. Some applications expose less metadata; missing labels by themselves are not necessarily a failure.
-
-### 8. Keyboard activity must be counts only
-
-Type in a normal application for a while.
-
-Expected: keypress counts/engagement increase. OpenWorkGraph must not display or export the actual typed text or key sequence.
-
-### 9. Repeated navigation must not equal repeated completed work
-
-Bounce between two websites several times without completing a meaningful action.
-
-Expected: this may appear as navigation/transition evidence but must not become a repeated completed task solely because the sequence repeated.
-
-Then perform a genuinely completed task twice, such as composing and sending two fresh emails.
-
-Expected: separate task executions can be inferred and a repeated task family can emerge when completion evidence is present.
-
-### 10. Delivery should survive temporary interruption
-
-Create a brief local delivery interruption while OpenWorkGraph is running, then restore it.
-
-Expected: queued desktop/browser observations should be retried rather than silently disappearing. The dashboard should expose connection/backlog state.
-
-## Privacy regression checks
-
-### 11. Swedish OCR/reference numbers must not become cards
-
-Use visible workflow text containing a real-looking OCR/reference number, for example in a test document/title/label where it can safely be observed.
-
-Expected: an explicit `OCR`/reference cue prevents the number from being described as a `PAYMENT_CARD_x` token.
-
-The privacy rule is semantic: Luhn validity alone is not enough to call a number a card.
-
-### 12. Real payment cards stay masked
-
-For a controlled test only, use a standard non-sensitive test card number such as `4111 1111 1111 1111` in a safe local test label.
-
-Expected: it is represented as a masked `PAYMENT_CARD_x` token rather than literal digits in persisted/presented evidence.
-
-Do not use a real card number for testing.
-
-### 13. Secret/config shapes should be removed
-
-In a controlled test document/terminal using fake credentials only, try shapes such as:
-
-```text
-DATABASE_PASSWORD=fake-test-password-123
-Authorization: Bearer fakeTokenValue123456789
-postgres://admin:fake-test-password@db.example.invalid:5432/app
-```
-
-Expected: the secret value is replaced with `SECRET_x` while useful surrounding context such as the database scheme/host can remain where appropriate.
-
-Never put a real secret into a test just to verify redaction.
-
-### 14. Status/team phrases must not become people
-
-Expose labels such as:
-
-```text
-Transition to In Progress
-Meeting with Legal Team
-Sprint board: In Progress column
-```
-
-Expected: these phrases should remain status/team/process language and should not create persistent `PERSON_x` identities.
-
-### 15. Reset learned person aliases
-
-After the observer has learned a genuine person alias from strong evidence, use **Reset learned person aliases** in the dashboard.
-
-Expected: the local learned-person registry is reset, but captured workflow history and timing remain intact.
-
-## Export checks
-
-Capture several minutes of ordinary work, then test all three export formats from the **Export** tab.
-
-### CSV ZIP
-
-Recommended for direct AI analysis.
-
-Expected:
-
-- the ZIP contains `README_FOR_AI.md`;
-- common event fields such as `action`, `page_host`, `page_path`, `target_label` and `target_role` are plain columns when available;
-- `metadata_json` remains available for detailed analysis;
-- rich raw evidence is included only when selected.
-
-### XLSX
-
-Expected:
-
-- the Overview sheet contains the AI/data dictionary;
-- event tables expose the same common semantic fields;
-- the workbook can be inspected manually without decoding nested JSON for every common field.
-
-### JSON
-
-Expected:
-
-- valid compact JSON;
-- the same structured payload semantics as before; consumers must not rely on whitespace/pretty-printing.
-
-## Useful AI test
-
-Upload the CSV ZIP or XLSX to an AI assistant and ask:
+A useful test: upload the file to an AI assistant and ask:
 
 > Read the data dictionary first. What repeated work, bottlenecks, handoffs or manual effort do you see? What internal tool or automation might help? For every recommendation, show the observed evidence and distinguish observations from inference. Do not infer typed text that was never captured.
 
-Good output should use the available sequence/timing/semantic evidence without pretending it saw screenshots or typed content.
-
-## Privacy sanity check before sharing
-
-Rich exports may intentionally retain business context such as amounts, company/customer names, project/deal names, order/reference numbers, document/page titles and safe UI labels.
-
-Expected: secrets and high-confidence identifiers are hardened, but useful business context remains. Review a rich export before sharing it outside its intended analysis context.
-
 ## What is not a failure
 
-The following can be expected in the current prototype:
+- Some desktop apps expose few button or menu labels; missing labels there are normal.
+- Engagement time is an estimate, not proof of continuous work.
+- Name detection uses a name list and context. An unusual or all-lowercase name can occasionally be missed, and a company that is also a surname can be tokenized. Please report either case.
+- After updating OpenWorkGraph, the browser extension may need a reload (the dashboard tells you).
+- Deleting local evidence does not recall anything an organization Gateway already received.
 
-- some native apps expose weak/no safe control labels;
-- a long row-like click may have an empty `target_label` because OpenWorkGraph intentionally suppresses oversized mail/chat/record labels;
-- engagement time is an estimate, not proof of continuous work;
-- the optional browser sensor may require a one-time browser reload/approval after updating;
-- local deletion does not automatically recall evidence that an organization Gateway already received.
+## Reporting problems
 
-The goal is a reconstructable, privacy-conscious workflow dataset — not perfect semantic understanding of every application.
+Open an issue at <https://github.com/KAVentures/openworkgraph/issues> with:
+
+- what you did;
+- what you expected;
+- what you saw;
+- your OS and the version shown in the dashboard's top bar.
+
+Don't paste evidence that contains real customer or personal data.

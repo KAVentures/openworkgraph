@@ -74,6 +74,9 @@ async def lifespan(_: FastAPI):
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
     harden_existing_browser_events(_runtime_config())
+    from .db import protect_existing_titles
+
+    protect_existing_titles()
     yield
 
 

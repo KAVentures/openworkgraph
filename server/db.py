@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from browser_privacy import harden_browser_event
-from browser_title_privacy import minimize_browser_title_at_rest
+from browser_title_privacy import protect_titles_at_rest
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 from sensitive_identifiers import sanitize_event_identifiers
@@ -345,13 +345,58 @@ def harden_existing_browser_events(config: dict[str, Any]) -> int:
     return changed
 
 
+TITLE_PROTECTION_MIGRATION = "titles_sensitive_details_tokenized_v0108"
+
+
+def protect_existing_titles() -> int:
+    """Apply the v0.108 title rule once to evidence stored before it.
+
+    Earlier versions stored desktop-app titles, control labels and URL paths with
+    names and contact details in them (browser titles were cut to the site
+    name). This tokenizes those sensitive details in place, keeping every other
+    word, and rebuilds the derived rows. It runs once per data folder and only
+    removes personal details; it cannot restore browser titles that older
+    versions already reduced.
+    """
+    changed = 0
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone():
+            return 0
+        existing = conn.execute("SELECT * FROM events WHERE source != 'agent' ORDER BY id ASC").fetchall()
+        for row in existing:
+            raw = _row_to_event(row)
+            safe = protect_titles_at_rest(raw)
+            if safe.get("window_title") == raw.get("window_title") and safe.get("metadata") == raw.get("metadata"):
+                continue
+            conn.execute(
+                "UPDATE events SET window_title = ?, metadata_json = ? WHERE event_id = ?",
+                (safe.get("window_title"), json.dumps(safe.get("metadata") or {}, ensure_ascii=False), safe.get("event_id")),
+            )
+            conn.execute("DELETE FROM normalized_events WHERE event_id = ?", (safe.get("event_id"),))
+            conn.execute("DELETE FROM context_events WHERE event_id = ?", (safe.get("event_id"),))
+            _insert_event(conn, "normalized_events", normalize_event(safe))
+            _insert_context(conn, contextualize_event(safe))
+            changed += 1
+        conn.execute("INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)", (TITLE_PROTECTION_MIGRATION,))
+    return changed
+
+
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
     """Persist rich evidence plus operational and context derivatives atomically."""
     inserted = 0
+    events = [dict(raw) for raw in events]
+    try:
+        # Learn "Name <email>" links first, so every event (including the one that
+        # revealed the link) gets the same person token when titles are protected.
+        from .privacy_pipeline import learn_persistent_identities
+
+        learn_persistent_identities(events)
+    except Exception:
+        pass
     with connect() as conn:
         for raw in events:
             e = sanitize_event_identifiers(dict(raw))
-            e = minimize_browser_title_at_rest(e)
+            e = protect_titles_at_rest(e)
             added = _insert_event(conn, "events", e)
             inserted += added
             normalized = normalize_event(e)

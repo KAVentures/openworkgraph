@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from browser_title_privacy import minimize_browser_title_at_rest
@@ -34,7 +35,8 @@ def test_bilingual_fixed_action_vocabulary_discards_modifiers():
         assert "Svensson" not in result
 
 
-def test_browser_titles_are_minimized_before_storage_shape():
+def test_titles_keep_context_and_tokenize_sensitive_details_before_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     salesforce = minimize_browser_title_at_rest({
         "event_type": "browser_click",
         "app": "Google Chrome",
@@ -47,8 +49,9 @@ def test_browser_titles_are_minimized_before_storage_shape():
             }
         },
     })
-    assert salesforce["window_title"] == "Salesforce"
-    assert salesforce["metadata"]["page"]["title"] == "Salesforce"
+    assert re.fullmatch(r"PERSON_[0-9A-F]{6} - Account 4739 - Salesforce", salesforce["window_title"])
+    assert salesforce["metadata"]["page"]["title"] == salesforce["window_title"]
+    assert salesforce["metadata"]["page"]["surface"] == "Salesforce"
     assert "Anna" not in str(salesforce)
 
     focus = minimize_browser_title_at_rest({
@@ -57,9 +60,9 @@ def test_browser_titles_are_minimized_before_storage_shape():
         "window_title": "Inbox - Anna Svensson - Gmail",
         "metadata": {},
     })
-    assert focus["window_title"] == "Gmail"
-    assert "Anna" not in str(focus)
+    assert re.fullmatch(r"Inbox - PERSON_[0-9A-F]{6} - Gmail", focus["window_title"])
 
+    # Desktop apps follow the same rule; titles without personal data are untouched.
     desktop = {"event_type": "focus_span", "app": "Visual Studio Code", "window_title": "project.py"}
     assert minimize_browser_title_at_rest(desktop) == desktop
 

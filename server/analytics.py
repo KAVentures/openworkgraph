@@ -1130,6 +1130,7 @@ def _summary_uncached(limit: int = 10000, since: str | None = None, *, operation
             "window_title": e.get("window_title"),
             "hostname": "",
             "pathname": "",
+            "surface": _semantic_surface(e),
             "action": meta.get("action") or str(e.get("event_type", "")).replace("screen_", ""),
             "label": _interaction_label(e),
         })
@@ -1143,6 +1144,8 @@ def _summary_uncached(limit: int = 10000, since: str | None = None, *, operation
             "window_title": e.get("window_title"),
             "hostname": page.get("hostname") or "",
             "pathname": page.get("pathname") or "",
+            # The same friendly name the dashboard uses (Gmail, not mail.google).
+            "surface": _semantic_surface(e),
             "action": meta.get("action") or str(e.get("event_type", "")).replace("browser_", ""),
             "label": _browser_label(e),
         })

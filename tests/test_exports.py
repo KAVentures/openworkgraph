@@ -54,7 +54,10 @@ def test_session_exports_default_to_operational_layer(monkeypatch, tmp_path):
     full = exporter.build_export_payload(scope="current", include_raw=True)
     assert "raw_local_evidence" in full
     full_blob = exporter.json_bytes(full).decode("utf-8")
-    assert "alice@example.com" in full_blob
+    # Rich evidence keeps the whole title and label; the address was tokenized
+    # before storage (v0.108).
+    assert "Private subject - Gmail" in full_blob and "Send to EMAIL_" in full_blob
+    assert "alice@example.com" not in full_blob
 
     xlsx = exporter.xlsx_bytes(safe)
     assert xlsx[:2] == b"PK"

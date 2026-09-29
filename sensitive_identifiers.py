@@ -408,9 +408,14 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
 
     def iban_repl(match: re.Match[str]) -> str:
         value = match.group("value")
-        if not _iban_valid(value):
-            return value
-        return stable_token("IBAN", re.sub(r"\s+", "", value).upper())
+        if _iban_valid(value):
+            return stable_token("IBAN", re.sub(r"\s+", "", value).upper())
+        # A grouped IBAN followed by a word ("SE45 5000 ... 7466 payment") makes
+        # the greedy match run into that word; retry at each earlier space.
+        for cut in [i for i, char in enumerate(value) if char == " "][::-1]:
+            if _iban_valid(value[:cut]):
+                return stable_token("IBAN", re.sub(r"\s+", "", value[:cut]).upper()) + value[cut:]
+        return value
 
     out = _IBAN_RE.sub(iban_repl, out)
 
