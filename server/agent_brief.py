@@ -17,6 +17,7 @@ Every delivery is logged locally so the person can see what agents received.
 
 import json
 import os
+import secrets
 import statistics
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -45,10 +46,33 @@ CREATE TABLE IF NOT EXISTS agent_brief_log (
   arm TEXT NOT NULL DEFAULT 'brief'
 )
 """
+_TRIAL_TABLE = """
+CREATE TABLE IF NOT EXISTS agent_brief_trial_assignment (
+  trial_id TEXT NOT NULL,
+  session_ref TEXT NOT NULL,
+  arm TEXT NOT NULL,
+  assigned_at TEXT NOT NULL,
+  PRIMARY KEY (trial_id, session_ref)
+)
+"""
+_TRIAL_DELETE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS agent_brief_log_delete_trial
+AFTER DELETE ON agent_brief_log
+WHEN OLD.session_ref != ''
+BEGIN
+  DELETE FROM agent_brief_trial_assignment WHERE session_ref = OLD.session_ref;
+END
+"""
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_trial_table(conn) -> None:
+    conn.execute(_LOG_TABLE)
+    conn.execute(_TRIAL_TABLE)
+    conn.execute(_TRIAL_DELETE_TRIGGER)
 
 
 # ------------------------------------------------------------------ the switch
@@ -63,6 +87,16 @@ def _settings() -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+
+def _write_settings(data: dict[str, Any]) -> None:
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 
 def enabled(framework: str) -> bool:
@@ -83,13 +117,7 @@ def set_enabled(framework: str, value: bool, *, install_hook: bool = True) -> di
     data = _settings()
     data.setdefault("enabled", {})[framework] = bool(value)
     data["changed_at"] = _now().isoformat()
-    path = _settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    try:
-        os.chmod(path, 0o600)
-    except Exception:
-        pass
+    _write_settings(data)
     return {"framework": framework, "enabled": bool(value), "hook": hook}
 
 
@@ -156,10 +184,15 @@ def build_brief(framework: str, *, workspace_ref: str = "", now: datetime | None
     if tested:
         failing = sum(1 for t in tested if t.get("ended") == "failing")
         last = tested[-1]
-        lines.append(
-            f"- Tests: {len(tested)} run(s) ran tests; {failing} ended with tests failing. "
-            f"Most recent test result: {last.get('ended')} ({int(last.get('last_passed') or 0)} passed, {int(last.get('last_failed') or 0)} failed)."
-        )
+        ended = str(last.get("ended") or "unknown")
+        if ended == "unknown":
+            latest = "Most recent test result: unknown; no recognized test summary was observed."
+        else:
+            latest = (
+                f"Most recent test result: {ended} "
+                f"({int(last.get('last_passed') or 0)} passed, {int(last.get('last_failed') or 0)} failed)."
+            )
+        lines.append(f"- Tests: {len(tested)} run(s) ran tests; {failing} ended with tests failing. {latest}")
 
     delivered = [r["delivery_outcome"] for r in runs if isinstance(r.get("delivery_outcome"), dict)]
     if delivered:
@@ -213,15 +246,104 @@ def _demo() -> bool:
         return False
 
 
+HOLDOUT_PERCENT = 20
+
+
+def evaluation_state() -> dict[str, Any]:
+    raw = _settings().get("evaluation")
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "holdout_percent": HOLDOUT_PERCENT,
+        "trial_id": str(raw.get("trial_id") or ""),
+        "started_at": str(raw.get("started_at") or "") or None,
+        "ended_at": str(raw.get("ended_at") or "") or None,
+        "changed_at": str(raw.get("changed_at") or "") or None,
+    }
+
+
+def evaluation_enabled() -> bool:
+    return bool(evaluation_state()["enabled"])
+
+
+def set_evaluation(value: bool) -> dict[str, Any]:
+    data = _settings()
+    previous = evaluation_state()
+    now = _now().isoformat()
+    if value:
+        if previous.get("enabled") and previous.get("trial_id"):
+            trial_id = str(previous["trial_id"])
+            started_at = previous.get("started_at") or now
+        else:
+            trial_id = "trial:" + secrets.token_hex(8)
+            started_at = now
+        current = {
+            "enabled": True,
+            "holdout_percent": HOLDOUT_PERCENT,
+            "trial_id": trial_id,
+            "started_at": started_at,
+            "ended_at": None,
+            "changed_at": now,
+        }
+    else:
+        current = {
+            "enabled": False,
+            "holdout_percent": HOLDOUT_PERCENT,
+            "trial_id": str(previous.get("trial_id") or ""),
+            "started_at": previous.get("started_at"),
+            "ended_at": now if previous.get("enabled") else previous.get("ended_at"),
+            "changed_at": now,
+        }
+    data["evaluation"] = current
+    _write_settings(data)
+    return current
+
+
+def _arm(session_ref: str) -> str:
+    """Randomized once per active trial/session and stored atomically in SQLite."""
+    state = evaluation_state()
+    trial_id = str(state.get("trial_id") or "")
+    if not state.get("enabled") or not trial_id or not session_ref:
+        return "brief"
+    with connect() as conn:
+        _ensure_trial_table(conn)
+        row = conn.execute(
+            "SELECT arm FROM agent_brief_trial_assignment WHERE trial_id = ? AND session_ref = ?",
+            (trial_id, session_ref),
+        ).fetchone()
+        if row and str(row[0]) in {"brief", "control"}:
+            return str(row[0])
+        proposed = "control" if secrets.randbelow(100) < HOLDOUT_PERCENT else "brief"
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_brief_trial_assignment(trial_id, session_ref, arm, assigned_at) VALUES (?, ?, ?, ?)",
+            (trial_id, session_ref, proposed, _now().isoformat()),
+        )
+        row = conn.execute(
+            "SELECT arm FROM agent_brief_trial_assignment WHERE trial_id = ? AND session_ref = ?",
+            (trial_id, session_ref),
+        ).fetchone()
+        return str(row[0]) if row and str(row[0]) in {"brief", "control"} else proposed
+
+
 def deliver(framework: str, *, session_id: str = "", workspace_ref: str = "") -> dict[str, Any]:
-    """What the SessionStart hook receives. Empty when off, in demo mode, or without history."""
+    """What the SessionStart hook receives. Empty when off, in demo mode, or without history.
+
+    With evaluation on, a random 1 in 5 sessions that would have received a brief
+    are held back (logged as "control"), so briefed and unbriefed sessions can be
+    compared fairly (server/brief_evaluation.py).
+    """
     if not enabled(framework) or _demo():
         return {"text": ""}
     brief = build_brief(framework, workspace_ref=workspace_ref)
     if not brief["text"]:
         return {"text": ""}
-    _log(framework, session_id=session_id, workspace_ref=workspace_ref, brief=brief)
-    return {"text": brief["text"]}
+    arm = "brief"
+    if evaluation_enabled() and session_id:
+        from .run_memory import _key, _session_ref
+
+        arm = _arm(_session_ref(session_id, key=_key()))
+    _log(framework, session_id=session_id, workspace_ref=workspace_ref, brief=brief, arm=arm)
+    return {"text": brief["text"] if arm == "brief" else ""}
 
 
 def _log(framework: str, *, session_id: str, workspace_ref: str, brief: dict[str, Any], arm: str = "brief") -> None:
@@ -232,7 +354,7 @@ def _log(framework: str, *, session_id: str, workspace_ref: str, brief: dict[str
     try:
         session_ref = _session_ref(session_id, key=_key()) if session_id else ""
         with connect() as conn:
-            conn.execute(_LOG_TABLE)
+            _ensure_trial_table(conn)
             conn.execute(
                 "INSERT INTO agent_brief_log(delivered_at, framework, workspace_ref, session_ref, scope, runs_considered, chars, arm)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -250,7 +372,7 @@ def status() -> dict[str, Any]:
     last = None
     try:
         with connect() as conn:
-            conn.execute(_LOG_TABLE)
+            _ensure_trial_table(conn)
             delivered = int(conn.execute("SELECT COUNT(*) FROM agent_brief_log WHERE arm = 'brief'").fetchone()[0])
             row = conn.execute("SELECT MAX(delivered_at) FROM agent_brief_log WHERE arm = 'brief'").fetchone()
             last = row[0] if row else None
@@ -266,6 +388,7 @@ def status() -> dict[str, Any]:
             for fw, name in FRAMEWORKS.items()
         },
         "briefs_delivered": delivered,
+        "evaluation": evaluation_state(),
         "last_delivered_at": last,
         "lookback_days": LOOKBACK_DAYS,
         "content_free": True,
@@ -275,8 +398,11 @@ def status() -> dict[str, Any]:
 
 def forget_log() -> int:
     with connect() as conn:
-        conn.execute(_LOG_TABLE)
+        _ensure_trial_table(conn)
         return int(conn.execute("DELETE FROM agent_brief_log").rowcount or 0)
 
 
-__all__ = ["build_brief", "deliver", "enabled", "forget_log", "set_enabled", "status"]
+__all__ = [
+    "build_brief", "deliver", "enabled", "evaluation_enabled", "evaluation_state", "forget_log",
+    "set_enabled", "set_evaluation", "status",
+]
