@@ -77,6 +77,19 @@ The keyboard sensor reports counts/timing only.
 
 Native accessibility/UI Automation code deliberately avoids value/text patterns that would expose field contents.
 
+## Run memory
+
+History retention ("Don't keep after session", or a number of days) deletes raw evidence. Just before retention removes a session, OpenWorkGraph keeps one small record per run in it, so repeated-workflow and similar-run features still have something to learn from:
+
+- **What a record holds:** the run's hashed family, structural step tokens, the agent's reported end status, timing, approval points, and for agents the work summary: commands, git/gh operations, test outcome, file and line counts, and tokens.
+- **What it never holds:** titles, URLs, paths, prompts or tool content. Native session and run identifiers are stored only as keyed hashes, and the key never leaves this computer.
+- **When it is kept:**
+  - Kept when **retention** removes a session: ephemeral close, expiry, or crash recovery.
+  - Deleted when **you** delete a session or a date range: its records go too.
+- **Retention and switch:** memory has its own retention (default 90 days) and an on/off switch in History. Turning it off deletes all of it.
+- **Where it stays:** on this computer. The Gateway connector syncs only the events table.
+- **AI access:** MCP reads it only through procedural memory, which requires saved-history AI access to be set to "All saved history".
+
 ## Screenshots
 
 Screenshot capture exists as disabled code/config support but is disabled in the normal configuration and is not part of the current product direction or standard exports. The current privacy strategy assumes useful workflow inference should work without continuous screenshots or recording.

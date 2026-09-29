@@ -48,8 +48,13 @@ def delete_database_range(since: str, until: str) -> dict[str, Any]:
             _delete_ids(conn, "context_events", event_ids)
             _delete_ids(conn, "normalized_events", event_ids)
             _delete_ids(conn, "events", event_ids)
+    # Deleting a time range also forgets any remembered run inside it.
+    from .run_memory import forget_range
+
+    memory_deleted = forget_range(normalized_since, normalized_until)
     return {
         "deleted_events": len(event_ids),
+        "run_memory_deleted": memory_deleted,
         "local_ids": local_ids,
         "event_ids": event_ids,
         "screenshot_paths": screenshots,
