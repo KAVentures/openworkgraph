@@ -10,14 +10,13 @@ permissions:
 
 jobs:
   repair:
-    if: github.event.head_commit.message == 'Temporarily automate clean v0.107 three-way landing'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Merge completed stack with explicit conflict policy
+      - name: Merge completed stack and resolve only release metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -29,11 +28,29 @@ jobs:
           git merge --no-ff --no-commit origin/feat/playbooks
           merge_rc=$?
           set -e
-          if [ "$merge_rc" -ne 0 ]; then
-            echo "Merge reported conflicts; resolving only the audited overlap set."
+
+          expected=$(cat <<'EOF'
+          VERSION
+          mcpb/manifest.json
+          pyproject.toml
+          sdk/python/pyproject.toml
+          sdk/typescript/package.json
+          tests/test_release_version_v087.py
+          EOF
+          )
+          expected="$(printf '%s\n' "$expected" | sed 's/^[[:space:]]*//' | sort)"
+          unresolved="$(git diff --name-only --diff-filter=U | sort)"
+          if [ "$unresolved" != "$expected" ]; then
+            echo "Unexpected conflict set."
+            echo "Expected:"
+            printf '%s\n' "$expected"
+            echo "Actual:"
+            printf '%s\n' "$unresolved"
+            exit 1
           fi
 
-          # Release metadata must come from the completed v0.107 stack.
+          # The only true conflicts are release/version metadata. The v0.107
+          # stack is authoritative for these values.
           git checkout --theirs -- \
             VERSION \
             mcpb/manifest.json \
@@ -49,190 +66,31 @@ jobs:
             sdk/typescript/package.json \
             tests/test_release_version_v087.py
 
-          # Preserve final #105 hardening in the three evidence files, then apply
-          # only the later #107/#109 additive features to those hardened versions.
-          git checkout --ours -- \
-            server/agent_execution_traces.py \
-            shared/codex_otel_adapter.py \
-            shared/tool_detail.py
-          git add \
-            server/agent_execution_traces.py \
-            shared/codex_otel_adapter.py \
-            shared/tool_detail.py
-
-          cat > /tmp/pr107-agent-traces.patch <<'PATCH'
-          diff --git a/server/agent_execution_traces.py b/server/agent_execution_traces.py
-          --- a/server/agent_execution_traces.py
-          +++ b/server/agent_execution_traces.py
-          @@ -344,6 +344,13 @@ def _parent_child_links(groups: list[list[dict[str, Any]]]) -> dict[int, dict[st
-               return links
-           
-           
-          +def _run_material(events: list[dict[str, Any]]) -> str:
-          +    from .outcome_tracker import run_material
-          +
-          +    _meta_value, trace = _meta(events[0])
-          +    return run_material(events[0].get("actor_id"), trace, events[0].get("session_id"))
-          +
-          +
-           def agent_execution_traces(
-               raw_events: list[dict[str, Any]],
-               *,
-          @@ -364,6 +371,13 @@ def agent_execution_traces(
-               event_limit = max(1, min(int(max_events_per_execution), 500))
-               groups = [events for events in _agent_groups(raw_events) if events]
-               links = _parent_child_links(groups)
-          +    materials = [_run_material(events) for events in groups]
-          +    try:
-          +        from .outcome_tracker import delivery_outcomes
-          +
-          +        outcomes = delivery_outcomes(materials)
-          +    except Exception:
-          +        outcomes = {}
-           
-               traces: list[dict[str, Any]] = []
-               considered = 0
-          @@ -372,6 +386,8 @@ def agent_execution_traces(
-                   link = links.get(index, {})
-                   candidate["parent_execution_id"] = link.get("parent")
-                   candidate["child_execution_ids"] = list(link.get("children") or [])
-          +        if materials[index] in outcomes:
-          +            candidate["delivery_outcome"] = outcomes[materials[index]]
-                   if family and candidate.get("observed_family_key") != family:
-                       continue
-                   if execution and candidate.get("execution_id") != execution:
-          PATCH
-
-          cat > /tmp/pr109-agent-traces.patch <<'PATCH'
-          diff --git a/server/agent_execution_traces.py b/server/agent_execution_traces.py
-          --- a/server/agent_execution_traces.py
-          +++ b/server/agent_execution_traces.py
-          @@ -385,6 +385,9 @@ def agent_execution_traces(
-               groups = [events for events in _agent_groups(raw_events) if events]
-               links = _parent_child_links(groups)
-               materials = [_run_material(events) for events in groups]
-          +    from .human_agent_join import human_context
-          +
-          +    human = human_context(groups, raw_events)
-               try:
-                   from .outcome_tracker import delivery_outcomes
-           
-          @@ -401,6 +404,8 @@ def agent_execution_traces(
-                   candidate["child_execution_ids"] = list(link.get("children") or [])
-                   if materials[index] in outcomes:
-                       candidate["delivery_outcome"] = outcomes[materials[index]]
-          +        if index in human:
-          +            candidate["human_context"] = human[index]
-                   if family and candidate.get("observed_family_key") != family:
-                       continue
-                   if execution and candidate.get("execution_id") != execution:
-          PATCH
-
-          cat > /tmp/pr107-codex.patch <<'PATCH'
-          diff --git a/shared/codex_otel_adapter.py b/shared/codex_otel_adapter.py
-          --- a/shared/codex_otel_adapter.py
-          +++ b/shared/codex_otel_adapter.py
-          @@ -181,6 +181,19 @@ def _tool_detail(tool_name: str, attrs: dict[str, Any]) -> dict[str, Any]:
-               return {}
-           
-           
-          +def _pr_watch(tool_name: str, attrs: dict[str, Any]) -> list[dict[str, Any]]:
-          +    """Pull requests a shell call opened (local-only outcome tracking)."""
-          +    from .tool_detail import pr_refs
-          +
-          +    raw_args = attrs.get("arguments") if isinstance(attrs.get("arguments"), str) else ""
-          +    try:
-          +        parsed = json.loads(raw_args) if raw_args.strip().startswith("{") else {}
-          +        command = parsed.get("command") if parsed.get("command") is not None else parsed.get("cmd")
-          +        return pr_refs(command=command, tool_name=tool_name, output=attrs.get("output"))
-          +    except Exception:
-          +        return []
-          +
-          +
-           def _event_id(conversation_id: str, event_name: str, attrs: dict[str, Any]) -> str:
-               if event_name == "codex.conversation_starts":
-                   discriminator = "conversation-start"
-          @@ -403,6 +416,9 @@ def codex_otel_to_agent_events(
-                       detail = _tool_detail(tool_name, attrs)
-                       if projected is not None and detail:
-                           projected["tool_detail"] = detail
-          +            watch = _pr_watch(tool_name, attrs)
-          +            if projected is not None and watch:
-          +                projected["pr_watch"] = watch
-           
-                   elif event_name == "codex.tool_decision":
-                       source = _text(attrs.get("source"), 80).lower()
-          PATCH
-
-          cat > /tmp/pr107-tool-detail.patch <<'PATCH'
-          diff --git a/shared/tool_detail.py b/shared/tool_detail.py
-          --- a/shared/tool_detail.py
-          +++ b/shared/tool_detail.py
-          @@ -385,5 +385,34 @@ def tool_call_detail(
-               return sanitize_detail(detail)
-           
-           
-          +# ------------------------------------------------------------------ pull requests (local only)
-          +
-          +_PR_URL_RE = re.compile(r"https://([A-Za-z0-9.-]{1,100})/([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})/pull/(\d{1,9})\b")
-          +_PR_TOOL_RE = re.compile(r"(create|open)_?pull_?request|pull_request_(create|open)", re.IGNORECASE)
-          +
-          +
-          +def pr_refs(*, command: Any = None, tool_name: str = "", output: Any = None) -> list[dict[str, Any]]:
-          +    """Pull requests an agent just opened, parsed from the tool output in memory.
-          +
-          +    Only for ``gh pr create`` or a create-pull-request tool, and only the host,
-          +    owner, repository and number. These never enter stored events: agent ingest
-          +    keeps them in a local-only watch list, and only when outcome tracking is on.
-          +    """
-          +    opened = False
-          +    if command is not None:
-          +        opened = "pr_create" in command_detail(command)["gh"]
-          +    if not opened and tool_name:
-          +        opened = bool(_PR_TOOL_RE.search(str(tool_name)))
-          +    if not opened:
-          +        return []
-          +    text = output if isinstance(output, str) else repr(output)
-          +    refs: list[dict[str, Any]] = []
-          +    for host, owner, repo, number in _PR_URL_RE.findall(text[-50_000:]):
-          +        ref = {"host": host.lower(), "owner": owner, "repo": repo, "number": int(number)}
-          +        if ref not in refs:
-          +            refs.append(ref)
-          +    return refs[:4]
-          +
-          +
-           def enabled() -> bool:
-               return os.getenv("OWG_AGENT_TOOL_DETAIL", "1").strip().lower() not in {"0", "false", "off", "no"}
-          PATCH
-
-          git apply --recount /tmp/pr107-agent-traces.patch
-          git apply --recount /tmp/pr109-agent-traces.patch
-          git apply --recount /tmp/pr107-codex.patch
-          git apply --recount /tmp/pr107-tool-detail.patch
-          git add \
-            server/agent_execution_traces.py \
-            shared/codex_otel_adapter.py \
-            shared/tool_detail.py
-
-          # There must be no unreviewed conflict left.
-          unresolved="$(git diff --name-only --diff-filter=U)"
-          if [ -n "$unresolved" ]; then
-            echo "Unresolved merge conflicts remain:"
-            echo "$unresolved"
+          # Git must have cleanly three-way merged every substantive code file.
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            git diff --name-only --diff-filter=U
             exit 1
           fi
 
-          # Keep the repair mechanism out of the product tree.
+          # Keep this one-off repair workflow out of the product tree.
           git rm .github/workflows/repair-v0107-landing.yml
 
-          # Sanity assertions before committing the integrated tree.
+          # Cross-stack invariants: final #105 hardening + #107-#112 additions.
           grep -qx '0.107.0' VERSION
           grep -q '_EDIT_TOOL_NAMES' server/agent_execution_traces.py
           grep -q 'test_status in {"passing", "failing", "unknown"}' server/agent_execution_traces.py
-          grep -q 'response.failed' shared/codex_otel_adapter.py
-          grep -q 'def pr_refs' shared/tool_detail.py
           grep -q 'def _run_material' server/agent_execution_traces.py
           grep -q 'human_context' server/agent_execution_traces.py
+          grep -q 'response.failed' shared/codex_otel_adapter.py
+          grep -q 'def _pr_watch' shared/codex_otel_adapter.py
+          grep -q 'def pr_refs' shared/tool_detail.py
+          grep -q 'test_status' shared/tool_detail.py
+          grep -q 'github.com' server/outcome_tracker.py
+          grep -q 'trial_id' server/agent_brief.py
+          grep -q 'resolved' server/brief_evaluation.py
+          grep -q '_valid_structural_step' server/playbooks.py
+          grep -q 'class _Locked' shared/workspace_rework.py
+          grep -q '0.107.0' mcpb/manifest.json
 
           git commit -m "Integrate hardened v0.107 stack onto current main"
           git push origin HEAD:fix/v0107-landing
