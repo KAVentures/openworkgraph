@@ -39,6 +39,24 @@ def agent_otlp_path_token_matches(supplied: str | None) -> bool:
     return bool(supplied) and hmac.compare_digest(supplied, ensure_agent_otlp_path_token())
 
 
+def ensure_agent_brief_token(*, directory: Path | None = None) -> str:
+    """Token the brief hook uses to fetch a session-start brief, and nothing else.
+
+    Separate from the write-only ingest token (which must never read) and from the
+    full API bearer. Briefs are content-free and served only while the person has
+    turned them on for that agent.
+    """
+    return _read_or_create_secret(".agent_brief_token", directory=directory)
+
+
+def agent_brief_bearer_matches(header: str | None) -> bool:
+    raw = str(header or "")
+    if not raw.lower().startswith("bearer "):
+        return False
+    supplied = raw[7:].strip()
+    return bool(supplied) and hmac.compare_digest(supplied, ensure_agent_brief_token())
+
+
 def main() -> None:
     # Explicit administrator/setup action. Printing is intentional here so a
     # local adapter can be configured without granting the broader API bearer.

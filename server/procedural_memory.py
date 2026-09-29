@@ -171,6 +171,17 @@ def _agent_family(events: list[dict[str, Any]], steps: list[str]) -> tuple[str, 
     return _hash("agent:structure", material or "unknown", size=16), "structural_signature"
 
 
+def _workspace_of(events: list[dict[str, Any]]) -> dict[str, str]:
+    from shared.tool_detail import valid_workspace_ref
+
+    for event in events:
+        meta, _trace = _meta(event)
+        ref = valid_workspace_ref(meta.get("workspace_ref"))
+        if ref:
+            return {"workspace_ref": ref}
+    return {}
+
+
 def _event_ref(event_id: Any) -> str:
     return _hash("event", event_id or "unknown", size=16)
 
@@ -385,6 +396,7 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "authoritative": False,
             "needs_review": True,
             "_approval_points": _approval_points(events),
+            **_workspace_of(events),
             "_run_material": f"agent|{actor}|{native_run}",
             "_session_ids": sorted({str(e.get("session_id") or "") for e in events if e.get("session_id")}),
         })
@@ -424,7 +436,7 @@ def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs", "evidence_window", "derived", "authoritative", "needs_review",
     )} | ({"source": execution["source"]} if execution.get("source") else {}) | (
         {"delivery_outcome": execution["delivery_outcome"]} if execution.get("delivery_outcome") else {}
-    )
+    ) | ({"workspace_ref": execution["workspace_ref"]} if execution.get("workspace_ref") else {})
 
 
 def _sequence_similarity(query: list[str], candidate: list[str]) -> float:

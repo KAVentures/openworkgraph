@@ -106,6 +106,17 @@ def cursor_hook_to_agent_events(payload: dict[str, Any], *, observed_at: str | N
     generation = _text(payload.get("generation_id"), 128)
     timestamp = _text(observed_at, 80) or datetime.now(timezone.utc).isoformat()
 
+    workspace: dict[str, str] = {}
+    roots = payload.get("workspace_roots")
+    if isinstance(roots, list) and roots:
+        try:
+            from .tool_detail import enabled, workspace_ref
+
+            ref = workspace_ref(roots[0]) if enabled() else ""
+            workspace = {"workspace_ref": ref} if ref else {}
+        except Exception:
+            workspace = {}
+
     def event(operation: str, status: str, run_id: str, key: str, *, tool: str = "", span: str = "") -> dict[str, Any]:
         return {
             "event_id": _event_id(conversation, run_id, key, span),
@@ -126,7 +137,7 @@ def cursor_hook_to_agent_events(payload: dict[str, Any], *, observed_at: str | N
             "tool_name": tool,
             "tool_category": _category(tool),
             "duration_seconds": _duration(payload),
-        }
+        } | workspace
 
     if hook == "sessionStart":
         return [event("run_started", "running", conversation, hook)]
