@@ -42,8 +42,10 @@ An AI can reconstruct the workflow from the evidence rather than depending on Op
 **[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
 
 1. Download and unzip the ZIP.
-2. Right-click **`START_OPENWORKGRAPH.command` → Open**.
-3. Confirm **Open** if macOS asks.
+2. Double-click **`START_OPENWORKGRAPH.command`**. This tester build is not yet signed by Apple, so macOS blocks it the first time:
+   - **macOS 15 (Sequoia) and later:** click **Done**, open **System Settings → Privacy & Security**, scroll down to the message about `START_OPENWORKGRAPH.command`, click **Open Anyway**, then confirm with **Open Anyway** and your password or Touch ID.
+   - **macOS 14 and earlier:** right-click the file → **Open**, then **Open** again.
+3. You only need to do this once.
 4. OpenWorkGraph installs its own private runtime; no system Python is required.
 5. Approve Accessibility/Input Monitoring if requested.
 6. The authenticated local dashboard opens at `http://127.0.0.1:8787`.
@@ -56,7 +58,7 @@ For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and
 
 1. Download and unzip the ZIP.
 2. Double-click **`START_OPENWORKGRAPH.cmd`**.
-3. Review any Windows security warning for this early unsigned prototype.
+3. This tester build is not yet signed, so Windows SmartScreen may say "Windows protected your PC". Click **More info → Run anyway** (only if you downloaded it from this repository's Releases page).
 4. OpenWorkGraph installs its own private runtime; no system Python is required.
 5. The local dashboard opens at `http://127.0.0.1:8787`.
 

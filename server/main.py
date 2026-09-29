@@ -74,6 +74,11 @@ async def lifespan(_: FastAPI):
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
     harden_existing_browser_events(_runtime_config())
+    from .db import protect_existing_titles_in_background
+
+    # One-time v0.108 title protection of older rows; batched and checkpointed,
+    # off the startup path so a long history never delays launch.
+    protect_existing_titles_in_background()
     yield
 
 
@@ -506,6 +511,10 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
     if scope not in {"current", "all"}:
         raise HTTPException(status_code=400, detail="scope must be current or all")
+    from .db import title_protection_complete
+
+    if not title_protection_complete():
+        redact_names = True  # older rows may still hold names until the v0.108 migration finishes
     if redact_names:
         # Same redactor as Redacted AI context: names/identifiers replaced in place.
         from .ai_context import redact_contextually

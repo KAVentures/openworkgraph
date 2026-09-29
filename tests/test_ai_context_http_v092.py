@@ -87,10 +87,9 @@ with TestClient(app) as c:
         ticket=c.post('/v1/export-ticket',headers=H,json={"format":"json","scope":"all","include_raw":True,"redact_names":redact}).json()
         assert ('redact_names=true' in ticket['url'])==redact
         body=c.get(ticket['url']).text
-        if redact:
-            assert 'Sara Ek' not in body and 'Chat with PERSON_' in body
-        else:
-            assert 'Chat with Sara Ek' in body  # default export behaviour unchanged
+        # Names are tokenized before storage (v0.108), so both keep the context
+        # ("Chat with ...") and neither contains the name.
+        assert 'Sara Ek' not in body and 'Microsoft Teams - Chat with PERSON_' in body
     # A ticket issued for a redacted export cannot be replayed as unredacted.
     ticket=c.post('/v1/export-ticket',headers=H,json={"format":"json","scope":"all","include_raw":True,"redact_names":True}).json()
     tampered=ticket['url'].replace('redact_names=true','redact_names=false')

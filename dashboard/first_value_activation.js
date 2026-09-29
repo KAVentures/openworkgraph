@@ -36,6 +36,9 @@
   }
 
   function surfaceOf(item){
+    // Prefer the server's canonical friendly name (Gmail, Google Sheets).
+    const named=String(item?.surface||'').trim();
+    if(named)return named;
     const host=String(item?.hostname||'').trim().toLowerCase();
     if(host){
       const parts=host.replace(/^www\./,'').split('.');
@@ -174,8 +177,8 @@
     if(card)return card;
     card=document.createElement('div');card.id='firstValueCard';card.className='card first-value-card';
     card.innerHTML=`<div class="first-value-head"><div><div class="setup-tag">FIRST VALUE</div><h2>See what OpenWorkGraph understands</h2><div id="firstValueLead" class="muted">Keep working normally. OpenWorkGraph will use the evidence already being captured on this computer to show you a factual reconstruction.</div></div><button id="firstValueDismiss" class="ghost" type="button" aria-label="Dismiss first-value guide">Dismiss</button></div><div id="firstValueProgress" class="first-value-progress"></div><div id="firstValueStatus" class="note">Waiting for enough observed activity to form a useful reconstruction.</div><div id="firstValueActions" class="first-value-actions"></div>`;
-    const onboarding=document.querySelector('#historyOnboarding');
-    if(onboarding&&onboarding.parentNode===overview)onboarding.insertAdjacentElement('afterend',card);else overview.insertBefore(card,overview.firstChild);
+    // Value first: the reconstruction leads; the retention choice follows it.
+    overview.insertBefore(card,overview.firstChild);
     card.querySelector('#firstValueDismiss').onclick=markDismissed;
     return card;
   }

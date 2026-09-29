@@ -89,9 +89,21 @@ _EXPLICIT_ID_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _IBAN_RE = re.compile(
-    r"(?<![A-Z0-9])(?P<value>[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30})(?![A-Z0-9])",
+    r"(?<![A-Z0-9_])(?P<value>[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30})(?![A-Z0-9_])",
     re.IGNORECASE,
 )
+# ISO 13616 lengths per country. A candidate must match its country's length
+# exactly, not just pass the mod-97 check (which 1 in 97 random strings do).
+_IBAN_LENGTHS = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
+    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
+    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
+    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19,
+    "MR": 27, "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29,
+    "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22, "VG": 24, "XK": 20,
+}
 _PAN_RE = re.compile(r"(?<!\d)(?P<value>(?:\d[ -]?){12,18}\d)(?!\d)")
 
 # Explicit business-reference cues take precedence over card-shape heuristics.
@@ -283,6 +295,8 @@ def _iban_valid(value: str) -> bool:
     canonical = re.sub(r"\s+", "", str(value or "")).upper()
     if not 15 <= len(canonical) <= 34:
         return False
+    if _IBAN_LENGTHS.get(canonical[:2]) != len(canonical):
+        return False
     if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]+", canonical):
         return False
     rearranged = canonical[4:] + canonical[:4]
@@ -364,6 +378,30 @@ def _nearby_has(pattern: re.Pattern[str], text: str, start: int, end: int, *, ra
     return bool(pattern.search(before) or pattern.search(after))
 
 
+# Any OpenWorkGraph privacy token: KIND_HEX6, including multi-part kinds such as
+# PAYMENT_CARD_x, PERSONNUMMER_x, EMAIL_x, PHONE_x.
+_OWG_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Z][A-Z0-9]*_)+[0-9A-F]{6}(?![A-Za-z0-9_])")
+_SHIELD_RE = re.compile("\ue000([\ue100-\uefff])\ue001")
+
+
+def _shield_tokens(text: str) -> tuple[str, list[str]]:
+    tokens: list[str] = []
+
+    def keep(match: re.Match[str]) -> str:
+        if len(tokens) >= 0xE00:  # more tokens than placeholders: leave the rest as they are
+            return match.group(0)
+        tokens.append(match.group(0))
+        return "\ue000" + chr(0xE100 + len(tokens) - 1) + "\ue001"
+
+    return _OWG_TOKEN_RE.sub(keep, text), tokens
+
+
+def _unshield_tokens(text: str, tokens: list[str]) -> str:
+    if not tokens:
+        return text
+    return _SHIELD_RE.sub(lambda m: tokens[ord(m.group(1)) - 0xE100], text)
+
+
 def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = False) -> str:
     """Pseudonymize high-confidence identifiers in human-readable text.
 
@@ -372,9 +410,13 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
     labelled IDs. Ordinary business names, amounts, project/deal names and order
     descriptions remain available for workflow understanding.
     """
-    raw = str(text or "")
-    if not raw or _ALREADY_TOKEN_RE.fullmatch(raw):
-        return raw
+    original = str(text or "")
+    if not original or _ALREADY_TOKEN_RE.fullmatch(original):
+        return original
+    # Tokens already in the text (PERSON_x, EMAIL_x, IBAN_x, ...) are never
+    # re-read by any detector: "PERSON_AD8327 call 12 ..." must not become an
+    # IBAN. They are swapped for placeholders no detector can match.
+    raw, shields = _shield_tokens(original)
 
     replacements: list[tuple[int, int, str]] = []
 
@@ -408,9 +450,14 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
 
     def iban_repl(match: re.Match[str]) -> str:
         value = match.group("value")
-        if not _iban_valid(value):
-            return value
-        return stable_token("IBAN", re.sub(r"\s+", "", value).upper())
+        if _iban_valid(value):
+            return stable_token("IBAN", re.sub(r"\s+", "", value).upper())
+        # A grouped IBAN followed by a word ("SE45 5000 ... 7466 payment") makes
+        # the greedy match run into that word; retry at each earlier space.
+        for cut in [i for i, char in enumerate(value) if char == " "][::-1]:
+            if _iban_valid(value[:cut]):
+                return stable_token("IBAN", re.sub(r"\s+", "", value[:cut]).upper()) + value[cut:]
+        return value
 
     out = _IBAN_RE.sub(iban_repl, out)
 
@@ -469,6 +516,8 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
         return f"{match.group('pre')}{stable_token('SECRET', value)}{match.group('post')}"
 
     out = _CONN_PW_RE.sub(conn_repl, out)
+
+    out = _unshield_tokens(out, shields)
 
     # Old v0.45 rows may already have lost the literal OCR value. We cannot
     # reconstruct it, but we can repair the semantics so an AI no longer reads

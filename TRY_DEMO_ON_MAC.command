@@ -22,7 +22,7 @@ fail() {
 trap fail ERR
 
 mkdir -p "$INSTALL_DIR"
-echo "Preparing Workflow Observer in your user Library…"
+echo "Preparing OpenWorkGraph in your user Library…"
 rsync -a --delete \
   --exclude '.venv/' \
   --exclude '.runtime/' \
@@ -53,10 +53,10 @@ if [ ! -x "$UV_BIN" ]; then
 fi
 
 if [ ! -x .venv/bin/python ]; then
-  echo "First-time setup: downloading Workflow Observer's private Python runtime…"
+  echo "First-time setup: downloading OpenWorkGraph's private Python runtime…"
   rm -rf .venv
   "$UV_BIN" venv --python 3.12 --managed-python .venv
-  echo "Installing Workflow Observer dependencies…"
+  echo "Installing OpenWorkGraph dependencies…"
   "$UV_BIN" pip install --python .venv/bin/python -e .
 fi
 

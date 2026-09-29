@@ -56,8 +56,9 @@ OpenWorkGraph $Version - Windows tester build
 
 1. Unzip this folder.
 2. Double-click START_OPENWORKGRAPH.cmd.
-3. Windows may show a security prompt because this is an early unsigned prototype;
-   review the files/source and choose Run only if you trust this repository.
+3. This tester build is not yet signed, so Windows SmartScreen may say
+   "Windows protected your PC". Click More info, then Run anyway (only if you
+   downloaded it from the OpenWorkGraph GitHub Releases page).
 4. On first launch, OpenWorkGraph downloads its own private runtime and installs
    itself under %LOCALAPPDATA%\OpenWorkGraph. No system Python is required.
 5. The local dashboard opens automatically at http://127.0.0.1:8787.

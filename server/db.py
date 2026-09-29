@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from browser_privacy import harden_browser_event
-from browser_title_privacy import minimize_browser_title_at_rest
+from browser_title_privacy import protect_titles_at_rest
 from contextualizer import contextualize_event
 from normalizer import normalize_event
 from sensitive_identifiers import sanitize_event_identifiers
@@ -345,13 +345,151 @@ def harden_existing_browser_events(config: dict[str, Any]) -> int:
     return changed
 
 
+TITLE_PROTECTION_MIGRATION = "titles_sensitive_details_tokenized_v0108"
+
+
+def _protected_text_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """True when protection changed any stored text (not just the privacy marker)."""
+    def texts(event: dict[str, Any]) -> tuple:
+        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+        target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
+        return (event.get("window_title"), page.get("title"), page.get("pathname"),
+                tuple(sorted((k, v) for k, v in target.items() if isinstance(v, str))))
+    return texts(before) != texts(after)
+
+
+_TITLE_PROTECTION_DONE: set[str] = set()
+SYNC_TITLE_PROTECTION_ROWS = 5000
+
+
+def title_protection_complete() -> bool:
+    """True once every row stored before v0.108 has had its titles protected.
+
+    Until then older rows may still hold names, so callers that would otherwise
+    return stored text unredacted (Full AI context, unredacted exports) must
+    redact on read instead. Cached once true (the marker is never removed).
+    """
+    key = str(DB_PATH)
+    if key in _TITLE_PROTECTION_DONE:
+        return True
+    try:
+        with connect() as conn:
+            done = bool(conn.execute(
+                "SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)
+            ).fetchone())
+    except Exception:
+        return False
+    if done:
+        _TITLE_PROTECTION_DONE.add(key)
+    return done
+
+
+def protect_existing_titles_in_background() -> None:
+    """Run the one-time title migration without delaying startup.
+
+    Until it finishes (``title_protection_complete``), AI context is forced to
+    Redacted and exports are forced to redact on read, so older rows are never
+    returned with the personal details the migration removes.
+    """
+    import threading
+
+    if title_protection_complete():
+        return
+    # Small histories (fresh installs, most upgrades) finish in well under a
+    # second: do them now so Full context is never briefly unavailable. Only a
+    # long history goes to the background.
+    try:
+        with connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS privacy_migration_progress (migration_key TEXT PRIMARY KEY, last_id INTEGER NOT NULL)")
+            row = conn.execute("SELECT last_id FROM privacy_migration_progress WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone()
+            remaining = int(conn.execute("SELECT COUNT(*) FROM events WHERE id > ? AND source != 'agent'", (int(row[0]) if row else 0,)).fetchone()[0])
+    except Exception:
+        remaining = SYNC_TITLE_PROTECTION_ROWS + 1
+    if remaining <= SYNC_TITLE_PROTECTION_ROWS:
+        try:
+            protect_existing_titles()
+            return
+        except Exception:
+            pass  # fall through to the background attempt
+
+    def run() -> None:
+        try:
+            protect_existing_titles()
+        except Exception:
+            pass  # retried on the next start (progress is checkpointed)
+
+    threading.Thread(target=run, name="owg-title-protection-migration", daemon=True).start()
+
+
+def protect_existing_titles(*, batch_size: int = 1000) -> int:
+    """Apply the v0.108 title rule once to evidence stored before it.
+
+    Earlier versions stored desktop-app titles, control labels and URL paths with
+    names and contact details in them (browser titles were cut to the site
+    name). This tokenizes detected personal details in place, keeping every
+    other word, and rebuilds the derived rows.
+
+    It works in batches of ``batch_size`` rows, each committed with a checkpoint,
+    so a large history neither holds one huge transaction nor starts over if
+    OpenWorkGraph is closed midway. It is idempotent (already-protected text is
+    left unchanged) and is marked done once finished. It only ever removes
+    personal details; it cannot restore browser titles older versions reduced.
+    """
+    changed = 0
+    cache: dict[str, str] = {}  # histories repeat the same titles; protect each once
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone():
+            return 0
+        conn.execute("CREATE TABLE IF NOT EXISTS privacy_migration_progress (migration_key TEXT PRIMARY KEY, last_id INTEGER NOT NULL)")
+        row = conn.execute("SELECT last_id FROM privacy_migration_progress WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone()
+        last_id = int(row[0]) if row else 0
+    while True:
+        with connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM events WHERE id > ? AND source != 'agent' ORDER BY id ASC LIMIT ?", (last_id, int(batch_size))
+            ).fetchall()
+            if not rows:
+                conn.execute("INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)", (TITLE_PROTECTION_MIGRATION,))
+                conn.execute("DELETE FROM privacy_migration_progress WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,))
+                return changed
+            for row in rows:
+                raw = _row_to_event(row)
+                safe = protect_titles_at_rest(raw, cache=cache)
+                if not _protected_text_changed(raw, safe):
+                    continue  # nothing personal found: leave the row exactly as it was
+                conn.execute(
+                    "UPDATE events SET window_title = ?, metadata_json = ? WHERE event_id = ?",
+                    (safe.get("window_title"), json.dumps(safe.get("metadata") or {}, ensure_ascii=False), safe.get("event_id")),
+                )
+                conn.execute("DELETE FROM normalized_events WHERE event_id = ?", (safe.get("event_id"),))
+                conn.execute("DELETE FROM context_events WHERE event_id = ?", (safe.get("event_id"),))
+                _insert_event(conn, "normalized_events", normalize_event(safe))
+                _insert_context(conn, contextualize_event(safe))
+                changed += 1
+            last_id = int(rows[-1]["id"])
+            conn.execute(
+                "INSERT OR REPLACE INTO privacy_migration_progress(migration_key, last_id) VALUES (?, ?)",
+                (TITLE_PROTECTION_MIGRATION, last_id),
+            )
+
+
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
     """Persist rich evidence plus operational and context derivatives atomically."""
     inserted = 0
+    events = [dict(raw) for raw in events]
+    try:
+        # Learn "Name <email>" links first, so every event (including the one that
+        # revealed the link) gets the same person token when titles are protected.
+        from .privacy_pipeline import learn_persistent_identities
+
+        learn_persistent_identities(events)
+    except Exception:
+        pass
     with connect() as conn:
         for raw in events:
             e = sanitize_event_identifiers(dict(raw))
-            e = minimize_browser_title_at_rest(e)
+            e = protect_titles_at_rest(e)
             added = _insert_event(conn, "events", e)
             inserted += added
             normalized = normalize_event(e)

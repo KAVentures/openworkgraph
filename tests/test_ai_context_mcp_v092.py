@@ -7,6 +7,7 @@ Real API process + real compact stdio MCP server, as an AI client would use them
 
 import asyncio
 import json
+import re
 import os
 import socket
 import sqlite3
@@ -177,7 +178,10 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
         assert setting.status_code == 200 and setting.json()["detail_level"] == "full"
         full = asyncio.run(call_all())
         combined = "\n".join(text for text, _ in full.values())
-        assert LABEL in combined and TITLE in combined
+        # Full = all stored context. Names were tokenized before storage (v0.108),
+        # so Full keeps the whole title and label with the same person tokens.
+        assert "Open email from PERSON_" in combined and "Re: Contract for PERSON_" in combined
+        assert "Anna" not in combined and "Svensson" not in combined
         assert all(s.get("detail_level") == "full" for _, s in full.values())
 
         # An AI-context request can read but never change the setting.
@@ -203,10 +207,11 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
     finally:
         _stop(api)
 
-    # Raw local evidence is untouched by AI redaction. This test explicitly chose
-    # forever retention above, so shutdown retention cleanup must not remove it.
+    # Stored evidence keeps the full title and label; only the name is a token.
+    # This test explicitly chose forever retention above, so shutdown retention
+    # cleanup must not remove it.
     db = sqlite3.connect(data / "workflow_observer.db")
     titles = {row[0] for row in db.execute("SELECT window_title FROM events")}
     labels = {json.loads(row[0] or "{}").get("target", {}).get("label") for row in db.execute("SELECT metadata_json FROM events")}
-    assert titles == {TITLE}
-    assert LABEL in labels
+    assert len(titles) == 1 and re.fullmatch(r"Re: Contract for PERSON_[0-9A-F]{6} - Gmail", next(iter(titles))), titles
+    assert any(re.fullmatch(r"Open email from PERSON_[0-9A-F]{6}", str(label)) for label in labels), labels

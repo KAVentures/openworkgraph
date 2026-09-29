@@ -5,6 +5,7 @@
   let state=null;
   let aiAccess=null;
   let diagnostics=null;
+  let briefState=null;
   let busy=new Set();
   let lastMessage={};
 
@@ -61,7 +62,7 @@
     if(!card){
       card=document.createElement('div');
       card.id='owgConnections';card.className='card';
-      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div id="owgAiDetail" class="ai-detail"></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
+      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). <strong>Brief</strong> starts new agent sessions with a short summary of how past runs went. Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div id="owgAiDetail" class="ai-detail"></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
       panel.insertBefore(card,panel.firstChild);
     }
     // Everything the table already covers moves into one collapsed section.
@@ -90,6 +91,24 @@
     const key=`${client.id}:${kind}`;
     const label=`${kind==='mcp'?'Context':'Observe'} for ${client.label}`;
     return `<div class="cell"><button class="sw" role="switch" aria-checked="${info.on?'true':'false'}" aria-label="${esc(label)}" data-client="${esc(client.id)}" data-kind="${esc(kind)}" ${busy.has(key)?'disabled':''}></button></div>`;
+  }
+
+  // Session briefs (server/agent_brief.py): a third per-app consent, next to
+  // Context and Observe. Only Claude Code supports it today.
+  const BRIEF_FRAMEWORK={claude_code:'claude-code'};
+  function briefHtml(client){
+    const framework=BRIEF_FRAMEWORK[client.id];
+    if(!framework||!briefState)return '<span class="na">—</span>';
+    const on=!!briefState.frameworks?.[framework]?.enabled,key=`${client.id}:brief`;
+    return `<div class="cell"><button class="sw" role="switch" aria-checked="${on?'true':'false'}" aria-label="Session brief for ${esc(client.label)}" data-brief="${esc(framework)}" data-client-id="${esc(client.id)}" ${busy.has(key)?'disabled':''}></button></div>`;
+  }
+  async function toggleBrief(framework,clientId,on){
+    const key=`${clientId}:brief`;busy.add(key);render();
+    try{
+      await api('/v1/agent-brief',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({framework,enabled:on})});
+      lastMessage[clientId]={text:on?'Session brief on. New sessions start with a short, content-free brief of past runs in the same project.':'Session brief off.'};
+    }catch(error){lastMessage[clientId]={text:error.message||'Could not change the session brief.',warn:true};}
+    finally{busy.delete(key);await refresh();window.refreshHistory?.();}
   }
 
   function restartLine(client){
@@ -153,17 +172,26 @@
       master.title='Master switch for all Context connections. It resets to OFF whenever OpenWorkGraph restarts.';
       master.querySelector('#owgMasterSwitch').onclick=toggleMaster;
     }
-    const rows=state.clients.map(client=>{
+    const row=client=>{
       const anyInstalled=(client.mcp.installed)||(client.observe.supported&&client.observe.installed);
       const manual=client.observe.supported?`<button class="linkish" data-manual="${esc(client.id)}">Manual setup</button>`:'';
       const remove=anyInstalled?`<button class="linkish" data-remove="${esc(client.id)}">Remove</button>`:'';
-      return `<tr><td><div class="app">${esc(client.label)}</div>${subline(client)}</td><td>${switchHtml(client,'mcp',client.mcp)}</td><td>${switchHtml(client,'observe',client.observe)}</td><td class="hide-sm" style="text-align:right">${remove} ${manual}</td></tr>`;
-    }).join('');
-    card.querySelector('#owgConnTable').innerHTML=`<table><thead><tr><th>App</th><th>Context</th><th>Observe</th><th class="hide-sm"></th></tr></thead><tbody>${rows}</tbody></table>`;
+      return `<tr><td><div class="app">${esc(client.label)}</div>${subline(client)}</td><td>${switchHtml(client,'mcp',client.mcp)}</td><td>${switchHtml(client,'observe',client.observe)}</td><td>${briefHtml(client)}</td><td class="hide-sm" style="text-align:right">${remove} ${manual}</td></tr>`;
+    };
+    const head='<thead><tr><th>App</th><th title="Let the app read the work context you allow">Context</th><th title="Record how the agent runs (structure only)">Observe</th><th title="Start new sessions with a short brief of past runs">Brief</th><th class="hide-sm"></th></tr></thead>';
+    // Apps found on this computer (or already connected) first; the rest folded away.
+    const found=state.clients.filter(c=>c.detected||c.mcp.installed||(c.observe.supported&&c.observe.installed));
+    const others=state.clients.filter(c=>!found.includes(c));
+    const openOthers=document.querySelector('#owgOtherApps')?.open?' open':'';
+    const intro=found.length
+      ?`<div class="sub" style="margin-top:10px;font-size:12.5px"><strong>Recommended:</strong> turn on <strong>Context</strong> for ${esc(found.map(c=>c.label).join(', '))} so your AI can use your work context, and <strong>Observe</strong> for the coding agents you use.</div>`
+      :'<div class="sub" style="margin-top:10px;font-size:12.5px">No supported AI apps were found on this computer yet. Install one, or see all apps below.</div>';
+    card.querySelector('#owgConnTable').innerHTML=`${intro}${found.length?`<table>${head}<tbody>${found.map(row).join('')}</tbody></table>`:''}${others.length?`<details id="owgOtherApps"${openOthers}><summary class="sub" style="cursor:pointer;margin-top:10px">Other apps (${others.length}, not found on this computer)</summary><table>${head}<tbody>${others.map(row).join('')}</tbody></table></details>`:''}`;
     card.querySelector('#owgCli').textContent=`owg=(${state.cli})\n"\${owg[@]}" list                     # every app and its switches\n"\${owg[@]}" on claude_code           # context + observe\n"\${owg[@]}" off cursor --mcp          # instant, no restart\n"\${owg[@]}" remove codex --observe   # uninstall from the app`;
     const copy=card.querySelector('#owgCliCopy');
     if(copy)copy.onclick=async()=>{try{await navigator.clipboard.writeText(card.querySelector('#owgCli').textContent);copy.textContent='Copied';setTimeout(()=>copy.textContent='Copy',1200);}catch(_){window.prompt('Copy this:',card.querySelector('#owgCli').textContent);}};
     card.querySelectorAll('.sw[data-client]').forEach(button=>button.onclick=()=>toggle(button.dataset.client,button.dataset.kind,button.getAttribute('aria-checked')!=='true'));
+    card.querySelectorAll('.sw[data-brief]').forEach(button=>button.onclick=()=>toggleBrief(button.dataset.brief,button.dataset.clientId,button.getAttribute('aria-checked')!=='true'));
     card.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>removeClient(button.dataset.remove));
     card.querySelectorAll('[data-manual]').forEach(button=>button.onclick=()=>window.openAgentSetup?.(button.dataset.manual));
   }
@@ -178,12 +206,13 @@
 
   async function refresh(){
     try{
-      const [connections,access,activity,traces,diag]=await Promise.all([
+      const [connections,access,activity,traces,diag,brief]=await Promise.all([
         api('/v1/connections'),api('/v1/ai-access'),api('/v1/mcp-activity?limit=200').catch(()=>({items:[]})),
         api('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=1').catch(()=>({executions:[]})),
         api('/v1/agent-telemetry/diagnostics').catch(()=>null),
+        api('/v1/agent-brief').catch(()=>null),
       ]);
-      diagnostics=diag;
+      diagnostics=diag;briefState=brief;
       const lastUsed={},lastObserved={};
       for(const item of activity.items||[]){if(item.client&&item.status==='ok'&&!lastUsed[item.client])lastUsed[item.client]=item.observed_at;}
       for(const run of traces.executions||[]){
@@ -250,9 +279,10 @@
       <div class="muted">What connected AI apps see when they read your work context. Your raw evidence always stays on this computer.</div>
       <div class="ai-opts" role="radiogroup" aria-label="AI context detail">
         <label class="ai-opt"><input type="radio" name="owgAiDetail" value="redacted" ${level==='redacted'?'checked':''}><span><strong>Redacted</strong> (recommended)<br>Titles and labels keep their context, but people, emails, phone numbers and IDs become stable tokens: <code>Re: Contract for PERSON_1A2B3C - Gmail</code>. The same person gets the same token in every app.</span></label>
-        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Raw labels and titles, including names: <code>Re: Contract for Anna Svensson - Gmail</code>. Use only with an AI you trust with this data.</span></label>
+        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Labels and titles exactly as stored. Detected names, emails, phone numbers and personal numbers are already tokenized before storage; Full skips the second redaction pass and your lists below, so anything the first pass missed is shown as is.</span></label>
       </div>
       ${locked?'<div class="ai-lock">Locked to Redacted by your organization.</div>':''}
+      ${aiDetail.migration_in_progress&&!locked&&aiDetail.user_setting==='full'?'<div class="ai-lock">Full becomes available when your existing history finishes its one-time privacy upgrade; until then AI apps get Redacted.</div>':''}
       <div class="ai-lists">
         <label class="sub">Never redact (company, product or project names, one per line)<textarea id="owgNeverRedact" placeholder="Acme AB&#10;Q3 pipeline">${esc((aiDetail.never_redact||[]).join('\n'))}</textarea></label>
         <label class="sub">Always redact (names the detector should always hide)<textarea id="owgAlwaysRedact" placeholder="Project Falcon">${esc((aiDetail.always_redact||[]).join('\n'))}</textarea></label>

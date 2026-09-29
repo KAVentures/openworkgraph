@@ -64,9 +64,15 @@ test('AI context detail: Redacted default, Full opt-in, organization lock, never
   assert.match(source,/PERSON_1A2B3C/);
 });
 
-test('export offers name redaction with the same redactor (default off)',()=>{
+test('export is redacted by default, with the same redactor as AI context',()=>{
   const html=fs.readFileSync(path.join(here,'..','..','dashboard','index.html'),'utf8');
-  assert.match(html,/id="redactNames"(?![^>]*checked)/);
-  assert.match(html,/Redact names in export/);
+  assert.match(html,/id="redactNames" checked/);
+  assert.match(html,/Redacted <span class="muted">\(recommended/);
   assert.match(html,/redact_names=\$\{redact\}/);
+});
+
+test('Connect lists found apps first and has a Brief column',()=>{
+  const js=fs.readFileSync(path.join(here,'..','..','dashboard','connections.js'),'utf8');
+  assert.doesNotThrow(()=>new Function(js));
+  for(const needle of ['Recommended:','owgOtherApps','not found on this computer','/v1/agent-brief','data-brief','>Brief</th>'])assert.ok(js.includes(needle),needle);
 });

@@ -150,8 +150,9 @@ def test_new_events_pseudonymize_sensitive_ids_before_database_storage(monkeypat
     assert "ABC12345" not in serialized
     assert "PERSONNUMMER_" in serialized
     assert "PATIENT_ID_" in serialized
-    # Names remain rich locally for inference; display masking is downstream.
-    assert "Erik Lindqvist" in serialized
+    # The title keeps its context; the name is a stable token (v0.108).
+    assert "Erik Lindqvist" not in serialized
+    assert "Remiss: PERSON_" in serialized
 
 
 def test_legacy_rows_are_migrated_once_and_derived_rows_rebuilt(monkeypatch, tmp_path):

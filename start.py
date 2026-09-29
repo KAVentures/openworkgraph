@@ -131,7 +131,7 @@ def main() -> None:
         reset_demo_data(env)
     system = platform.system()
 
-    print(f"\nOpenWorkGraph / Workflow Observer {VERSION}")
+    print(f"\nOpenWorkGraph {VERSION}")
     print(f"Build: {BUILD_COMMIT}")
     print("===========================================")
     print("Evidence is captured and stored locally first. It leaves this computer only through an explicit export/AI connection or an explicitly enrolled organization Gateway.")
@@ -194,7 +194,7 @@ def main() -> None:
             ], cwd=ROOT, env=collector_env)
             collector.wait()
     except KeyboardInterrupt:
-        print("\nStopping Workflow Observer…")
+        print("\nStopping OpenWorkGraph…")
     finally:
         stop_process(collector)
         stop_process(api)

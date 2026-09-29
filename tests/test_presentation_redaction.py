@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,7 +219,7 @@ def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
     assert safe["events"][0]["metadata"]["activity"] == raw["events"][0]["metadata"]["activity"]
 
 
-def test_browser_container_titles_are_minimized_at_rest_without_changing_event_structure(monkeypatch, tmp_path):
+def test_titles_keep_context_with_sensitive_details_tokenized_at_rest(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.db as db
     import server.presentation as presentation
@@ -246,12 +247,14 @@ def test_browser_container_titles_are_minimized_at_rest_without_changing_event_s
     stored = db.rows("SELECT * FROM events WHERE event_id = ?", ("raw1",))[0]
     shown = presentation.redact_for_display(stored)
 
-    assert stored["window_title"] == "Gmail"
-    assert stored["metadata"]["page"]["title"] == "Gmail"
-    assert stored["metadata"]["privacy"]["arbitrary_browser_title_persisted"] is False
-    assert "Anna Svensson" not in stored["window_title"]
-    assert "anna.svensson@acme.com" not in stored["window_title"].lower()
-    assert shown["window_title"] == "Gmail"
+    # v0.108: the title keeps its context; name and address become stable tokens.
+    assert re.fullmatch(r"Contract renewal - PERSON_[0-9A-F]{6} <EMAIL_[0-9A-F]{6}> - Gmail", stored["window_title"])
+    assert stored["metadata"]["page"]["title"] == stored["window_title"]
+    assert stored["metadata"]["page"]["surface"] == "Gmail"
+    assert stored["metadata"]["privacy"]["titles"] == "kept_with_sensitive_details_tokenized"
+    assert re.fullmatch(r"Reply to PERSON_[0-9A-F]{6}", stored["metadata"]["target"]["label"])
+    assert "Anna" not in json.dumps(stored) and "anna.svensson" not in json.dumps(stored).lower()
+    assert shown["window_title"] == stored["window_title"]  # display redaction is idempotent
     assert stored["event_id"] == shown["event_id"] == "raw1"
     assert stored["event_type"] == shown["event_type"] == "browser_click"
 

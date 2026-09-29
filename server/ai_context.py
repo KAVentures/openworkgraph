@@ -2,7 +2,11 @@ from __future__ import annotations
 
 """AI context detail level: what Context MCP tools may show an AI.
 
-Three layers, one source of truth (the raw local database, never modified):
+Three layers, one source of truth (the local database). The AI detail setting
+never modifies it; since v0.108 detected personal details are tokenized before
+storage, and rows stored earlier are protected once by a privacy migration
+(server.db.protect_existing_titles). Until that migration completes, Full is
+served as Redacted.
 
 * **Raw**: stored locally, used by local analysis. Not sent to AI by default.
 * **Redacted** (default for AI): the original text with only sensitive spans
@@ -191,14 +195,20 @@ def organization_lock() -> str:
 
 
 def effective_detail() -> dict[str, Any]:
+    from .db import title_protection_complete
+
     settings = user_settings()
     lock = organization_lock()
-    level = DETAIL_REDACTED if lock else settings["detail"]
+    # While the one-time v0.108 title protection is still running, older rows
+    # may hold names; Full would return them as stored, so it waits.
+    migrating = not title_protection_complete()
+    level = DETAIL_REDACTED if lock or migrating else settings["detail"]
     return {
         "detail_level": level,
         "user_setting": settings["detail"],
         "locked_by_organization": bool(lock),
         "lock_source": lock or None,
+        "migration_in_progress": migrating,
         "never_redact": settings["never_redact"],
         "always_redact": settings["always_redact"],
     }

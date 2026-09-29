@@ -61,6 +61,8 @@ import json, os
 from pathlib import Path
 from connector.state import SyncState
 from server import ai_context
+from server.db import init_db, protect_existing_titles
+init_db(); protect_existing_titles()  # as at startup: the v0.108 title migration is done
 
 cfg=Path(os.environ["WORKFLOW_OBSERVER_CONFIG"])
 cfg.write_text(json.dumps({"ai_context":{"detail":"full"},"gateway":{"enabled":True}}),encoding="utf-8")
@@ -141,9 +143,9 @@ with TestClient(app) as c:
     assert body['total']>=1 and any(row.get('event_id')=='token-search-1' for row in body['rows']), body
     assert token in found.text and 'Anna' not in found.text and 'Svensson' not in found.text
 
-    # The pseudonym is not written into canonical storage; token lookup exists
-    # only at the redacted AI boundary.
+    # Since v0.108 the name is tokenized before storage, so the same token is
+    # what is stored and the plain (non-AI) lookup finds it too; the name never is.
     raw=c.get('/v1/workflow-trace',headers=H,params={'scope':'all','query':token})
     assert raw.status_code==200
-    assert raw.json()['total']==0
+    assert raw.json()['total']>=1 and 'Anna' not in raw.text and 'Svensson' not in raw.text
 ''', tmp_path)

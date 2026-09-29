@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Explicit local cleanup for browser titles captured before v0.87.3.
+"""Explicit local re-run of the current title rule over all stored evidence.
 
-This command is intentionally opt-in because rewriting canonical historical evidence
-is irreversible. New evidence is minimized automatically before persistence.
+Since v0.108 new evidence is protected automatically before persistence, and
+evidence stored earlier is protected once on upgrade (server.db.
+protect_existing_titles). This command re-applies the rule on demand.
 """
 
 import json
