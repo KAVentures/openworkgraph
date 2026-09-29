@@ -288,8 +288,17 @@ def get_agent_telemetry_diagnostics(request: Request) -> dict[str, Any]:
     """Per-channel delivery counts so a missing signal can be located, not guessed."""
     _require_api_read_bearer(request)
     from .agent_capture_runtime import configuration_state
+    from .setup_checks import checks
 
-    return {**diagnostics.snapshot(), "configuration": configuration_state()}
+    snapshot, configuration = diagnostics.snapshot(), configuration_state()
+    extras: dict[str, Any] = {}
+    try:
+        from . import agent_brief, outcome_tracker
+
+        extras = {"outcome_tracking": outcome_tracker.status(), "agent_brief": agent_brief.status()}
+    except Exception:
+        pass
+    return {**snapshot, "configuration": configuration, "checks": checks(snapshot, configuration, extras=extras)}
 
 
 @router.get("/v1/agent-workflows")
