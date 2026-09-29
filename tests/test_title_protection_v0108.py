@@ -123,3 +123,99 @@ with connect() as c:
     c.execute("UPDATE events SET window_title = 'Erik Lund again' WHERE event_id = 'old'")
 assert protect_existing_titles() == 0  # runs once per data folder
 ''', tmp_path)
+
+
+def test_tokens_are_never_reread_and_protection_is_idempotent(tmp_path):
+    """Regression: 'PERSON_<hex> om budget 2027' was sometimes read as an IBAN."""
+    _run(r'''
+import random, secrets
+from sensitive_identifiers import redact_sensitive_identifiers
+random.seed(7)
+kinds = ["PERSON", "EMAIL", "PHONE", "IBAN", "PERSONNUMMER", "PAYMENT_CARD", "SECRET"]
+tails = ["om budget 2027 - Outlook", "about Q3 2026 plan", "re invoice 4471 2231", "SE 2027 roadmap review",
+         "call 12 oktober kl 14", "DE 89 3704 0044", "GB 82 west 1234", "- Gmail"]
+for _ in range(5000):
+    text = f"Möte med {random.choice(kinds)}_{secrets.token_hex(3).upper()} {random.choice(tails)}"
+    assert redact_sensitive_identifiers(text, redact_adjacent_name=True) == text, text
+    once = protect_text(text)
+    assert protect_text(once) == once, (text, once)
+    assert "IBAN_" not in once or text.startswith("Möte med IBAN_"), (text, once)
+# Real IBANs are still found, and must match their country's length.
+for iban in ("SE45 5000 0000 0583 9825 7466", "DE89 3704 0044 0532 0130 00", "GB82 WEST 1234 5698 7654 32"):
+    assert re.fullmatch(r"Pay IBAN_\w{6} now", redact_sensitive_identifiers(f"Pay {iban} now")), iban
+assert redact_sensitive_identifiers("Ref SE4550000000058398257466999") == "Ref SE4550000000058398257466999"
+''', tmp_path)
+
+
+BUSINESS_TITLES = (ROOT / "tests" / "data" / "business_titles_v0108.txt")
+
+
+def test_ordinary_business_titles_are_unchanged(tmp_path):
+    _run(r'''
+from pathlib import Path
+titles = [t for t in Path(''' + repr(str(BUSINESS_TITLES)) + r''').read_text(encoding="utf-8").splitlines() if t.strip()]
+assert len(titles) >= 50
+changed = [(t, protect_text(t)) for t in titles if protect_text(t) != t]
+assert changed == [], changed
+''', tmp_path)
+
+
+def test_upgrade_changes_only_personal_spans_resumes_and_is_a_true_no_op_twice(tmp_path):
+    _run(r'''
+from pathlib import Path
+import server.db as db
+business = [t for t in Path(''' + repr(str(BUSINESS_TITLES)) + r''').read_text(encoding="utf-8").splitlines() if t.strip()]
+personal = {
+    "Re: Offert Q4 - Anna Svensson <anna.svensson@acme.se> - Gmail": r"Re: Offert Q4 - PERSON_\w{6} <EMAIL_\w{6}> - Gmail",
+    "Möte med Karin Ek om budget 2027 - Outlook": r"Möte med PERSON_\w{6} om budget 2027 - Outlook",
+    "Call +46 70 123 45 67 re order 4471-2231 - Zendesk": r"Call PHONE_\w{6} re order 4471-2231 - Zendesk",
+    "Chat with Sara Ek - Microsoft Teams": r"Chat with PERSON_\w{6} - Microsoft Teams",
+    "Patient 19850312-1234 remiss - Journal": r"Patient PERSONNUMMER_\w{6} remiss - Journal",
+}
+rows = [(f"b{i}", t) for i, t in enumerate(business)] + [(f"p{i}", t) for i, t in enumerate(personal)]
+with connect() as c:
+    c.executemany("INSERT INTO events(event_id, observed_at, device_id, session_id, app, window_title, event_type, duration_seconds, metadata_json)"
+                  " VALUES (?, ?, 'd', 's', 'Outlook', ?, 'focus_span', 30, '{}')", [(eid, base.isoformat(), t) for eid, t in rows])
+    before = {r[0]: (r[1], r[2]) for r in c.execute("SELECT event_id, window_title, metadata_json FROM events")}
+
+# Interrupt after the first batch: progress is checkpointed and the next run resumes.
+real = db._row_to_event
+calls = {"n": 0}
+def flaky(row):
+    calls["n"] += 1
+    if calls["n"] == 4:
+        raise RuntimeError("closed midway")
+    return real(row)
+db._row_to_event = flaky
+try:
+    db.protect_existing_titles(batch_size=3)
+except RuntimeError:
+    pass
+db._row_to_event = real
+with connect() as c:
+    assert c.execute("SELECT last_id FROM privacy_migration_progress").fetchone()[0] == 3
+    assert not c.execute("SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (db.TITLE_PROTECTION_MIGRATION,)).fetchone()
+assert db.protect_existing_titles(batch_size=3) == len(personal)
+
+with connect() as c:
+    after = {r[0]: (r[1], r[2]) for r in c.execute("SELECT event_id, window_title, metadata_json FROM events")}
+for eid, title in rows:
+    if eid.startswith("b"):
+        assert after[eid] == before[eid], (title, after[eid])  # untouched, byte for byte
+    else:
+        assert re.fullmatch(personal[title], after[eid][0]), (title, after[eid][0])
+assert db.protect_existing_titles() == 0  # done: a true no-op
+with connect() as c:
+    assert {r[0]: (r[1], r[2]) for r in c.execute("SELECT event_id, window_title, metadata_json FROM events")} == after
+''', tmp_path)
+
+
+def test_privacy_failures_fail_closed(tmp_path):
+    _run(r'''
+import server.ai_context as ai
+def boom(*a, **k):
+    raise RuntimeError("redactor unavailable")
+ai.contextual_text_redactor = boom
+assert protect_text("SECRET=abc123456789 for Anna Svensson") == ""
+assert protect_path("/people/anna-svensson").strip("/") == ""
+''', tmp_path)

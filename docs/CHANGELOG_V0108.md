@@ -2,7 +2,7 @@
 
 ## Titles keep their context; only personal details become tokens
 - **What changed:** before v0.108, browser tab titles were cut to the site name before storage. `Re: Contract renewal Q4 - Anna Svensson - Gmail` became `Gmail`. Desktop-app titles, meanwhile, were stored with names in them.
-- **Now:** every title (browser and desktop alike), control label and URL path keeps its text. Only these become stable tokens, before anything is stored:
+- **Now:** every title (browser and desktop alike), control label and URL path keeps its text. These become stable tokens when detected, before anything is stored:
   - people's names;
   - email addresses and phone numbers;
   - personal identity numbers, IBANs, payment cards, credentials and labelled personal IDs.
@@ -10,13 +10,15 @@
 - **Kept:** subjects, documents, projects, company and product names, order and invoice numbers, dates, amounts.
 - **Same person, same token:** a name seen next to an email address gets the email-linked token everywhere.
 - **Grouping:** browser events keep the recognised work surface (`page.surface`).
-- **Upgrade:** evidence stored earlier is protected once on the first start, recorded as a privacy migration. Browser titles that older versions already cut down cannot be restored.
-- **Fix:** an IBAN written in groups and followed by a word ("SE45 5000 … 7466 payment") was not recognised. It is now.
+- **Upgrade:** evidence stored earlier is protected once, in the background after start-up (so launch is never delayed), in checkpointed batches of 1,000 rows. Only rows where a personal detail is detected are rewritten; about 9,000 rows per second in testing. It is recorded as a privacy migration. Browser titles that older versions already cut down cannot be restored.
+- **Fix:** an IBAN written in groups and followed by a word ("SE45 5000 … 7466 payment") was not recognised. It is now. IBANs must also match their country's exact length.
+- **Tokens are never re-read:** existing tokens (PERSON_x, EMAIL_x, IBAN_x, …) are shielded from every detector, so protecting text twice changes nothing.
+- **Fails closed:** if a privacy pass errors, the title, label or path is dropped rather than stored partly processed.
 - **AI context "Full"** now means "titles as stored", which no longer contain names or contact details.
 
 ## Export is redacted by default
 - **Defaults:** Export now defaults to **Redacted** and to including every captured event. Since v0.108 the difference from before is small: redaction runs a second pass that also covers anything captured before this version. History's JSON export is redacted too.
-- **Honest text:** the export text now says what the file keeps (full titles and business context) and what it never contains.
+- **Honest text:** the export text now says what the file keeps (full titles and business context), that detected personal details are tokenized, and that detection is best effort.
 
 ## Easier first use
 - **Value first:** the "See what OpenWorkGraph understands" reconstruction comes first, and the retention choice ("Keep this beyond today?") sits directly under it. Its text reflects whether history is currently kept or deleted.

@@ -42,7 +42,7 @@
     if(policy?.onboarding_complete)return;
     const overview=document.querySelector('#panel-overview');if(!overview||document.querySelector('#historyOnboarding'))return;
     const box=document.createElement('div');box.id='historyOnboarding';box.className='card';box.style.borderLeft='4px solid #3159a5';
-    box.innerHTML=`<h2>Keep this beyond today?</h2><div class="muted">${policy?.human_retention?.mode==='ephemeral'?'Right now OpenWorkGraph deletes what it saw when this session ends.':'Your existing history is kept until you choose otherwise.'} Keeping history lets it answer “last month” questions, compare periods and find patterns across days. It stays on this computer, and names and contact details are replaced with tokens before anything is stored. A small content-free summary of each run is kept for 90 days either way (run memory; you can turn it off in History).</div><div class="modal-actions"><button id="keep90" class="green">Keep 90 days</button><button id="keepNone" class="secondary">Don’t keep after sessions</button><button id="openHistory" class="ghost">Choose separately</button></div>${policy?.upgrade_preserved_existing_history?'<div class="note" style="margin-top:10px">Existing history was preserved during this upgrade. Nothing was deleted automatically.</div>':''}`;
+    box.innerHTML=`<h2>Keep this beyond today?</h2><div class="muted">${policy?.human_retention?.mode==='ephemeral'?'Right now OpenWorkGraph deletes what it saw when this session ends.':'Your existing history is kept until you choose otherwise.'} Keeping history lets it answer “last month” questions, compare periods and find patterns across days. It stays on this computer, and detected names and contact details are replaced with tokens before anything is stored.${policy?.run_memory?.enabled?` A small content-free summary of each run is kept for ${Number(policy.run_memory.days||90)} days either way (run memory; you can turn it off in History).`:''}</div><div class="modal-actions"><button id="keep90" class="green">Keep 90 days</button><button id="keepNone" class="secondary">Don’t keep after sessions</button><button id="openHistory" class="ghost">Choose separately</button></div>${policy?.upgrade_preserved_existing_history?'<div class="note" style="margin-top:10px">Existing history was preserved during this upgrade. Nothing was deleted automatically.</div>':''}`;
     // After the first-value reconstruction when it is showing: value, then the choice.
     const firstValue=document.querySelector('#firstValueCard');
     if(firstValue&&firstValue.parentNode===overview)firstValue.insertAdjacentElement('afterend',box);else overview.insertBefore(box,overview.firstChild);
@@ -130,7 +130,7 @@
     let section=document.querySelector('#agentLearning');
     if(!section){
       section=document.createElement('section');section.id='agentLearning';
-      section.innerHTML='<h2 style="margin:18px 2px 8px">Agent learning</h2><div class="muted" style="margin:0 2px 10px">Optional ways for OpenWorkGraph to judge and share how agent work goes. Each is off until you turn it on.</div>';
+      section.innerHTML='<h2 style="margin:18px 2px 8px">Agent learning</h2><div class="muted" style="margin:0 2px 10px">Optional ways for OpenWorkGraph to judge and share how agent work goes. Each is off by default and keeps whatever setting you chose before.</div>';
       agents.appendChild(section);
       document.querySelector('#tab-agents')?.addEventListener('click',()=>setTimeout(refresh,0));
     }

@@ -116,7 +116,7 @@ Screenshot capture exists as disabled code/config support but is disabled in the
 
 ## Titles: kept, with sensitive details tokenized (v0.108)
 
-Window and tab titles, button and control labels and URL paths carry most of the context that makes work evidence useful. Before anything is stored, OpenWorkGraph keeps their text and replaces only sensitive details with stable tokens. The same rule applies to browser tabs and desktop apps.
+Window and tab titles, button and control labels and URL paths carry most of the context that makes work evidence useful. Before anything is stored, OpenWorkGraph keeps their text and replaces the personal details it detects with stable tokens. The same rule applies to browser tabs and desktop apps.
 
 | Captured | Stored |
 |---|---|
@@ -127,11 +127,11 @@ Window and tab titles, button and control labels and URL paths carry most of the
 | `Q4 pipeline - Customer tracker - Google Sheets` | unchanged |
 | `Acme Logistics AB \| Account \| Salesforce` | unchanged |
 
-- **Tokenized:** people's names, email addresses, phone numbers, personal identity numbers, IBANs, payment cards, credentials and explicitly labelled personal IDs.
+- **Tokenized when detected:** people's names, email addresses, phone numbers, personal identity numbers, IBANs, payment cards, credentials and explicitly labelled personal IDs.
 - **Kept:** subjects, document and project names, company and product names, business references (order, invoice, PR numbers), dates and amounts.
 - **Same person, same token:** tokens are keyed to this installation. Once a name has been seen next to an email address, both map to the same person.
-- **Limits:** names are recognised from a name lexicon and context cues. Unusual or all-lowercase names can be missed, and a company that is also a surname can be tokenized. Browser events also keep the recognised work surface (Gmail, Salesforce, …) for grouping.
-- **Existing data:** on the first start after upgrading, evidence stored before v0.108 is updated once in the same way. Older versions had already cut browser titles down to the site name, and that detail cannot be restored. Rows already sent to an organization Gateway are not changed there.
+- **Best effort, not a guarantee:** names are recognised from a name lexicon and context cues. Unusual or all-lowercase names can be missed, and a company that is also a surname can be tokenized. Browser events also keep the recognised work surface (Gmail, Salesforce, …) for grouping.
+- **Existing data:** after upgrading, evidence stored before v0.108 is updated once in the same way, in the background and in checkpointed batches (only rows where a personal detail is found are rewritten). Older versions had already cut browser titles down to the site name, and that detail cannot be restored. Rows already sent to an organization Gateway are not changed there.
 
 ## Storage-time sensitive-identifier hardening
 
@@ -173,11 +173,11 @@ For old rows that were already irreversibly pseudonymized as payment cards in an
 
 | Layer | What it is | Who sees it |
 |---|---|---|
-| **Raw** | Rich local evidence as stored: full titles and labels, with names and other sensitive details already tokenized (see "Titles" above). | Local analysis (patterns, findings, work profile). Never sent to AI by default. |
+| **Raw** | Rich local evidence as stored: full titles and labels, with detected names and other sensitive details already tokenized (see "Titles" above). | Local analysis (patterns, findings, work profile). Never sent to AI by default. |
 | **Redacted** | The original text with only sensitive spans replaced by typed stable tokens (`PERSON_…`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`, `ID_…`): `Re: Contract for PERSON_1A2B3C - Gmail`. | **Default for every Context MCP tool**, and optionally exports (**Redact names in export**). |
 | **Safe allowlist** | Only known safe phrases; everything else dropped. | Dashboard glance views and organization (Gateway) sharing. Unchanged. |
 
-The **AI context detail** setting (Connect tab → Connections) chooses what AI apps get: **Redacted** (default) or **Full** (labels and titles as stored). Since v0.108, stored titles already have names and contact details tokenized, so Full never contains them either. An organization can force Redacted. Every MCP response carries `detail_level` so the AI knows which it received. The AI setting never modifies the database. See [OWNER_REDACTION.md](OWNER_REDACTION.md#contextual-redaction-for-ai-context).
+The **AI context detail** setting (Connect tab → Connections) chooses what AI apps get: **Redacted** (default) or **Full** (labels and titles as stored). Since v0.108, stored titles already have detected names and contact details tokenized, so Full mostly differs from Redacted by skipping a second redaction pass. Detection is best effort, so Redacted remains the recommended setting. An organization can force Redacted. Every MCP response carries `detail_level` so the AI knows which it received. The AI setting never modifies the database. See [OWNER_REDACTION.md](OWNER_REDACTION.md#contextual-redaction-for-ai-context).
 
 ## Person/owner presentation redaction
 

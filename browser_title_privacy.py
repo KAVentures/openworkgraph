@@ -30,25 +30,26 @@ from normalizer import safe_surface
 _TARGET_TEXT_KEYS = ("label", "name", "text", "title", "aria_label", "placeholder")
 
 
-def protect_text(text: Any) -> str:
-    """Keep the text; tokenize names, contact details and personal identifiers."""
+def _protect_text(text: Any) -> str:
+    """Keep the text; tokenize names, contact details and personal identifiers.
+
+    Fails closed: if any privacy pass raises, the text is dropped (stored as an
+    empty string) rather than stored partly processed.
+    """
     raw = str(text or "")
     if not raw.strip():
         return raw
-    from sensitive_identifiers import redact_sensitive_identifiers
-
-    value = redact_sensitive_identifiers(raw, redact_adjacent_name=True)
     try:
+        from sensitive_identifiers import redact_sensitive_identifiers
         from server.ai_context import contextual_text_redactor
         from server.privacy_pipeline import redact_for_display_now
 
+        value = redact_sensitive_identifiers(raw, redact_adjacent_name=True)
         value = contextual_text_redactor()(value)
         value = redact_for_display_now(value)
     except Exception:
-        # The name/contact redactors are unavailable (e.g. a minimal embedded
-        # runtime). Fail closed on the free text rather than store it raw.
-        return "" if value == raw else value
-    return value if isinstance(value, str) else raw
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 def protect_path(path: Any) -> str:
@@ -61,11 +62,23 @@ def protect_path(path: Any) -> str:
 
         return "/".join(_redact_slug_component(part, protect_text) for part in raw.split("/"))
     except Exception:
-        return raw
+        return ""  # fail closed: never store a path we could not check
 
 
-def protect_titles_at_rest(event: dict[str, Any]) -> dict[str, Any]:
-    """Apply ``protect_text`` to an event's titles and control labels before storage."""
+def protect_titles_at_rest(event: dict[str, Any], *, cache: dict[str, str] | None = None) -> dict[str, Any]:
+    """Apply ``protect_text`` to an event's titles and control labels before storage.
+
+    ``cache`` lets a bulk caller (the upgrade migration) protect each distinct
+    text once.
+    """
+    if cache is not None:
+        def protect_text(text: Any) -> str:  # noqa: F811  (cached variant for bulk use)
+            key = str(text or "")
+            if key not in cache:
+                cache[key] = _protect_text(key)
+            return cache[key]
+    else:
+        protect_text = _protect_text
     e = copy.deepcopy(event)
     meta = e.get("metadata") if isinstance(e.get("metadata"), dict) else None
     if str(e.get("source") or (meta or {}).get("source") or "") == "agent":
@@ -107,6 +120,8 @@ def protect_titles_at_rest(event: dict[str, Any]) -> dict[str, Any]:
     e["metadata"] = meta
     return e
 
+
+protect_text = _protect_text
 
 # Kept for callers of the pre-v0.108 name.
 minimize_browser_title_at_rest = protect_titles_at_rest

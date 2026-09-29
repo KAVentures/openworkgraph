@@ -279,7 +279,7 @@
       <div class="muted">What connected AI apps see when they read your work context. Your raw evidence always stays on this computer.</div>
       <div class="ai-opts" role="radiogroup" aria-label="AI context detail">
         <label class="ai-opt"><input type="radio" name="owgAiDetail" value="redacted" ${level==='redacted'?'checked':''}><span><strong>Redacted</strong> (recommended)<br>Titles and labels keep their context, but people, emails, phone numbers and IDs become stable tokens: <code>Re: Contract for PERSON_1A2B3C - Gmail</code>. The same person gets the same token in every app.</span></label>
-        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Labels and titles exactly as stored. Names, emails, phone numbers and personal numbers are already tokenized before anything is stored, so Full differs only by skipping this second pass and your lists below.</span></label>
+        <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Labels and titles exactly as stored. Detected names, emails, phone numbers and personal numbers are already tokenized before storage; Full skips the second redaction pass and your lists below, so anything the first pass missed is shown as is.</span></label>
       </div>
       ${locked?'<div class="ai-lock">Locked to Redacted by your organization.</div>':''}
       <div class="ai-lists">

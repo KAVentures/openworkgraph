@@ -141,7 +141,15 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
-          ### v0.107: the agent learning loop
+          ### v0.108: full context, personal details tokenized
+          Titles keep their context; only detected personal details are replaced.
+
+          - **Titles, labels and paths keep their text:** browser tabs and desktop apps alike. Detected names, email addresses, phone numbers, personal identity numbers, IBANs, payment cards and credentials become stable tokens before storage, for example **Re: Contract renewal Q4 - PERSON_x - Gmail**. Company, product and project names and business references stay. Name detection is best effort; review exports before external sharing.
+          - **Upgrade:** evidence stored earlier is protected once in the background, in checkpointed batches; only rows with a detected personal detail are rewritten.
+          - **Exports:** redacted by default, with copy that says what the file keeps.
+          - **First use:** the first reconstruction comes before the retention choice; Connect lists detected apps first with Context, Observe and Brief switches; agent-learning features moved to the Agents tab; friendly surface names throughout; OpenWorkGraph launcher wording; current macOS Gatekeeper and Windows SmartScreen steps; a rewritten testing guide.
+
+          ### Since v0.107: the agent learning loop
           This release turns structural observation into a bounded learning loop without making inferred summaries the source of truth. Canonical evidence remains primary.
 
           - **Run memory:** content-free structural run summaries can survive raw-history retention. Existing installations whose human and agent history were both explicitly ephemeral do not silently gain persistent run memory on upgrade.

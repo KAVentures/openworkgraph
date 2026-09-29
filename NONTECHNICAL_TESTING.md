@@ -53,7 +53,7 @@ Open **Evidence** and look at recent rows.
 **Expected:**
 
 - **Context is kept:** titles such as `Re: Contract renewal Q4 - Gmail`, `Q4 pipeline - Customer tracker - Google Sheets`, `Acme Logistics AB | Account | Salesforce`.
-- **Personal details are tokens:** people's names, email addresses, phone numbers and personal identity numbers appear as tokens such as `PERSON_1A2B3C`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`. The same person always gets the same token.
+- **Personal details are tokens:** detected names, email addresses, phone numbers and personal identity numbers appear as tokens such as `PERSON_1A2B3C`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`. The same person always gets the same token.
 - **Typed text is never shown**, only counts.
 
 Safe tests you can do (use fake data only):
@@ -108,7 +108,7 @@ On **Export**, download the **XLSX** or **CSV ZIP**.
 
 **Expected:**
 
-- **Redacted** is on by default. The file keeps titles, tools, timing and repeated workflows, and contains no names, email addresses, phone numbers or personal numbers.
+- **Redacted** is on by default. The file keeps titles, tools, timing and repeated workflows, with detected names, email addresses, phone numbers and personal numbers replaced by tokens. Detection is best effort: if you spot a real name, please report it.
 - Business context such as customer, company and project names stays in the file. Review it before sharing outside your organization.
 
 A useful test: upload the file to an AI assistant and ask:
