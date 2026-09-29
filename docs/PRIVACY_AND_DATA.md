@@ -131,7 +131,7 @@ Window and tab titles, button and control labels and URL paths carry most of the
 - **Kept:** subjects, document and project names, company and product names, business references (order, invoice, PR numbers), dates and amounts.
 - **Same person, same token:** tokens are keyed to this installation. Once a name has been seen next to an email address, both map to the same person.
 - **Best effort, not a guarantee:** names are recognised from a name lexicon and context cues. Unusual or all-lowercase names can be missed, and a company that is also a surname can be tokenized. Browser events also keep the recognised work surface (Gmail, Salesforce, …) for grouping.
-- **Existing data:** after upgrading, evidence stored before v0.108 is updated once in the same way, in the background and in checkpointed batches (only rows where a personal detail is found are rewritten). Older versions had already cut browser titles down to the site name, and that detail cannot be restored. Rows already sent to an organization Gateway are not changed there.
+- **Existing data:** after upgrading, evidence stored before v0.108 is updated once in the same way, in checkpointed batches (only rows where a personal detail is found are rewritten). Small histories finish during start-up; a long one continues in the background. Until it finishes, AI context is served as Redacted even if you chose Full, and exports are redacted; Full returns automatically afterwards. Older versions had already cut browser titles down to the site name, and that detail cannot be restored. Rows already sent to an organization Gateway are not changed there.
 
 ## Storage-time sensitive-identifier hardening
 

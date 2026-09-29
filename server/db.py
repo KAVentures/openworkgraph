@@ -359,13 +359,59 @@ def _protected_text_changed(before: dict[str, Any], after: dict[str, Any]) -> bo
     return texts(before) != texts(after)
 
 
+_TITLE_PROTECTION_DONE: set[str] = set()
+SYNC_TITLE_PROTECTION_ROWS = 5000
+
+
+def title_protection_complete() -> bool:
+    """True once every row stored before v0.108 has had its titles protected.
+
+    Until then older rows may still hold names, so callers that would otherwise
+    return stored text unredacted (Full AI context, unredacted exports) must
+    redact on read instead. Cached once true (the marker is never removed).
+    """
+    key = str(DB_PATH)
+    if key in _TITLE_PROTECTION_DONE:
+        return True
+    try:
+        with connect() as conn:
+            done = bool(conn.execute(
+                "SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)
+            ).fetchone())
+    except Exception:
+        return False
+    if done:
+        _TITLE_PROTECTION_DONE.add(key)
+    return done
+
+
 def protect_existing_titles_in_background() -> None:
     """Run the one-time title migration without delaying startup.
 
-    Until it finishes, API responses and exports are still redacted on read, so
-    older rows are never shown with the personal details the migration removes.
+    Until it finishes (``title_protection_complete``), AI context is forced to
+    Redacted and exports are forced to redact on read, so older rows are never
+    returned with the personal details the migration removes.
     """
     import threading
+
+    if title_protection_complete():
+        return
+    # Small histories (fresh installs, most upgrades) finish in well under a
+    # second: do them now so Full context is never briefly unavailable. Only a
+    # long history goes to the background.
+    try:
+        with connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS privacy_migration_progress (migration_key TEXT PRIMARY KEY, last_id INTEGER NOT NULL)")
+            row = conn.execute("SELECT last_id FROM privacy_migration_progress WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone()
+            remaining = int(conn.execute("SELECT COUNT(*) FROM events WHERE id > ? AND source != 'agent'", (int(row[0]) if row else 0,)).fetchone()[0])
+    except Exception:
+        remaining = SYNC_TITLE_PROTECTION_ROWS + 1
+    if remaining <= SYNC_TITLE_PROTECTION_ROWS:
+        try:
+            protect_existing_titles()
+            return
+        except Exception:
+            pass  # fall through to the background attempt
 
     def run() -> None:
         try:

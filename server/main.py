@@ -511,6 +511,10 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
     if scope not in {"current", "all"}:
         raise HTTPException(status_code=400, detail="scope must be current or all")
+    from .db import title_protection_complete
+
+    if not title_protection_complete():
+        redact_names = True  # older rows may still hold names until the v0.108 migration finishes
     if redact_names:
         # Same redactor as Redacted AI context: names/identifiers replaced in place.
         from .ai_context import redact_contextually

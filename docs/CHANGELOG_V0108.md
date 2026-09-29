@@ -10,7 +10,7 @@
 - **Kept:** subjects, documents, projects, company and product names, order and invoice numbers, dates, amounts.
 - **Same person, same token:** a name seen next to an email address gets the email-linked token everywhere.
 - **Grouping:** browser events keep the recognised work surface (`page.surface`).
-- **Upgrade:** evidence stored earlier is protected once, in the background after start-up (so launch is never delayed), in checkpointed batches of 1,000 rows. Only rows where a personal detail is detected are rewritten; about 9,000 rows per second in testing. It is recorded as a privacy migration. Browser titles that older versions already cut down cannot be restored.
+- **Upgrade:** evidence stored earlier is protected once, in checkpointed batches of 1,000 rows. Up to 5,000 rows are done during start-up (well under a second); a longer history continues in the background so launch is never delayed. Until it finishes, AI context is served as Redacted even if Full is chosen, and exports are redacted; Full returns automatically afterwards. Only rows where a personal detail is detected are rewritten; about 9,000 rows per second in testing. It is recorded as a privacy migration. Browser titles that older versions already cut down cannot be restored.
 - **Fix:** an IBAN written in groups and followed by a word ("SE45 5000 … 7466 payment") was not recognised. It is now. IBANs must also match their country's exact length.
 - **Tokens are never re-read:** existing tokens (PERSON_x, EMAIL_x, IBAN_x, …) are shielded from every detector, so protecting text twice changes nothing.
 - **Fails closed:** if a privacy pass errors, the title, label or path is dropped rather than stored partly processed.

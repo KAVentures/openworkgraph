@@ -102,6 +102,8 @@ def run_history_cleanup()->dict[str,Any]: return cleanup_expired_history(startup
 
 @app.get("/v1/history/export-json")
 def export_history_json(since:str|None=None,until:str|None=None,include_raw:bool=False,redact_names:bool=False)->Response:
+    from .db import title_protection_complete
+    if not title_protection_complete(): redact_names=True  # older rows may hold names until the v0.108 migration finishes
     # Validate the date window through the same catalogue parser first.
     try: catalog=list_history(since=since,until=until,limit=1)
     except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc

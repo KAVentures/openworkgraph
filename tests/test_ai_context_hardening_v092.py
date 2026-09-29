@@ -61,6 +61,8 @@ import json, os
 from pathlib import Path
 from connector.state import SyncState
 from server import ai_context
+from server.db import init_db, protect_existing_titles
+init_db(); protect_existing_titles()  # as at startup: the v0.108 title migration is done
 
 cfg=Path(os.environ["WORKFLOW_OBSERVER_CONFIG"])
 cfg.write_text(json.dumps({"ai_context":{"detail":"full"},"gateway":{"enabled":True}}),encoding="utf-8")

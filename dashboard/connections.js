@@ -282,6 +282,7 @@
         <label class="ai-opt"><input type="radio" name="owgAiDetail" value="full" ${level==='full'?'checked':''} ${locked?'disabled':''}><span><strong>Full</strong><br>Labels and titles exactly as stored. Detected names, emails, phone numbers and personal numbers are already tokenized before storage; Full skips the second redaction pass and your lists below, so anything the first pass missed is shown as is.</span></label>
       </div>
       ${locked?'<div class="ai-lock">Locked to Redacted by your organization.</div>':''}
+      ${aiDetail.migration_in_progress&&!locked&&aiDetail.user_setting==='full'?'<div class="ai-lock">Full becomes available when your existing history finishes its one-time privacy upgrade; until then AI apps get Redacted.</div>':''}
       <div class="ai-lists">
         <label class="sub">Never redact (company, product or project names, one per line)<textarea id="owgNeverRedact" placeholder="Acme AB&#10;Q3 pipeline">${esc((aiDetail.never_redact||[]).join('\n'))}</textarea></label>
         <label class="sub">Always redact (names the detector should always hide)<textarea id="owgAlwaysRedact" placeholder="Project Falcon">${esc((aiDetail.always_redact||[]).join('\n'))}</textarea></label>

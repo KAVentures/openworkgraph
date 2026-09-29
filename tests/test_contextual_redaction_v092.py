@@ -118,6 +118,10 @@ def test_owner_stays_owner(ai):
 
 
 def test_settings_validation_and_org_lock(ai, tmp_path, monkeypatch):
+    # A started OpenWorkGraph has finished the v0.108 title migration; while it
+    # runs, Full is held back (tests/test_migration_window_v0108.py).
+    import server.db
+    monkeypatch.setattr(server.db, "title_protection_complete", lambda: True)
     assert ai.effective_detail()["detail_level"] == "redacted"  # default
     ai.save_user_settings(detail="full")
     assert ai.effective_detail()["detail_level"] == "full"
