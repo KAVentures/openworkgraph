@@ -1,0 +1,132 @@
+name: repair-v0107-landing-v2
+
+on:
+  push:
+    branches:
+      - fix/v0107-landing-v2
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'Build v0.107 from each hardened PR head'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge hardened PR heads in dependency order
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Fetch the exact reviewed/hardened heads, not their later-mutated base branches.
+          for pr in 107 108 109 110 111 112; do
+            git fetch origin "refs/pull/${pr}/head:refs/remotes/hardened-${pr}"
+          done
+
+          # #106 is already on current main. Merge each subsequent hardened head.
+          for pr in 107 108 109 110 111; do
+            echo "=== merging hardened PR #${pr} ==="
+            if ! git merge --no-ff --no-edit "refs/remotes/hardened-${pr}"; then
+              echo "Unexpected conflict while merging PR #${pr}:"
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+          done
+
+          # #112 intentionally changes release metadata from 0.100.0 to 0.107.0.
+          # No substantive-code conflict is acceptable here.
+          set +e
+          git merge --no-ff --no-commit refs/remotes/hardened-112
+          rc=$?
+          set -e
+          unresolved="$(git diff --name-only --diff-filter=U | sort)"
+          if [ "$rc" -ne 0 ]; then
+            expected=$(cat <<'EOF'
+          VERSION
+          mcpb/manifest.json
+          pyproject.toml
+          sdk/python/pyproject.toml
+          sdk/typescript/package.json
+          tests/test_release_version_v087.py
+          EOF
+          )
+            expected="$(printf '%s\n' "$expected" | sed 's/^[[:space:]]*//' | sort)"
+            if [ "$unresolved" != "$expected" ]; then
+              echo "Unexpected #112 conflict set."
+              echo "Expected:"; printf '%s\n' "$expected"
+              echo "Actual:"; printf '%s\n' "$unresolved"
+              exit 1
+            fi
+            git checkout --theirs -- \
+              VERSION \
+              mcpb/manifest.json \
+              pyproject.toml \
+              sdk/python/pyproject.toml \
+              sdk/typescript/package.json \
+              tests/test_release_version_v087.py
+            git add \
+              VERSION \
+              mcpb/manifest.json \
+              pyproject.toml \
+              sdk/python/pyproject.toml \
+              sdk/typescript/package.json \
+              tests/test_release_version_v087.py
+          fi
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git commit -m "Merge hardened PR #112 and finalize v0.107.0"
+
+          # The one-off integration mechanism must not ship.
+          git rm .github/workflows/repair-v0107-landing-v2.yml
+
+          # Cross-PR invariants. These specifically catch the stale-stack bug.
+          test "$(tr -d '\r\n' < VERSION)" = "0.107.0"
+
+          # #105 hardening survived.
+          grep -q '_EDIT_TOOL_NAMES' server/agent_execution_traces.py
+          grep -q 'test_status' server/agent_execution_traces.py
+          grep -q 'response.failed' shared/codex_otel_adapter.py
+
+          # #107 hardening.
+          grep -q 'host != "github.com"' server/outcome_tracker.py
+          grep -q 'observed_at' server/outcome_tracker.py
+
+          # #108 hardening.
+          grep -q 'no recognized test summary was observed' server/agent_brief.py
+
+          # #109 hardening: cross-platform process lock + immediate previous turn.
+          grep -q 'os.O_EXCL' shared/workspace_rework.py
+          grep -q 'current_turn_agent_refs' shared/workspace_rework.py
+          grep -q 'stop_agent_refs' shared/workspace_rework.py
+          ! grep -q 'import fcntl' shared/workspace_rework.py
+
+          # #110 hardening: isolated randomized trial and right-censoring.
+          grep -q 'trial_id' server/agent_brief.py
+          grep -q 'agent_brief_trial_assignment' server/agent_brief.py
+          grep -q 'closed_unmerged' server/brief_evaluation.py
+
+          # #111 hardening: canonical grammar, no generic safe-character import gate.
+          grep -q '_valid_structural_step' server/playbooks.py
+          grep -q 'LOCAL_REF_PREFIXES' server/playbooks.py
+
+          # #112 honesty fix.
+          grep -q 'age is not None' server/setup_checks.py
+          grep -q 'If these sessions began before telemetry was enabled' server/setup_checks.py
+
+          python -m py_compile \
+            server/agent_execution_traces.py \
+            shared/codex_otel_adapter.py \
+            server/outcome_tracker.py \
+            server/agent_brief.py \
+            shared/workspace_rework.py \
+            server/brief_evaluation.py \
+            server/playbooks.py \
+            server/setup_checks.py
+
+          git commit -m "Integrate hardened v0.107.0 stack onto main"
+          git push origin HEAD:fix/v0107-landing-v2
