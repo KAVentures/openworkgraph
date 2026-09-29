@@ -147,7 +147,7 @@ assert redact_sensitive_identifiers("Ref SE4550000000058398257466999") == "Ref S
 ''', tmp_path)
 
 
-BUSINESS_TITLES = (ROOT / "tests" / "data" / "business_titles_v0108.txt")
+BUSINESS_TITLES = (ROOT / "tests" / "fixtures" / "business_titles_v0108.txt")
 
 
 def test_ordinary_business_titles_are_unchanged(tmp_path):

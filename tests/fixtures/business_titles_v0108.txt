@@ -1,0 +1,50 @@
+Q4 pipeline - Customer tracker - Google Sheets
+Acme Logistics AB | Account | Salesforce
+Projektplan Volvo Cars 2026.docx
+GitHub - KAVentures/openworkgraph: Pull request #112
+Mötesanteckningar styrelsemöte 12 oktober - Google Docs
+Invoice INV-2024-00931 - Fortnox
+Order 4471-2231 - Zendesk
+Budget 2027 v3.xlsx - Excel
+Kvartalsrapport Q3 2026 - PowerPoint
+Sprint board: In Progress column - Jira
+Transition to In Progress - Jira
+Meeting with Legal Team - Calendar
+Weekly sync - Engineering - Google Meet
+Onboarding checklist - Notion
+Release notes v2.4.1 - Confluence
+Customer churn analysis - Looker
+Leverantörsfaktura 88213 - Visma
+Moms deklaration september - Skatteverket
+Bokföring 2026 - Fortnox
+Offert Scania Trucks 2026 - Word
+Avtal ramavtal IKEA leverans - PDF
+Pull requests · KAVentures/openworkgraph
+Inbox (1,204) - Gmail
+Drafts - Outlook
+Board meeting agenda 15 November
+Marketing plan H1 2027 - Google Slides
+Customer Success QBR - Ericsson AB
+SLA breach report week 42
+Invoice 2026-10-003 for Spotify AB
+Purchase order PO-77120 Atlas Copco
+Payroll run October 2026 - Hogia
+Salesforce Opportunity Northvolt expansion
+HubSpot deal Klarna renewal
+Zendesk ticket #88231 - Login issue
+Linear issue OWG-412 export redaction
+Figma - Onboarding flow v5
+Stripe dashboard - Payments
+Amazon Web Services console - EC2
+Kubernetes dashboard - prod-eu-north-1
+Datadog - API latency p95
+Sentry issue TypeError in exporter.py
+README.md - openworkgraph - Visual Studio Code
+main.py - server - Cursor
+Terminal - zsh - 120x40
+Google Analytics - Traffic acquisition
+LinkedIn Sales Navigator - Saved leads
+Trello board Product roadmap
+Asana - Q4 launch tasks
+Miro - Retrospective board
+Canva - Instagram post October
