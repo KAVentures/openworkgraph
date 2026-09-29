@@ -252,6 +252,18 @@ def _observed_coverage(
     }
 
 
+def _workspace(events: list[dict[str, Any]]) -> dict[str, str]:
+    """The run's keyed workspace hash, when the adapter reported one."""
+    from shared.tool_detail import valid_workspace_ref
+
+    for event in events:
+        meta, _trace = _meta(event)
+        ref = valid_workspace_ref(meta.get("workspace_ref"))
+        if ref:
+            return {"workspace_ref": ref}
+    return {}
+
+
 def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, Any]:
     base = _one_execution(events)
     projected = [_event_projection(event) for event in events]
@@ -285,6 +297,7 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
         "run_start_observed": run_start_observed,
         "run_finish_observed": run_finish_observed,
         "work_summary": _work_summary(projected),
+        **_workspace(events),
         "complete_boundary_observed": run_start_observed and run_finish_observed,
         "event_count_total": len(projected),
         "event_count_returned": len(bounded_events),

@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS run_memory (
 _RECORD_KEYS = (
     "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
     "duration_seconds", "outcome_status", "outcome_basis", "positive_example", "explicit_failure",
-    "steps", "observation_level", "evidence_window", "_approval_points",
+    "steps", "observation_level", "evidence_window", "_approval_points", "workspace_ref",
 )
 _AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome")
 
@@ -202,7 +202,20 @@ def forget_sessions(session_ids: Iterable[str]) -> int:
     from .outcome_tracker import forget_sessions as forget_watches
 
     forget_watches(refs)
+    _forget_brief_log("session_ref IN ({})".format(",".join("?" for _ in refs)), tuple(sorted(refs)))
     return removed
+
+
+def _forget_brief_log(where: str, params: tuple) -> None:
+    """Deleting a session or range also deletes the record of briefs sent to it."""
+    try:
+        from .agent_brief import _LOG_TABLE
+
+        with connect() as conn:
+            conn.execute(_LOG_TABLE)
+            conn.execute(f"DELETE FROM agent_brief_log WHERE {where}", params)
+    except Exception:
+        pass
 
 
 def forget_range(since: str, until: str) -> int:
@@ -220,6 +233,7 @@ def forget_range(since: str, until: str) -> int:
     from .outcome_tracker import forget_range as forget_watches
 
     forget_watches(start, end)
+    _forget_brief_log("delivered_at >= ? AND delivered_at < ?", (start.isoformat(), end.isoformat()))
     return _delete_where(overlaps)
 
 

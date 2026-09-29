@@ -2,7 +2,7 @@
   'use strict';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmt=s=>{s=Math.max(0,Number(s)||0);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h?`${h}h ${m}m`:`${m}m`;};
-  let policy=null, history=null, access=null, memory=null, outcomes=null;
+  let policy=null, history=null, access=null, memory=null, outcomes=null, brief=null;
 
   async function call(url,options={}){
     await window.__owgAuthReady;
@@ -29,6 +29,7 @@
       <div class="card"><h2>History & retention</h2><div class="muted">Capture, keeping history, and letting an AI read saved history are separate choices. Saved history stays on this computer unless you explicitly export or share it.</div><div id="historyPolicyMount" style="margin-top:14px"></div></div>
       <div class="card"><h2>Run memory</h2><div class="muted">A small, content-free summary of each run: steps, outcome, commands used, test results, file and line counts, tokens. No titles, paths, prompts or content. It is kept even after retention deletes the session, so OpenWorkGraph can still learn repeated workflows. Deleting a session or date range yourself deletes its summary too. It never leaves this computer.</div><div id="runMemoryMount" style="margin-top:14px"></div></div>
       <div class="card"><h2>Did agent work hold up?</h2><div class="muted">Off by default. When on, pull requests your agents open are checked through your own <code>gh</code> login (read-only) for merged/closed and CI status, so runs are judged by what happened to the work, not only by how the agent ended. Only the pull request link is kept, on this computer, until it is resolved or 30 days pass. Turning this off deletes every stored link.</div><div id="outcomeMount" style="margin-top:14px"></div></div>
+      <div class="card"><h2>Brief agents at session start</h2><div class="muted">Off by default. When on, a new agent session starts with a short, content-free brief from your past runs in the same project: how tests usually end, pull request outcomes, commands used, typical size, tokens. No titles, paths, prompts or content, and it is labeled as observational, not instructions. Every brief sent is counted here.</div><div id="briefMount" style="margin-top:14px"></div></div>
       <div class="card"><h2>AI access to saved history</h2><div class="muted">Current-session AI access does not automatically include older saved work.</div><div id="historyAiMount" style="margin-top:14px"></div></div>
       <div class="card"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><div><h2>Saved sessions</h2><div class="muted">A human session is one recording run. Long idle breaks stay inside it as activity blocks. Agent sessions use observed execution boundaries.</div></div><button class="secondary" id="historyExportAll">Export retained history JSON</button></div><div id="historySessions" style="margin-top:12px"></div></div>`;
     const exportPanel=document.querySelector('#panel-export');main.insertBefore(panel,exportPanel||null);
@@ -84,6 +85,13 @@
     const now=host.querySelector('#checkOutcome');if(now)now.onclick=async()=>{await call('/v1/outcome-tracking/check-now',{method:'POST'});await refresh();};
   }
 
+  function renderBrief(){
+    const host=document.querySelector('#briefMount');if(!host||!brief)return;const fw=(brief.frameworks||{})['claude-code']||{};
+    host.innerHTML=`<div class="filter-row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="briefClaude" ${fw.enabled?'checked':''}> Claude Code</label><button id="saveBrief" class="secondary">Save</button><button id="previewBrief" class="ghost">Preview brief</button></div><div class="muted">${fw.enabled?`On${fw.hook_installed?'':' (hook missing: save again)'} · applies ${esc(brief.applies||'in new sessions')} · ${Number(brief.briefs_delivered||0)} brief${Number(brief.briefs_delivered||0)===1?'':'s'} sent${brief.last_delivered_at?`, last ${esc(String(brief.last_delivered_at).replace('T',' ').slice(0,16))}`:''}`:'Off: agents receive nothing from OpenWorkGraph at session start.'}</div><pre id="briefPreview" hidden style="white-space:pre-wrap;margin-top:10px;padding:10px;border:1px solid #cfd3cb;border-radius:9px;font-size:12px"></pre>`;
+    host.querySelector('#saveBrief').onclick=async()=>{try{await call('/v1/agent-brief',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({framework:'claude-code',enabled:host.querySelector('#briefClaude').checked})});if(typeof window.toast==='function')window.toast('Session briefs updated. New Claude Code sessions pick this up.');}catch(e){if(typeof window.toast==='function')window.toast(e.message);}await refresh();};
+    host.querySelector('#previewBrief').onclick=async()=>{const p=await call('/v1/agent-brief/preview?framework=claude-code');const pre=host.querySelector('#briefPreview');pre.hidden=false;pre.textContent=p.text||'No brief yet: there are no observed Claude Code runs with work detail in the past 30 days.';};
+  }
+
   function sessionLabel(s){if(s.kind==='agent'){const a=s.agent||{};return `${a.framework||a.provider||a.name||'Agent'} · ${s.observation_level||'partial observation'}`;}return `Human recording · ${fmt(s.engaged_seconds)}`;}
   function renderSessions(){
     const host=document.querySelector('#historySessions');if(!host||!history)return;const rows=history.sessions||[];
@@ -100,7 +108,7 @@
 
   async function refresh(){
     ensureUI();
-    try{[policy,history,access,memory,outcomes]=await Promise.all([call('/v1/history-policy'),call('/v1/history?limit=200'),call('/v1/history/ai-access'),call('/v1/run-memory?limit=20').catch(()=>null),call('/v1/outcome-tracking').catch(()=>null)]);access=access.access||{mode:'off'};renderPolicy();renderAccess();renderMemory();renderOutcomes();renderSessions();onboarding();}catch(e){const host=document.querySelector('#historySessions');if(host)host.innerHTML=`<div class="off">${esc(e.message)}</div>`;}
+    try{[policy,history,access,memory,outcomes,brief]=await Promise.all([call('/v1/history-policy'),call('/v1/history?limit=200'),call('/v1/history/ai-access'),call('/v1/run-memory?limit=20').catch(()=>null),call('/v1/outcome-tracking').catch(()=>null),call('/v1/agent-brief').catch(()=>null)]);access=access.access||{mode:'off'};renderPolicy();renderAccess();renderMemory();renderOutcomes();renderBrief();renderSessions();onboarding();}catch(e){const host=document.querySelector('#historySessions');if(host)host.innerHTML=`<div class="off">${esc(e.message)}</div>`;}
   }
   window.refreshHistory=refresh;
   document.addEventListener('DOMContentLoaded',()=>{ensureUI();refresh();});

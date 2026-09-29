@@ -271,6 +271,24 @@ def file_ref(path: Any, *, key: bytes | None = None) -> str:
     return "f:" + digest.hexdigest()[:16]
 
 
+_WORKSPACE_REF_RE = re.compile(r"^w:[0-9a-f]{16}$")
+
+
+def workspace_ref(path: Any, *, key: bytes | None = None) -> str:
+    """Keyed hash of the agent's working directory: "same project again", no path."""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    normalized = posixpath.normpath(raw.replace("\\", "/")).rstrip("/") or "/"
+    digest = hmac.new(key if key is not None else _file_ref_key(), ("workspace|" + normalized).encode("utf-8"), hashlib.sha256)
+    return "w:" + digest.hexdigest()[:16]
+
+
+def valid_workspace_ref(value: Any) -> str:
+    text = str(value or "")
+    return text if _WORKSPACE_REF_RE.fullmatch(text) else ""
+
+
 def file_type(path: Any) -> str:
     name = posixpath.basename(str(path or "").replace("\\", "/")).lower()
     if not name:

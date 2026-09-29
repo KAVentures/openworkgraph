@@ -388,6 +388,11 @@ def agent_event_to_evidence(payload: dict[str, Any]) -> dict[str, Any]:
         detail = sanitize_detail(payload.get("tool_detail"))
         if detail:
             metadata["tool"]["detail"] = detail
+    from .tool_detail import valid_workspace_ref
+
+    workspace = valid_workspace_ref(payload.get("workspace_ref"))
+    if workspace:
+        metadata["workspace_ref"] = workspace
     task_context = _task_context(payload, operation=operation)
     if task_context:
         metadata["task_context"] = task_context
