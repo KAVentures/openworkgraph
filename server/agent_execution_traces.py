@@ -267,6 +267,18 @@ def _observed_coverage(
     }
 
 
+def _workspace(events: list[dict[str, Any]]) -> dict[str, str]:
+    """The run's keyed workspace hash, when the adapter reported one."""
+    from shared.tool_detail import valid_workspace_ref
+
+    for event in events:
+        meta, _trace = _meta(event)
+        ref = valid_workspace_ref(meta.get("workspace_ref"))
+        if ref:
+            return {"workspace_ref": ref}
+    return {}
+
+
 def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, Any]:
     base = _one_execution(events)
     projected = [_event_projection(event) for event in events]
@@ -300,6 +312,7 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
         "run_start_observed": run_start_observed,
         "run_finish_observed": run_finish_observed,
         "work_summary": _work_summary(projected),
+        **_workspace(events),
         "complete_boundary_observed": run_start_observed and run_finish_observed,
         "event_count_total": len(projected),
         "event_count_returned": len(bounded_events),
@@ -359,6 +372,13 @@ def _parent_child_links(groups: list[list[dict[str, Any]]]) -> dict[int, dict[st
     return links
 
 
+def _run_material(events: list[dict[str, Any]]) -> str:
+    from .outcome_tracker import run_material
+
+    _meta_value, trace = _meta(events[0])
+    return run_material(events[0].get("actor_id"), trace, events[0].get("session_id"))
+
+
 def agent_execution_traces(
     raw_events: list[dict[str, Any]],
     *,
@@ -379,6 +399,16 @@ def agent_execution_traces(
     event_limit = max(1, min(int(max_events_per_execution), 500))
     groups = [events for events in _agent_groups(raw_events) if events]
     links = _parent_child_links(groups)
+    materials = [_run_material(events) for events in groups]
+    from .human_agent_join import human_context
+
+    human = human_context(groups, raw_events)
+    try:
+        from .outcome_tracker import delivery_outcomes
+
+        outcomes = delivery_outcomes(materials)
+    except Exception:
+        outcomes = {}
 
     traces: list[dict[str, Any]] = []
     considered = 0
@@ -387,6 +417,10 @@ def agent_execution_traces(
         link = links.get(index, {})
         candidate["parent_execution_id"] = link.get("parent")
         candidate["child_execution_ids"] = list(link.get("children") or [])
+        if materials[index] in outcomes:
+            candidate["delivery_outcome"] = outcomes[materials[index]]
+        if index in human:
+            candidate["human_context"] = human[index]
         if family and candidate.get("observed_family_key") != family:
             continue
         if execution and candidate.get("execution_id") != execution:

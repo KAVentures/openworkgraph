@@ -277,6 +277,24 @@ def file_ref(path: Any, *, key: bytes | None = None) -> str:
     return "f:" + digest.hexdigest()[:16]
 
 
+_WORKSPACE_REF_RE = re.compile(r"^w:[0-9a-f]{16}$")
+
+
+def workspace_ref(path: Any, *, key: bytes | None = None) -> str:
+    """Keyed hash of the agent's working directory: "same project again", no path."""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    normalized = posixpath.normpath(raw.replace("\\", "/")).rstrip("/") or "/"
+    digest = hmac.new(key if key is not None else _file_ref_key(), ("workspace|" + normalized).encode("utf-8"), hashlib.sha256)
+    return "w:" + digest.hexdigest()[:16]
+
+
+def valid_workspace_ref(value: Any) -> str:
+    text = str(value or "")
+    return text if _WORKSPACE_REF_RE.fullmatch(text) else ""
+
+
 def file_type(path: Any) -> str:
     name = posixpath.basename(str(path or "").replace("\\", "/")).lower()
     if not name:
@@ -396,6 +414,35 @@ def tool_call_detail(
         text = str(new_file_text)
         detail.update(lines_added=min(len(text.splitlines()), MAX_COUNT), lines_removed=0)
     return sanitize_detail(detail)
+
+
+# ------------------------------------------------------------------ pull requests (local only)
+
+_PR_URL_RE = re.compile(r"https://([A-Za-z0-9.-]{1,100})/([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})/pull/(\d{1,9})\b")
+_PR_TOOL_RE = re.compile(r"(create|open)_?pull_?request|pull_request_(create|open)", re.IGNORECASE)
+
+
+def pr_refs(*, command: Any = None, tool_name: str = "", output: Any = None) -> list[dict[str, Any]]:
+    """Pull requests an agent just opened, parsed from the tool output in memory.
+
+    Only for ``gh pr create`` or a create-pull-request tool, and only the host,
+    owner, repository and number. These never enter stored events: agent ingest
+    keeps them in a local-only watch list, and only when outcome tracking is on.
+    """
+    opened = False
+    if command is not None:
+        opened = "pr_create" in command_detail(command)["gh"]
+    if not opened and tool_name:
+        opened = bool(_PR_TOOL_RE.search(str(tool_name)))
+    if not opened:
+        return []
+    text = output if isinstance(output, str) else repr(output)
+    refs: list[dict[str, Any]] = []
+    for host, owner, repo, number in _PR_URL_RE.findall(text[-50_000:]):
+        ref = {"host": host.lower(), "owner": owner, "repo": repo, "number": int(number)}
+        if ref not in refs:
+            refs.append(ref)
+    return refs[:4]
 
 
 def enabled() -> bool:

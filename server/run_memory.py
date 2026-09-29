@@ -48,9 +48,10 @@ CREATE TABLE IF NOT EXISTS run_memory (
 _RECORD_KEYS = (
     "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
     "duration_seconds", "outcome_status", "outcome_basis", "positive_example", "explicit_failure",
-    "steps", "observation_level", "evidence_window", "_approval_points",
+    "steps", "observation_level", "evidence_window", "_approval_points", "workspace_ref",
 )
-_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids")
+_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome", "human_context",
+               "structural_steps", "observed_family_key")
 
 
 def _key() -> bytes:
@@ -105,8 +106,11 @@ def remember(events: Iterable[dict[str, Any]]) -> int:
     agent_extras: dict[str, dict[str, Any]] = {}
     if any(item.get("actor_kind") == "agent" for item in executions):
         try:
-            payload = agent_execution_traces(rows, limit=1000, max_events_per_execution=1)
-            payload = enrich_agent_execution_payload(payload, rows)
+            # Human work around these runs (still in the store) joins what the
+            # person did during and after each run into the remembered record.
+            context_rows = rows + _human_rows_around(rows)
+            payload = agent_execution_traces(context_rows, limit=1000, max_events_per_execution=1)
+            payload = enrich_agent_execution_payload(payload, context_rows)
             for trace in payload.get("executions") or []:
                 agent_extras[str(trace.get("execution_id") or "")] = {k: trace.get(k) for k in _AGENT_KEYS if trace.get(k) is not None}
         except Exception:
@@ -142,6 +146,31 @@ def remember(events: Iterable[dict[str, Any]]) -> int:
     return stored
 
 
+def _human_rows_around(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    times = sorted(t for t in (_parse(r.get("observed_at")) for r in rows) if t is not None)
+    if not times:
+        return []
+    start, end = (times[0] - timedelta(hours=2)).isoformat(), (times[-1] + timedelta(hours=2)).isoformat()
+    try:
+        with connect() as conn:
+            found = conn.execute(
+                "SELECT * FROM events WHERE source != 'agent' AND event_type IN ('focus_span', 'away_span')"
+                " AND observed_at >= ? AND observed_at <= ? LIMIT 20000",
+                (start, end),
+            ).fetchall()
+    except Exception:
+        return []
+    out = []
+    for row in found:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json", "{}") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        out.append(item)
+    return out
+
+
 def memory_runs(*, since: str | None = None, limit: int = 5000) -> list[dict[str, Any]]:
     """Remembered runs as procedural executions (with ``_run_key`` for de-duplication)."""
     if not enabled():
@@ -170,7 +199,7 @@ def memory_runs(*, since: str | None = None, limit: int = 5000) -> list[dict[str
     return output
 
 
-def _delete_where(predicate) -> int:
+def _delete_where(predicate, *, with_outcomes: bool = True) -> int:
     with connect() as conn:
         _ensure(conn)
         rows = conn.execute("SELECT run_key, started_at, ended_at, session_refs, record_json FROM run_memory").fetchall()
@@ -178,6 +207,10 @@ def _delete_where(predicate) -> int:
         for offset in range(0, len(doomed), 500):
             chunk = doomed[offset:offset + 500]
             conn.execute(f"DELETE FROM run_memory WHERE run_key IN ({','.join('?' for _ in chunk)})", tuple(chunk))
+    if doomed and with_outcomes:
+        from .outcome_tracker import forget_run_keys
+
+        forget_run_keys(doomed)
     return len(doomed)
 
 
@@ -194,7 +227,24 @@ def forget_sessions(session_ids: Iterable[str]) -> int:
         except Exception:
             return False
 
-    return _delete_where(hit)
+    removed = _delete_where(hit)
+    from .outcome_tracker import forget_sessions as forget_watches
+
+    forget_watches(refs)
+    _forget_brief_log("session_ref IN ({})".format(",".join("?" for _ in refs)), tuple(sorted(refs)))
+    return removed
+
+
+def _forget_brief_log(where: str, params: tuple) -> None:
+    """Deleting a session or range also deletes the record of briefs sent to it."""
+    try:
+        from .agent_brief import _LOG_TABLE
+
+        with connect() as conn:
+            conn.execute(_LOG_TABLE)
+            conn.execute(f"DELETE FROM agent_brief_log WHERE {where}", params)
+    except Exception:
+        pass
 
 
 def forget_range(since: str, until: str) -> int:
@@ -209,6 +259,10 @@ def forget_range(since: str, until: str) -> int:
             return False
         return began < end and (ended or began) >= start
 
+    from .outcome_tracker import forget_range as forget_watches
+
+    forget_watches(start, end)
+    _forget_brief_log("delivered_at >= ? AND delivered_at < ?", (start.isoformat(), end.isoformat()))
     return _delete_where(overlaps)
 
 
