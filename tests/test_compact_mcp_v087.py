@@ -21,6 +21,7 @@ DEFAULT_TOOLS = {
     "get_task_context",
     "how_did_similar_runs_go",
     "get_agent_runs",
+    "get_playbooks",
 }
 EXPERIMENTAL_GOVERNANCE_TOOLS = {
     "get_action_policy_advisory",
