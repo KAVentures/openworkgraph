@@ -50,7 +50,7 @@ _RECORD_KEYS = (
     "duration_seconds", "outcome_status", "outcome_basis", "positive_example", "explicit_failure",
     "steps", "observation_level", "evidence_window", "_approval_points", "workspace_ref",
 )
-_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome")
+_AGENT_KEYS = ("agent", "work_summary", "usage_totals", "models_observed", "parent_execution_id", "child_execution_ids", "delivery_outcome", "human_context")
 
 
 def _key() -> bytes:
@@ -105,8 +105,11 @@ def remember(events: Iterable[dict[str, Any]]) -> int:
     agent_extras: dict[str, dict[str, Any]] = {}
     if any(item.get("actor_kind") == "agent" for item in executions):
         try:
-            payload = agent_execution_traces(rows, limit=1000, max_events_per_execution=1)
-            payload = enrich_agent_execution_payload(payload, rows)
+            # Human work around these runs (still in the store) joins what the
+            # person did during and after each run into the remembered record.
+            context_rows = rows + _human_rows_around(rows)
+            payload = agent_execution_traces(context_rows, limit=1000, max_events_per_execution=1)
+            payload = enrich_agent_execution_payload(payload, context_rows)
             for trace in payload.get("executions") or []:
                 agent_extras[str(trace.get("execution_id") or "")] = {k: trace.get(k) for k in _AGENT_KEYS if trace.get(k) is not None}
         except Exception:
@@ -140,6 +143,31 @@ def remember(events: Iterable[dict[str, Any]]) -> int:
             )
             stored += 1
     return stored
+
+
+def _human_rows_around(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    times = sorted(t for t in (_parse(r.get("observed_at")) for r in rows) if t is not None)
+    if not times:
+        return []
+    start, end = (times[0] - timedelta(hours=2)).isoformat(), (times[-1] + timedelta(hours=2)).isoformat()
+    try:
+        with connect() as conn:
+            found = conn.execute(
+                "SELECT * FROM events WHERE source != 'agent' AND event_type IN ('focus_span', 'away_span')"
+                " AND observed_at >= ? AND observed_at <= ? LIMIT 20000",
+                (start, end),
+            ).fetchall()
+    except Exception:
+        return []
+    out = []
+    for row in found:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.pop("metadata_json", "{}") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        out.append(item)
+    return out
 
 
 def memory_runs(*, since: str | None = None, limit: int = 5000) -> list[dict[str, Any]]:

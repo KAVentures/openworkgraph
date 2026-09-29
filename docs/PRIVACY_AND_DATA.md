@@ -102,6 +102,14 @@ When you turn on "Did agent work hold up?" in History:
 - **Turning it off:** stops every GitHub call and deletes all stored links. Deleting a session or date range deletes its watches.
 - **Before the server sees it:** while tracking is off, hooks still pass a PR reference to the local server with the event, and the server drops it. It exists only in memory and, if delivery is delayed, in the short-lived local agent spool.
 
+## Human work around agent runs
+
+- **During and after each run:** OpenWorkGraph lines up human capture with agent runs in time. It records engaged and away seconds by **app category** (terminal, editor, browser, communication, AI assistant, other). It stores no app names or titles for this. When there is no human evidence in a window, it says so rather than reporting zero.
+- **Between Claude Code turns:** the hook compares keyed hashes of the files git reports as changed at the end of a turn and at the start of the next one. The next turn's start records only counts: files changed, how many of them the agent had edited in the last 24 hours, whether HEAD moved, and the gap.
+  - **Where the snapshot lives:** in a local state file keyed by the project's hash, for at most 7 days.
+  - **When it runs:** only while OpenWorkGraph holds a recording lease. Git runs with its fsmonitor disabled and without taking the index lock.
+  - **Turning it off:** `OWG_AGENT_REWORK=0`.
+
 ## Screenshots
 
 Screenshot capture exists as disabled code/config support but is disabled in the normal configuration and is not part of the current product direction or standard exports. The current privacy strategy assumes useful workflow inference should work without continuous screenshots or recording.
