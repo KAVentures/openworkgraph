@@ -9,6 +9,7 @@ DEFAULT_LOCAL_POLICY: dict[str, Any] = {
     "share_window_titles": True,
     "share_metadata": True,
     "allow_agent_events": False,
+    "allow_agent_session_messages": False,
     "allowed_event_types": [],
     "strip_metadata_keys": [],
     # Organization can require that AI context (MCP) is always Redacted.
@@ -19,7 +20,7 @@ DEFAULT_LOCAL_POLICY: dict[str, Any] = {
 def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     result = dict(DEFAULT_LOCAL_POLICY)
-    for key in ("share_excluded", "share_window_titles", "share_metadata", "allow_agent_events", "force_redacted_ai_context"):
+    for key in ("share_excluded", "share_window_titles", "share_metadata", "allow_agent_events", "allow_agent_session_messages", "force_redacted_ai_context"):
         if key in source:
             result[key] = bool(source[key])
     for key in ("allowed_event_types", "strip_metadata_keys"):
@@ -44,6 +45,12 @@ def _restrict_allowlist(local: list[str], remote: list[str]) -> tuple[list[str],
         intersection = sorted(a & b)
         return intersection, not bool(intersection)
     return sorted(a or b), False
+
+
+def _effective_sensitive_channel(local_policy: dict[str, Any] | None, organization_policy: dict[str, Any] | None, key: str) -> bool:
+    local_source = local_policy if isinstance(local_policy, dict) else {}
+    remote_source = organization_policy if isinstance(organization_policy, dict) else {}
+    return bool(local_source.get(key, False)) and bool(remote_source.get(key, True))
 
 
 def _effective_agent_sharing(
@@ -77,6 +84,7 @@ def merge_policies(local_policy: dict[str, Any] | None, organization_policy: dic
         "share_window_titles": bool(local["share_window_titles"] and remote["share_window_titles"]),
         "share_metadata": bool(local["share_metadata"] and remote["share_metadata"]),
         "allow_agent_events": _effective_agent_sharing(local_policy, organization_policy),
+        "allow_agent_session_messages": _effective_sensitive_channel(local_policy, organization_policy, "allow_agent_session_messages"),
         "allowed_event_types": allowed_event_types,
         "_deny_all_event_types": deny_all_event_types,
         "strip_metadata_keys": sorted(set(local["strip_metadata_keys"]) | set(remote["strip_metadata_keys"])),

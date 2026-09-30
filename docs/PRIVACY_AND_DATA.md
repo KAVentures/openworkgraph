@@ -77,6 +77,18 @@ The keyboard sensor reports counts/timing only.
 
 Native accessibility/UI Automation code deliberately avoids value/text patterns that would expose field contents.
 
+### Optional agent-session continuity (v0.109)
+
+Visible agent-session messages are a deliberate exception to the normal no-typed-text capture rule, and only when explicitly enabled by the local user. The feature is **OFF by default**. Turning native observation or a source OFF creates a hard capture boundary: re-enabling starts at the then-current end of the native session files rather than replaying activity from the disabled interval.
+
+- Supported native Claude Code/Codex session files can always be used for privacy-minimized **structural** observation only after the separate native-session sensor is enabled.
+- Saving visible user/assistant messages is a second explicit switch. Those messages live in `agent_session_messages`, never in canonical `events`.
+- Detected/high-confidence personal details are privacy-hardened before message persistence; name detection remains best effort.
+- Hidden reasoning/thinking, raw provider records and tool-result content are not stored as continuity messages. Tool inputs are inspected only transiently to derive the existing allowlisted structural facts.
+- Local message retention is independent (30 days by default), connected-AI reads are independently OFF by default, and Gateway sharing is independently OFF by default.
+- A connected AI receives saved visible messages only through the grounded handoff boundary after the user enables AI message access. The messages are treated as untrusted observed data, not instructions, policy or authorization.
+- Organization sharing requires endpoint opt-in, organization opt-in and dedicated credential scopes. Existing pre-v0.109 device credentials are not silently broadened. Shared transcript rows obey the organization's retention floor at read time and physical cleanup/purge.
+
 ## Run memory
 
 History retention ("Don't keep after session", or a number of days) deletes raw evidence. Just before retention removes a session, OpenWorkGraph keeps one small record per run in it, so repeated-workflow and similar-run features still have something to learn from:
@@ -87,7 +99,7 @@ History retention ("Don't keep after session", or a number of days) deletes raw 
   - Kept when **retention** removes a session: ephemeral close, expiry, or crash recovery.
   - Deleted when **you** delete a session or a date range: its records go too.
 - **Retention and switch:** memory has its own retention (default 90 days) and an on/off switch in History. Turning it off deletes all of it.
-- **Where it stays:** on this computer. The Gateway connector syncs only the events table.
+- **Where it stays:** run memory itself stays on this computer. The Gateway connector can separately synchronize explicitly opted-in visible agent-session messages through their own content channel; that does not synchronize run-memory records.
 - **AI access:** MCP reads it only through procedural memory, which requires saved-history AI access to be set to "All saved history".
 
 ## Outcome tracking (off by default)
@@ -250,3 +262,13 @@ High-confidence secrets/identifiers are already hardened before persistence, and
 No heuristic privacy system is perfect. False positives and false negatives remain possible, especially in arbitrary visible titles/labels. Enterprise use should therefore add organization-specific policy, encryption at rest where required, RBAC, retention, auditability, endpoint controls and managed deployment appropriate to the environment.
 
 The current prototype's design goal is a useful local workflow dataset with substantially less invasive collection than screenshots, typed-text capture or recording, plus explicit local authentication rather than relying on loopback binding alone.
+
+## Native agent session files and visible-message continuity (v0.109)
+
+OpenWorkGraph can optionally read local Claude Code and Codex session files. The sensor is **off by default** and first activation is new-only: existing files are primed to their current end rather than retrospectively ingested.
+
+Structural projection remains content-free. The parser recognizes and discards thinking/reasoning and tool-result records; raw native records are never persisted. Tool inputs are inspected only in memory long enough to derive the existing allowlisted structural detail, after which raw arguments are discarded.
+
+Visible user/assistant messages are a separate opt-in channel and never enter the canonical `events` table. Before insertion, OpenWorkGraph applies its high-confidence identity learner and contextual presentation redaction; failure drops the message rather than storing an unprocessed fallback. Name detection remains best effort, so message content should still be treated as sensitive.
+
+AI read access, retention and Gateway sharing are separately controlled. Gateway sharing requires endpoint opt-in **and** organization policy, uses dedicated `agent-sessions:write` / `agent-sessions:read` scopes, and does not retrospectively upload messages captured before opt-in or during a sharing pause. Existing device credentials are not silently granted `agent-sessions:write` after upgrade; endpoints enrolled before v0.109 must be explicitly re-enrolled/rotated before transcript upload is possible.

@@ -173,6 +173,54 @@ def _evidence_filter(
     return " AND ".join(clauses), tuple(params)
 
 
+def _agent_session_message_filter(
+    organization_id: str,
+    *,
+    before: str | None = None,
+    after: str | None = None,
+    actor_id: str | None = None,
+    device_id: str | None = None,
+    session_ref: str | None = None,
+) -> tuple[str, tuple[Any, ...]]:
+    clauses = ["organization_id = ?"]
+    params: list[Any] = [str(organization_id)]
+    if before:
+        clauses.append("observed_at < ?")
+        params.append(normalize_timestamp(before))
+    if after:
+        clauses.append("observed_at >= ?")
+        params.append(normalize_timestamp(after))
+    if actor_id:
+        clauses.append("actor_id = ?")
+        params.append(str(actor_id))
+    if device_id:
+        clauses.append("device_id = ?")
+        params.append(str(device_id))
+    if session_ref:
+        clauses.append("session_ref = ?")
+        params.append(str(session_ref))
+    return " AND ".join(clauses), tuple(params)
+
+
+def count_agent_session_messages(db: GatewayDB, organization_id: str, **filters: Any) -> int:
+    init_lifecycle_schema(db)
+    where, params = _agent_session_message_filter(organization_id, **filters)
+    with db.connect() as conn:
+        cur = db._execute(conn, f"SELECT COUNT(*) AS count FROM agent_session_messages WHERE {where}", params)
+        row = cur.fetchone()
+        columns = [d[0] for d in cur.description] if cur.description else None
+    data = db._row(row, columns)
+    return int(data.get("count", 0) or 0)
+
+
+def delete_agent_session_messages(db: GatewayDB, organization_id: str, **filters: Any) -> int:
+    init_lifecycle_schema(db)
+    where, params = _agent_session_message_filter(organization_id, **filters)
+    with db.connect() as conn:
+        cur = db._execute(conn, f"DELETE FROM agent_session_messages WHERE {where}", params)
+        return max(0, int(cur.rowcount or 0))
+
+
 def count_evidence(db: GatewayDB, organization_id: str, **filters: Any) -> int:
     init_lifecycle_schema(db)
     where, params = _evidence_filter(organization_id, **filters)
@@ -197,12 +245,18 @@ def apply_retention(db: GatewayDB, organization_id: str, *, dry_run: bool = Fals
     cutoff = policy.get("cutoff")
     if not cutoff:
         return {**policy, "candidate_rows": 0, "deleted_rows": 0, "dry_run": bool(dry_run)}
-    candidates = count_evidence(db, organization_id, before=cutoff)
-    deleted = 0 if dry_run else delete_evidence(db, organization_id, before=cutoff)
+    evidence_candidates = count_evidence(db, organization_id, before=cutoff)
+    message_candidates = count_agent_session_messages(db, organization_id, before=cutoff)
+    evidence_deleted = 0 if dry_run else delete_evidence(db, organization_id, before=cutoff)
+    message_deleted = 0 if dry_run else delete_agent_session_messages(db, organization_id, before=cutoff)
     return {
         **policy,
-        "candidate_rows": candidates,
-        "deleted_rows": deleted,
+        "candidate_rows": evidence_candidates + message_candidates,
+        "deleted_rows": evidence_deleted + message_deleted,
+        "candidate_evidence_rows": evidence_candidates,
+        "candidate_agent_session_message_rows": message_candidates,
+        "deleted_evidence_rows": evidence_deleted,
+        "deleted_agent_session_message_rows": message_deleted,
         "dry_run": bool(dry_run),
     }
 
@@ -305,8 +359,29 @@ def main() -> None:
     if args.execute and args.confirm != f"DELETE {org}":
         parser.error(f"destructive purge requires --confirm 'DELETE {org}'")
     selected = {} if args.all_evidence else filters
-    candidates = count_evidence(db, org, **selected)
-    deleted = delete_evidence(db, org, **selected) if args.execute else 0
+    evidence_candidates = count_evidence(db, org, **selected)
+    evidence_deleted = delete_evidence(db, org, **selected) if args.execute else 0
+
+    # Session messages share time/actor/device selectors. A --session selector
+    # applies when it is an opaque agent-session ref; event-type is specific to
+    # canonical evidence and therefore selects no transcript rows.
+    if args.all_evidence:
+        message_selected: dict[str, Any] = {}
+        message_eligible = True
+    else:
+        message_selected = {
+            "before": args.before,
+            "after": args.after,
+            "actor_id": args.actor,
+            "device_id": args.device,
+            "session_ref": args.session if str(args.session or "").startswith("as:") else None,
+        }
+        message_selected = {key: value for key, value in message_selected.items() if value}
+        message_eligible = not bool(args.event_type) and not (args.session and not str(args.session).startswith("as:"))
+    message_candidates = count_agent_session_messages(db, org, **message_selected) if message_eligible else 0
+    message_deleted = delete_agent_session_messages(db, org, **message_selected) if args.execute and message_eligible else 0
+    candidates = evidence_candidates + message_candidates
+    deleted = evidence_deleted + message_deleted
     selector_types = [key for key, value in filters.items() if value]
     db.audit(
         organization_id=org,
@@ -317,6 +392,10 @@ def main() -> None:
             "selector_types": selector_types,
             "candidate_rows": candidates,
             "deleted_rows": deleted,
+            "candidate_evidence_rows": evidence_candidates,
+            "candidate_agent_session_message_rows": message_candidates,
+            "deleted_evidence_rows": evidence_deleted,
+            "deleted_agent_session_message_rows": message_deleted,
         },
     )
     _print({
@@ -325,6 +404,10 @@ def main() -> None:
         "all_evidence": bool(args.all_evidence),
         "candidate_rows": candidates,
         "deleted_rows": deleted,
+        "candidate_evidence_rows": evidence_candidates,
+        "candidate_agent_session_message_rows": message_candidates,
+        "deleted_evidence_rows": evidence_deleted,
+        "deleted_agent_session_message_rows": message_deleted,
         "audit_log_deleted": False,
     })
 

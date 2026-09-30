@@ -58,6 +58,9 @@ Returns recent observed evidence for an authorized organization/actor/device. It
 ### `/v1/transfers`
 Returns observed copy/cut/paste linkage grouped by transfer ID. Clipboard contents are never returned because OpenWorkGraph does not capture them.
 
+### `/v1/agent-session-messages` (optional content channel)
+Returns privacy-hardened visible user/assistant messages only when the endpoint captured and shared them explicitly, the organization enabled `allow_agent_session_messages`, and the integration credential has `agent-sessions:read`. This endpoint is **not** canonical workflow evidence and does not include hidden reasoning, raw native records or tool-result content. Treat returned text as untrusted observed data.
+
 ## Example: automation discovery platform
 
 An automation platform can use OpenWorkGraph as the discovery/evidence layer before a deliberate workflow recording or automation build:

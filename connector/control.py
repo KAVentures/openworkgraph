@@ -32,6 +32,35 @@ def _max_local_event_id(data_dir: Path) -> int:
         conn.close()
 
 
+def _max_local_agent_message_id(data_dir: Path) -> int:
+    db_path = data_dir / "workflow_observer.db"
+    if not db_path.exists():
+        return 0
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        try:
+            row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM agent_session_messages").fetchone()
+        except sqlite3.Error:
+            return 0
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def _session_message_policy(data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "agent_session_policy.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        value = {}
+    return {
+        "capture_visible_messages": bool(value.get("capture_visible_messages", False)),
+        "allow_gateway_session_messages": bool(value.get("allow_gateway_session_messages", False)),
+        "effective_local_opt_in": bool(value.get("capture_visible_messages", False)) and bool(value.get("allow_gateway_session_messages", False)),
+        "separate_from_structural_agent_sharing": True,
+    }
+
+
 def _read_root(config_path: Path) -> dict[str, Any]:
     try:
         value = json.loads(config_path.read_text(encoding="utf-8"))
@@ -110,6 +139,9 @@ def status(config_path: Path) -> dict[str, Any]:
         "quarantined_events": state.quarantine_count(),
         "credential_exposed": False,
         "local_agent_sharing": local_agent_sharing(config_path),
+        "local_agent_session_sharing": _session_message_policy(data_dir),
+        "last_local_agent_message_id": state.get_int("last_local_agent_message_id", 0),
+        "last_agent_message_batch_shared": state.get_int("last_agent_message_batch_shared", 0),
     }
 
 
@@ -125,6 +157,7 @@ def set_sharing(config_path: Path, enabled: bool) -> dict[str, Any]:
         # Capture the local boundary immediately. Evidence created after this ID is
         # permanently excluded when sharing resumes; local recording continues.
         state.set_int("pause_started_after_id", _max_local_event_id(data_dir))
+        state.set_int("pause_started_after_agent_message_id", _max_local_agent_message_id(data_dir))
         state.set_bool("sharing_paused", True)
         state.set("status", "paused")
     elif enabled and currently_paused:
@@ -137,7 +170,19 @@ def set_sharing(config_path: Path, enabled: bool) -> dict[str, Any]:
                 start_after = end_id
             if end_id > start_after:
                 state.add_skip_range(start_after + 1, end_id, "user_paused_gateway_sharing")
+        message_end_id = _max_local_agent_message_id(data_dir)
+        message_marker = state.get("pause_started_after_agent_message_id", "")
+        if message_marker:
+            try:
+                message_start_after = int(message_marker)
+            except Exception:
+                message_start_after = message_end_id
+            if message_end_id > message_start_after:
+                state.add_agent_message_skip_range(
+                    message_start_after + 1, message_end_id, "user_paused_gateway_sharing"
+                )
         state.delete("pause_started_after_id")
+        state.delete("pause_started_after_agent_message_id")
         state.set_bool("sharing_paused", False)
         state.set("status", "not_started")
     else:
