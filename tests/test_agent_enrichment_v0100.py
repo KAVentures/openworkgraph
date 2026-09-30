@@ -179,7 +179,16 @@ def test_claude_subagent_is_its_own_run_linked_to_the_turn(monkeypatch):
     child = next(t for t in traces if t.get("parent_execution_id"))
     assert child["parent_execution_id"] == parent["execution_id"]
     assert parent["child_execution_ids"] == [child["execution_id"]]
-    assert parent["work_summary"]["tests"] == {"runs": 2, "runs_with_failures": 1, "last_passed": 5, "last_failed": 0, "ended": "passing"}
+    assert parent["work_summary"]["tests"] == {
+        "runs": 2,
+        "known_passing_runs": 1,
+        "known_failing_runs": 1,
+        "unknown_result_runs": 0,
+        "runs_with_failures": 1,
+        "last_passed": 5,
+        "last_failed": 0,
+        "ended": "passing",
+    }
     assert parent["work_summary"]["git"] == {"commit": 1}
     assert child["work_summary"]["lines"] == {"added": 2, "removed": 1}
     assert child["work_summary"]["files"] == {"edited": 1, "read_only": 0}
@@ -321,14 +330,16 @@ def test_mcp_run_summaries_carry_work_summary_and_links():
 def test_ephemeral_history_keeps_the_session_when_a_subagent_finishes(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path / "data"))
     from server.agent_ingest import ingest_agent_payloads
+    from server.agent_session_store import session_ref
     from server.db import init_db, rows
     from shared.history_policy import update_retention
 
     init_db()
     update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
+    safe_session = session_ref("claude_code", "eph-sub")
 
     def count():
-        return len([r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == "eph-sub"])
+        return len([r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == safe_session])
 
     def hook(name, **extra):
         return claude_hook_to_agent_events({"session_id": "eph-sub", "prompt_id": "t1", "hook_event_name": name, **extra})
