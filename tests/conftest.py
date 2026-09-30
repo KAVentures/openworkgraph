@@ -21,6 +21,25 @@ os.environ["OWG_GATEWAY_DATABASE_URL"] = f"sqlite:///{_GATEWAY_DATA / 'openworkg
 
 
 @pytest.fixture(autouse=True)
+def _isolate_analytics_summary_cache():
+    """Never let a cached analytics summary cross a pytest test boundary.
+
+    Production invalidation is keyed to the append-only DB revision. Tests also
+    monkeypatch event loaders and temporarily swap DB paths, operations that do
+    not exist in production and therefore are not represented by that revision.
+    Clearing only at test boundaries preserves the production cache contract
+    while ensuring one synthetic fixture cannot answer a later monkeypatched test.
+    """
+    from server import analytics
+
+    analytics.clear_summary_cache()
+    try:
+        yield
+    finally:
+        analytics.clear_summary_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_agent_ingestion_database(request):
     """Keep agent-ingestion persistence tests from polluting legacy analytics tests.
 
