@@ -60,10 +60,17 @@ def _transfer(at: datetime, app: str, event_type: str, transfer_id: str, linked_
     }
 
 
-def test_real_today_profile_keeps_three_crm_transfers_after_restart(monkeypatch, tmp_path):
+def test_real_today_profile_keeps_three_crm_transfers_after_restart(monkeypatch, tmp_path, request):
     """Drive the real DB/profile path for the dogfood Gmail/CRM/Sheets workday."""
+    from server import analytics
     from server import db as server_db
     from server.work_profile_service import compute_work_profile
+
+    # analytics.summary() is intentionally cached by DB revision. This test swaps
+    # the process-global DB path, so isolate that cache as part of the test fixture
+    # rather than letting this synthetic workday contaminate later analytics tests.
+    analytics.clear_summary_cache()
+    request.addfinalizer(analytics.clear_summary_cache)
 
     # Use monkeypatch rather than a direct module assignment so the global DB path
     # is restored after this test and cannot leak the simulated workday into later
