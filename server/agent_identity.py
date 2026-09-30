@@ -43,7 +43,9 @@ def normalize_claude_event(event: dict[str, Any]) -> dict[str, Any]:
     The transformation is idempotent. The session key is exactly the same
     ``as:`` HMAC used by the native-session continuity sensor, allowing richer
     hook/OTel evidence and transcript fallback evidence to join instead of
-    appearing as separate physical sessions.
+    appearing as separate physical sessions. Top-level Claude prompt turns are
+    observations inside that physical session, not separate executions; true
+    subagents keep a separate opaque run identity.
     """
     if not is_claude_code_event(event):
         return dict(event)
@@ -58,7 +60,11 @@ def normalize_claude_event(event: dict[str, Any]) -> dict[str, Any]:
         return out
 
     native_run = _text(out.get("run_id"))
-    if not native_run or native_run in {native_session, safe_session}:
+    agent_name = _text(out.get("agent_name"), 160)
+    is_subagent = agent_name.lower().startswith("claude code/")
+    if not is_subagent:
+        safe_run = safe_session
+    elif not native_run or native_run in {native_session, safe_session}:
         safe_run = safe_session
     elif native_run.startswith("ar:"):
         safe_run = native_run
