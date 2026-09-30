@@ -69,7 +69,15 @@ def test_latest_unknown_test_run_does_not_inherit_earlier_passing_result():
             "tool": {"name": "Bash", "detail": {"commands": ["pytest"], "test_status": "unknown"}},
         },
     ])
-    assert summary["tests"] == {"runs": 2, "runs_with_failures": 0, "ended": "unknown"}
+    assert summary["tests"] == {
+        "runs": 2,
+        "known_passing_runs": 1,
+        "known_failing_runs": 0,
+        "unknown_result_runs": 1,
+        "runs_with_failures": None,
+        "runs_with_failures_status": "unknown_no_failure_count_observed",
+        "ended": "unknown",
+    }
 
 
 def test_cursor_style_edit_without_patch_counts_as_edited_not_read_only():
