@@ -14,6 +14,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from server.db import init_db, insert_events, connect
 from server.agent_ingest import ingest_agent_payloads
+from server.agent_session_store import session_ref as canonical_session_ref
 from server.history_retention import initialize_history_retention, cleanup_expired_history, delete_history_session, delete_sessions
 from server import run_memory
 from server.procedural_memory import load_recent_evidence, procedural_overview, similar_runs
@@ -42,8 +43,11 @@ def claude_session(session, offset=0, tests="1 failed, 4 passed in 1s"):
     return events
 
 def raw_count(session):
+    # v0.112 canonical Claude rows use the opaque cross-sensor session id. Keep
+    # legacy raw-id coverage too so this helper works for human/old fixture rows.
+    opaque = canonical_session_ref("claude_code", session)
     with connect() as c:
-        return c.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (session,)).fetchone()[0]
+        return c.execute("SELECT COUNT(*) FROM events WHERE session_id IN (?, ?)", (session, opaque)).fetchone()[0]
 
 def memory_rows():
     with connect() as c:
