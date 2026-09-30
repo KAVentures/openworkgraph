@@ -42,9 +42,9 @@ def test_release_notes_are_current_and_version_driven():
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
     assert "### v0.111: provenance-safe agent Working Detail" in workflow
-    assert "workspace-relative files" in workflow
-    assert "Raw tool output is not stored" in workflow
-    assert "explicit historical import" in workflow
+    assert "workspace-relative file" in workflow
+    assert "without persisting raw tool output" in workflow
+    assert "Import last 7 days is a separate explicit action" in workflow
     v111_section = workflow.split("### v0.111: provenance-safe agent Working Detail", 1)[1].split("### v0.110: evidence-first MCP guidance and safer first-run history", 1)[0]
     assert "`" not in v111_section
     assert "### v0.110: evidence-first MCP guidance and safer first-run history" in workflow
