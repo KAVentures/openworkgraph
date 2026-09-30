@@ -146,6 +146,14 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.111: provenance-safe agent Working Detail
+
+          - Working Detail is OFF by default and lives outside the canonical event stream, with separate capture and connected-AI read controls.
+          - Working Detail preserves bounded workspace-relative file, command, test, failure, and repository-state facts without persisting raw tool output, arbitrary shell arguments, absolute paths, prompts, messages, or hidden reasoning.
+          - Existing session handoff can include bounded Working Detail only when AI read permission is enabled; no new compact MCP tool is added and Gateway sharing is unchanged.
+          - Enabling Working Detail starts at the end of existing native history. Import last 7 days is a separate explicit action that parses historical result text in memory and stores only privacy-hardened structured facts.
+          - Test outcomes remain tri-state. Missing result evidence stays unknown, and zero observed failures never becomes proof that all tests passed.
+
           ### v0.110: evidence-first MCP guidance and safer first-run history
           This release ships the frontier-aware automation behavior already merged on main and makes the compact MCP tell connected models how to use the evidence surface rather than hoping they discover optional prompts/resources on their own.
 

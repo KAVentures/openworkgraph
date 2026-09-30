@@ -35,6 +35,7 @@ def main() -> None:
 
     import server.agent_capture_runtime as agent_capture_runtime
     import server.agent_session_sensor as agent_session_sensor
+    import server.agent_working_detail as agent_working_detail
     import server.log_redaction as log_redaction
 
     log_redaction.install()
@@ -42,6 +43,9 @@ def main() -> None:
     org_join_routes.start_managed_setup_in_background()
     agent_capture_runtime.start()
     agent_session_sensor.start()
+    # Working detail is a separate, opt-in continuity layer. Its scanner has an
+    # independent state/cursor and cannot interfere with structural capture.
+    agent_working_detail.start()
     import server.outcome_tracker as outcome_tracker
 
     if not agent_capture_runtime._demo():
@@ -55,12 +59,14 @@ def main() -> None:
 
     extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
     extend_lifespan(secure_app, shutdown=agent_session_sensor.stop)
+    extend_lifespan(secure_app, shutdown=agent_working_detail.stop)
     extend_lifespan(secure_app, shutdown=outcome_tracker.stop)
     try:
         uvicorn.run(SECURE_APP, host=args.host, port=args.port)
     finally:
         agent_capture_runtime.stop()
         agent_session_sensor.stop()
+        agent_working_detail.stop()
         outcome_tracker.stop()
 
 
