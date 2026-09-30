@@ -65,7 +65,10 @@ def test_real_today_profile_keeps_three_crm_transfers_after_restart(monkeypatch,
     from server import db as server_db
     from server.work_profile_service import compute_work_profile
 
-    server_db.DB_PATH = tmp_path / "owg.db"
+    # Use monkeypatch rather than a direct module assignment so the global DB path
+    # is restored after this test and cannot leak the simulated workday into later
+    # analytics tests in the same pytest process.
+    monkeypatch.setattr(server_db, "DB_PATH", tmp_path / "owg.db")
     server_db.init_db()
     base = datetime.now(timezone.utc) - timedelta(minutes=45)
     # Simulate a launcher restart after the observed work: current scope begins
