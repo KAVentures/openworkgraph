@@ -22,6 +22,10 @@ from shared.claude_code_adapter import claude_hook_to_agent_events
 from shared.history_policy import update_retention, update_run_memory, run_memory_policy
 SECRET = "TOP-SECRET-CONTENT"
 init_db(); initialize_history_retention()
+# These tests exercise the explicit "Don't keep after sessions" path. New
+# installs now have a separate undecided 7-day grace period, so do not rely on
+# the onboarding default to stand in for an explicit ephemeral choice.
+update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
 base = datetime.now(timezone.utc) - timedelta(minutes=30)
 
 def hook(session, name, offset, **extra):

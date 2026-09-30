@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import Any
 
 _LOCK = threading.RLock()
-_POLICY_VERSION = 1
+_POLICY_VERSION = 2
 _MAX_SESSION_TOMBSTONES = 5000
 _RETENTION_MODES = {"ephemeral", "days", "forever"}
 _AI_ACCESS_MODES = {"off", "selected_range", "all_saved"}
+UNDECIDED_RETENTION_GRACE_DAYS = 7
 
 
 def _now_dt() -> datetime:
@@ -77,14 +78,16 @@ def _run_memory(enabled: Any, days: Any) -> dict[str, Any]:
 
 
 def _default(*, has_existing_evidence: bool) -> dict[str, Any]:
-    # Existing installations must never lose history merely by upgrading. New
-    # installations start ephemeral until the person makes an informed choice.
-    initial = "forever" if has_existing_evidence else "ephemeral"
+    # Existing installations must never lose history merely by upgrading. A new
+    # installation gets a short local-only grace window while the person decides;
+    # onboarding_complete remains false, so this is not treated as consent for a
+    # durable retention choice and it never grants saved-history AI access.
+    initial = _retention("forever") if has_existing_evidence else _retention("days", UNDECIDED_RETENTION_GRACE_DAYS)
     return {
         "version": _POLICY_VERSION,
         "onboarding_complete": False,
-        "human_retention": _retention(initial),
-        "agent_retention": _retention(initial),
+        "human_retention": dict(initial),
+        "agent_retention": dict(initial),
         "history_generation": 1,
         "session_tombstones": [],
         # New installs see this choice during onboarding. Existing policy files
@@ -108,7 +111,7 @@ def _uninitialized_fallback() -> dict[str, Any]:
     """Preserve pre-History retention until the owning runtime initializes it.
 
     The production runner explicitly initializes History: genuinely new installs
-    then receive the ephemeral onboarding default, while upgrades preserve existing
+    then receive the undecided local grace window, while upgrades preserve existing
     history. Legacy/embedded callers that import agent ingestion or secure_app
     directly do not run that initialization. Absence of a policy file there must
     not silently turn completed agent runs into disposable data.
@@ -128,6 +131,21 @@ def _normalize(value: dict[str, Any]) -> dict[str, Any]:
             result[key] = _retention(str(raw.get("mode") or "ephemeral"), raw.get("days"))
         except Exception:
             result[key] = _retention("ephemeral")
+
+    # v0.109 new installs could still be undecided with the old ephemeral default.
+    # Migrate only that genuinely undecided state. Explicit "don't keep" choices
+    # have onboarding_complete=true and therefore remain ephemeral.
+    if (
+        not result["onboarding_complete"]
+        and not bool(result.get("upgrade_preserved_existing_history"))
+        and all(
+            str((result.get(key) or {}).get("mode") or "ephemeral") == "ephemeral"
+            for key in ("human_retention", "agent_retention")
+        )
+    ):
+        result["human_retention"] = _retention("days", UNDECIDED_RETENTION_GRACE_DAYS)
+        result["agent_retention"] = _retention("days", UNDECIDED_RETENTION_GRACE_DAYS)
+
     result["history_generation"] = max(1, int(result.get("history_generation") or 1))
 
     raw_memory = result.get("run_memory")
@@ -395,6 +413,7 @@ def active_ai_history_access(*, now: datetime | None = None) -> dict[str, Any]:
 
 
 __all__ = [
+    "UNDECIDED_RETENTION_GRACE_DAYS",
     "run_memory_policy",
     "update_run_memory",
     "active_ai_history_access",

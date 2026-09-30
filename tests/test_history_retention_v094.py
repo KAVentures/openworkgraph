@@ -14,13 +14,11 @@ def _run(code:str,tmp_path:Path,timeout:int=120)->str:
     return result.stdout
 
 
-def test_new_install_ephemeral_existing_install_preserved(tmp_path):
+def test_new_install_has_seven_day_undecided_grace_existing_install_preserved(tmp_path):
     _run(r'''
-from datetime import datetime, timezone
-from server.db import init_db,insert_events
+from server.db import init_db
 from server.history_retention import initialize_history_retention
-from shared.history_policy import read_policy
-init_db();p=initialize_history_retention();assert p['human_retention']['mode']=='ephemeral';assert p['agent_retention']['mode']=='ephemeral';assert p['onboarding_complete'] is False
+init_db();p=initialize_history_retention();assert p['human_retention']=={'mode':'days','days':7};assert p['agent_retention']=={'mode':'days','days':7};assert p['onboarding_complete'] is False;assert p['ai_history_access']['mode']=='off'
 ''',tmp_path/'new')
     _run(r'''
 from datetime import datetime, timezone
@@ -28,6 +26,15 @@ from server.db import init_db,insert_events
 from server.history_retention import initialize_history_retention
 init_db();insert_events([{'event_id':'old','observed_at':datetime.now(timezone.utc).isoformat(),'device_id':'d','session_id':'s','app':'Editor','event_type':'focus_span','duration_seconds':1,'metadata':{}}]);p=initialize_history_retention();assert p['human_retention']['mode']=='forever';assert p['upgrade_preserved_existing_history'] is True
 ''',tmp_path/'existing')
+
+
+def test_v0109_undecided_ephemeral_policy_migrates_to_grace_not_ai_access(tmp_path):
+    _run(r'''
+import json
+from shared.history_policy import policy_path,read_policy
+path=policy_path();path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps({'version':1,'onboarding_complete':False,'human_retention':{'mode':'ephemeral','days':None},'agent_retention':{'mode':'ephemeral','days':None},'upgrade_preserved_existing_history':False,'history_generation':1,'session_tombstones':[],'ai_history_access':{'mode':'off'}}),encoding='utf-8')
+p=read_policy();assert p['human_retention']=={'mode':'days','days':7};assert p['agent_retention']=={'mode':'days','days':7};assert p['onboarding_complete'] is False;assert p['ai_history_access']['mode']=='off'
+''',tmp_path)
 
 
 def test_uninitialized_legacy_runtime_does_not_delete_completed_agent_run(tmp_path):
@@ -44,14 +51,17 @@ with connect() as c: assert c.execute("SELECT COUNT(*) FROM events WHERE session
 ''',tmp_path/'legacy')
 
 
-def test_ephemeral_cleanup_tombstones_late_delivery_and_bumps_generation(tmp_path):
+def test_undecided_grace_survives_restart_then_explicit_ephemeral_tombstones(tmp_path):
     _run(r'''
 from datetime import datetime, timezone
 from server.db import init_db,insert_events,connect
 from server.history_retention import initialize_history_retention,cleanup_expired_history
 from shared.capture_control import filter_recordable
-from shared.history_policy import history_generation
-init_db();initialize_history_retention();now=datetime.now(timezone.utc).isoformat();event={'event_id':'e1','observed_at':now,'device_id':'d','session_id':'ephemeral-1','app':'Editor','event_type':'focus_span','duration_seconds':1,'metadata':{}};insert_events([event]);g=history_generation();cleanup_expired_history(startup=True);assert history_generation()>g
+from shared.history_policy import history_generation,update_retention
+init_db();p=initialize_history_retention();assert p['onboarding_complete'] is False and p['human_retention']=={'mode':'days','days':7}
+now=datetime.now(timezone.utc).isoformat();event={'event_id':'e1','observed_at':now,'device_id':'d','session_id':'grace-1','app':'Editor','event_type':'focus_span','duration_seconds':1,'metadata':{}};insert_events([event]);cleanup_expired_history(startup=True)
+with connect() as c: assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==1
+update_retention(human_mode='ephemeral',human_days=None,agent_mode='ephemeral',agent_days=None,onboarding_complete=True);g=history_generation();cleanup_expired_history(startup=True);assert history_generation()>g
 with connect() as c: assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 late=dict(event,event_id='e2');kept,suppressed=filter_recordable([late]);assert kept==[] and suppressed==1
 ''',tmp_path)
@@ -99,4 +109,4 @@ def test_history_architecture_is_registered_and_no_filesystem_sensor_added():
     adapter=(ROOT/'browser_extension'/'agent_surface_adapters.js').read_text(encoding='utf-8')
     assert 'FileSystem' not in adapter and 'FileReader' not in adapter
     policy=(ROOT/'shared'/'history_policy.py').read_text(encoding='utf-8')
-    assert 'ai_history_access' in policy and 'session_tombstones' in policy
+    assert 'ai_history_access' in policy and 'session_tombstones' in policy and 'UNDECIDED_RETENTION_GRACE_DAYS = 7' in policy

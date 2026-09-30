@@ -66,6 +66,9 @@ from shared.claude_code_adapter import claude_hook_to_agent_events
 from shared.history_policy import update_retention
 URL = "https://github.com/acme/widgets/pull/42"
 init_db(); initialize_history_retention()
+# Outcome tests that purge raw agent history exercise an explicit ephemeral
+# retention choice, not the new-install undecided 7-day grace period.
+update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
 base = datetime.now(timezone.utc) - timedelta(minutes=30)
 ot._gh = lambda: "/usr/local/bin/gh"
 calls = []
