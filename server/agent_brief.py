@@ -75,6 +75,27 @@ def _ensure_trial_table(conn) -> None:
     conn.execute(_TRIAL_DELETE_TRIGGER)
 
 
+def _evaluation_session_ref(framework: str, session_id: str) -> str:
+    """Return the content-free brief/evaluation ref for the canonical session.
+
+    Claude hook callers know the provider's native session id, while canonical
+    evidence now stores only the shared opaque ``as:`` session ref. Normalize the
+    Claude id first so randomized brief assignments, raw evidence and run memory
+    join on the same privacy-safe session after v0.112. Already-opaque refs are
+    idempotent. Other frameworks retain their existing generic behavior.
+    """
+    from .run_memory import _key, _session_ref
+
+    value = str(session_id or "").strip()
+    if not value:
+        return ""
+    if framework == "claude-code" and not value.startswith("as:"):
+        from .agent_session_store import session_ref as canonical_session_ref
+
+        value = canonical_session_ref("claude_code", value)
+    return _session_ref(value, key=_key())
+
+
 # ------------------------------------------------------------------ the switch
 
 def _settings_path() -> Path:
@@ -339,9 +360,7 @@ def deliver(framework: str, *, session_id: str = "", workspace_ref: str = "") ->
         return {"text": ""}
     arm = "brief"
     if evaluation_enabled() and session_id:
-        from .run_memory import _key, _session_ref
-
-        arm = _arm(_session_ref(session_id, key=_key()))
+        arm = _arm(_evaluation_session_ref(framework, session_id))
     _log(framework, session_id=session_id, workspace_ref=workspace_ref, brief=brief, arm=arm)
     return {"text": brief["text"] if arm == "brief" else ""}
 
@@ -349,10 +368,8 @@ def deliver(framework: str, *, session_id: str = "", workspace_ref: str = "") ->
 def _log(framework: str, *, session_id: str, workspace_ref: str, brief: dict[str, Any], arm: str = "brief") -> None:
     from shared.tool_detail import valid_workspace_ref
 
-    from .run_memory import _key, _session_ref
-
     try:
-        session_ref = _session_ref(session_id, key=_key()) if session_id else ""
+        session_ref = _evaluation_session_ref(framework, session_id)
         with connect() as conn:
             _ensure_trial_table(conn)
             conn.execute(
