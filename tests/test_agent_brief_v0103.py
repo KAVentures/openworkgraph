@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from server.db import init_db, connect
 from server.agent_ingest import ingest_agent_payloads
+from server.agent_session_store import session_ref as canonical_session_ref
 from server.history_retention import initialize_history_retention, delete_sessions
 from server import agent_brief, outcome_tracker as ot
 from shared.claude_code_adapter import claude_hook_to_agent_events
@@ -208,7 +209,7 @@ run("a1", PROJECT_A, 0, "3 passed in 1s")
 agent_brief.set_enabled("claude-code", True)
 agent_brief.deliver("claude-code", session_id="a1", workspace_ref=workspace_ref(PROJECT_A))
 assert len(log_rows()) == 1
-delete_sessions("agent", ["a1"], reason="user_deleted_session")
+delete_sessions("agent", [canonical_session_ref("claude_code", "a1")], reason="user_deleted_session")
 assert log_rows() == []
 ''', tmp_path)
 
