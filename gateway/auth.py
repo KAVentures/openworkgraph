@@ -10,8 +10,9 @@ ALLOWED_INTEGRATION_SCOPES = {
     "evidence:read",
     "context:read",
     "transfers:read",
+    "agent-sessions:read",
 }
-DEVICE_SCOPES = {"evidence:write", "policy:read"}
+DEVICE_SCOPES = {"evidence:write", "policy:read", "agent-sessions:write"}
 
 
 def token_hash(token: str) -> str:

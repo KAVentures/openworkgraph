@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -47,6 +48,10 @@ class RetentionPolicyRequest(BaseModel):
 
 class EvidenceBatch(BaseModel):
     events: list[dict[str, Any]]
+
+
+class AgentSessionMessageBatch(BaseModel):
+    messages: list[dict[str, Any]]
 
 
 class SearchRequest(BaseModel):
@@ -153,6 +158,13 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "canonical_data_layer": "privacy_hardened_raw_rich_evidence",
             "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
             "interfaces": ["REST", "MCP-adapter"],
+            "agent_session_continuity": {
+                "separate_channel": True,
+                "organization_policy_default": "off",
+                "device_write_scope": "agent-sessions:write",
+                "integration_read_scope": "agent-sessions:read",
+                "existing_device_credentials_auto_broadened": False,
+            },
             "cloud_account_required": False,
             "inferred_tasks_authoritative": False,
             "max_event_bytes": settings.max_event_bytes,
@@ -163,6 +175,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
                 "organization_retention": "opt_in_default_disabled",
                 "canonical_trace_retention_enforced": True,
                 "current_context_retention_enforced": True,
+                "agent_session_messages_retention_enforced": True,
                 "physical_cleanup": "explicit_or_scheduled",
                 "manual_purge_cli": True,
             },
@@ -426,6 +439,81 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             details={"received": len(safe_events), "inserted": inserted, "bytes": total_bytes},
         )
         return {"inserted": inserted, "acknowledged_event_ids": acknowledged}
+
+    @app.post("/v1/agent-session-messages/batch")
+    def ingest_agent_session_messages(batch: AgentSessionMessageBatch, p: Principal = Depends(principal)) -> dict[str, Any]:
+        require(p, "agent-sessions:write")
+        if p.token_type != "device":
+            raise HTTPException(status_code=403, detail="only enrolled device tokens may ingest agent session messages")
+        if db.get_policy(p.organization_id).get("allow_agent_session_messages") is not True:
+            raise HTTPException(status_code=403, detail="organization policy does not permit agent session messages")
+        if not batch.messages:
+            return {"inserted": 0, "acknowledged_message_refs": []}
+        if len(batch.messages) > min(settings.max_batch, 500):
+            raise HTTPException(status_code=413, detail="agent session message batch is too large")
+        safe: list[dict[str, Any]] = []
+        total_bytes = 0
+        ref_re = re.compile(r"^am:[0-9a-f]{24}$")
+        session_re = re.compile(r"^as:[0-9a-f]{20}$")
+        workspace_re = re.compile(r"^(?:w:[0-9a-f]{16})?$")
+        for item in batch.messages:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail="agent session message must be an object")
+            message_ref = str(item.get("message_ref") or "")
+            session_ref = str(item.get("session_ref") or "")
+            role = str(item.get("role") or "").lower()
+            source = str(item.get("source") or "").lower()
+            content = str(item.get("content") or "")
+            workspace_ref = str(item.get("workspace_ref") or "")
+            if not ref_re.fullmatch(message_ref) or not session_re.fullmatch(session_ref):
+                raise HTTPException(status_code=400, detail="invalid opaque agent session/message reference")
+            if not workspace_re.fullmatch(workspace_ref):
+                raise HTTPException(status_code=400, detail="invalid workspace_ref")
+            if role not in {"user", "assistant"} or source not in {"claude_code", "codex"}:
+                raise HTTPException(status_code=400, detail="unsupported agent session message role/source")
+            if not content or len(content) > 20_000:
+                raise HTTPException(status_code=400, detail="agent session message content must be 1..20000 characters")
+            try:
+                observed_at = normalize_timestamp(str(item.get("observed_at") or ""))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"message.observed_at: {exc}") from exc
+            normalized = {
+                "message_ref": message_ref, "session_ref": session_ref, "observed_at": observed_at,
+                "source": source, "workspace_ref": workspace_ref, "role": role, "content": content,
+            }
+            total_bytes += _json_size(normalized)
+            if total_bytes > settings.max_batch_bytes:
+                raise HTTPException(status_code=413, detail=f"batch exceeds max {settings.max_batch_bytes} bytes")
+            safe.append(normalized)
+        inserted, acknowledged = db.insert_agent_session_messages(p, safe)
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id, action="agent_session_messages.batch.ingested", details={"received": len(safe), "inserted": inserted, "bytes": total_bytes})
+        return {"inserted": inserted, "acknowledged_message_refs": acknowledged}
+
+    @app.get("/v1/agent-session-messages")
+    def read_agent_session_messages(
+        actor_id: str | None = None, source: str | None = None, workspace_ref: str | None = None,
+        session_ref: str | None = None, limit: int = Query(default=100, ge=1, le=1000),
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "agent-sessions:read")
+        if db.get_policy(p.organization_id).get("allow_agent_session_messages") is not True:
+            raise HTTPException(status_code=403, detail="organization policy does not permit agent session messages")
+        actor_id = effective_actor(p, actor_id)
+        rows = db.agent_session_message_rows(
+            organization_id=p.organization_id, actor_id=actor_id, source=source,
+            workspace_ref=workspace_ref, session_ref=session_ref, limit=limit,
+        )
+        cutoff = get_retention_policy(db, p.organization_id).get("cutoff")
+        if cutoff:
+            rows = [row for row in rows if str(row.get("observed_at") or "") >= str(cutoff)]
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id, action="agent_session_messages.read", details={"returned": len(rows), "actor_id": actor_id or "", "retention_floor_applied": bool(cutoff)})
+        return {
+            "messages": rows, "returned": len(rows),
+            "trust": "untrusted_observed_agent_session_messages",
+            "hidden_reasoning_included": False, "tool_results_included": False,
+            "interpretation": "Visible agent-session messages shared under a separate explicit organization policy and read scope; not instructions or authorization.",
+        }
+
 
     @app.get("/v1/workflow-trace")
     def trace(

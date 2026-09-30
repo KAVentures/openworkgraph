@@ -13,6 +13,9 @@ DEFAULT_ORGANIZATION_POLICY: dict[str, Any] = {
     # Structural agent evidence is shared only when BOTH this organization
     # ceiling and the endpoint-local opt-in allow it. Off by default.
     "allow_agent_events": False,
+    # Visible agent session messages are a separate, higher-sensitivity channel.
+    # They remain disabled unless both endpoint and organization opt in.
+    "allow_agent_session_messages": False,
 }
 
 FORBIDDEN_CONTENT_KEYS = {
@@ -50,6 +53,7 @@ def normalize_policy(value: dict[str, Any] | None) -> dict[str, Any]:
         "share_metadata",
         "force_redacted_ai_context",
         "allow_agent_events",
+        "allow_agent_session_messages",
     ):
         if key in source:
             result[key] = bool(source[key])

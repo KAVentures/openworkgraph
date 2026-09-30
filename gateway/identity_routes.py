@@ -700,6 +700,7 @@ def _sharing(policy: dict[str, Any]) -> dict[str, Any]:
         "shares_metadata": bool(policy.get("share_metadata", True)),
         "shares_excluded_apps": bool(policy.get("share_excluded", False)),
         "shares_agent_activity": bool(policy.get("allow_agent_events", False)),
+                "shares_agent_session_messages": bool(policy.get("allow_agent_session_messages", False)),
         "limited_to_event_types": list(policy.get("allowed_event_types") or []),
         "forces_redacted_ai_context": bool(policy.get("force_redacted_ai_context", False)),
     }

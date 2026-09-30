@@ -60,6 +60,7 @@ def load_gateway_settings(config_path: Path, *, auth_dir: Path) -> GatewaySyncSe
     # organization policy may narrow this later, but cannot turn it on locally.
     local_policy = dict(gateway.get("local_policy") or {})
     local_policy.setdefault("allow_agent_events", False)
+    local_policy.setdefault("allow_agent_session_messages", False)
 
     return GatewaySyncSettings(
         enabled=bool(gateway.get("enabled", False)),
