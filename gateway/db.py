@@ -34,6 +34,24 @@ CREATE TABLE IF NOT EXISTS evidence_events (
 CREATE INDEX IF NOT EXISTS idx_gateway_org_time ON evidence_events(organization_id, observed_at, event_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_org_actor_time ON evidence_events(organization_id, actor_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_org_session_time ON evidence_events(organization_id, session_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS agent_session_messages (
+  organization_id TEXT NOT NULL,
+  message_ref TEXT NOT NULL,
+  session_ref TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  workspace_ref TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  ingested_at TEXT NOT NULL,
+  PRIMARY KEY (organization_id, message_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_time ON agent_session_messages(organization_id, observed_at, message_ref);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_ref ON agent_session_messages(organization_id, session_ref, observed_at);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_workspace ON agent_session_messages(organization_id, workspace_ref, observed_at);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -84,6 +102,24 @@ CREATE TABLE IF NOT EXISTS evidence_events (
 CREATE INDEX IF NOT EXISTS idx_gateway_org_time ON evidence_events(organization_id, observed_at, event_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_org_actor_time ON evidence_events(organization_id, actor_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_org_session_time ON evidence_events(organization_id, session_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS agent_session_messages (
+  organization_id TEXT NOT NULL,
+  message_ref TEXT NOT NULL,
+  session_ref TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  workspace_ref TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  ingested_at TEXT NOT NULL,
+  PRIMARY KEY (organization_id, message_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_time ON agent_session_messages(organization_id, observed_at, message_ref);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_ref ON agent_session_messages(organization_id, session_ref, observed_at);
+CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_workspace ON agent_session_messages(organization_id, workspace_ref, observed_at);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -218,6 +254,10 @@ class GatewayDB:
             scopes = frozenset(json.loads(data.get("scopes_json") or "[]"))
         except Exception:
             scopes = frozenset()
+        # Never silently broaden an existing endpoint credential after upgrade.
+        # Agent-session content is a distinct sensitivity class from structural
+        # evidence, so older device tokens need explicit re-enrollment/rotation
+        # before they can receive the new agent-sessions:write scope.
         return Principal(
             token_id=str(data["token_id"]),
             token_type=str(data["token_type"]),
@@ -271,6 +311,52 @@ class GatewayDB:
                 cur = self._execute(conn, sql, params)
                 inserted += max(0, int(cur.rowcount or 0))
         return inserted, acknowledged
+
+    def insert_agent_session_messages(self, principal: Principal, items: list[dict[str, Any]]) -> tuple[int, list[str]]:
+        inserted = 0
+        acknowledged: list[str] = []
+        now = _now()
+        with self.connect() as conn:
+            for item in items:
+                message_ref = str(item.get("message_ref") or "")
+                session_ref = str(item.get("session_ref") or "")
+                if not message_ref or not session_ref:
+                    continue
+                acknowledged.append(message_ref)
+                params = (
+                    principal.organization_id, message_ref, session_ref,
+                    str(item.get("observed_at") or now), principal.actor_id, principal.device_id,
+                    str(item.get("source") or "")[:80], str(item.get("workspace_ref") or "")[:80],
+                    str(item.get("role") or "")[:20], str(item.get("content") or "")[:20000], now,
+                )
+                sql = (
+                    """INSERT INTO agent_session_messages(organization_id, message_ref, session_ref, observed_at, actor_id, device_id, source, workspace_ref, role, content, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(organization_id, message_ref) DO NOTHING"""
+                    if self.is_postgres else
+                    """INSERT OR IGNORE INTO agent_session_messages(organization_id, message_ref, session_ref, observed_at, actor_id, device_id, source, workspace_ref, role, content, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+                )
+                cur = self._execute(conn, sql, params)
+                inserted += max(0, int(cur.rowcount or 0))
+        return inserted, acknowledged
+
+    def agent_session_message_rows(
+        self, *, organization_id: str, actor_id: str | None = None, source: str | None = None,
+        workspace_ref: str | None = None, session_ref: str | None = None, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["organization_id = ?"]
+        params: list[Any] = [organization_id]
+        for key, value in (("actor_id", actor_id), ("source", source), ("workspace_ref", workspace_ref), ("session_ref", session_ref)):
+            if value:
+                clauses.append(f"{key} = ?")
+                params.append(value)
+        sql = f"SELECT organization_id, message_ref, session_ref, observed_at, actor_id, device_id, source, workspace_ref, role, content FROM agent_session_messages WHERE {' AND '.join(clauses)} ORDER BY observed_at DESC, message_ref DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        with self.connect() as conn:
+            cur = self._execute(conn, sql, tuple(params))
+            rows = cur.fetchall()
+            columns = [d[0] for d in cur.description] if cur.description else None
+        values = [self._row(row, columns) for row in rows]
+        values.reverse()
+        return values
 
     def trace_rows(
         self,

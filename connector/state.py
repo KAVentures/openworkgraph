@@ -39,6 +39,14 @@ class SyncState:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )"""
             )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS agent_message_skip_ranges(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_id INTEGER NOT NULL,
+                    end_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL
+                )"""
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=10)
@@ -113,6 +121,26 @@ class SyncState:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT 1 FROM skip_ranges WHERE start_id <= ? AND end_id >= ? LIMIT 1",
+                (int(local_id), int(local_id)),
+            ).fetchone()
+        return bool(row)
+
+
+    def add_agent_message_skip_range(self, start_id: int, end_id: int, reason: str) -> None:
+        start = int(start_id)
+        end = int(end_id)
+        if end < start:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO agent_message_skip_ranges(start_id, end_id, reason) VALUES (?, ?, ?)",
+                (start, end, str(reason)[:120]),
+            )
+
+    def agent_message_skipped(self, local_id: int) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM agent_message_skip_ranges WHERE start_id <= ? AND end_id >= ? LIMIT 1",
                 (int(local_id), int(local_id)),
             ).fetchone()
         return bool(row)

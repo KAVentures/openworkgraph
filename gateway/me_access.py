@@ -232,7 +232,7 @@ def overview(db: GatewayDB, *, organization_id: str, actor_id: str) -> dict[str,
             scopes = set(json.loads(token.get("scopes_json") or "[]"))
         except Exception:
             scopes = set()
-        if scopes & {"evidence:read", "context:read", "transfers:read"}:
+        if scopes & {"evidence:read", "context:read", "transfers:read", "agent-sessions:read"}:
             org_readers += 1
     retention = get_retention_policy(db, organization_id)
     return {
@@ -251,6 +251,7 @@ def overview(db: GatewayDB, *, organization_id: str, actor_id: str) -> dict[str,
             "structural_details": bool(policy.get("share_metadata", True)),
             "excluded_apps": bool(policy.get("share_excluded", False)),
             "ai_agent_activity_permitted": bool(policy.get("allow_agent_events", False)),
+            "ai_agent_session_messages_permitted": bool(policy.get("allow_agent_session_messages", False)),
             "limited_to_event_types": list(policy.get("allowed_event_types") or []),
         },
         "never_shared": ["typed text", "clipboard contents", "screenshots", "passwords"],

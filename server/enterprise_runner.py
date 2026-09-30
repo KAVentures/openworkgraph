@@ -31,14 +31,17 @@ def main() -> None:
     import server.outcome_routes  # noqa: F401
     import server.agent_brief_routes  # noqa: F401
     import server.playbook_routes  # noqa: F401
+    import server.agent_session_routes  # noqa: F401
 
     import server.agent_capture_runtime as agent_capture_runtime
+    import server.agent_session_sensor as agent_session_sensor
     import server.log_redaction as log_redaction
 
     log_redaction.install()
 
     org_join_routes.start_managed_setup_in_background()
     agent_capture_runtime.start()
+    agent_session_sensor.start()
     import server.outcome_tracker as outcome_tracker
 
     if not agent_capture_runtime._demo():
@@ -51,11 +54,13 @@ def main() -> None:
     from server.secure_app import app as secure_app
 
     extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
+    extend_lifespan(secure_app, shutdown=agent_session_sensor.stop)
     extend_lifespan(secure_app, shutdown=outcome_tracker.stop)
     try:
         uvicorn.run(SECURE_APP, host=args.host, port=args.port)
     finally:
         agent_capture_runtime.stop()
+        agent_session_sensor.stop()
         outcome_tracker.stop()
 
 

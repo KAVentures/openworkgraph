@@ -55,6 +55,155 @@ def _read_local_rows(db_path: Path, after_id: int, limit: int) -> list[tuple[int
     return [(int(row["id"]), _row_event(row)) for row in rows]
 
 
+def _agent_session_local_opt_in(data_dir: Path) -> bool:
+    """Read the user's explicit local transcript-sharing choice.
+
+    This is intentionally separate from structural agent sharing. Missing or
+    unreadable policy fails closed. The session store owns the setting; the
+    connector only reads it so it does not need to import the local server.
+    """
+    path = data_dir / "agent_session_policy.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(value.get("capture_visible_messages")) and bool(value.get("allow_gateway_session_messages"))
+
+
+def _read_local_agent_message_rows(db_path: Path, after_id: int, limit: int) -> list[tuple[int, dict[str, Any]]]:
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        try:
+            rows = conn.execute(
+                """SELECT m.id, m.message_ref, m.session_ref, m.observed_at, m.role, m.content,
+                          s.source, s.workspace_ref
+                   FROM agent_session_messages m
+                   JOIN agent_sessions s ON s.session_ref = m.session_ref
+                   WHERE m.id > ? ORDER BY m.id ASC LIMIT ?""",
+                (int(after_id), max(1, min(int(limit), 500))),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    finally:
+        conn.close()
+    return [
+        (
+            int(row["id"]),
+            {
+                "message_ref": str(row["message_ref"] or ""),
+                "session_ref": str(row["session_ref"] or ""),
+                "observed_at": str(row["observed_at"] or ""),
+                "source": str(row["source"] or ""),
+                "workspace_ref": str(row["workspace_ref"] or ""),
+                "role": str(row["role"] or ""),
+                "content": str(row["content"] or ""),
+            },
+        )
+        for row in rows
+    ]
+
+
+def _max_local_agent_message_id(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        try:
+            row = conn.execute("SELECT COALESCE(MAX(id),0) FROM agent_session_messages").fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def _push_agent_message_batch(client: httpx.Client, url: str, messages: list[dict[str, Any]]) -> set[str]:
+    response = client.post(f"{url}/v1/agent-session-messages/batch", json={"messages": messages})
+    response.raise_for_status()
+    data = response.json()
+    return {str(x) for x in data.get("acknowledged_message_refs") or []}
+
+
+def _push_agent_message_batch_resilient(
+    client: httpx.Client, url: str, messages: list[dict[str, Any]],
+) -> tuple[set[str], dict[str, str]]:
+    if not messages:
+        return set(), {}
+    try:
+        return _push_agent_message_batch(client, url, messages), {}
+    except httpx.HTTPStatusError as exc:
+        if not _terminal_http_failure(exc):
+            raise
+        if len(messages) == 1:
+            ref = str(messages[0].get("message_ref") or "")
+            try:
+                detail = str(exc.response.json().get("detail") or exc.response.text)
+            except Exception:
+                detail = exc.response.text
+            return set(), {ref: f"HTTP {exc.response.status_code}: {detail}"[:500]}
+        middle = len(messages) // 2
+        left_ok, left_bad = _push_agent_message_batch_resilient(client, url, messages[:middle])
+        right_ok, right_bad = _push_agent_message_batch_resilient(client, url, messages[middle:])
+        return left_ok | right_ok, left_bad | right_bad
+
+
+def _sync_agent_session_messages(
+    client: httpx.Client, *, url: str, db_path: Path, state: SyncState,
+    policy: dict[str, Any], batch_size: int,
+) -> int:
+    cursor = state.get_int("last_local_agent_message_id", 0)
+
+    # No retrospective sharing: while this distinct channel is disabled, mark
+    # currently-retained messages as processed locally. Enabling it later starts
+    # with messages created after the opt-in boundary.
+    if policy.get("allow_agent_session_messages") is not True:
+        current = _max_local_agent_message_id(db_path)
+        if current > cursor:
+            state.set_int("last_local_agent_message_id", current)
+        state.set_int("last_agent_message_batch_shared", 0)
+        return 0
+
+    rows = _read_local_agent_message_rows(db_path, cursor, batch_size)
+    if not rows:
+        state.set_int("last_agent_message_batch_shared", 0)
+        return 0
+
+    prepared: list[dict[str, Any]] = []
+    id_by_ref: dict[str, int] = {}
+    last_local_id = cursor
+    for local_id, message in rows:
+        last_local_id = local_id
+        if state.agent_message_skipped(local_id):
+            continue
+        ref = str(message.get("message_ref") or "")
+        if not ref:
+            # A malformed local row is never uploaded and must not block all
+            # later privacy-hardened messages forever.
+            state.set(f"agent_message_quarantine:{local_id}", "missing message_ref")
+            continue
+        prepared.append(message)
+        id_by_ref[ref] = local_id
+
+    acknowledged: set[str] = set()
+    rejected: dict[str, str] = {}
+    if prepared:
+        acknowledged, rejected = _push_agent_message_batch_resilient(client, url, prepared)
+        expected = set(id_by_ref)
+        if not expected.issubset(acknowledged | set(rejected)):
+            raise RuntimeError("Gateway did not acknowledge the complete agent-session message batch")
+        for ref, reason in rejected.items():
+            local_id = id_by_ref.get(ref)
+            if local_id is not None:
+                state.set(f"agent_message_quarantine:{local_id}", reason)
+
+    state.set_int("last_local_agent_message_id", last_local_id)
+    state.set_int("last_agent_message_batch_shared", len(acknowledged))
+    return len(acknowledged)
+
+
 def _fetch_policy(client: httpx.Client, url: str) -> dict[str, Any]:
     response = client.get(f"{url}/v1/device-policy")
     response.raise_for_status()
@@ -166,7 +315,10 @@ def run(config_path: Path, *, once: bool = False) -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     headers = {"Authorization": f"Bearer {token}"}
-    policy: dict[str, Any] = merge_policies(settings.local_policy, {})
+    remote_policy: dict[str, Any] = {}
+    initial_local_policy = dict(settings.local_policy)
+    initial_local_policy["allow_agent_session_messages"] = _agent_session_local_opt_in(data_dir)
+    policy: dict[str, Any] = merge_policies(initial_local_policy, remote_policy)
     policy_fetched_at = 0.0
     managed_policy_fetched_at = 0.0
     delay = settings.poll_seconds
@@ -197,13 +349,27 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 if now - policy_fetched_at >= settings.policy_refresh_seconds:
                     # Fail closed: if the company's current policy cannot be fetched,
                     # do not upload using a potentially broader stale/default policy.
-                    remote = _fetch_policy(client, settings.url)
-                    policy = merge_policies(settings.local_policy, remote)
+                    remote_policy = _fetch_policy(client, settings.url)
+                    local_policy = dict(settings.local_policy)
+                    # Session messages have their own explicit local opt-in. The
+                    # organization may only narrow it; it can never enable it.
+                    local_policy["allow_agent_session_messages"] = _agent_session_local_opt_in(data_dir)
+                    policy = merge_policies(local_policy, remote_policy)
                     policy_fetched_at = now
                     state.set("policy_refreshed_at", _now())
                     # Read by the local server (server.ai_context) to lock AI
                     # context detail to Redacted when the organization requires it.
                     state.set_bool("org_force_redacted_ai_context", bool(policy.get("force_redacted_ai_context")))
+
+                # Apply local transcript opt-in immediately even between remote
+                # policy refreshes, using the last successfully fetched org policy.
+                local_policy = dict(settings.local_policy)
+                local_policy["allow_agent_session_messages"] = _agent_session_local_opt_in(data_dir)
+                policy = merge_policies(local_policy, remote_policy)
+                shared_messages = _sync_agent_session_messages(
+                    client, url=settings.url, db_path=db_path, state=state,
+                    policy=policy, batch_size=settings.batch_size,
+                )
 
                 cursor = state.get_int("last_local_event_id", 0)
                 rows = _read_local_rows(db_path, cursor, settings.batch_size)
@@ -211,7 +377,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     state.set("status", "connected")
                     state.set("last_error", "")
                     if once:
-                        return 0
+                        return shared_messages
                     time.sleep(settings.poll_seconds)
                     continue
 
@@ -257,7 +423,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 state.set("status", "connected")
                 delay = settings.poll_seconds
                 if once:
-                    return len(acknowledged)
+                    return len(acknowledged) + shared_messages
             except Exception as exc:
                 message = str(exc)[:500]
                 state.set("status", "error")

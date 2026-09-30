@@ -35,6 +35,7 @@ def _isolate_agent_ingestion_database(request):
         "test_agent_delivery_v098.py",
         "test_agent_coverage_v099.py",
         "test_agent_enrichment_v0100.py",
+        "test_agent_session_continuity_v0109.py",
     }
     if Path(str(request.fspath)).name not in isolated_modules:
         yield

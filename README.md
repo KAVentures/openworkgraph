@@ -187,6 +187,8 @@ Current capture can include:
 - screenshots/screen recording by default;
 - browser URL query strings/fragments in structured browser evidence.
 
+**Explicit v0.109 exception:** if the user deliberately enables **Agents → Session continuity → Save visible session messages**, OpenWorkGraph can store the visible user/assistant text from supported local agent sessions in a separate local message table. This is OFF by default, has its own retention and AI/Gateway permissions, never enters the canonical `events` table, and does not include hidden reasoning/thinking, raw provider records or tool-result content.
+
 High-confidence secrets and sensitive identifiers are hardened before persistence where their literal value is not needed. Presentation/export/MCP layers add further protections appropriate to their trust boundary.
 
 Rich business context can intentionally remain when useful — for example project/customer names, amounts, document titles, safe UI labels, and order/reference identifiers. Review evidence before sharing it outside its intended context.
@@ -227,7 +229,7 @@ AI access starts OFF on every OpenWorkGraph launch. By default AI apps get **Red
 
 The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
-New dashboard-generated connections and the Claude MCP bundle use a compact eight-tool surface so agents have fewer overlapping choices: current context, search, canonical trace, work profile, repeated workflows, task context, descriptive feedback from similar runs, and agent-run inspection. Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool surface; OpenWorkGraph does not silently remove those tools underneath existing clients.
+New dashboard-generated connections and the Claude MCP bundle use a compact ten-tool surface so agents have fewer overlapping choices: current context, search, canonical trace, work profile, repeated workflows, task context, descriptive feedback from similar runs, agent-run inspection, grounded prior-agent handoff, and playbooks. Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool surface; OpenWorkGraph does not silently remove those tools underneath existing clients.
 
 The canonical evidence tool remains:
 
@@ -302,7 +304,10 @@ Current integration read scopes:
 evidence:read
 context:read
 transfers:read
+agent-sessions:read
 ```
+
+`agent-sessions:read` is a separate optional content scope. It does not follow from `evidence:read` or `context:read`, and the organization must also explicitly allow agent-session messages.
 
 Administrators use named accounts at `https://<your-gateway>/admin`: password plus authenticator app, or company sign-in (OpenID Connect).
 
@@ -337,6 +342,8 @@ GET  /v1/transfers
 Local desktop capture uses a durable queue into the local API. Browser evidence has its own extension queue.
 
 Organization synchronization is independent of both. It reads the canonical local event database and advances its durable cursor only after the Gateway acknowledges the complete shareable batch. Retries are idempotent by organization-scoped event ID.
+
+Optional visible agent-session messages use a **separate** synchronization channel, cursor and permission set. They are never enabled by structural `allow_agent_events`; endpoint opt-in (`allow_gateway_session_messages`), organization policy (`allow_agent_session_messages`) and a device credential carrying `agent-sessions:write` must all agree. Existing pre-v0.109 device credentials are not silently broadened and must be explicitly re-enrolled/rotated before transcript upload is possible. Organization retention and lifecycle purge apply to shared session messages as well as canonical evidence.
 
 If the current organization policy cannot be fetched, synchronization fails closed rather than sharing under a potentially broader fallback policy.
 

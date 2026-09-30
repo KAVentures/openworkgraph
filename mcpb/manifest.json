@@ -2,27 +2,94 @@
   "manifest_version": "0.3",
   "name": "openworkgraph-local",
   "display_name": "OpenWorkGraph",
-  "version": "0.108.0",
+  "version": "0.109.0",
   "description": "Connect Claude Desktop to the compact local OpenWorkGraph context surface.",
-  "long_description": "Uses the OpenWorkGraph installation already running on this computer. v0.108 keeps full window and page titles as context while tokenizing detected personal details (names, emails, phone numbers, personal numbers) before storage, and defaults exports to redacted. v0.107 adds content-free run memory across ephemeral history, opt-in pull-request outcome tracking, Claude Code session briefs, human/agent rework joins, local randomized brief evaluation, portable sanitized playbooks, and specific setup diagnostics. v0.100 enriches structural agent runs with content-free command, test, file and token summaries while hardening edit and test-result classification. v0.99 broadens privacy-safe structural observation to GitHub Copilot, Gemini CLI and Cursor, adds clipboard-write evidence without reading contents, and makes web-agent lifecycle detection rely primarily on structural UI signals rather than English labels. v0.98 hardens capture correctness with single-instance recording, local-only away spans, sparse degradation-only health evidence, truthful macOS permission status, debounced same-app document boundaries, Claude Code turn boundaries, and lease-gated durable structural agent delivery. v0.97 added named Gateway administrators, an employee roster, identity-bound personal invitations, optional company sign-in, and an employee /me view of organization-held evidence and recorded reads. v0.96 added an evidence-driven first-value dashboard layer that reconstructs the current session from existing privacy-hardened evidence without adding sensors, permissions, AI access, retention, or MCP capabilities. v0.95 added a framework-neutral custom-harness setup flow plus standalone Python and Node helpers for privacy-safe structural agent telemetry; arbitrary MCP-capable harnesses can separately read authorized OpenWorkGraph context. v0.94 added explicit local history retention, separate saved-history AI access, lightweight history navigation, and structural browser-agent lifecycle observation. Canonical workflow evidence remains primary; Context Pulse provides incremental factual updates. Retained history is separately user-controlled: list_history can navigate saved human and agent sessions only while a time-limited saved-history lease is active. The legacy 24-tool MCP entrypoint remains available for existing configurations while new connections use this compact surface. Prompts, model responses, tool arguments/results, typed text, clipboard contents, exception text, returned values, and hidden reasoning are not captured by the custom agent helpers.",
-  "author": {"name": "Koyar Afrasyab / Kinvectum"},
-  "repository": {"type": "git", "url": "https://github.com/KAVentures/openworkgraph"},
-  "server": {"type": "node", "entry_point": "server/index.js", "mcp_config": {"command": "node", "args": ["${__dirname}/server/index.js"], "env": {}}},
+  "long_description": "Uses the OpenWorkGraph installation already running on this computer. v0.109 adds default-off native Claude Code/Codex session observation and grounded cross-agent continuity while keeping visible messages in a separate opt-in channel; v0.108 keeps full window and page titles as context while tokenizing detected personal details (names, emails, phone numbers, personal numbers) before storage, and defaults exports to redacted. v0.107 adds content-free run memory across ephemeral history, opt-in pull-request outcome tracking, Claude Code session briefs, human/agent rework joins, local randomized brief evaluation, portable sanitized playbooks, and specific setup diagnostics. v0.100 enriches structural agent runs with content-free command, test, file and token summaries while hardening edit and test-result classification. v0.99 broadens privacy-safe structural observation to GitHub Copilot, Gemini CLI and Cursor, adds clipboard-write evidence without reading contents, and makes web-agent lifecycle detection rely primarily on structural UI signals rather than English labels. v0.98 hardens capture correctness with single-instance recording, local-only away spans, sparse degradation-only health evidence, truthful macOS permission status, debounced same-app document boundaries, Claude Code turn boundaries, and lease-gated durable structural agent delivery. v0.97 added named Gateway administrators, an employee roster, identity-bound personal invitations, optional company sign-in, and an employee /me view of organization-held evidence and recorded reads. v0.96 added an evidence-driven first-value dashboard layer that reconstructs the current session from existing privacy-hardened evidence without adding sensors, permissions, AI access, retention, or MCP capabilities. v0.95 added a framework-neutral custom-harness setup flow plus standalone Python and Node helpers for privacy-safe structural agent telemetry; arbitrary MCP-capable harnesses can separately read authorized OpenWorkGraph context. v0.94 added explicit local history retention, separate saved-history AI access, lightweight history navigation, and structural browser-agent lifecycle observation. Canonical workflow evidence remains primary; Context Pulse provides incremental factual updates. Retained history is separately user-controlled: list_history can navigate saved human and agent sessions only while a time-limited saved-history lease is active. The legacy 24-tool MCP entrypoint remains available for existing configurations while new connections use this compact surface. Prompts, model responses, tool arguments/results, typed text, clipboard contents, exception text, returned values, and hidden reasoning are not captured by the custom agent helpers.",
+  "author": {
+    "name": "Koyar Afrasyab / Kinvectum"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KAVentures/openworkgraph"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
+      "env": {}
+    }
+  },
   "tools": [
-    {"name":"get_current_work_context","description":"Read an optional compact derived overview with pointers to canonical evidence."},
-    {"name":"get_context_pulse","description":"Read what changed since the last check plus new or materially changed factual findings; pass the returned cursor back next time."},
-    {"name":"list_history","description":"Navigate retained human and agent sessions within the saved-history date range the user explicitly allowed."},
-    {"name":"search_work","description":"Search prior work through evidence or semantic layers."},
-    {"name":"get_workflow_trace","description":"Read the primary canonical paginated workflow evidence, optionally for one session or date range."},
-    {"name":"get_work_profile","description":"Read derived workflow signals without productivity scoring."},
-    {"name":"find_repeated_workflows","description":"Find repeated-work candidates and exact procedural-memory family keys for follow-up."},
-    {"name":"get_task_context","description":"Read a bounded task-context bundle with provenance and authority separation."},
-    {"name":"how_did_similar_runs_go","description":"Read descriptive prior-run feedback with privacy-safe human step labels, failure points, approval hotspots and observed next steps."},
-    {"name":"get_agent_runs","description":"List privacy-safe structural agent runs; saved-history leases bound historical date access."},
-    {"name":"get_playbooks","description":"Read shared content-free playbooks (how a kind of work usually went); own workflows need saved-history access."}
+    {
+      "name": "get_current_work_context",
+      "description": "Read an optional compact derived overview with pointers to canonical evidence."
+    },
+    {
+      "name": "get_context_pulse",
+      "description": "Read what changed since the last check plus new or materially changed factual findings; pass the returned cursor back next time."
+    },
+    {
+      "name": "list_history",
+      "description": "Navigate retained human and agent sessions within the saved-history date range the user explicitly allowed."
+    },
+    {
+      "name": "search_work",
+      "description": "Search prior work through evidence or semantic layers."
+    },
+    {
+      "name": "get_workflow_trace",
+      "description": "Read the primary canonical paginated workflow evidence, optionally for one session or date range."
+    },
+    {
+      "name": "get_work_profile",
+      "description": "Read derived workflow signals without productivity scoring."
+    },
+    {
+      "name": "find_repeated_workflows",
+      "description": "Find repeated-work candidates and exact procedural-memory family keys for follow-up."
+    },
+    {
+      "name": "get_task_context",
+      "description": "Read a bounded task-context bundle with provenance and authority separation."
+    },
+    {
+      "name": "how_did_similar_runs_go",
+      "description": "Read descriptive prior-run feedback with privacy-safe human step labels, failure points, approval hotspots and observed next steps."
+    },
+    {
+      "name": "get_agent_runs",
+      "description": "List privacy-safe structural agent runs; saved-history leases bound historical date access."
+    },
+    {
+      "name": "get_agent_handoff",
+      "description": "Read a grounded prior-agent handoff: explicitly permitted visible session messages plus canonical structural execution and nearby observed work context."
+    },
+    {
+      "name": "get_playbooks",
+      "description": "Read shared content-free playbooks (how a kind of work usually went); own workflows need saved-history access."
+    }
   ],
-  "compatibility": {"platforms":["darwin","win32"],"runtimes":{"node":">=18.0.0"}},
-  "keywords":["workflow","context","local","mcp","history","agents"],
-  "license":"Apache-2.0",
-  "privacy_policies":[]
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "keywords": [
+    "workflow",
+    "context",
+    "local",
+    "mcp",
+    "history",
+    "agents"
+  ],
+  "license": "Apache-2.0",
+  "privacy_policies": []
 }

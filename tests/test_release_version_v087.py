@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.108.0"
+EXPECTED_VERSION = "0.109.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -41,6 +41,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.109: native agent session continuity" in workflow
+    assert "visible user/assistant messages are OFF by default" in workflow
+    assert "allow_agent_session_messages" in workflow
+    assert "agent-sessions:read" in workflow
+    v109_section = workflow.split("### v0.109: native agent session continuity", 1)[1].split("### v0.108: full context, personal details tokenized", 1)[0]
+    assert "`" not in v109_section
     assert "### v0.108: full context, personal details tokenized" in workflow
     assert "### v0.107: the agent learning loop" not in workflow
     assert "pkg-agent-sdk" in workflow
