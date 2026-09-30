@@ -71,36 +71,6 @@ def _session_ids(kind: str, rows: list[dict[str, Any]] | None = None) -> list[st
     return sorted({str(row.get("session_id") or "") for row in _kind_rows(kind, rows) if row.get("session_id")})
 
 
-def _deletion_session_ids(kind: str, session_ids: set[str]) -> set[str]:
-    """Resolve deletion aliases without making raw provider IDs canonical again.
-
-    v0.112 stores new Claude Code evidence under an opaque ``as:`` physical-session
-    identity. Older internal callers and pre-v0.112 cleanup paths can still know a
-    native Claude session id. Deletion is the one boundary where accepting that old
-    alias is useful: expand it to the opaque identity so events, tombstones, run
-    memory, brief logs and outcome watches are all removed together. Both aliases
-    are included so legacy rows that already stored the raw id remain deletable too.
-    """
-    ids = {str(value).strip() for value in session_ids if str(value).strip()}
-    if str(kind).lower() != "agent" or not ids:
-        return ids
-    try:
-        from .agent_session_store import session_ref as canonical_session_ref
-    except Exception:
-        return ids
-    expanded = set(ids)
-    for value in ids:
-        if value.startswith("as:"):
-            continue
-        try:
-            opaque = str(canonical_session_ref("claude_code", value) or "").strip()
-        except Exception:
-            opaque = ""
-        if opaque:
-            expanded.add(opaque)
-    return expanded
-
-
 def _delete_ids(conn, table: str, event_ids: list[str]) -> None:
     for offset in range(0, len(event_ids), 500):
         chunk = event_ids[offset : offset + 500]
@@ -150,15 +120,12 @@ def _rewrite_jsonl_sessions(kind: str, session_ids: set[str]) -> int:
 
 def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[str, Any]:
     selected = "agent" if str(kind).lower() == "agent" else "human"
-    requested_ids = {str(value).strip() for value in session_ids if str(value).strip()}
-    ids = _deletion_session_ids(selected, requested_ids)
+    ids = {str(value) for value in session_ids if str(value)}
     if not ids:
         return {"kind": selected, "sessions_deleted": 0, "events_deleted": 0, "local_ids": []}
 
     # Tombstone first so late native/browser/outbox delivery cannot recreate a
     # session while cleanup is in progress or after a crash between cleanup steps.
-    # For Claude, ids can contain both a legacy raw alias and its opaque canonical
-    # session. Incoming v0.112 events are normalized before the tombstone check.
     add_session_tombstones(selected, sorted(ids), reason=reason)
     user_deleted = reason.startswith("user_")
 
@@ -201,7 +168,7 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
     analytics.clear_summary_cache()
     return {
         "kind": selected,
-        "sessions_deleted": len(requested_ids),
+        "sessions_deleted": len(ids),
         "events_deleted": len(event_ids),
         "local_ids": local_ids,
         "jsonl_events_removed": jsonl_removed,
