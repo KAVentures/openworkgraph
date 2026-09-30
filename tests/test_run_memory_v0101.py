@@ -130,7 +130,7 @@ update_retention(human_mode="forever", human_days=None, agent_mode="forever", ag
 ingest_agent_payloads(claude_session("del-1"))
 run_memory.remember(load_recent_evidence())
 assert len(memory_rows()) == 1
-result = delete_sessions("agent", ["del-1"], reason="user_deleted_session")
+result = delete_sessions("agent", [canonical_session_ref("claude_code", "del-1")], reason="user_deleted_session")
 assert result["run_memory_deleted"] == 1 and result["run_memory_kept"] == 0
 assert memory_rows() == [] and raw_count("del-1") == 0
 ''', tmp_path)
