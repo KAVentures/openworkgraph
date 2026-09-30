@@ -27,6 +27,11 @@ def _clarify_work_summary(value: Any) -> Any:
     tests = summary.get("tests")
     if not isinstance(tests, dict):
         return summary
+    # Older callers may provide a qualitative tests object without the compact
+    # run-count evidence used by this clarification. Preserve those payloads
+    # byte-for-byte semantically instead of inventing zero-valued counts.
+    if "runs" not in tests:
+        return summary
     out = dict(tests)
     runs = max(0, int(out.get("runs") or 0))
     known_failing = max(0, min(runs, int(out.get("runs_with_failures") or 0)))
