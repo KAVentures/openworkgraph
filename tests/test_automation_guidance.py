@@ -42,7 +42,7 @@ async def _listed_surfaces(tmp_path: Path) -> tuple[set[str], set[str], set[str]
 def test_compact_mcp_exposes_guidance_as_prompt_and_resource_not_tool(tmp_path):
     tools, prompts, resources = asyncio.run(_listed_surfaces(tmp_path))
     assert "find_automation_opportunities" in prompts
-    assert "openworkgraph://automation-capabilities" in resources
+    assert any(uri.rstrip("/") == "openworkgraph://automation-capabilities" for uri in resources)
     assert "get_automation_capabilities" not in tools
     assert "find_automation_opportunities" not in tools
 
