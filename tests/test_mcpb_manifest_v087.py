@@ -25,7 +25,18 @@ def test_mcpb_manifest_advertises_exact_compact_default_surface():
     manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     names = {str(item.get("name") or "") for item in manifest.get("tools") or []}
     assert names == EXPECTED_COMPACT_TOOLS
-    assert "legacy 24-tool" in str(manifest.get("long_description") or "")
+    description = str(manifest.get("long_description") or "")
+    assert "v0.110" in description
+    assert "legacy 24-tool" in description
+
+
+def test_mcp_architecture_docs_name_the_exact_compact_default_surface():
+    docs = (ROOT / "docs" / "MCP_ARCHITECTURE.md").read_text(encoding="utf-8")
+    compact = docs.split("```text", 2)[2].split("```", 1)[0]
+    listed = {line.strip() for line in compact.splitlines() if line.strip()}
+    assert listed == EXPECTED_COMPACT_TOOLS
+    assert "MCP `instructions` block" in docs
+    assert "next_cursor" in docs and "has_more" in docs
 
 
 def test_experimental_governance_docs_preserve_rest_compatibility_boundary():

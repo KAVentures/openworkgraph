@@ -48,6 +48,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Build Claude Desktop MCP bundle
         run: python scripts/build_mcpb.py
       - name: Check MCP bundle contents
@@ -59,6 +62,8 @@ jobs:
               names = set(z.namelist())
           assert {'manifest.json', 'server/index.js'} <= names, names
           PY
+      - name: Smoke-test packaged Claude MCP bundle
+        run: python scripts/smoke_mcpb.py dist/OpenWorkGraph-Claude.mcpb
       - name: Upload Claude MCP bundle artifact
         uses: actions/upload-artifact@v4
         with:
@@ -140,6 +145,15 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.110: evidence-first MCP guidance and safer first-run history
+          This release ships the frontier-aware automation behavior already merged on main and makes the compact MCP tell connected models how to use the evidence surface rather than hoping they discover optional prompts/resources on their own.
+
+          - **MCP initialize guidance:** compact local MCP clients now receive short server instructions that keep raw workflow evidence primary, require paging through get_workflow_trace when a whole period matters, and direct automation questions to the dated capability resource.
+          - **Current automation frontier:** models are told to inspect the tools actually available to them, consider agentic browser/computer use, connectors/MCP, files, code, scheduling and approval checkpoints, and classify plausible-but-uncertain opportunities as TEST rather than dismissing them.
+          - **Packaged MCPB smoke test:** CI now extracts the built Claude Desktop bundle, validates its v0.110 manifest and exact 12-tool compact surface, syntax-checks the packaged Node launcher and verifies its OpenWorkGraph launcher markers.
+          - **First-run retention grace:** genuinely undecided new users keep human and agent history locally for up to 7 days while the retention card keeps asking. Explicit Don't keep after sessions remains ephemeral, upgrades keep their prior history behavior, and saved-history AI access remains a separate OFF-by-default permission.
+          - **Documentation sync:** the MCP architecture now documents the complete compact surface, including Context Pulse and History navigation.
 
           ### v0.109: native agent session continuity
           OpenWorkGraph can now observe supported local agent sessions directly and provide a grounded handoff between agents without turning transcripts into canonical workflow evidence.

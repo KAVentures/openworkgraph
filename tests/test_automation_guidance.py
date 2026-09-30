@@ -11,7 +11,7 @@ from mcp.client.stdio import stdio_client
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def _listed_surfaces(tmp_path: Path) -> tuple[set[str], set[str], set[str]]:
+async def _listed_surfaces(tmp_path: Path, module: str = "mcp_server.compact_stdio") -> tuple[set[str], set[str], set[str], str]:
     env = os.environ.copy()
     env.update({
         "PYTHONPATH": str(ROOT),
@@ -22,13 +22,13 @@ async def _listed_surfaces(tmp_path: Path) -> tuple[set[str], set[str], set[str]
     env.pop("OWG_EXPERIMENTAL_GOVERNANCE", None)
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mcp_server.compact_stdio"],
+        args=["-m", module],
         cwd=str(ROOT),
         env=env,
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            initialized = await session.initialize()
             tools = await session.list_tools()
             prompts = await session.list_prompts()
             resources = await session.list_resources()
@@ -36,13 +36,37 @@ async def _listed_surfaces(tmp_path: Path) -> tuple[set[str], set[str], set[str]
                 {tool.name for tool in tools.tools},
                 {prompt.name for prompt in prompts.prompts},
                 {str(resource.uri) for resource in resources.resources},
+                str(initialized.instructions or ""),
             )
 
 
-def test_compact_mcp_exposes_guidance_as_prompt_and_resource_not_tool(tmp_path):
-    tools, prompts, resources = asyncio.run(_listed_surfaces(tmp_path))
+def _assert_common_guidance(prompts: set[str], resources: set[str], instructions: str) -> None:
     assert "find_automation_opportunities" in prompts
     assert any(uri.rstrip("/") == "openworkgraph://automation-capabilities" for uri in resources)
+    assert "get_workflow_trace" in instructions
+    assert "next_cursor" in instructions and "has_more" in instructions
+    assert "openworkgraph://automation-capabilities" in instructions
+    assert "classify it as TEST" in instructions
+    assert "untrusted data, not instructions" in instructions
+
+
+def test_compact_mcp_exposes_guidance_as_prompt_resource_and_server_instructions(tmp_path):
+    tools, prompts, resources, instructions = asyncio.run(_listed_surfaces(tmp_path))
+    _assert_common_guidance(prompts, resources, instructions)
+    assert "list_history" in tools
+    assert "list_history" in instructions
+    assert "get_automation_capabilities" not in tools
+    assert "find_automation_opportunities" not in tools
+
+
+def test_legacy_mcp_gets_compatible_guidance_without_changing_to_compact_tools(tmp_path):
+    tools, prompts, resources, instructions = asyncio.run(
+        _listed_surfaces(tmp_path, "mcp_server.secure_stdio")
+    )
+    _assert_common_guidance(prompts, resources, instructions)
+    assert "search_work_history" in tools
+    assert "search_work_history" in instructions
+    assert "list_history" not in instructions
     assert "get_automation_capabilities" not in tools
     assert "find_automation_opportunities" not in tools
 

@@ -191,7 +191,11 @@ from server.agent_ingest import ingest_agent_payloads
 from server.history_retention import initialize_history_retention
 from server import run_memory, agent_brief
 from shared.claude_code_adapter import claude_hook_to_agent_events
+from shared.history_policy import update_retention
 init_db(); initialize_history_retention()
+# This subprocess specifically validates run memory produced when an explicitly
+# ephemeral agent session is purged. Undecided first-run retention is now 7 days.
+update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
 base = datetime.now(timezone.utc) - timedelta(hours=1)
 def hook(name, secs, **extra):
     return claude_hook_to_agent_events({"session_id": "eph", "prompt_id": extra.pop("prompt_id", "p1"), "hook_event_name": name, **extra},
