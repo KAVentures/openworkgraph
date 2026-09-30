@@ -1,6 +1,6 @@
 {
   "name": "@openworkgraph/agent",
-  "version": "0.110.0",
+  "version": "0.111.0",
   "description": "Dependency-free structural telemetry helper for custom OpenWorkGraph agent harnesses",
   "type": "module",
   "exports": {
