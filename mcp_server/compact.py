@@ -195,8 +195,12 @@ def _slim_trace(trace: dict[str, Any]) -> dict[str, Any]:
             )
             if key in trace
         },
+        # Keep the older overview marker for saved clients while also exposing the
+        # more general v0.112 compact/rich contract.
+        "rows_are_compact_overview": True,
         "rows_are_compact": True,
         "rich_detail_available": True,
+        "canonical_detail_tool": "get_workflow_trace",
     }
 
 
@@ -388,11 +392,12 @@ def get_current_work_context(
     limit: int = 6,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return a compact derived overview with pointers to canonical evidence.
+    """Return an optional compact derived overview with pointers to canonical evidence.
 
-    If a restart makes current-session evidence empty, this attempts a local-day
-    evidence fallback when saved-history access permits it. Derived sections never
-    override the canonical trace.
+    Use get_workflow_trace first when reconstructing what happened. If a restart
+    makes current-session evidence empty, this attempts a local-day evidence
+    fallback when saved-history access permits it. Derived sections never override
+    the canonical trace and remain non-authoritative convenience indexes.
     """
     name = "get_current_work_context"
     core._begin(name)
@@ -513,9 +518,10 @@ def get_workflow_trace(
 ) -> dict[str, Any]:
     """Return canonical chronological workflow evidence with stable pagination.
 
-    Compact rows are the default to keep a normal page within a small model-context
-    budget. Set detail='rich' for the full authorized row. Follow next_cursor until
-    has_more is false when a whole period is requested.
+    Use this first to reconstruct what happened. This is the primary Context MCP
+    evidence surface. Compact rows are the default to keep a normal page within a
+    small model-context budget; set detail='rich' for the full authorized row.
+    Follow next_cursor until has_more is false when a whole period is requested.
     """
     selected = str(detail or "compact").strip().lower()
     if selected not in {"compact", "rich"}:
@@ -644,7 +650,13 @@ def get_task_context(
     max_steps_per_run: int = 16,
     max_evidence_refs_per_item: int = 2,
 ) -> dict[str, Any]:
-    """Return one read-only organizational context bundle for a task."""
+    """Return one read-only organizational context bundle for a task.
+
+    Supply family_key from find_repeated_workflows when available, or task_family
+    for a canonical human family such as email.reply. current_steps/after_step are
+    structural step inputs used to bound observed context; they do not become
+    policy, permission, or a causal claim.
+    """
     name = "get_task_context"
     core._begin(name)
     result = _history_get("/v1/task-context", {
@@ -671,7 +683,13 @@ def how_did_similar_runs_go(
     max_events: int = 25_000,
     run_limit: int = 8,
 ) -> dict[str, Any]:
-    """Summarize evidence from similar prior runs with readable human-work steps."""
+    """Summarize evidence from similar prior runs with readable human-work steps.
+
+    Call find_repeated_workflows first to obtain an exact family_key. For human
+    work, current_steps/after_step may use privacy-safe readable labels returned by
+    this tool, for example 'Gmail · Open email'. Legacy structural tokens remain
+    supported. Results are observations, not recommendations or authorization.
+    """
     name = "how_did_similar_runs_go"
     core._begin(name)
     bounded_events = _bounded(max_events, maximum=100_000)
