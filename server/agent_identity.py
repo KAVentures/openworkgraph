@@ -3,8 +3,8 @@ from __future__ import annotations
 """Opaque, cross-sensor identities for native agent execution evidence.
 
 Claude Code hooks and native session files can describe the same physical
-session. This module maps native session/turn/tool identifiers onto the same
-local HMAC namespace before canonical persistence (and, for hooks, before the
+session. This module maps native session/turn/tool identifiers onto one local
+HMAC namespace before canonical persistence (and, for hooks, before the
 fail-open spool). Native identifiers are never returned from these helpers.
 """
 
@@ -40,12 +40,13 @@ def is_claude_code_event(event: Any) -> bool:
 def normalize_claude_event(event: dict[str, Any]) -> dict[str, Any]:
     """Return one Claude event with native session/turn/tool IDs made opaque.
 
-    The transformation is idempotent. The session key is exactly the same
-    ``as:`` HMAC used by the native-session continuity sensor, allowing richer
-    hook/OTel evidence and transcript fallback evidence to join instead of
-    appearing as separate physical sessions. Top-level Claude prompt turns are
-    observations inside that physical session, not separate executions; true
-    subagents keep a separate opaque run identity.
+    The physical session uses exactly the same ``as:`` HMAC as the native-session
+    continuity sensor. Prompt turns keep separate opaque ``ar:`` run identities so
+    turn-level rework/evaluation remains meaningful; genuine subagents also keep a
+    separate opaque run. SessionStart/SessionEnd and transcript-only fallback records
+    whose native run is the session itself stay on the session run and can later be
+    suppressed from *derived run lists* when richer turn evidence exists. Canonical
+    evidence is never discarded merely because a richer sensor may also observe it.
     """
     if not is_claude_code_event(event):
         return dict(event)
@@ -60,16 +61,19 @@ def normalize_claude_event(event: dict[str, Any]) -> dict[str, Any]:
         return out
 
     native_run = _text(out.get("run_id"))
-    agent_name = _text(out.get("agent_name"), 160)
-    is_subagent = agent_name.lower().startswith("claude code/")
-    if not is_subagent:
-        safe_run = safe_session
-    elif not native_run or native_run in {native_session, safe_session}:
+    agent_name = _text(out.get("agent_name"), 160).lower()
+    is_subagent = agent_name.startswith("claude code/")
+
+    if not native_run or native_run in {native_session, safe_session}:
         safe_run = safe_session
     elif native_run.startswith("ar:"):
         safe_run = native_run
     else:
-        safe_run = _child_ref("ar", safe_session, "run", native_run)
+        # Keep top-level prompt turns and true subagents distinct, but under the
+        # same opaque physical-session namespace. The kind marker avoids a
+        # hypothetical native prompt id colliding with a native subagent id.
+        kind = "subagent" if is_subagent else "turn"
+        safe_run = _child_ref("ar", safe_session, kind, native_run)
 
     out["session_id"] = safe_session
     out["trace_id"] = safe_session
