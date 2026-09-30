@@ -14,9 +14,46 @@ def _bounded(value: int, *, minimum: int = 1, maximum: int) -> int:
     return min(max(minimum, int(value)), maximum)
 
 
+def _clarify_work_summary(value: Any) -> Any:
+    """Preserve legacy summary fields while making unknown test results explicit.
+
+    A zero in runs_with_failures means no *known* failing run in the compact
+    structural summary. It must not be read as proof that every run passed when
+    the latest observed test result is unknown.
+    """
+    if not isinstance(value, dict):
+        return value
+    summary = dict(value)
+    tests = summary.get("tests")
+    if not isinstance(tests, dict):
+        return summary
+    out = dict(tests)
+    runs = max(0, int(out.get("runs") or 0))
+    known_failing = max(0, min(runs, int(out.get("runs_with_failures") or 0)))
+    latest = str(out.get("ended") or "unknown")
+    unknown = 1 if runs and latest == "unknown" else 0
+    out.update({
+        "known_failing": known_failing,
+        "known_passing": max(0, runs - known_failing - unknown),
+        "unknown_result": unknown,
+        "zero_failures_does_not_mean_all_passed": unknown > 0,
+    })
+    summary["tests"] = out
+    return summary
+
+
+def _clarify_execution(execution: Any) -> Any:
+    if not isinstance(execution, dict):
+        return execution
+    out = dict(execution)
+    if "work_summary" in out:
+        out["work_summary"] = _clarify_work_summary(out.get("work_summary"))
+    return out
+
+
 def _run_summary(execution: dict[str, Any]) -> dict[str, Any]:
     """Keep list responses compact while preserving interpretation boundaries."""
-    return {
+    compact = {
         key: execution.get(key)
         for key in (
             "execution_id",
@@ -60,6 +97,9 @@ def _run_summary(execution: dict[str, Any]) -> dict[str, Any]:
         )
         if key in execution
     }
+    if "work_summary" in compact:
+        compact["work_summary"] = _clarify_work_summary(compact.get("work_summary"))
+    return compact
 
 
 def register_agent_tools(mcp: Any) -> None:
@@ -83,9 +123,11 @@ def register_agent_tools(mcp: Any) -> None:
         Results report observed structural counts separately from the active
         adapter's capability to observe each signal. A numeric zero is meaningful
         only when that signal is observable; not_observable/unknown must not be
-        interpreted as zero underlying activity. Native run/trace/span IDs,
-        prompts, model-response content, tool arguments/results and hidden
-        reasoning are not exposed.
+        interpreted as zero underlying activity. Test summaries additionally
+        expose known_passing/known_failing/unknown_result semantics so zero known
+        failures is not mistaken for proof that every test run passed. Native
+        run/trace/span IDs, prompts, model-response content, raw tool arguments/
+        results and hidden reasoning are not exposed.
         """
         name = "get_agent_runs"
         core._begin(name)
@@ -102,7 +144,7 @@ def register_agent_tools(mcp: Any) -> None:
             **{key: value for key, value in result.items() if key != "executions"},
             "executions": [_run_summary(item) for item in list(result.get("executions") or [])],
             "events_omitted_from_list_view": True,
-            "count_semantics": "prefer observed_operation_counts; interpret counts together with signal_capabilities",
+            "count_semantics": "prefer observed_operation_counts; interpret counts together with signal_capabilities; test unknown_result is not a pass",
             "detail_tool": "get_agent_execution_trace",
         }
         return core._finish(name, compact)
@@ -117,7 +159,8 @@ def register_agent_tools(mcp: Any) -> None:
 
         The execution ID must be an opaque OpenWorkGraph ID previously returned by
         the agent-run view. Completeness depends on the integration's observed
-        lifecycle surface; false coverage flags mean only not observed.
+        lifecycle surface; false coverage flags mean only not observed. Unknown
+        test outcomes remain explicitly unknown rather than being counted as pass.
         """
         opaque_id = str(execution_id or "").strip().lower()
         if not opaque_id.startswith("execution:"):
@@ -133,6 +176,8 @@ def register_agent_tools(mcp: Any) -> None:
                 "max_events_per_execution": _bounded(max_events, maximum=500),
             },
         )
+        if isinstance(result, dict) and isinstance(result.get("executions"), list):
+            result = {**result, "executions": [_clarify_execution(item) for item in result["executions"]]}
         return core._finish(name, result)
 
 

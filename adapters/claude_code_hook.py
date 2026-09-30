@@ -122,6 +122,15 @@ def main(argv: list[str] | None = None) -> int:
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict):
             return 0
+        # Working detail is a separate opt-in local store. Its parser may inspect
+        # tool input/output in memory but persists only bounded redacted facts.
+        # Failure here must never affect canonical structural observation.
+        try:
+            from server.agent_working_detail import capture_claude_hook
+
+            capture_claude_hook(payload)
+        except Exception:
+            pass
         events = claude_hook_to_agent_events(payload)
         try:
             # Files changed between turns (content-free counts on the next turn's start).
