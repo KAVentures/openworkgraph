@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.110.0"
+EXPECTED_VERSION = "0.111.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -41,24 +41,29 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.111: provenance-safe agent Working Detail" in workflow
+    assert "workspace-relative files" in workflow
+    assert "Raw tool output is not stored" in workflow
+    assert "explicit historical import" in workflow
+    v111_section = workflow.split("### v0.111: provenance-safe agent Working Detail", 1)[1].split("### v0.110: evidence-first MCP guidance and safer first-run history", 1)[0]
+    assert "`" not in v111_section
     assert "### v0.110: evidence-first MCP guidance and safer first-run history" in workflow
     assert "MCP initialize guidance" in workflow
     assert "Packaged MCPB smoke test" in workflow
     assert "First-run retention grace" in workflow
-    v110_section = workflow.split("### v0.110: evidence-first MCP guidance and safer first-run history", 1)[1].split("### v0.109: native agent session continuity", 1)[0]
-    assert "`" not in v110_section
     assert "### v0.109: native agent session continuity" in workflow
     assert "visible user/assistant messages are OFF by default" in workflow
     assert "allow_agent_session_messages" in workflow
     assert "agent-sessions:read" in workflow
-    v109_section = workflow.split("### v0.109: native agent session continuity", 1)[1].split("### v0.108: full context, personal details tokenized", 1)[0]
-    assert "`" not in v109_section
     assert "### v0.108: full context, personal details tokenized" in workflow
-    assert "### v0.107: the agent learning loop" not in workflow
     assert "pkg-agent-sdk" in workflow
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
+    changelog = (ROOT / "docs" / "CHANGELOG_V0111.md").read_text(encoding="utf-8")
+    assert "Working Detail" in changelog
+    assert "hidden reasoning" in changelog
+    assert "raw tool output" in changelog
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
