@@ -7,17 +7,37 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY_BRIEF_PATH = ROOT / "AUTOMATION_CAPABILITIES.md"
 
+_FALLBACK_CAPABILITY_BRIEF = """# OpenWorkGraph automation capability brief
+
+**Capability brief date: 2026-09-30**
+
+Treat automation feasibility as time-sensitive. This is a search-space guide, not a claim that every AI client has every capability below.
+
+Before judging an observed workflow, inspect the capabilities actually available in the current AI environment: connected tools and APIs, MCP servers, browser/computer interaction, file/document/spreadsheet access, code execution, scheduling or conditional tasks, and human-approval mechanisms. If current verification is available and capability details may have changed, use it.
+
+Modern agent systems may combine browser/computer interaction, APIs and connectors, file/email/calendar/repository/database operations, code execution, multi-step agentic workflows, scheduled or condition-triggered work, human approval checkpoints, draft-first workflows, and deterministic plus agentic steps. Availability, permissions, reliability, latency, cost, and policy constraints differ by installation.
+
+Use evidence in this order when available:
+1. Current AI tool surface.
+2. Current documentation or live verification.
+3. OpenWorkGraph observations of prior agent runs. Absence of an observed capability means not observed, not unavailable.
+4. This dated generic brief.
+
+Reason about automating the outcome rather than simply reproducing every human click. Classify material opportunities as READY TO AUTOMATE, TEST, or NOT CURRENTLY PRACTICAL. Use TEST when a current agentic implementation is plausible but reliability, permissions, edge cases, or workflow reconstruction remain uncertain. Reserve NOT CURRENTLY PRACTICAL for a concrete blocker and name it.
+
+For TEST items, prefer a bounded shadow trial on the next natural occurrence of the workflow. Default to draft, read-only, sandboxed, or otherwise non-consequential execution. Require explicit user authorization before sends, submissions, production writes, purchases, deletes, merges, deployments, or other consequential actions. Measure success/failure, human intervention, elapsed time, cost when available, important errors, and approval needs.
+
+Do not automatically replay historical work against live systems. OpenWorkGraph deliberately does not capture ordinary typed text, clipboard contents, email bodies, spreadsheet cell contents, passwords, or every application payload, so past observations often do not contain the full original inputs.
+
+Keep automation ideas, feasibility judgments, and trial conclusions derived and disposable. They must not overwrite or become equivalent to canonical OpenWorkGraph evidence.
+"""
+
 
 def _read_capability_brief() -> str:
     try:
         return CAPABILITY_BRIEF_PATH.read_text(encoding="utf-8").strip() + "\n"
     except Exception:
-        return (
-            "# OpenWorkGraph automation capability brief\n\n"
-            "Treat automation feasibility as time-sensitive. Inspect the AI tools actually available now, "
-            "keep OpenWorkGraph evidence separate from interpretation, and use bounded draft/read-only "
-            "tests when feasibility is uncertain.\n"
-        )
+        return _FALLBACK_CAPABILITY_BRIEF.strip() + "\n"
 
 
 AUTOMATION_CAPABILITIES_MD = _read_capability_brief()
