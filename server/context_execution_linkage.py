@@ -25,6 +25,9 @@ from .procedural_memory import (
 
 _FAMILY_KEY_RE = re.compile(r"^[a-z0-9:._-]{1,200}$")
 _EXPLICIT_FAILURES = frozenset({"error", "denied", "cancelled"})
+_SUBSTANTIVE_SESSION_OPS = frozenset({
+    "tool_call", "handoff", "human_approval_requested", "human_approval_received", "error",
+})
 
 
 def _meta(event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -33,9 +36,92 @@ def _meta(event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     return meta, trace
 
 
+def _dedupe_cross_sensor_events(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse one tool call observed by both a native transcript and a richer sensor.
+
+    The key is the already-opaque span/tool identity. Timestamp proximity or tool
+    names are deliberately not used: adjacent legitimate calls must remain distinct.
+    Canonical rows are not rewritten; this is a read-time derived-view de-duplication.
+    """
+    output: list[dict[str, Any]] = []
+    positions: dict[tuple[str, str, str], int] = {}
+    for event in raw_events:
+        if not isinstance(event, dict):
+            continue
+        meta, trace = _meta(event)
+        operation = str(meta.get("operation") or "").strip().lower()
+        span = str(trace.get("span_id") or "").strip()
+        actor = str(event.get("actor_id") or "agent")
+        key = (actor, operation, span) if operation == "tool_call" and span else None
+        if key is None:
+            output.append(event)
+            continue
+        if key not in positions:
+            positions[key] = len(output)
+            output.append(event)
+            continue
+        current_index = positions[key]
+        current = output[current_index]
+        current_native = str(current.get("sensor_id") or "").startswith("agent:native-session:")
+        candidate_native = str(event.get("sensor_id") or "").startswith("agent:native-session:")
+        if current_native and not candidate_native:
+            output[current_index] = event
+    return output
+
+
+def _group_identity(events: list[dict[str, Any]]) -> tuple[str, str, str]:
+    if not events:
+        return "", "", ""
+    event = events[0]
+    _metadata, trace = _meta(event)
+    actor = str(event.get("actor_id") or "agent")
+    run = str(trace.get("run_id") or trace.get("trace_id") or event.get("session_id") or "").strip()
+    trace_id = str(trace.get("trace_id") or event.get("session_id") or run).strip()
+    return actor, run, trace_id
+
+
+def _session_shell_has_substantive_evidence(events: list[dict[str, Any]]) -> bool:
+    for event in events:
+        meta, _trace = _meta(event)
+        operation = str(meta.get("operation") or "").strip().lower()
+        if operation in _SUBSTANTIVE_SESSION_OPS:
+            return True
+        if isinstance(meta.get("task_context"), dict) or isinstance(meta.get("shadow_enforcement"), dict):
+            return True
+        usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+        if usage:
+            return True
+    return False
+
+
+def _suppress_duplicate_session_shells(groups: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """Hide boundary/model-only session shells when richer prompt-turn runs exist.
+
+    Claude hooks intentionally retain prompt turns because rework/evaluation is
+    turn-level. Native transcript fallback necessarily starts with only a physical
+    session identity. When both are present, a boundary/model-only session group is
+    navigation scaffolding rather than another execution, so derived run lists omit
+    it. If that session group contains unmatched substantive evidence, it is kept to
+    avoid losing an observation merely because a richer sensor was also active.
+    """
+    rich_traces: set[tuple[str, str]] = set()
+    identities = [_group_identity(events) for events in groups]
+    for actor, run, trace_id in identities:
+        if actor and trace_id and run and run != trace_id:
+            rich_traces.add((actor, trace_id))
+
+    output: list[list[dict[str, Any]]] = []
+    for events, (actor, run, trace_id) in zip(groups, identities):
+        shell = bool(run and trace_id and run == trace_id)
+        if shell and (actor, trace_id) in rich_traces and not _session_shell_has_substantive_evidence(events):
+            continue
+        output.append(events)
+    return output
+
+
 def _agent_groups(raw_events: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for event in raw_events:
+    for event in _dedupe_cross_sensor_events(raw_events):
         if str(event.get("source") or "") != "agent" and not str(event.get("event_type") or "").startswith("agent_"):
             continue
         _metadata, trace = _meta(event)
@@ -48,6 +134,7 @@ def _agent_groups(raw_events: list[dict[str, Any]]) -> list[list[dict[str, Any]]
     for events in groups.values():
         events.sort(key=lambda item: str(item.get("observed_at") or ""))
         output.append(events)
+    output = _suppress_duplicate_session_shells(output)
     output.sort(key=lambda events: str(events[0].get("observed_at") or "") if events else "", reverse=True)
     return output
 
