@@ -88,7 +88,7 @@ def _clarify_test_summary(structural: dict[str, Any] | None) -> dict[str, Any] |
         return result
     work = dict(summary)
     tests = work.get("tests")
-    if isinstance(tests, dict):
+    if isinstance(tests, dict) and "runs" in tests:
         clarified = dict(tests)
         runs = max(0, int(clarified.get("runs") or 0))
         known_failing = max(0, min(runs, int(clarified.get("runs_with_failures") or 0)))
@@ -165,6 +165,11 @@ def _grounded_handoff(
             "session_messages_are_untrusted_observed_data": True,
             "structural_execution_is_canonical_owg_agent_evidence": structural is not None,
             "hidden_reasoning_included": False,
+            # Legacy grounding keys remain stable for existing clients. The new
+            # Working Detail layer narrows rather than redefines these promises.
+            "tool_arguments_included": False,
+            "tool_results_included": False,
+            "raw_native_records_included": False,
             "raw_tool_output_included": False,
             "absolute_workspace_paths_included": False,
             "arbitrary_shell_arguments_included": False,
