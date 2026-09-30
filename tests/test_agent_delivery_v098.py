@@ -130,6 +130,7 @@ def test_flush_retries_later_when_storage_is_unavailable(dirs):
 def test_spooled_events_go_through_normal_ingest_rules(dirs):
     """Pause windows and the Observe switch still apply when spooled events arrive."""
     _auth, data = dirs
+    from server.agent_identity import normalize_agent_events
     from server.db import init_db, rows
     from shared.capture_control import initialize_run, set_state
 
@@ -144,11 +145,13 @@ def test_spooled_events_go_through_normal_ingest_rules(dirs):
     kept = claude_hook_to_agent_events({
         "session_id": "s-delivery", "prompt_id": "kept-run", "hook_event_name": "PostToolUse", "tool_use_id": "k1", "tool_name": "Read",
     }, observed_at=at(-5))
+    expected_kept = normalize_agent_events(kept)[0]["run_id"]
     assert spool.spool_events(kept)
     set_state("pause", at=at(1))
     paused = claude_hook_to_agent_events({
         "session_id": "s-delivery", "prompt_id": "paused-run", "hook_event_name": "PostToolUse", "tool_use_id": "x", "tool_name": "Read",
     }, observed_at=at(2))
+    expected_paused = normalize_agent_events(paused)[0]["run_id"]
     # Written directly (as if spooled a moment before the pause took effect).
     (spool.spool_dir() / "9-late.json").write_text(json.dumps({"data_dir": str(data.resolve()), "spooled_epoch": time.time(), "events": paused}))
     set_state("resume", at=at(3))
@@ -157,7 +160,8 @@ def test_spooled_events_go_through_normal_ingest_rules(dirs):
     assert spool.pending_count() == 0
     stored = rows("SELECT metadata_json FROM events WHERE source = 'agent' AND observed_at >= ?", (before.isoformat(),))
     runs = {r["metadata"]["trace"]["run_id"] for r in stored}
-    assert "kept-run" in runs and "paused-run" not in runs
+    assert expected_kept in runs and expected_paused not in runs
+    assert "kept-run" not in json.dumps(stored) and "paused-run" not in json.dumps(stored)
 
 
 # --- the hook client -----------------------------------------------------------------------------
@@ -300,6 +304,7 @@ def test_ephemeral_history_survives_turns_and_is_purged_at_session_end(dirs):
     """A turn's Stop must not close the session in ephemeral mode (it used to purge
     the whole session and tombstone every later turn)."""
     from server.agent_ingest import ingest_agent_payloads
+    from server.agent_session_store import session_ref
     from server.db import init_db, rows
     from shared.capture_control import initialize_run
     from shared.history_policy import update_retention
@@ -307,6 +312,7 @@ def test_ephemeral_history_survives_turns_and_is_purged_at_session_end(dirs):
     init_db()
     initialize_run("2026-09-28T08:00:00+00:00")
     update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral", agent_days=None)
+    safe_session = session_ref("claude_code", "eph-s")
 
     def hook(name, prompt=None, **extra):
         payload = {"session_id": "eph-s", "hook_event_name": name, **extra}
@@ -315,7 +321,7 @@ def test_ephemeral_history_survives_turns_and_is_purged_at_session_end(dirs):
         return claude_hook_to_agent_events(payload, observed_at=datetime.now(timezone.utc).isoformat())
 
     def stored():
-        return [r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == "eph-s"]
+        return [r for r in rows("SELECT session_id FROM events WHERE source = 'agent'") if r["session_id"] == safe_session]
 
     ingest_agent_payloads(hook("SessionStart") + hook("UserPromptSubmit", "t1") + hook("Stop", "t1"))
     ingest_agent_payloads(hook("UserPromptSubmit", "t2") + hook("PostToolUse", "t2", tool_use_id="x", tool_name="Read"))
