@@ -108,7 +108,7 @@ assert facts["tests"]["error"]["type"] == "AssertionError"
 assert facts["tests"]["error"]["excerpt"]["untrusted_observed_text"] is True
 assert facts["exit_code"] == 1
 assert prov["raw_output_stored"] is False and prov["parsed_output"] is True
-dump = json.dumps(rows)
+dump = json.dumps([tuple(row) for row in rows])
 assert "sk-super-secret" not in dump
 assert "RAW_TAIL_MUST_NOT_BE_STORED" not in dump
 assert str(root) not in dump
@@ -201,10 +201,10 @@ records = [
    {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"pytest tests/test_auth.py -q"}}
  ]}},
  {"type":"user","timestamp":now,"sessionId":"old-session","cwd":str(root),"message":{"content":[
-   {"type":"tool_result","tool_use_id":"t1","content":"FAILED tests/test_auth.py::test_refresh_expiry - AssertionError: expected 3600\\n1 failed, 11 passed in 1.0s\\nRAW_IMPORT_OUTPUT"}
+   {"type":"tool_result","tool_use_id":"t1","content":"FAILED tests/test_auth.py::test_refresh_expiry - AssertionError: expected 3600\n1 failed, 11 passed in 1.0s\nRAW_IMPORT_OUTPUT"}
  ]}},
 ]
-path.write_text("".join(json.dumps(x)+"\\n" for x in records), encoding="utf-8")
+path.write_text("".join(json.dumps(x)+"\n" for x in records), encoding="utf-8")
 # Enabling today starts at EOF: old session data is not silently imported.
 wd.write_policy({"capture_working_detail": True, "allow_ai_read_working_detail": False})
 assert wd.scan_once()["details_written"] == 0
@@ -220,7 +220,7 @@ facts = json.loads(rows[0][0])
 assert facts["command"] == {"program":"pytest","targets":["tests/test_auth.py"]}
 assert facts["tests"]["status"] == "failing" and facts["tests"]["failed"] == 1
 assert facts["tests"]["failing_tests"] == ["tests/test_auth.py::test_refresh_expiry"]
-dump = json.dumps(rows)
+dump = json.dumps([tuple(row) for row in rows])
 assert "HIDDEN_REASONING_MUST_NEVER_APPEAR" not in dump
 assert "RAW_IMPORT_OUTPUT" not in dump
 assert str(root) not in dump
