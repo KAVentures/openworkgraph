@@ -11,6 +11,7 @@ from .work_profile import (
     list_self_tags,
     compute_work_profile as _compute_work_profile,
 )
+from .work_profile_accuracy import compute_today_work_profile
 from .work_profile_signals import enrich_work_profile
 
 MIGRATION_KEY = "work_profile_clipboard_context_links_v1"
@@ -50,7 +51,7 @@ def backfill_clipboard_context_links() -> int:
 
 def compute_work_profile(*, scope: str = "current", now=None) -> dict[str, Any]:
     backfill_clipboard_context_links()
-    profile = _compute_work_profile(scope=scope, now=now)
+    profile = compute_today_work_profile(now=now) if scope == "today" else _compute_work_profile(scope=scope, now=now)
     return enrich_work_profile(profile, since=profile.get("since"))
 
 
