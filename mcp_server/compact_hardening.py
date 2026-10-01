@@ -24,6 +24,55 @@ def _readable_step_input(value: str) -> bool:
     return _LEGACY_STEP_RE.fullmatch(text) is None
 
 
+def _bounded_text(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _compact_trace_row(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep enough protected identity to interpret browser-heavy compact traces.
+
+    The secure runtime has already applied the configured redaction/detail policy.
+    We deliberately do not return rich metadata here; a short title and work-surface
+    hint prevent a Gmail -> CRM -> Sheets sequence from collapsing to Chrome x N.
+    """
+    result = {
+        key: item.get(key)
+        for key in (
+            "event_id",
+            "observed_at",
+            "app",
+            "event_type",
+            "duration_seconds",
+            "source",
+            "action",
+            "target_label",
+            "target_role",
+            "foreground_seconds",
+            "engaged_seconds",
+            "keypress_count",
+            "click_count",
+            "scroll_count",
+        )
+        if item.get(key) not in (None, "", [], {})
+    }
+
+    surface = _bounded_text(item.get("work_surface"), 120)
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    page = metadata.get("page") if isinstance(metadata.get("page"), dict) else {}
+    if not surface:
+        surface = _bounded_text(page.get("surface") or page.get("hostname"), 120)
+    if surface:
+        result["work_surface"] = surface
+
+    title = _bounded_text(item.get("window_title"), 240)
+    if title:
+        result["window_title"] = title
+    return result
+
+
 class _CompactRuntimeProxy:
     def __init__(self, runtime: ModuleType) -> None:
         self._runtime = runtime
@@ -54,6 +103,7 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
     if getattr(compact_module, "_V0873_HARDENING_APPLIED", False):
         return
     compact_module._is_readable_step_input = _readable_step_input
+    compact_module._slim_trace_row = _compact_trace_row
     compact_module.secure_runtime = _CompactRuntimeProxy(compact_module.secure_runtime)
 
     @compact_module.mcp.tool()
