@@ -33,7 +33,11 @@ def browser_context_with_signal_settings() -> dict[str, Any]:
         "device_id": str(core.COLLECTOR_STATUS.get("device_id") or ""),
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
+        # These local patterns are supplied to the paired extension only so it can
+        # fail closed before an optional rich locator enters its retry queue. The
+        # server applies the same policy again at ingest.
         "excluded_browser_host_patterns": list(runtime.get("excluded_browser_host_patterns") or []),
+        "excluded_title_patterns": list(runtime.get("excluded_title_patterns") or []),
     }
 
 
