@@ -37,9 +37,10 @@
           <h3 style="margin:0 0 5px">Teach your AI from observed work</h3>
           <div class="muted">OpenWorkGraph supplies evidence; your AI writes the skill or procedure. Derived groupings are only a way to find examples — select the runs you actually want your AI to learn from.</div>
         </div>
-        <span class="badge">Evidence → external AI</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="ghost" type="button" id="refreshWorkflowEvidence">Refresh examples</button><span class="badge">Evidence → external AI</span></div>
       </div>
       <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>`;
+    host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     const patternList=parent.querySelector('#patternList');
     if(patternList) parent.insertBefore(host,patternList); else parent.appendChild(host);
     return host;
@@ -174,6 +175,8 @@
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if(active!=='overview'||loading) return;
     loading=true;
+    const button=document.querySelector('#refreshWorkflowEvidence');
+    if(button){button.disabled=true;button.textContent='Refreshing…';}
     try{
       await window.__owgAuthReady;
       const response=await fetch('/v1/workflow-evidence/families?min_runs=2&limit=20',{cache:'no-store'});
@@ -184,7 +187,11 @@
     }catch(_){
       const host=ensureCard()?.querySelector('#workflowEvidenceCandidates');
       if(host) host.innerHTML='<div class="muted">Workflow evidence examples are unavailable right now. Stored/Redacted evidence export and canonical MCP trace access are unchanged.</div>';
-    }finally{loading=false;}
+    }finally{
+      loading=false;
+      const current=document.querySelector('#refreshWorkflowEvidence');
+      if(current){current.disabled=false;current.textContent='Refresh examples';}
+    }
   }
 
   const observer=new MutationObserver(()=>{ensureCard();removeOldPlaceholderActions();});
@@ -194,7 +201,6 @@
     if(overview) observer.observe(overview,{childList:true,subtree:true});
     document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(refresh,0));
     refresh();
-    setInterval(()=>{if(!document.hidden) refresh();},7000);
   }
   window.refreshWorkflowEvidenceDrafting=refresh;
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',install); else install();
