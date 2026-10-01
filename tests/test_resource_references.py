@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import re
+
+import pytest
+
 from browser_privacy import harden_browser_event, minimize_known_resource_path
 from resource_references import normalize_resource_reference
 from server import browser_signal_settings
+from server.local_auth import ensure_browser_secret
+
+
+_SENSOR_NAMESPACE = "openworkgraph-resource-reference-sensor-v1:"
+
+
+@pytest.fixture(autouse=True)
+def isolated_resource_reference_secrets(tmp_path, monkeypatch):
+    # Resource-reference tests must never write auth material into the checkout,
+    # and each test gets a clean installation-equivalent secret boundary.
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path / "auth"))
 
 
 def _config(**overrides):
@@ -41,15 +58,45 @@ def _event(reference):
     }
 
 
+def _canonical(reference):
+    return "|".join((
+        str(reference["provider"]).lower(),
+        str(reference["resource_kind"]).lower(),
+        str(reference["host"]).lower(),
+        str(reference["resolver_locator"]),
+    ))
+
+
+def _sensor_ref(reference):
+    digest = hmac.new(
+        ensure_browser_secret().encode("utf-8"),
+        (_SENSOR_NAMESPACE + _canonical(reference)).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"owg:e:{digest[:24]}"
+
+
+def _legacy_plain_hash(reference):
+    digest = hashlib.sha256(_canonical(reference).encode("utf-8")).hexdigest()
+    return f"owg:r:{digest[:24]}"
+
+
 def _reference():
-    return {
+    value = {
         "provider": "salesforce",
         "resource_kind": "record",
         "host": "acme.lightning.force.com",
         "resolver_locator": "Opportunity:006ABCDEF123456789",
-        "resource_ref": "owg:r:000000000000000000000000",
         "resolution": "observed",
     }
+    value["resource_ref"] = _sensor_ref(value)
+    return value
+
+
+def _context_reference():
+    value = _reference()
+    value.pop("resolver_locator")
+    return value
 
 
 def test_privacy_first_drops_business_reference_and_masks_known_route_id():
@@ -62,29 +109,61 @@ def test_privacy_first_drops_business_reference_and_masks_known_route_id():
     assert metadata["privacy"]["business_object_references"] is False
 
 
-def test_context_mode_keeps_only_stable_local_reference_token():
+def test_context_mode_rekeys_sensor_fingerprint_before_persistence():
+    incoming = _context_reference()
+    sensor_ref = incoming["resource_ref"]
     safe = harden_browser_event(
-        _event(_reference()),
+        _event(incoming),
         _config(business_object_references=True, resource_reference_locators=False),
     )
     ref = safe["metadata"]["resource_reference"]
     assert ref["provider"] == "salesforce"
     assert ref["resource_kind"] == "record"
-    assert ref["resource_ref"].startswith("owg:r:")
-    assert ref["resource_ref"] != "owg:r:000000000000000000000000"
+    assert re.fullmatch(r"owg:r:[0-9a-f]{32}", ref["resource_ref"])
+    assert ref["resource_ref"] != sensor_ref
+    assert sensor_ref not in str(safe)
     assert "resolver_locator" not in ref
     assert safe["metadata"]["page"]["pathname"] == "/lightning/r/Opportunity/:id/view"
 
 
-def test_rich_mode_keeps_only_validated_minimal_locator():
+def test_persisted_token_is_not_old_dictionary_attackable_plain_hash():
+    rich_input = _reference()
+    old_plain = _legacy_plain_hash(rich_input)
+    sensor_ref = rich_input["resource_ref"]
     safe = harden_browser_event(
-        _event(_reference()),
+        _event(rich_input),
+        _config(business_object_references=True, resource_reference_locators=False),
+    )
+    stored = safe["metadata"]["resource_reference"]["resource_ref"]
+    assert stored != old_plain
+    assert stored != sensor_ref
+    assert old_plain not in str(safe)
+    assert sensor_ref not in str(safe)
+
+
+def test_rich_mode_keeps_only_validated_minimal_locator_and_rekeys_token():
+    incoming = _reference()
+    sensor_ref = incoming["resource_ref"]
+    safe = harden_browser_event(
+        _event(incoming),
         _config(business_object_references=True, resource_reference_locators=True),
     )
     ref = safe["metadata"]["resource_reference"]
     assert ref["resolver_locator"] == "Opportunity:006ABCDEF123456789"
+    assert re.fullmatch(r"owg:r:[0-9a-f]{32}", ref["resource_ref"])
+    assert ref["resource_ref"] != sensor_ref
     assert set(ref) == {"provider", "resource_kind", "host", "resource_ref", "resolution", "resolver_locator"}
     assert safe["metadata"]["page"]["pathname"] == "/lightning/r/Opportunity/006ABCDEF123456789/view"
+
+
+def test_conflicting_sensor_token_is_rejected_when_locator_is_present():
+    value = _reference()
+    value["resource_ref"] = "owg:e:000000000000000000000000"
+    safe = harden_browser_event(
+        _event(value),
+        _config(business_object_references=True, resource_reference_locators=True),
+    )
+    assert "resource_reference" not in safe["metadata"]
 
 
 def test_known_resource_paths_mask_ids_without_collapsing_route_structure():
@@ -123,11 +202,24 @@ def test_invalid_or_excluded_reference_never_survives():
     assert "resource_reference" not in excluded["metadata"]
 
 
-def test_minimized_reference_can_be_revalidated_without_locator():
+def test_minimized_persisted_reference_is_idempotent_without_locator():
     rich = normalize_resource_reference(_reference(), include_locator=False)
     assert rich is not None
     minimized = normalize_resource_reference(rich, include_locator=False)
     assert minimized == rich
+
+
+def test_same_sensor_reference_gets_different_stored_token_in_another_install(tmp_path, monkeypatch):
+    reference = _reference()
+    incoming = dict(reference)
+    incoming.pop("resolver_locator")
+    first = normalize_resource_reference(incoming, include_locator=False)
+    assert first is not None
+
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path / "second-install-auth"))
+    second = normalize_resource_reference(incoming, include_locator=False)
+    assert second is not None
+    assert second["resource_ref"] != first["resource_ref"]
 
 
 def test_privacy_profiles_are_explicit_and_backwards_compatible(tmp_path, monkeypatch):
