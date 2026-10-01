@@ -60,7 +60,9 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
     })
     api = subprocess.Popen(
         [sys.executable, "-m", "server.enterprise_runner", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Keep stdout quiet, but inherit stderr so an early production-launcher
+        # failure is visible in CI instead of collapsing into "did not start".
+        cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
     )
     _wait(base + "/health", api)
     headers = {"Authorization": f"Bearer {token}"}
