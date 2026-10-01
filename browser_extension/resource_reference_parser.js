@@ -6,8 +6,8 @@
   const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
   const GITHUB_PART = /^[A-Za-z0-9_.-]{1,100}$/;
   const WORKSPACE = /^[A-Za-z0-9_-]{1,100}$/;
-  const GMAIL_ROUTE_NAMES = new Set([
-    "inbox", "all", "sent", "drafts", "spam", "trash", "starred", "snoozed", "important", "search"
+  const GMAIL_DIRECT_THREAD_ROUTES = new Set([
+    "inbox", "all", "sent", "drafts", "spam", "trash", "starred", "snoozed", "important"
   ]);
 
   function candidate(provider, resourceKind, resolverLocator, host) {
@@ -43,9 +43,23 @@
     const fragment = String(u.hash || "").replace(/^#/, "");
     if (!fragment) return null;
     const parts = fragment.split("/").filter(Boolean);
-    const raw = parts.at(-1) || "";
+    const route = String(parts[0] || "").toLowerCase();
+    let raw = "";
+
+    // Only treat shapes that positively identify a conversation as resource
+    // references. In particular, #search/<query> is user-entered search content
+    // and must never be mistaken for a thread locator merely because it looks
+    // token-like. Search-result conversations have at least one segment between
+    // the route name and the final thread token.
+    if (GMAIL_DIRECT_THREAD_ROUTES.has(route) && parts.length === 2) {
+      raw = parts[1] || "";
+    } else if (route === "search" && parts.length >= 3) {
+      raw = parts[parts.length - 1] || "";
+    } else {
+      return null;
+    }
+
     if (!/^[A-Za-z0-9_-]{12,80}$/.test(raw)) return null;
-    if (GMAIL_ROUTE_NAMES.has(raw.toLowerCase())) return null;
     return candidate("gmail", "thread_locator", `web-thread:${raw}`, u.hostname);
   }
 
