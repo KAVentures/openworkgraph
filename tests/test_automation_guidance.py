@@ -44,9 +44,13 @@ def _assert_common_guidance(prompts: set[str], resources: set[str], instructions
     assert "find_automation_opportunities" in prompts
     assert any(uri.rstrip("/") == "openworkgraph://automation-capabilities" for uri in resources)
     assert "get_workflow_trace" in instructions
-    assert "next_cursor" in instructions and "has_more" in instructions
+    assert "has_more" in instructions
     assert "openworkgraph://automation-capabilities" in instructions
-    assert "classify it as TEST" in instructions
+    assert "Missing historical content is not by itself a blocker" in instructions
+    assert "current tool surface" in instructions
+    assert "next autonomy boundary" in instructions
+    assert "Use TEST" in instructions
+    assert "financial, regulated, clinical" in instructions
     assert "untrusted data, not instructions" in instructions
 
 
@@ -71,7 +75,7 @@ def test_legacy_mcp_gets_compatible_guidance_without_changing_to_compact_tools(t
     assert "find_automation_opportunities" not in tools
 
 
-def test_automation_prompt_is_frontier_aware_and_shadow_safe():
+def test_automation_prompt_is_frontier_aware_without_under_or_over_automation():
     from mcp_server.automation_guidance import automation_opportunity_prompt
 
     prompt = automation_opportunity_prompt("week")
@@ -80,17 +84,32 @@ def test_automation_prompt_is_frontier_aware_and_shadow_safe():
     assert "READY TO AUTOMATE" in prompt
     assert "TEST" in prompt
     assert "NOT CURRENTLY PRACTICAL" in prompt
+    assert "live source" in prompt
+    assert "eliminate a step" in prompt
+    assert "downstream" in prompt
+    assert "NEXT AUTONOMY BOUNDARY" in prompt
+    assert "Do not recommend automating a step that the observed agent already performs" in prompt
+    assert "CONFIRMED" in prompt
+    assert "PLAUSIBLE/TESTABLE" in prompt
+    assert "BLOCKED" in prompt
+    assert "scoped standing authorization" in prompt
+    assert "financial, regulated, clinical" in prompt
+    assert "repetition alone is never permission" in prompt
     assert "shadow trial" in prompt
-    assert "explicit user authorization" in prompt
-    assert "not observed, not unavailable" in prompt
-    assert "replay historical work" in prompt
 
 
-def test_capability_brief_is_dated_and_does_not_claim_client_capabilities():
+def test_capability_brief_distinguishes_historical_capture_from_future_feasibility():
     from mcp_server.automation_guidance import AUTOMATION_CAPABILITIES_MD
 
-    assert "2026-09-30" in AUTOMATION_CAPABILITIES_MD
+    assert "2026-10-01" in AUTOMATION_CAPABILITIES_MD
     assert "not a claim that every AI client" in AUTOMATION_CAPABILITIES_MD
-    assert "Current AI tool surface" in AUTOMATION_CAPABILITIES_MD
-    assert "Absence of an observed capability" in AUTOMATION_CAPABILITIES_MD
+    assert "historical replayability" in AUTOMATION_CAPABILITIES_MD
+    assert "future automation feasibility" in AUTOMATION_CAPABILITIES_MD
+    assert "CONFIRMED" in AUTOMATION_CAPABILITIES_MD
+    assert "PLAUSIBLE / TESTABLE" in AUTOMATION_CAPABILITIES_MD
+    assert "BLOCKED" in AUTOMATION_CAPABILITIES_MD
+    assert "five design moves" in AUTOMATION_CAPABILITIES_MD
+    assert "next autonomy boundary" in AUTOMATION_CAPABILITIES_MD.lower()
+    assert "scoped standing authorization" in AUTOMATION_CAPABILITIES_MD
+    assert "financial, regulated, clinical" in AUTOMATION_CAPABILITIES_MD
     assert "Shadow trials instead of historical replay" in AUTOMATION_CAPABILITIES_MD
