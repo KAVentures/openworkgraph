@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _execution(execution_id: str, session_id: str, steps: list[str], *, family: str = "family:demo") -> dict:
+    return {
+        "execution_id": execution_id,
+        "actor_kind": "human",
+        "family_key": family,
+        "family_basis": "structural",
+        "started_at": "2026-10-01T10:00:00Z",
+        "ended_at": "2026-10-01T10:05:00Z",
+        "duration_seconds": 300,
+        "outcome_status": "observed_completion",
+        "steps": steps,
+        "observation_level": "structural",
+        "evidence_refs": [],
+        "_session_ids": [session_id],
+    }
+
+
+def _event(event_id: str, session_id: str, at: str, event_type: str, app: str, *, metadata: dict | None = None) -> dict:
+    return {
+        "event_id": event_id,
+        "session_id": session_id,
+        "observed_at": at,
+        "schema_version": "1",
+        "actor_id": "human",
+        "device_id": "device",
+        "sensor_id": "sensor",
+        "source": "test",
+        "app": app,
+        "window_title": app,
+        "event_type": event_type,
+        "duration_seconds": 30,
+        "metadata": metadata or {},
+    }
+
+
+def _install_fixture(monkeypatch: pytest.MonkeyPatch):
+    from server import workflow_evidence as module
+
+    executions = [
+        _execution("execution:aaaaaaaaaaaaaaaa", "s1", ["surface:gmail", "surface:salesforce", "surface:sheets"]),
+        _execution("execution:bbbbbbbbbbbbbbbb", "s2", ["surface:gmail", "surface:salesforce", "surface:sheets"]),
+        _execution("execution:cccccccccccccccc", "s3", ["surface:gmail", "surface:slack", "surface:sheets"]),
+    ]
+    events = [
+        _event(
+            "e1",
+            "s1",
+            "2026-10-01T10:00:10Z",
+            "focus_span",
+            "Gmail",
+            metadata={"resource_reference": {"provider": "gmail", "resource_kind": "conversation"}},
+        ),
+        _event(
+            "e2",
+            "s1",
+            "2026-10-01T10:01:00Z",
+            "clipboard_copy",
+            "Google Sheets",
+            metadata={"clipboard_transfer_id": "t1", "action": "copy"},
+        ),
+        _event(
+            "e3",
+            "s1",
+            "2026-10-01T10:01:05Z",
+            "clipboard_paste",
+            "Salesforce",
+            metadata={"clipboard_transfer_id": "t1", "action": "paste"},
+        ),
+        _event("e4", "s2", "2026-10-01T10:00:10Z", "focus_span", "Gmail"),
+        _event("e5", "s3", "2026-10-01T10:00:10Z", "focus_span", "Gmail"),
+    ]
+    monkeypatch.setattr(module, "_load", lambda **_kwargs: list(events))
+    monkeypatch.setattr(module, "derive_executions", lambda _raw: list(executions))
+    return module
+
+
+def test_explicit_run_selection_keeps_support_descriptive(monkeypatch: pytest.MonkeyPatch):
+    module = _install_fixture(monkeypatch)
+    bundle = module.build_workflow_evidence(
+        execution_ids=(
+            "execution:aaaaaaaaaaaaaaaa,execution:bbbbbbbbbbbbbbbb,"
+            "execution:cccccccccccccccc"
+        )
+    )
+
+    assert bundle["selector"]["selection_mode"] == "explicit_executions"
+    assert bundle["selector"]["family_selection_is_ground_truth"] is False
+    assert bundle["structural_alignment"]["common_path_claimed"] is False
+    assert bundle["interpretation_contract"]["descriptive_not_prescriptive"] is True
+    assert bundle["interpretation_contract"]["observed_behavior_is_not_policy"] is True
+    assert bundle["interpretation_contract"]["observed_behavior_is_not_permission"] is True
+
+    high = {row["step"]: row for row in bundle["structural_alignment"]["high_support_steps"]}
+    uncommon = {row["step"]: row for row in bundle["structural_alignment"]["less_common_observed_steps"]}
+    assert high["surface:gmail"]["support_runs"] == 3
+    assert high["surface:salesforce"]["support_runs"] == 2
+    assert uncommon["surface:slack"]["support_runs"] == 1
+    assert "not a required order" in high["surface:gmail"]["interpretation"]
+
+
+def test_evidence_bundle_preserves_provenance_without_inventing_payloads(monkeypatch: pytest.MonkeyPatch):
+    module = _install_fixture(monkeypatch)
+    bundle = module.build_workflow_evidence(execution_ids="execution:aaaaaaaaaaaaaaaa")
+
+    assert bundle["provenance"]["source"] == "canonical_local_event_store"
+    assert bundle["canonical_evidence_included"] is True
+    returned = bundle["canonical_evidence"][0]
+    assert returned["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
+    assert all(event["untrusted_observed_data"] is True for event in returned["events"])
+
+    transfers = bundle["data_movement"]["clipboard_transfers"]
+    assert len(transfers) == 1
+    assert transfers[0]["clipboard_contents_observed"] is False
+    assert bundle["data_movement"]["clipboard_contents_captured"] is False
+    assert "clipboard values" in bundle["ai_drafting_guidance"]["rules"][5]
+
+
+def test_family_selection_is_navigation_only(monkeypatch: pytest.MonkeyPatch):
+    module = _install_fixture(monkeypatch)
+    bundle = module.build_workflow_evidence(family_key="family:demo")
+    candidates = module.list_workflow_evidence_candidates(min_runs=2)
+
+    assert bundle["selector"]["selection_mode"] == "derived_family_candidate"
+    assert bundle["selector"]["family_selection_is_ground_truth"] is False
+    assert candidates["family_grouping_is_navigation_only"] is True
+    assert candidates["explicit_execution_selection_supported"] is True
+    assert candidates["families"][0]["family_is_ground_truth"] is False
+
+
+def test_skill_prompt_preserves_authority_boundary():
+    from mcp_server.workflow_evidence_tools import draft_skill_prompt
+
+    prompt = draft_skill_prompt(execution_ids="execution:aaaaaaaaaaaaaaaa")
+    lowered = prompt.lower()
+    assert "get_workflow_evidence" in prompt
+    assert "canonical evidence" in lowered
+    assert "never infer policy or permission from repetition" in lowered
+    assert "never claim clipboard contents were observed" in lowered
+    assert "do not write anything back to live business systems" in lowered
+
+
+def test_dashboard_exports_through_authenticated_fetch_and_defaults_to_redacted():
+    source = (ROOT / "dashboard" / "workflow_evidence.js").read_text(encoding="utf-8")
+    assert "await window.__owgAuthReady" in source
+    assert "fetch(`/v1/workflow-evidence/export?" in source
+    assert "downloadEvidence(index,'redacted')" in source
+    assert "Export redacted evidence" in source
+    assert "confirm('Export the stored privacy-hardened representation?" in source
+    assert "window.location" not in source
