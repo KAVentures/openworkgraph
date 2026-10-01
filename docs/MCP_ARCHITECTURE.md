@@ -91,7 +91,7 @@ Existing saved configurations that explicitly launch:
 python -m mcp_server.secure_stdio
 ```
 
-continue to receive the existing 24-tool surface. OpenWorkGraph does not silently remove or rename those tools underneath already configured clients. The workflow-evidence drafting helper is additive and is also registered where the compatibility server supports the shared tool-registration path; existing tool names remain unchanged.
+continue to receive the existing 24-tool surface exactly. OpenWorkGraph does not silently add, remove or rename tools underneath already configured legacy clients. `get_workflow_evidence` is exposed on the compact surface used by new connections; users who want the dedicated workflow-to-skill path can create/reconnect through the current compact MCP configuration. The underlying canonical evidence and legacy tools remain available to older configurations.
 
 The compact stdio entrypoint is:
 
