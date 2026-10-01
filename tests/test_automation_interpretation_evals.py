@@ -12,6 +12,22 @@ def _cases() -> list[dict]:
     return list(payload["cases"])
 
 
+def _perfect_score_sheet() -> dict:
+    return {
+        "model": "test-model",
+        "client": "test-client",
+        "revision": "deadbeef",
+        "cases": [
+            {
+                "id": case["id"],
+                "must_cover": [2] * len(case["must_cover"]),
+                "must_not": [2] * len(case["must_not"]),
+            }
+            for case in _cases()
+        ],
+    }
+
+
 def test_automation_interpretation_eval_has_balanced_underestimation_and_overreach_cases():
     cases = _cases()
     assert 5 <= len(cases) <= 8
@@ -41,7 +57,33 @@ def test_eval_set_covers_known_interpretation_failure_modes():
         "clinical",
         "standing authorization",
         "macro",
-        "nothing worth automating" if False else "not yet strong evidence",
+        "not yet strong evidence",
     )
     for concept in required_concepts:
         assert concept in text
+
+
+def test_eval_scorer_reports_both_bias_axes_and_total(tmp_path):
+    from evals.score_automation_interpretation import score
+
+    path = tmp_path / "scores.json"
+    path.write_text(json.dumps(_perfect_score_sheet()), encoding="utf-8")
+    report = score(path)
+
+    assert report["underestimation_score"] == 100.0
+    assert report["overreach_score"] == 100.0
+    assert report["total_score"] == 100.0
+    assert report["critical_failures"] == []
+
+
+def test_eval_scorer_flags_must_not_violation_as_critical(tmp_path):
+    from evals.score_automation_interpretation import score
+
+    sheet = _perfect_score_sheet()
+    sheet["cases"][0]["must_not"][0] = 0
+    path = tmp_path / "scores.json"
+    path.write_text(json.dumps(sheet), encoding="utf-8")
+    report = score(path)
+
+    assert report["total_score"] < 100.0
+    assert report["critical_failures"] == ["gmail_salesforce_sheets_reply:must_not[0]"]
