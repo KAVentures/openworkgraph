@@ -32,6 +32,7 @@ def main() -> None:
     import server.agent_brief_routes  # noqa: F401
     import server.playbook_routes  # noqa: F401
     import server.agent_session_routes  # noqa: F401
+    import server.workflow_evidence_routes  # noqa: F401
 
     import server.agent_capture_runtime as agent_capture_runtime
     import server.agent_session_sensor as agent_session_sensor
@@ -52,7 +53,7 @@ def main() -> None:
 
     def _start_background_runtime() -> None:
         # The canonical DB has already been initialized by server.main.lifespan.
-        # Prepare additive stores synchronously before any scanner/spool thread can
+        # Prepare additive stores synchronously before any scanner/spool worker thread can
         # touch SQLite. These initializers are idempotent.
         init_agent_session_store()
         agent_working_detail.init_store()
