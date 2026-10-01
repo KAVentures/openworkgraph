@@ -6,18 +6,34 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, Response
 
 from . import main as core
-from .browser_signal_settings import public_settings, save_settings
+from .browser_signal_settings import SETTING_KEYS, apply_profile, public_settings, save_settings
 from .main import ROOT
 from .secure_app import app
 
 
+# Browser privacy hardening receives core._runtime_config(). Merge these local
+# signal settings there so the server, not only the extension UI, enforces the
+# selected privacy profile on every event and on legacy-row hardening.
+_BASE_RUNTIME_CONFIG = core._runtime_config
+if not getattr(core, "_owg_browser_signal_runtime_wrapped", False):
+    def _runtime_config_with_signal_settings() -> dict[str, Any]:
+        cfg = dict(_BASE_RUNTIME_CONFIG())
+        cfg.update(public_settings()["settings"])
+        return cfg
+
+    core._runtime_config = _runtime_config_with_signal_settings
+    core._owg_browser_signal_runtime_wrapped = True
+
+
 def browser_context_with_signal_settings() -> dict[str, Any]:
+    runtime = core._runtime_config()
     return {
         "organization_id": str(core.COLLECTOR_STATUS.get("organization_id") or ""),
         "actor_id": str(core.COLLECTOR_STATUS.get("actor_id") or ""),
         "device_id": str(core.COLLECTOR_STATUS.get("device_id") or ""),
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
+        "excluded_browser_host_patterns": list(runtime.get("excluded_browser_host_patterns") or []),
     }
 
 
@@ -32,7 +48,9 @@ async def update_browser_signal_settings(request: Request) -> dict[str, Any]:
         payload = {}
     current = public_settings()["settings"]
     if isinstance(payload, dict):
-        for key in ("performance_timing", "file_upload_category"):
+        if payload.get("profile") in {"privacy_first", "context", "rich_enterprise"}:
+            current = apply_profile(str(payload["profile"]), current)
+        for key in SETTING_KEYS:
             if key in payload:
                 current[key] = bool(payload[key])
     save_settings(current)
