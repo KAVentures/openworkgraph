@@ -51,4 +51,5 @@ test('does not turn arbitrary URLs or sensitive-looking app routes into referenc
   assert.equal(parse('https://example.com/reset/SECRETSECRETSECRET'), null);
   assert.equal(parse('https://github.com/KAVentures/openworkgraph/settings'), null);
   assert.equal(parse('https://mail.google.com/mail/u/0/#inbox'), null);
+  assert.equal(parse('https://mail.google.com/mail/u/0/#search/averylongsinglewordquery'), null);
 });
