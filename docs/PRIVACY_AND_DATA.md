@@ -2,7 +2,7 @@
 
 OpenWorkGraph is designed to collect enough workflow evidence for useful process/context analysis without becoming a screen recorder or keylogger.
 
-This document describes the current v0.48 behavior. It is a technical description of the prototype, not a claim that every future enterprise deployment has the same policy requirements.
+This document describes the current v0.114 behavior. It is a technical description of the prototype, not a claim that every future enterprise deployment has the same policy requirements.
 
 ## Local-first boundary
 
@@ -77,6 +77,39 @@ The keyboard sensor reports counts/timing only.
 
 Native accessibility/UI Automation code deliberately avoids value/text patterns that would expose field contents.
 
+## Browser-context privacy profiles (v0.114)
+
+Business-object references are a separate optional browser-context layer. They do not turn typed text, clipboard contents, page contents or arbitrary full URLs into capture inputs.
+
+| Profile | Business-object reference | Provider locator | Stored browser path |
+|---|---|---|---|
+| **Privacy-first** (default) | Off | No | Known Google Docs/Drive, GitHub, Salesforce, Jira and Linear object-ID positions are masked to `:id`. This is deliberately stricter than pre-v0.114 path behavior. |
+| **Context** | On | No | Same known object-ID positions are masked; repeated observations can share an installation-keyed `owg:r:…` token. |
+| **Rich enterprise** | On | Yes, only after allowlist validation | The ordinary generic URL sanitizer still removes query/fragment/secret-like material; the separately validated minimal locator may be retained for authorized connector resolution. |
+| **Custom** | User-selected | User-selected, but only when references are on | Follows the selected switches. |
+
+The initial allowlist recognizes Google Docs/Sheets/Slides/Drive objects, known Gmail conversation routes, GitHub pull requests/issues, Salesforce records, Jira issues and Linear issues. Unknown sites and arbitrary sensitive-looking routes are not guessed; they fall back to ordinary sanitized browser evidence.
+
+### Resource-reference token boundaries
+
+Context mode is intended to support correlation without turning short provider IDs into a reversible local identifier database. v0.114 therefore uses two keyed stages rather than a plain SHA-256 of the provider locator:
+
+1. **Browser durable queue:** before a resource-reference event can enter the extension retry queue, the paired extension HMACs the canonical allowlisted reference with the installation browser-pairing secret. The queue-side `owg:e:…` fingerprint is therefore not recoverable by simply enumerating likely Jira keys, GitHub PR numbers or Linear issue keys and hashing them.
+2. **Local event persistence:** at ingest the server independently validates the provider/kind/host and, when present, the locator. It then replaces the browser fingerprint with a different `owg:r:…` HMAC keyed by the installation API secret. The incoming browser fingerprint is not retained in the persisted event.
+3. **Rich enterprise validation:** when a locator is present, the server derives the expected browser fingerprint from the validated locator and rejects a conflicting supplied fingerprint before storing anything.
+
+The resulting tokens are stable within one installation while the relevant local capability secrets remain unchanged. Different installations produce different persisted tokens for the same source object. Re-hardening an already persisted token is idempotent.
+
+These keys are local capability secrets under the same threat-model limit described above: this protects against offline dictionary recovery from a copied evidence token, not against malware already able to read the current user's OWG credential files.
+
+### Capture versus disclosure
+
+The profile controls what this browser-context feature may retain locally. It does **not** by itself grant an AI or an organization access to that data. Connected-AI detail, export choices and Gateway sharing remain separate boundaries. An organization may narrow endpoint sharing; it does not make a locally stricter capture choice richer.
+
+Host/title exclusions are applied before an optional Rich enterprise locator can enter the browser retry queue, and the local server applies the same exclusion policy again at ingest. Incognito/private extension operation remains disabled.
+
+The browser sensor version is also checked independently. When the local server observes an older unpacked extension, the dashboard displays **Browser sensor update available** and tells the user to reload it. Ordinary existing capture can continue, but v0.114 resource-reference behavior should not be treated as active until the expected sensor version is running.
+
 ### Optional agent-session continuity (v0.109)
 
 Visible agent-session messages are a deliberate exception to the normal no-typed-text capture rule, and only when explicitly enabled by the local user. The feature is **OFF by default**. Turning native observation or a source OFF creates a hard capture boundary: re-enabling starts at the then-current end of the native session files rather than replaying activity from the disabled interval.
@@ -140,7 +173,7 @@ Window and tab titles, button and control labels and URL paths carry most of the
 | `Acme Logistics AB \| Account \| Salesforce` | unchanged |
 
 - **Tokenized when detected:** people's names, email addresses, phone numbers, personal identity numbers, IBANs, payment cards, credentials and explicitly labelled personal IDs.
-- **Kept:** subjects, document and project names, company and product names, business references (order, invoice, PR numbers), dates and amounts.
+- **Kept:** subjects, document and project names, company and product names, business references (order, invoice, PR numbers), dates and amounts. Known SaaS object-ID positions in browser paths are additionally governed by the v0.114 browser-context profile above.
 - **Same person, same token:** tokens are keyed to this installation. Once a name has been seen next to an email address, both map to the same person.
 - **Best effort, not a guarantee:** names are recognised from a name lexicon and context cues. Unusual or all-lowercase names can be missed, and a company that is also a surname can be tokenized. Browser events also keep the recognised work surface (Gmail, Salesforce, …) for grouping.
 - **Existing data:** after upgrading, evidence stored before v0.108 is updated once in the same way, in checkpointed batches (only rows where a personal detail is found are rewritten). Small histories finish during start-up; a long one continues in the background. Until it finishes, AI context is served as Redacted even if you chose Full, and exports are redacted; Full returns automatically afterwards. Older versions had already cut browser titles down to the site name, and that detail cannot be restored. Rows already sent to an organization Gateway are not changed there.
@@ -224,17 +257,17 @@ OpenWorkGraph is not designed to erase every business fact. The following may re
 - document/page/window titles
 - safe UI labels
 
-This is a deliberate utility/privacy tradeoff. A rich export should be reviewed before it is shared beyond the intended analysis context.
+This is a deliberate utility/privacy tradeoff. A rich export should be reviewed before it is shared beyond the intended analysis context. Browser business-object IDs/locators are separately governed by the v0.114 browser-context profile rather than assumed safe merely because they are business references.
 
 ## Excluded applications/pages
 
 Configured excluded applications/title patterns and excluded browser contexts are handled specially. Excluded rows can retain timing/activity evidence while omitting sensitive content labels/titles.
 
-This lets broad effort timing remain useful without preserving content from deliberately excluded surfaces.
+This lets broad effort timing remain useful without preserving content from deliberately excluded surfaces. v0.114 checks these exclusions before a Rich enterprise resource locator enters the browser retry queue and again at server ingest.
 
 ## Browser URL handling
 
-Browser evidence removes query strings and fragments. Token-like or identifier-like path segments are normalized where possible. Authentication/recovery/invite/token-related path segments receive additional sanitization.
+Browser evidence removes query strings and fragments. Token-like or identifier-like path segments are normalized where possible. Authentication/recovery/invite/token-related path segments receive additional sanitization. Since v0.114, known Google Docs/Drive, GitHub, Salesforce, Jira and Linear object-ID route positions are also masked in Privacy-first and Context modes; a separately validated provider locator is available only when the Rich enterprise locator switch is explicitly enabled.
 
 ## MCP trust boundary
 
