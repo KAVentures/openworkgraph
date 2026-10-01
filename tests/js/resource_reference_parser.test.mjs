@@ -53,3 +53,12 @@ test('does not turn arbitrary URLs or sensitive-looking app routes into referenc
   assert.equal(parse('https://mail.google.com/mail/u/0/#inbox'), null);
   assert.equal(parse('https://mail.google.com/mail/u/0/#search/averylongsinglewordquery'), null);
 });
+
+test('durable browser resource fingerprints use pairing-secret HMAC rather than a plain hash', () => {
+  const source = fs.readFileSync(new URL('../../browser_extension/resource_reference_enrichment.js', import.meta.url), 'utf8');
+  assert.match(source, /OWGBrowserAuth\?\.pairingSecret/);
+  assert.match(source, /name:\s*"HMAC"/);
+  assert.match(source, /openworkgraph-resource-reference-sensor-v1:/);
+  assert.match(source, /owg:e:/);
+  assert.equal(source.includes('crypto.subtle.digest("SHA-256"'), false);
+});
