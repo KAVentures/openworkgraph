@@ -16,15 +16,17 @@ DEFAULTS: dict[str, bool] = {
 SETTING_KEYS = tuple(DEFAULTS)
 
 PROFILES: dict[str, dict[str, bool]] = {
-    # Exactly preserves the old default capture posture.
+    # Keeps optional business-reference capture off. v0.114 also masks known
+    # SaaS object-ID positions in stored URL paths, which is deliberately stricter
+    # than the pre-v0.114 privacy-first path behavior.
     "privacy_first": {
         "performance_timing": True,
         "file_upload_category": False,
         "business_object_references": False,
         "resource_reference_locators": False,
     },
-    # Correlate the same business object across tools using an OWG-local stable
-    # token; do not retain the provider's actual object/thread/record locator.
+    # Correlate the same business object across tools using an installation-keyed
+    # local token; do not retain the provider's actual object/thread/record locator.
     "context": {
         "performance_timing": True,
         "file_upload_category": False,
@@ -108,12 +110,12 @@ def public_settings() -> dict[str, Any]:
             "business_object_references": {
                 "enabled": settings["business_object_references"],
                 "content": False,
-                "description": "Recognize allowlisted work objects such as a GitHub PR, Google document, Jira issue or Salesforce record. Full URLs are never stored.",
+                "description": "Recognize allowlisted work objects such as a GitHub PR, Google document, Jira issue or Salesforce record. Context mode stores only an installation-keyed correlation token; full URLs are never stored.",
             },
             "resource_reference_locators": {
                 "enabled": settings["resource_reference_locators"],
                 "content": False,
-                "description": "Optional provider-specific object locator for connector resolution. Off in Privacy-first and Context modes.",
+                "description": "Optional validated provider-specific object locator for connector resolution. Off in Privacy-first and Context modes.",
             },
         },
         "derived_without_new_sensor": [
