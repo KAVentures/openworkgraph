@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from collector.privacy import should_exclude
+from resource_references import normalize_resource_reference
 
 SENSITIVE_PATH_PREDECESSORS = {
     "auth", "authenticate", "callback", "confirm", "invite", "invitation",
@@ -71,6 +72,53 @@ def sanitize_pathname(pathname: str) -> str:
     if trailing and not result.endswith("/"):
         result += "/"
     return result
+
+
+def minimize_known_resource_path(hostname: str, pathname: str) -> str:
+    """Hide allowlisted SaaS object IDs while preserving useful route structure.
+
+    Generic sanitization intentionally cannot know that a 15/18-character
+    Salesforce ID or a short GitHub issue number is a business-object locator.
+    Privacy-first and Context modes therefore mask those known route positions.
+    Rich enterprise mode may retain the already-sanitized path plus the separately
+    validated resolver locator.
+    """
+    host = str(hostname or "").strip().lower()
+    path = sanitize_pathname(pathname)
+
+    if host == "docs.google.com":
+        return re.sub(
+            r"^/(document|spreadsheets|presentation)/d/[^/]+",
+            r"/\1/d/:id",
+            path,
+            count=1,
+        )
+    if host == "drive.google.com":
+        return re.sub(r"^/file/d/[^/]+", "/file/d/:id", path, count=1)
+    if host == "github.com":
+        return re.sub(
+            r"^/([^/]+)/([^/]+)/(pull|issues)/[^/]+",
+            r"/\1/\2/\3/:id",
+            path,
+            count=1,
+        )
+    if host.endswith(".salesforce.com") or host.endswith(".force.com"):
+        return re.sub(
+            r"^(/(?:lightning/)?r/[^/]+/)[^/]+",
+            r"\1:id",
+            path,
+            count=1,
+        )
+    if host.endswith(".atlassian.net"):
+        return re.sub(r"^/browse/[^/]+", "/browse/:id", path, count=1)
+    if host == "linear.app":
+        return re.sub(
+            r"^/([^/]+)/issue/[^/]+",
+            r"/\1/issue/:id",
+            path,
+            count=1,
+        )
+    return path
 
 
 def sanitize_url_value(value: str) -> str:
@@ -150,14 +198,40 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
 
     Excluded pages retain only structural event/action evidence. Query values,
     fragments and token-like paths are removed even for non-excluded pages.
+    Business-object references are separately gated: privacy-first mode drops
+    them entirely, context mode keeps only a stable OWG correlation token, and
+    rich mode may retain the validated minimal provider locator.
+
+    A live browser request reaches this function with a server-authored base
+    ``privacy`` object that does not contain the v0.114 reference-policy fields.
+    Persisted rows already hardened by this function do contain those fields. We
+    use that server-authored marker only to make local DB re-hardening idempotent;
+    a live producer cannot use a prebuilt ``owg:r:…`` token to bypass re-keying.
     """
     e = copy.deepcopy(event)
     meta = sanitize_browser_metadata(e.get("metadata") or {})
     if not isinstance(meta, dict):
         meta = {}
+
+    incoming_privacy = meta.get("privacy") if isinstance(meta.get("privacy"), dict) else {}
+    already_persisted = "business_object_references" in incoming_privacy
+
+    raw_reference = meta.pop("resource_reference", None)
+    reference = None
+    references_enabled = bool(config.get("business_object_references", False))
+    locators_enabled = references_enabled and bool(config.get("resource_reference_locators", False))
+    if references_enabled:
+        reference = normalize_resource_reference(
+            raw_reference,
+            include_locator=locators_enabled,
+            allow_persisted=already_persisted,
+        )
+
     page = sanitize_browser_page(meta.get("page") if isinstance(meta.get("page"), dict) else {})
     title = str(page.get("title") or e.get("window_title") or "")
     hostname = str(page.get("hostname") or "")
+    if page and not locators_enabled:
+        page["pathname"] = minimize_known_resource_path(hostname, str(page.get("pathname") or "/"))
     excluded = browser_event_is_excluded(
         app=str(e.get("app") or "Browser"),
         title=title,
@@ -165,13 +239,15 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         config=config,
     )
 
-    privacy = dict(meta.get("privacy") or {}) if isinstance(meta.get("privacy"), dict) else {}
+    privacy = dict(incoming_privacy)
     privacy.update({
         "typed_values": False,
         "clipboard_contents": False,
         "url_query": False,
         "url_fragment": False,
         "token_like_path_segments": False,
+        "business_object_references": references_enabled,
+        "resource_reference_locators": locators_enabled,
     })
 
     if excluded:
@@ -186,6 +262,8 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         }
         return e
 
+    if reference:
+        meta["resource_reference"] = reference
     if page:
         meta["page"] = page
         e["window_title"] = str(page.get("title") or page.get("hostname") or e.get("window_title") or "")

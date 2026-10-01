@@ -146,6 +146,15 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.114: configurable browser context with keyed correlation
+
+          - **Privacy remains configurable:** Privacy-first keeps business-object references off and now masks known SaaS object-ID positions in stored browser paths; Context correlates repeated work with an installation-keyed token; Rich enterprise explicitly opts into minimal validated provider locators for authorized connector resolution.
+          - **Allowlisted object references:** Google Docs/Sheets/Slides/Drive, known Gmail conversation routes, GitHub PR/issues, Salesforce records, Jira issues and Linear issues can be recognized without storing full URLs, query values, fragments or page contents.
+          - **Two keyed persistence boundaries:** the browser durable queue uses an HMAC keyed by the browser-pairing secret, and the local server replaces that fingerprint with a second HMAC keyed by the installation API secret before database persistence. Short Jira keys or PR numbers cannot be recovered by enumerating plain hashes from the stored token.
+          - **Exclusions still fail closed:** configured host/title exclusions are checked before an optional Rich enterprise locator can enter the extension retry queue, and the server applies policy again at ingest.
+          - **Browser sensor update notice:** the v1.14 browser sensor is version-checked by the local server; the dashboard tells unpacked-extension users to reload when an older sensor is still running. Existing capture continues while new v0.114 browser-context features wait for the current sensor.
+          - **No platform expansion hidden in the release:** native macOS/Windows active-URL capture and enterprise content connectors remain separate future work; existing desktop/browser/agent/MCP/Gateway behavior stays intact.
+
           ### v0.113: frontier-aware automation interpretation
 
           - **Compact evidence keeps work identity:** compact MCP workflow rows retain a bounded protected work surface and title, so browser-heavy work can remain distinguishable as Gmail, Salesforce, Sheets, and similar surfaces without exposing rich metadata.
@@ -187,11 +196,11 @@ jobs:
           OpenWorkGraph can now observe supported local agent sessions directly and provide a grounded handoff between agents without turning transcripts into canonical workflow evidence.
 
           - **Native session observation:** Claude Code and Codex session files can feed privacy-minimized structural evidence into the existing agent-run model. First enable starts new-only rather than silently backfilling old sessions, and richer hook/SDK/OTel evidence remains preferred when available.
-          - **Separate message layer:** visible user/assistant messages are OFF by default and live in a separate local store when explicitly enabled. Hidden reasoning/thinking, raw native records and tool outputs are not retained as session continuity content.
+          - **Separate message layer:** visible user/assistant messages are OFF by default and live in a separate local store when explicitly enabled. Hidden reasoning/thinking, raw provider records and tool outputs are not retained as session continuity content.
           - **Grounded cross-agent handoff:** the compact MCP surface adds get_agent_handoff, combining bounded optional visible messages with matching canonical structural execution evidence and explicit provenance/grounding semantics.
           - **Independent privacy controls:** message capture, connected-AI message reads, retention and organization sharing are separate choices. Existing Context/Observe/Brief settings do not silently grant transcript access.
           - **Organization sharing:** agent-session messages do not inherit allow_agent_events. Upload requires endpoint opt-in allow_gateway_session_messages, organization opt-in allow_agent_session_messages and a device credential with agent-sessions:write; reads separately require agent-sessions:read. Existing device credentials are not silently broadened after upgrade, local restriction wins, and a separate sync cursor prevents later opt-in from backfilling older saved messages.
-          - **Transcript lifecycle:** shared session messages obey organization retention immediately at read time and during physical cleanup/purge. Oversized native JSONL records are skipped in bounded chunks so one malformed/giant provider record cannot pin observation of later session activity.
+          - **Transcript lifecycle:** shared session messages obey the organization's retention immediately at read time and during physical cleanup/purge. Oversized native JSONL records are skipped in bounded chunks so one malformed/giant provider record cannot pin observation of later session activity.
 
           ### v0.108: full context, personal details tokenized
           Titles keep their context; only detected personal details are replaced.
