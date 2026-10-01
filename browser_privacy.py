@@ -201,18 +201,31 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
     Business-object references are separately gated: privacy-first mode drops
     them entirely, context mode keeps only a stable OWG correlation token, and
     rich mode may retain the validated minimal provider locator.
+
+    A live browser request reaches this function with a server-authored base
+    ``privacy`` object that does not contain the v0.114 reference-policy fields.
+    Persisted rows already hardened by this function do contain those fields. We
+    use that server-authored marker only to make local DB re-hardening idempotent;
+    a live producer cannot use a prebuilt ``owg:r:…`` token to bypass re-keying.
     """
     e = copy.deepcopy(event)
     meta = sanitize_browser_metadata(e.get("metadata") or {})
     if not isinstance(meta, dict):
         meta = {}
 
+    incoming_privacy = meta.get("privacy") if isinstance(meta.get("privacy"), dict) else {}
+    already_persisted = "business_object_references" in incoming_privacy
+
     raw_reference = meta.pop("resource_reference", None)
     reference = None
     references_enabled = bool(config.get("business_object_references", False))
     locators_enabled = references_enabled and bool(config.get("resource_reference_locators", False))
     if references_enabled:
-        reference = normalize_resource_reference(raw_reference, include_locator=locators_enabled)
+        reference = normalize_resource_reference(
+            raw_reference,
+            include_locator=locators_enabled,
+            allow_persisted=already_persisted,
+        )
 
     page = sanitize_browser_page(meta.get("page") if isinstance(meta.get("page"), dict) else {})
     title = str(page.get("title") or e.get("window_title") or "")
@@ -226,7 +239,7 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         config=config,
     )
 
-    privacy = dict(meta.get("privacy") or {}) if isinstance(meta.get("privacy"), dict) else {}
+    privacy = dict(incoming_privacy)
     privacy.update({
         "typed_values": False,
         "clipboard_contents": False,
