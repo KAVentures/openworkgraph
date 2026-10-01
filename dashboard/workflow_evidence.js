@@ -64,7 +64,7 @@
     const host=ensureCard()?.querySelector('#workflowEvidenceCandidates');
     if(!host) return;
     if(!families.length){
-      host.innerHTML='<div class="muted">No repeated structural family has at least two observed executions yet. You can still use raw/redacted exports or ask a connected AI to inspect canonical evidence directly.</div>';
+      host.innerHTML='<div class="muted">No repeated structural family has at least two observed executions yet. You can still use Stored/Redacted exports or ask a connected AI to inspect canonical evidence directly.</div>';
       return;
     }
     host.innerHTML=families.slice(0,8).map((item,index)=>{
@@ -183,7 +183,7 @@
       renderFamilies();
     }catch(_){
       const host=ensureCard()?.querySelector('#workflowEvidenceCandidates');
-      if(host) host.innerHTML='<div class="muted">Workflow evidence examples are unavailable right now. Raw/redacted evidence export and canonical MCP trace access are unchanged.</div>';
+      if(host) host.innerHTML='<div class="muted">Workflow evidence examples are unavailable right now. Stored/Redacted evidence export and canonical MCP trace access are unchanged.</div>';
     }finally{loading=false;}
   }
 
