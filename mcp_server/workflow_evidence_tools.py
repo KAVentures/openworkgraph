@@ -131,7 +131,9 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
             "this_tool_is_for": "evidence_for_external_ai_skill_or_procedure_drafting",
             "skill_created_by_openworkgraph": False,
             "family_key_is_ground_truth": False,
-            "raw_trace_tool": "get_workflow_trace",
+            "canonical_trace_tool": "get_workflow_trace",
+            "evidence_is_pre_privacy_capture": False,
+            "stored_evidence_is_privacy_hardened": True,
             "connected_ai_should_author_and_review_with_user": True,
         }
         return result
