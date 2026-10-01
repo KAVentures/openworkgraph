@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.112.0"
+EXPECTED_VERSION = "0.113.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -41,6 +41,11 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.113: frontier-aware automation interpretation" in workflow
+    assert "Missing historical payload" in workflow
+    assert "next autonomy boundary" in workflow
+    assert "consequence-aware" in workflow
+    assert "evaluation corpus" in workflow
     assert "### v0.112: trustworthy AI answers and agent-run accounting" in workflow
     assert "opaque cross-sensor identity" in workflow
     assert "Token usage" in workflow
@@ -65,11 +70,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
-    changelog = (ROOT / "docs" / "CHANGELOG_V0112.md").read_text(encoding="utf-8")
-    assert "opaque" in changelog
-    assert "Token usage" in changelog
-    assert "unknown" in changelog
-    assert "raw tool output" in changelog
+    changelog = (ROOT / "docs" / "CHANGELOG_V0113.md").read_text(encoding="utf-8")
+    assert "historical replayability" in changelog
+    assert "next autonomy boundary" in changelog
+    assert "consequence-aware" in changelog
+    assert "underestimation" in changelog
+    assert "overreach" in changelog
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
