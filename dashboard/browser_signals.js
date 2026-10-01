@@ -55,6 +55,11 @@
     const help=document.querySelector('#browserPrivacyProfileHelp'); if(help) help.textContent=profileHelp(d?.profile||'custom');
   }
 
+  function clearVersionNotice(el){
+    el.className='';
+    el.replaceChildren();
+  }
+
   async function renderBrowserVersionNotice(){
     const el=document.querySelector('#browserSensorVersionStatus');
     if(!el) return;
@@ -63,15 +68,19 @@
       if(!r.ok) return;
       const d=await r.json();
       const sensor=d?.browser_sensor;
-      if(!sensor){el.innerHTML='';return;}
+      if(!sensor){clearVersionNotice(el);return;}
       if(sensor.version_ok===false){
         const current=String(sensor.sensor_version||'older version');
         const expected=String(sensor.expected_sensor_version||d?.expected_browser_sensor_version||'the current version');
         el.className='note';
-        el.innerHTML=`<strong>Browser sensor update available</strong><br><span class="muted">Open your browser's extensions page and reload the unpacked OpenWorkGraph extension. Running: ${current}. Expected: ${expected}. Capture continues, but new browser-context features stay unavailable until the sensor is reloaded.</span>`;
+        const title=document.createElement('strong');
+        title.textContent='Browser sensor update available';
+        const detail=document.createElement('span');
+        detail.className='muted';
+        detail.textContent=`Open your browser's extensions page and reload the unpacked OpenWorkGraph extension. Running: ${current}. Expected: ${expected}. Capture continues, but new browser-context features stay unavailable until the sensor is reloaded.`;
+        el.replaceChildren(title,document.createElement('br'),detail);
       }else{
-        el.className='';
-        el.innerHTML='';
+        clearVersionNotice(el);
       }
     }catch(_){}
   }
