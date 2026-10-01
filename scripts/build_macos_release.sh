@@ -8,6 +8,7 @@ PKG="$DIST/OpenWorkGraph-macOS-v$VERSION"
 STAGE="$DIST/.openworkgraph-payload"
 PAYLOAD_ARCHIVE="$DIST/.openworkgraph-payload.tar.gz"
 LAUNCHER="$PKG/START_OPENWORKGRAPH.command"
+DEMO_LAUNCHER="$PKG/TRY_DEMO_OPENWORKGRAPH.command"
 
 rm -rf "$DIST"
 mkdir -p "$PKG" "$STAGE"
@@ -63,8 +64,12 @@ if ! tar -xzf "$PAYLOAD" -C "$TMP_ROOT"; then
 fi
 rm -f "$PAYLOAD"
 
+MODE="observe"
+case "$(basename "$0")" in
+  *DEMO*) MODE="demo" ;;
+esac
 chmod +x "$TMP_ROOT/START_ON_MAC.command" 2>/dev/null || true
-/bin/bash "$TMP_ROOT/START_ON_MAC.command"
+/bin/bash "$TMP_ROOT/START_ON_MAC.command" --mode "$MODE"
 STATUS=$?
 exit "$STATUS"
 
@@ -73,6 +78,8 @@ EOF
 
 # macOS /usr/bin/base64 wraps by default. The decoder accepts wrapped input.
 /usr/bin/base64 < "$PAYLOAD_ARCHIVE" >> "$LAUNCHER"
+# Same self-contained payload, but filename selects isolated synthetic demo mode.
+cp "$LAUNCHER" "$DEMO_LAUNCHER"
 
 cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
 cp "$ROOT/AI_GUIDE.md" "$PKG/AI_GUIDE.md"
@@ -83,6 +90,8 @@ cat > "$PKG/README_FIRST.txt" <<EOF
 OpenWorkGraph $VERSION — macOS tester build
 ============================================
 
+Live human workflow observation
+-------------------------------
 1. Unzip this folder.
 2. Double-click START_OPENWORKGRAPH.command. This tester build is not yet signed
    by Apple, so macOS blocks it the first time:
@@ -96,6 +105,18 @@ OpenWorkGraph $VERSION — macOS tester build
    need to install Python manually.
 5. Approve macOS Accessibility/Input Monitoring permissions if requested.
 6. The local dashboard opens automatically at http://127.0.0.1:8787.
+
+OpenWorkGraph records ordinary human desktop/browser workflows on its own. An AI
+agent is NOT required. Agent telemetry is an optional additional evidence source.
+
+Try the isolated demo
+---------------------
+Double-click TRY_DEMO_OPENWORKGRAPH.command to open synthetic sample evidence.
+It starts with three repeated human-only Gmail -> Salesforce -> Sheets ->
+Salesforce -> Gmail workflows, including timing, browser-object correlation and
+content-free copy/paste linkage. A separate human+agent example later in the
+timeline demonstrates optional agent observation. Demo data is isolated from live
+observations and is never synchronized to an organization Gateway.
 
 Browser enrichment (optional)
 -----------------------------
@@ -150,7 +171,7 @@ Stop OpenWorkGraph with Ctrl+C in the Terminal window it opened.
 Project: https://github.com/KAVentures/openworkgraph
 EOF
 
-chmod +x "$LAUNCHER" "$PKG/ADD_BROWSER_SENSOR.command"
+chmod +x "$LAUNCHER" "$DEMO_LAUNCHER" "$PKG/ADD_BROWSER_SENSOR.command"
 rm -rf "$STAGE" "$PAYLOAD_ARCHIVE"
 
 # ditto is Apple's ZIP tool and preserves the macOS metadata/permissions expected

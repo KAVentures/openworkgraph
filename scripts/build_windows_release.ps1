@@ -45,6 +45,15 @@ call "%~dp0.openworkgraph-src\START_ON_WINDOWS.bat"
 exit /b %ERRORLEVEL%
 '@ | Set-Content -Path (Join-Path $Package "START_OPENWORKGRAPH.cmd") -Encoding ascii
 
+@'
+@echo off
+setlocal
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0.openworkgraph-src\START_ON_WINDOWS.ps1" -Mode demo
+set EXIT_CODE=%ERRORLEVEL%
+if not "%EXIT_CODE%"=="0" pause
+exit /b %EXIT_CODE%
+'@ | Set-Content -Path (Join-Path $Package "TRY_DEMO_OPENWORKGRAPH.cmd") -Encoding ascii
+
 Copy-Item (Join-Path $Root "ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
 Copy-Item (Join-Path $Root "AI_GUIDE.md") (Join-Path $Package "AI_GUIDE.md")
 Copy-Item (Join-Path $Root "PROMPT.md") (Join-Path $Package "PROMPT.md")
@@ -54,6 +63,8 @@ Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Package "LICENSE")
 OpenWorkGraph $Version - Windows tester build
 ==============================================
 
+Live human workflow observation
+-------------------------------
 1. Unzip this folder.
 2. Double-click START_OPENWORKGRAPH.cmd.
 3. This tester build is not yet signed, so Windows SmartScreen may say
@@ -62,6 +73,18 @@ OpenWorkGraph $Version - Windows tester build
 4. On first launch, OpenWorkGraph downloads its own private runtime and installs
    itself under %LOCALAPPDATA%\OpenWorkGraph. No system Python is required.
 5. The local dashboard opens automatically at http://127.0.0.1:8787.
+
+OpenWorkGraph records ordinary human desktop/browser workflows on its own. An AI
+agent is NOT required. Agent telemetry is an optional additional evidence source.
+
+Try the isolated demo
+---------------------
+Double-click TRY_DEMO_OPENWORKGRAPH.cmd to open synthetic sample evidence. It
+starts with three repeated human-only Gmail -> Salesforce -> Sheets -> Salesforce
+-> Gmail workflows, including timing, browser-object correlation and content-free
+copy/paste linkage. A separate human+agent example later in the timeline shows
+optional agent observation. Demo data is isolated from live observations and is
+never synchronized to an organization Gateway.
 
 Browser enrichment (optional)
 -----------------------------

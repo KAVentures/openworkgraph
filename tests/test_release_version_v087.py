@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.114.0"
+EXPECTED_VERSION = "0.115.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,10 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.115: human-first demo and distribution refresh" in workflow
+    assert "ordinary human workflows" in workflow_lower
+    assert "ai agent observation is an optional additional evidence stream" in workflow_lower
+    assert "try_demo_openworkgraph" in workflow_lower
     assert "### v0.114: configurable browser context with keyed correlation" in workflow
     assert "privacy-first" in workflow_lower
     assert "installation-keyed" in workflow_lower
@@ -76,14 +80,18 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
 
-    changelog = (ROOT / "docs" / "CHANGELOG_V0114.md").read_text(encoding="utf-8")
+    changelog = (ROOT / "docs" / "CHANGELOG_V0115.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
-    assert "privacy-first" in changelog_lower
-    assert "context" in changelog_lower
-    assert "rich enterprise" in changelog_lower
-    assert "hmac" in changelog_lower
-    assert "browser sensor update" in changelog_lower
-    assert "0.114.0" in changelog
+    assert "human-only" in changelog_lower
+    assert "ai agent" in changelog_lower
+    assert "copy/paste" in changelog_lower
+    assert "try_demo_openworkgraph" in changelog_lower
+    assert "0.115.0" in changelog
+
+    prior_114 = (ROOT / "docs" / "CHANGELOG_V0114.md").read_text(encoding="utf-8").lower()
+    assert "privacy-first" in prior_114
+    assert "rich enterprise" in prior_114
+    assert "hmac" in prior_114
 
     prior = (ROOT / "docs" / "CHANGELOG_V0113.md").read_text(encoding="utf-8").lower()
     assert "historical replayability" in prior

@@ -12,6 +12,8 @@ The local product requires **no account and no cloud storage**. Organizations ca
 
 > **Project status:** early public infrastructure. The priorities are reconstructable work evidence, strong local defaults, self-hosting, and controlled AI access — not employee productivity scoring.
 
+**AI agents are optional.** OpenWorkGraph's core product records ordinary human desktop/browser workflows on its own. Agent telemetry is an additional evidence source for teams that also want to observe agent execution and human↔agent handoffs.
+
 ## Why OpenWorkGraph
 
 Most enterprise AI can retrieve what an organization has already written down: documents, email, chat, tickets, CRM records, meeting notes and knowledge bases.
@@ -37,6 +39,8 @@ An AI can reconstruct the workflow from the evidence rather than depending on Op
 
 # Try the local product
 
+The ZIPs contain two entry points: **START_OPENWORKGRAPH** starts real local observation; **TRY_DEMO_OPENWORKGRAPH** opens isolated synthetic sample evidence. The demo starts with repeated human-only workflows and shows an optional human+agent example separately.
+
 ## macOS
 
 **[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
@@ -50,6 +54,8 @@ An AI can reconstruct the workflow from the evidence rather than depending on Op
 5. Approve Accessibility/Input Monitoring if requested.
 6. The authenticated local dashboard opens at `http://127.0.0.1:8787`.
 
+To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.command`**. It uses the same private runtime but a separate demo database.
+
 For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and load the opened extension folder.
 
 ## Windows
@@ -61,6 +67,8 @@ For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and
 3. This tester build is not yet signed, so Windows SmartScreen may say "Windows protected your PC". Click **More info → Run anyway** (only if you downloaded it from this repository's Releases page).
 4. OpenWorkGraph installs its own private runtime; no system Python is required.
 5. The local dashboard opens at `http://127.0.0.1:8787`.
+
+To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.cmd`**. No separate Python installation is required.
 
 For richer Chrome/Edge context, run **`ADD_BROWSER_SENSOR.cmd`** once.
 
@@ -177,6 +185,8 @@ Current capture can include:
 - best-effort native control metadata through macOS Accessibility / Windows UI Automation;
 - browser semantic actions such as clicks, submits and control changes;
 - copy/cut/paste **occurrence and linkage**, never clipboard contents.
+
+These human-workflow signals are collected independently of agent observation. You can use OpenWorkGraph entirely for human workflows and never enable an agent integration.
 
 ## Deliberately not captured in normal operation
 
