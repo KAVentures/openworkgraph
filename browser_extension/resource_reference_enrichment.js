@@ -1,27 +1,23 @@
 (() => {
   "use strict";
   const ext = globalThis.browser ?? globalThis.chrome;
-  const API = "http://127.0.0.1:8787";
-  const SETTINGS_KEY = "openworkgraph_resource_reference_settings";
   const recent = new Map();
+  let cachedPolicy = null;
+  let cachedPolicyAt = 0;
 
-  async function refreshPolicy() {
+  async function loadPolicy({force = false} = {}) {
+    if (!force && cachedPolicy && Date.now() - cachedPolicyAt < 5000) return cachedPolicy;
     let data = null;
     try {
       if (typeof getJson === "function") data = await getJson("/v1/browser-context");
-      else {
-        const response = await fetch(`${API}/v1/browser-context`, {method: "GET", cache: "no-store"});
-        if (response.ok) data = await response.json();
-      }
     } catch (_) {}
-    const policy = {
+    cachedPolicy = {
       settings: data?.signal_settings || {},
       excluded_browser_host_patterns: Array.isArray(data?.excluded_browser_host_patterns) ? data.excluded_browser_host_patterns : [],
       excluded_title_patterns: Array.isArray(data?.excluded_title_patterns) ? data.excluded_title_patterns : [],
-      checked_at: Date.now(),
     };
-    try { await ext.storage.local.set({[SETTINGS_KEY]: policy}); } catch (_) {}
-    return policy;
+    cachedPolicyAt = Date.now();
+    return cachedPolicy;
   }
 
   function allowedHost(candidate) {
@@ -96,50 +92,76 @@
     return now - previous < 1000;
   }
 
-  ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === "workflow_observer_resource_reference_settings_request") {
-      refreshPolicy().then(() => sendResponse?.({ok: true})).catch(() => sendResponse?.({ok: false}));
-      return true;
-    }
-    if (message?.type !== "workflow_observer_resource_reference") return;
+  async function observeUrl(rawUrl, tab, reason) {
+    const policy = await loadPolicy();
+    const settings = policy.settings || {};
+    if (!settings.business_object_references) return;
 
-    (async () => {
-      const policy = await refreshPolicy();
-      const settings = policy.settings || {};
-      if (!settings.business_object_references) return;
+    const parser = globalThis.OpenWorkGraphResourceReferences;
+    if (!parser?.parse) return;
+    const candidate = parser.parse(rawUrl);
+    if (!candidate) return;
 
-      let tab = sender?.tab || null;
-      try {
-        if (!tab?.url && sender?.tab?.id != null) tab = await ext.tabs.get(sender.tab.id);
-      } catch (_) {}
-      const page = typeof safeUrl === "function" ? safeUrl(tab?.url || "") : null;
-      if (!page) return;
+    let currentTab = tab || null;
+    try {
+      if (!currentTab?.url && currentTab?.id != null) currentTab = await ext.tabs.get(currentTab.id);
+    } catch (_) {}
 
-      const candidateHost = String(message?.resource_reference?.host || "").toLowerCase();
-      if (!candidateHost || candidateHost !== String(page.hostname || "").toLowerCase()) return;
-      if (matchesPattern(page.hostname, policy.excluded_browser_host_patterns)) return;
-      if (matchesPattern(tab?.title || "", policy.excluded_title_patterns)) return;
+    const page = typeof safeUrl === "function" ? safeUrl(rawUrl || currentTab?.url || "") : null;
+    if (!page) return;
+    const candidateHost = String(candidate.host || "").toLowerCase();
+    if (!candidateHost || candidateHost !== String(page.hostname || "").toLowerCase()) return;
 
-      const reference = await normalizeCandidate(
-        message.resource_reference,
-        !!settings.resource_reference_locators,
-      );
-      if (!reference || recentlySent(reference)) return;
+    const title = String(currentTab?.title || "").slice(0, 240);
+    if (matchesPattern(page.hostname, policy.excluded_browser_host_patterns)) return;
+    // If title exclusions exist, do not emit until a title is actually known.
+    // That prevents a rich locator from entering the retry queue before the
+    // local exclusion policy can be evaluated.
+    if (policy.excluded_title_patterns.length && !title) return;
+    if (matchesPattern(title, policy.excluded_title_patterns)) return;
 
-      await sendBrowserEvent({
-        observed_at: message.observed_at || new Date().toISOString(),
-        action: "resource_reference_observed",
-        page: {...page, title: String(tab?.title || "").slice(0, 240)},
-        target: {},
-        metadata: {
-          resource_reference: reference,
-          resource_reference_reason: String(message.reason || "navigation").slice(0, 80),
-          tab_id: tab?.id ?? null,
-          window_id: tab?.windowId ?? null,
-        },
-      });
-    })().catch(() => {});
+    const reference = await normalizeCandidate(candidate, !!settings.resource_reference_locators);
+    if (!reference || recentlySent(reference)) return;
+
+    await sendBrowserEvent({
+      observed_at: new Date().toISOString(),
+      action: "resource_reference_observed",
+      page: {...page, title},
+      target: {},
+      metadata: {
+        resource_reference: reference,
+        resource_reference_reason: String(reason || "navigation").slice(0, 80),
+        tab_id: currentTab?.id ?? null,
+        window_id: currentTab?.windowId ?? null,
+      },
+    });
+  }
+
+  async function observeTab(tabId, rawUrl, reason) {
+    try {
+      const tab = tabId != null ? await ext.tabs.get(tabId) : null;
+      await observeUrl(rawUrl || tab?.url || "", tab, reason);
+    } catch (_) {}
+  }
+
+  // Use browser/background navigation signals that OWG already has permission to
+  // observe. No page-world history functions are wrapped or modified.
+  ext.tabs.onActivated.addListener(({tabId}) => observeTab(tabId, "", "tab_activated"));
+  ext.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.url) observeUrl(changeInfo.url, tab, "tab_url_changed");
+    else if (changeInfo.status === "complete" && tab?.url) observeUrl(tab.url, tab, "navigation_complete");
   });
 
-  refreshPolicy();
+  if (ext.webNavigation?.onHistoryStateUpdated) {
+    ext.webNavigation.onHistoryStateUpdated.addListener((details) => {
+      if (details.frameId === 0) observeTab(details.tabId, details.url, "history_state");
+    });
+  }
+  if (ext.webNavigation?.onCompleted) {
+    ext.webNavigation.onCompleted.addListener((details) => {
+      if (details.frameId === 0) observeTab(details.tabId, details.url, "web_navigation_complete");
+    });
+  }
+
+  loadPolicy({force: true});
 })();
