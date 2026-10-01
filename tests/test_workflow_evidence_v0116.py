@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -157,3 +158,67 @@ def test_dashboard_exports_through_authenticated_fetch_and_defaults_to_redacted(
     assert "Export redacted evidence" in source
     assert "confirm('Export the stored privacy-hardened representation?" in source
     assert "window.location" not in source
+
+
+def test_history_guard_limits_workflow_evidence_to_current_run_when_history_access_is_off():
+    from mcp_server.history_guard import install_history_guard
+
+    calls: list[tuple[str, dict | None]] = []
+
+    def secure_get(path: str, params: dict | None = None):
+        if path == "/v1/history/ai-access":
+            return {"access": {"mode": "off"}}
+        if path == "/v1/capture/status":
+            return {"run_started_at": "2026-10-01T12:00:00+00:00"}
+        calls.append((path, dict(params or {})))
+        return {"ok": True}
+
+    runtime = SimpleNamespace(secure_get=secure_get)
+    install_history_guard(runtime)
+    runtime.secure_get(
+        "/v1/workflow-evidence",
+        {"execution_ids": "execution:aaaaaaaaaaaaaaaa", "since": "2026-09-01T00:00:00+00:00"},
+    )
+
+    assert calls == [
+        (
+            "/v1/workflow-evidence",
+            {"execution_ids": "execution:aaaaaaaaaaaaaaaa", "since": "2026-10-01T12:00:00+00:00"},
+        )
+    ]
+
+
+def test_history_guard_clamps_family_discovery_to_explicit_saved_history_range():
+    from mcp_server.history_guard import install_history_guard
+
+    calls: list[tuple[str, dict | None]] = []
+
+    def secure_get(path: str, params: dict | None = None):
+        if path == "/v1/history/ai-access":
+            return {
+                "access": {
+                    "mode": "selected_range",
+                    "since": "2026-09-28T00:00:00+00:00",
+                    "until": "2026-09-30T23:59:59+00:00",
+                }
+            }
+        calls.append((path, dict(params or {})))
+        return {"ok": True}
+
+    runtime = SimpleNamespace(secure_get=secure_get)
+    install_history_guard(runtime)
+    runtime.secure_get(
+        "/v1/workflow-evidence/families",
+        {"since": "2026-09-01T00:00:00+00:00", "until": "2026-10-01T23:59:59+00:00", "min_runs": 2},
+    )
+
+    assert calls == [
+        (
+            "/v1/workflow-evidence/families",
+            {
+                "since": "2026-09-28T00:00:00+00:00",
+                "until": "2026-09-30T23:59:59+00:00",
+                "min_runs": 2,
+            },
+        )
+    ]
