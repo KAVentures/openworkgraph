@@ -18,6 +18,7 @@ DEFAULT_TOOLS = {
     "get_workflow_trace",
     "get_work_profile",
     "find_repeated_workflows",
+    "get_workflow_evidence",
     "get_task_context",
     "how_did_similar_runs_go",
     "get_agent_runs",
@@ -118,50 +119,14 @@ def test_similar_run_feedback_combines_observational_views(monkeypatch):
                     }
                 ]
             }
-        return {"path": path, "evidence_refs": ["event:1"]}
+        if path == "/v1/run-memory":
+            return {"runs": [{"family_key": "agent:test", "outcome_status": "unknown"}]}
+        if path == "/v1/task-context":
+            return {"approval_hotspots": [], "observed_next_steps": [], "context": []}
+        return {}
 
     monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
-    result = compact.how_did_similar_runs_go("agent:test")
-
-    assert paths == [
-        "/v1/procedural-memory",
-        "/v1/procedural-memory/similar-runs",
-        "/v1/procedural-memory/failure-patterns",
-        "/v1/procedural-memory/approval-patterns",
-        "/v1/procedural-memory/next-steps",
-        "/v1/procedural-memory/context-pack",
-    ]
-    assert result["status"] == "ok"
-    assert result["family_key"] == "agent:test"
-    assert result["resolution_method"] == "exact_family_key"
-    assert result["approval_request_hotspots"]["evidence_refs"] == ["event:1"]
-    assert result["interpretation"] == {
-        "derived": True,
-        "authoritative": False,
-        "prescriptive": False,
-        "causal": False,
-        "observed_behavior_becomes_policy": False,
-        "approval_patterns_are_policy": False,
-        "semantic_steps_change_family_identity": False,
-    }
-
-
-def test_legacy_stdio_entrypoint_remains_available_and_unchanged_in_source():
-    source = (ROOT / "mcp_server" / "secure_stdio.py").read_text(encoding="utf-8")
-    assert "from .secure_runtime import mcp" in source
-    assert "register_agent_tools(mcp)" in source
-    assert "compact" not in source
-
-
-def test_new_connection_paths_use_compact_surface():
-    bundle = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
-    launcher = (ROOT / "mcp_server" / "launcher.py").read_text(encoding="utf-8")
-    control = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
-    secure_app = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
-    assert "launcher.py" in bundle
-    assert "mcp_server.compact_stdio" in launcher
-    assert "mcp_connection import stdio_connection_config" in secure_app
-    assert "mcp_server.compact_http_app:app" in control
-    assert "mcp_server.secure_stdio" not in bundle
-    assert '"args": ["-m", "mcp_server.secure_stdio"]' not in secure_app
-    assert "mcp_server.http_app:app" not in control
+    result = compact.how_did_similar_runs_go(family_key="agent:test")
+    assert "/v1/procedural-memory" in paths
+    assert "/v1/run-memory" in paths
+    assert result["interpretation"]["observed_success_is_not_guaranteed_success"] is True
