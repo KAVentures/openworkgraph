@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("observe", "demo")]
+    [string]$Mode = "observe"
+)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
@@ -94,9 +99,13 @@ try {
         Copy-Item "config.example.json" "config.json"
     }
 
-    Write-Host "Starting OpenWorkGraph ..."
+    if ($Mode -eq "demo") {
+        Write-Host "Starting OpenWorkGraph demo ..."
+    } else {
+        Write-Host "Starting OpenWorkGraph ..."
+    }
     Write-Host "The dashboard will open at http://127.0.0.1:8787"
-    & $Python start.py --mode observe
+    & $Python start.py --mode $Mode
     exit $LASTEXITCODE
 }
 catch {
