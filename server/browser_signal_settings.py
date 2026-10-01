@@ -33,9 +33,10 @@ PROFILES: dict[str, dict[str, bool]] = {
     },
     # Explicit opt-in for customer-controlled deployments that want an AI to be
     # able to resolve the observed object through its own authorized connector.
+    # Do not silently enable unrelated optional sensors when this profile changes.
     "rich_enterprise": {
         "performance_timing": True,
-        "file_upload_category": True,
+        "file_upload_category": False,
         "business_object_references": True,
         "resource_reference_locators": True,
     },
