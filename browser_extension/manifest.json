@@ -8,12 +8,12 @@
   "permissions": ["tabs", "webNavigation", "storage", "alarms"],
   "host_permissions": ["http://127.0.0.1:8787/*", "http://*/*", "https://*/*"],
   "background": {
-    "scripts": ["browser_auth.js", "background.js", "workflow_enrichment.js", "browser_signal_enrichment.js", "resource_reference_enrichment.js"],
+    "scripts": ["browser_auth.js", "background.js", "workflow_enrichment.js", "browser_signal_enrichment.js", "resource_reference_parser.js", "resource_reference_enrichment.js"],
     "service_worker": "secure_background.js"
   },
   "content_scripts": [{
     "matches": ["http://*/*", "https://*/*"],
-    "js": ["content.js", "content_enrichment.js", "browser_signals.js", "agent_surface_adapters.js", "resource_reference_parser.js", "resource_reference_sensor.js"],
+    "js": ["content.js", "content_enrichment.js", "browser_signals.js", "agent_surface_adapters.js"],
     "run_at": "document_start",
     "all_frames": true,
     "match_about_blank": true
