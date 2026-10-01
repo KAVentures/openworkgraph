@@ -140,7 +140,7 @@
     }).join('');
     const body=`
       <p><strong>Select the examples your AI should learn from.</strong> OWG's grouping is only a suggestion; uncheck anything that does not belong.</p>
-      <div class="note"><strong>What the AI receives</strong><div class="muted" style="margin-top:4px">Canonical raw/redacted evidence (according to your AI context setting), plus support-counted structural observations, resource types, copy/paste linkage, timing and provenance. OWG does not write the skill.</div></div>
+      <div class="note"><strong>What the AI receives</strong><div class="muted" style="margin-top:4px">The evidence bundle contains bounded canonical evidence plus support-counted structural observations, resource types, copy/paste linkage, timing and provenance. With MCP, your AI-context setting controls Redacted vs Full context. Manual export uses the Redacted or Stored choice below. OWG does not write the skill.</div></div>
       <div id="workflowEvidenceRunList" style="margin-top:10px;max-height:310px;overflow:auto">${rows||'<div class="muted">No selectable executions were returned.</div>'}</div>
       <div class="muted" id="workflowEvidenceSelectedCount" style="margin-top:8px"></div>
       <div class="modal-actions">
