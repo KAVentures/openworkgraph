@@ -74,6 +74,53 @@ def sanitize_pathname(pathname: str) -> str:
     return result
 
 
+def minimize_known_resource_path(hostname: str, pathname: str) -> str:
+    """Hide allowlisted SaaS object IDs while preserving useful route structure.
+
+    Generic sanitization intentionally cannot know that a 15/18-character
+    Salesforce ID or a short GitHub issue number is a business-object locator.
+    Privacy-first and Context modes therefore mask those known route positions.
+    Rich enterprise mode may retain the already-sanitized path plus the separately
+    validated resolver locator.
+    """
+    host = str(hostname or "").strip().lower()
+    path = sanitize_pathname(pathname)
+
+    if host == "docs.google.com":
+        return re.sub(
+            r"^/(document|spreadsheets|presentation)/d/[^/]+",
+            r"/\1/d/:id",
+            path,
+            count=1,
+        )
+    if host == "drive.google.com":
+        return re.sub(r"^/file/d/[^/]+", "/file/d/:id", path, count=1)
+    if host == "github.com":
+        return re.sub(
+            r"^/([^/]+)/([^/]+)/(pull|issues)/[^/]+",
+            r"/\1/\2/\3/:id",
+            path,
+            count=1,
+        )
+    if host.endswith(".salesforce.com") or host.endswith(".force.com"):
+        return re.sub(
+            r"^(/(?:lightning/)?r/[^/]+/)[^/]+",
+            r"\1:id",
+            path,
+            count=1,
+        )
+    if host.endswith(".atlassian.net"):
+        return re.sub(r"^/browse/[^/]+", "/browse/:id", path, count=1)
+    if host == "linear.app":
+        return re.sub(
+            r"^/([^/]+)/issue/[^/]+",
+            r"/\1/issue/:id",
+            path,
+            count=1,
+        )
+    return path
+
+
 def sanitize_url_value(value: str) -> str:
     """Return a URL-like value without query/fragment or secret-like path data.
 
@@ -170,6 +217,8 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
     page = sanitize_browser_page(meta.get("page") if isinstance(meta.get("page"), dict) else {})
     title = str(page.get("title") or e.get("window_title") or "")
     hostname = str(page.get("hostname") or "")
+    if page and not locators_enabled:
+        page["pathname"] = minimize_known_resource_path(hostname, str(page.get("pathname") or "/"))
     excluded = browser_event_is_excluded(
         app=str(e.get("app") or "Browser"),
         title=title,
