@@ -40,9 +40,20 @@ def _event(*, at, action, hostname="example.com", pathname="/work", label="", me
 def test_signal_settings_defaults_and_persistence():
     from server.browser_signal_settings import load_settings, public_settings, save_settings
 
-    assert load_settings() == {"performance_timing": True, "file_upload_category": False}
+    defaults = {
+        "performance_timing": True,
+        "file_upload_category": False,
+        "business_object_references": False,
+        "resource_reference_locators": False,
+    }
+    assert load_settings() == defaults
     changed = save_settings({"performance_timing": False, "file_upload_category": True})
-    assert changed == {"performance_timing": False, "file_upload_category": True}
+    assert changed == {
+        "performance_timing": False,
+        "file_upload_category": True,
+        "business_object_references": False,
+        "resource_reference_locators": False,
+    }
     public = public_settings()
     assert public["settings"] == changed
     never = set(public["never_captured_by_these_signals"])
