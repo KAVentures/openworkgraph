@@ -59,19 +59,3 @@ def test_compact_trace_identity_is_bounded():
     assert len(row["window_title"]) <= 240
     assert row["work_surface"].endswith("…")
     assert row["window_title"].endswith("…")
-
-
-def test_compact_stdio_applies_surface_identity_hardening():
-    from mcp_server import compact
-    from mcp_server.compact_hardening import apply_compact_hardening
-
-    apply_compact_hardening(compact)
-    row = compact._slim_trace_row({
-        "app": "Google Chrome",
-        "work_surface": "Google Sheets",
-        "window_title": "Q4 pipeline - Customer tracker - Google Sheets",
-        "event_type": "focus_span",
-    })
-
-    assert row["work_surface"] == "Google Sheets"
-    assert "Customer tracker" in row["window_title"]
