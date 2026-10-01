@@ -38,45 +38,44 @@ def main() -> None:
     import server.agent_working_detail as agent_working_detail
     import server.log_redaction as log_redaction
     import server.outcome_tracker as outcome_tracker
+    from server.agent_session_store import init_agent_session_store
 
     log_redaction.install()
 
     # Database/schema/privacy initialization lives in the app's existing lifespan.
-    # Start every background subsystem only after that lifespan has entered. Starting
-    # these threads before uvicorn previously allowed Windows to race a fresh SQLite
-    # database open against init_db()/PRAGMA journal_mode=WAL, intermittently causing
-    # `sqlite3.OperationalError: database is locked` during application startup.
+    # Background workers used to start before uvicorn entered that lifespan, which
+    # let Windows race a fresh SQLite open against init_db()/PRAGMA journal_mode=WAL.
+    # Keep startup two-phase: first finish every SQLite-backed schema setup while no
+    # worker thread exists, then start the workers.
     from shared.lifespan import extend_lifespan
     from server.secure_app import app as secure_app
 
-    extend_lifespan(secure_app, startup=org_join_routes.start_managed_setup_in_background)
-    extend_lifespan(
-        secure_app,
-        startup=agent_capture_runtime.start,
-        shutdown=agent_capture_runtime.stop,
-    )
-    extend_lifespan(
-        secure_app,
-        startup=agent_session_sensor.start,
-        shutdown=agent_session_sensor.stop,
-    )
-    # Working detail is a separate, opt-in continuity layer. Its scanner has an
-    # independent state/cursor and cannot interfere with structural capture.
-    extend_lifespan(
-        secure_app,
-        startup=agent_working_detail.start,
-        shutdown=agent_working_detail.stop,
-    )
+    def _start_background_runtime() -> None:
+        # The canonical DB has already been initialized by server.main.lifespan.
+        # Prepare additive stores synchronously before any scanner/spool thread can
+        # touch SQLite. These initializers are idempotent.
+        init_agent_session_store()
+        agent_working_detail.init_store()
 
-    def _start_outcome_tracker() -> None:
+        # Working detail waits before its first scan; the native-session scanner and
+        # spool runtime may run immediately, but all required schemas now exist and
+        # WAL mode has already been established by init_db().
+        agent_working_detail.start()
+        agent_session_sensor.start()
+        agent_capture_runtime.start()
+        org_join_routes.start_managed_setup_in_background()
         if not agent_capture_runtime._demo():
             outcome_tracker.start()  # does nothing until the person turns outcome tracking on
 
-    extend_lifespan(
-        secure_app,
-        startup=_start_outcome_tracker,
-        shutdown=outcome_tracker.stop,
-    )
+    extend_lifespan(secure_app, startup=_start_background_runtime)
+
+    # Keep shutdown hooks separate. Besides making the lifecycle explicit, this
+    # preserves the established normal-quit guarantee that the agent recording
+    # lease is revoked inside FastAPI shutdown rather than relying on finally/atexit.
+    extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
+    extend_lifespan(secure_app, shutdown=agent_session_sensor.stop)
+    extend_lifespan(secure_app, shutdown=agent_working_detail.stop)
+    extend_lifespan(secure_app, shutdown=outcome_tracker.stop)
 
     # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
     # the process before a finally/atexit block can run. The lifespan hooks above
