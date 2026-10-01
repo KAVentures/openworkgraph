@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from collector.privacy import should_exclude
+from resource_references import normalize_resource_reference
 
 SENSITIVE_PATH_PREDECESSORS = {
     "auth", "authenticate", "callback", "confirm", "invite", "invitation",
@@ -150,11 +151,22 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
 
     Excluded pages retain only structural event/action evidence. Query values,
     fragments and token-like paths are removed even for non-excluded pages.
+    Business-object references are separately gated: privacy-first mode drops
+    them entirely, context mode keeps only a stable OWG correlation token, and
+    rich mode may retain the validated minimal provider locator.
     """
     e = copy.deepcopy(event)
     meta = sanitize_browser_metadata(e.get("metadata") or {})
     if not isinstance(meta, dict):
         meta = {}
+
+    raw_reference = meta.pop("resource_reference", None)
+    reference = None
+    references_enabled = bool(config.get("business_object_references", False))
+    locators_enabled = references_enabled and bool(config.get("resource_reference_locators", False))
+    if references_enabled:
+        reference = normalize_resource_reference(raw_reference, include_locator=locators_enabled)
+
     page = sanitize_browser_page(meta.get("page") if isinstance(meta.get("page"), dict) else {})
     title = str(page.get("title") or e.get("window_title") or "")
     hostname = str(page.get("hostname") or "")
@@ -172,6 +184,8 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         "url_query": False,
         "url_fragment": False,
         "token_like_path_segments": False,
+        "business_object_references": references_enabled,
+        "resource_reference_locators": locators_enabled,
     })
 
     if excluded:
@@ -186,6 +200,8 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         }
         return e
 
+    if reference:
+        meta["resource_reference"] = reference
     if page:
         meta["page"] = page
         e["window_title"] = str(page.get("title") or page.get("hostname") or e.get("window_title") or "")
