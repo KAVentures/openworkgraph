@@ -122,5 +122,5 @@ def test_demo_launchers_share_the_live_private_runtime_and_ship_in_packages():
 
     assert "TRY_DEMO_OPENWORKGRAPH.command" in mac_package
     assert "TRY_DEMO_OPENWORKGRAPH.cmd" in win_package
-    assert "AI agent is NOT required" in mac_package
-    assert "AI agent is NOT required" in win_package
+    assert "AI agent is NOT required" in " ".join(mac_package.split())
+    assert "AI agent is NOT required" in " ".join(win_package.split())
