@@ -275,7 +275,7 @@ def build_agent_demo_payloads(base: datetime) -> list[dict]:
     steps = [
         (0, "repository_search", "search", "demo-agent-span-1", "demo-agent-root"),
         (38, "edit_files", "filesystem", "demo-agent-span-2", "demo-agent-root"),
-        (92, "run_tests", "testing", "demo-agent-span-3", "demo-agent-root"),
+        (92, "run_tests", "shell", "demo-agent-span-3", "demo-agent-root"),
     ]
     payloads: list[dict] = []
     for offset, tool_name, category, span_id, parent_span_id in steps:
