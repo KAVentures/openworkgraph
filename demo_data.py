@@ -317,8 +317,30 @@ def build_agent_handoff_human_events(base: datetime) -> list[dict]:
 
 
 def build_demo_events(base: datetime, refs: list[dict[str, dict]] | None = None) -> list[dict]:
-    """Compatibility helper: all synthetic human evidence, including agent handoff context."""
-    return build_human_demo_events(base, refs=refs) + build_agent_handoff_human_events(base)
+    """Stable legacy analytics fixture retained for callers that expect 12+12 rows.
+
+    The actual v0.115 demo uses ``build_human_demo_events`` plus a separately
+    labeled human↔agent handoff. Keeping this compact fixture stable prevents the
+    richer product demo from silently changing older analytics/security tests.
+    """
+    session = "demo-session"
+    scenario = "legacy_demo_analytics"
+    events: list[dict] = []
+    for i in range(3):
+        t = base + timedelta(minutes=i * 22)
+        events.extend(
+            [
+                _focus(session, t, 150, app="Google Chrome", title="Inbox - Gmail", activity=_activity(150, 24, 3, 1), scenario=scenario),
+                _browser(session, t + timedelta(seconds=8), host="mail.google.com", path="/mail/u/0/inbox", title="Inbox - Gmail", label="Open customer email", scenario=scenario),
+                _focus(session, t + timedelta(seconds=150), 170, app="Google Chrome", title="Customer account - Salesforce", activity=_activity(170, 38, 4, 2), scenario=scenario),
+                _browser(session, t + timedelta(seconds=165), host="example.my.salesforce.com", path="/lightning/r/Account/RESOURCE_ID/view", title="Customer account - Salesforce", label="Open account", scenario=scenario),
+                _focus(session, t + timedelta(seconds=320), 190, app="Google Chrome", title="Customer tracker - Google Sheets", activity=_activity(190, 72, 5, 2), scenario=scenario),
+                _browser(session, t + timedelta(seconds=340), host="docs.google.com", path="/spreadsheets/d/RESOURCE_ID/edit", title="Customer tracker - Google Sheets", label="Update status", scenario=scenario),
+                _focus(session, t + timedelta(seconds=510), 145, app="Google Chrome", title="Reply - Gmail", activity=_activity(145, 86, 4, 1), scenario=scenario),
+                _browser(session, t + timedelta(seconds=625), host="mail.google.com", path="/mail/u/0/inbox", title="Reply - Gmail", label="Send", scenario=scenario),
+            ]
+        )
+    return events
 
 
 def main() -> None:
@@ -334,7 +356,7 @@ def main() -> None:
         base = datetime.now(timezone.utc) - timedelta(minutes=90)
 
     refs = demo_resource_references()
-    human_events = build_demo_events(base, refs=refs)
+    human_events = build_human_demo_events(base, refs=refs) + build_agent_handoff_human_events(base)
     human_inserted = insert_events(human_events)
     agent_result = ingest_agent_payloads(build_agent_demo_payloads(base))
 
