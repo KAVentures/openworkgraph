@@ -141,6 +141,17 @@ def test_persisted_token_is_not_old_dictionary_attackable_plain_hash():
     assert sensor_ref not in str(safe)
 
 
+def test_live_browser_cannot_supply_persisted_format_token_to_bypass_rekeying():
+    forged = _context_reference()
+    forged["resource_ref"] = "owg:r:" + "a" * 32
+    safe = harden_browser_event(
+        _event(forged),
+        _config(business_object_references=True, resource_reference_locators=False),
+    )
+    assert "resource_reference" not in safe["metadata"]
+    assert forged["resource_ref"] not in str(safe)
+
+
 def test_rich_mode_keeps_only_validated_minimal_locator_and_rekeys_token():
     incoming = _reference()
     sensor_ref = incoming["resource_ref"]
@@ -202,11 +213,22 @@ def test_invalid_or_excluded_reference_never_survives():
     assert "resource_reference" not in excluded["metadata"]
 
 
-def test_minimized_persisted_reference_is_idempotent_without_locator():
-    rich = normalize_resource_reference(_reference(), include_locator=False)
-    assert rich is not None
-    minimized = normalize_resource_reference(rich, include_locator=False)
-    assert minimized == rich
+def test_minimized_persisted_reference_is_idempotent_only_after_server_hardening():
+    first = harden_browser_event(
+        _event(_context_reference()),
+        _config(business_object_references=True, resource_reference_locators=False),
+    )
+    stored = first["metadata"]["resource_reference"]["resource_ref"]
+    assert re.fullmatch(r"owg:r:[0-9a-f]{32}", stored)
+    second = harden_browser_event(
+        first,
+        _config(business_object_references=True, resource_reference_locators=False),
+    )
+    assert second["metadata"]["resource_reference"]["resource_ref"] == stored
+
+    bare = dict(first["metadata"]["resource_reference"])
+    assert normalize_resource_reference(bare, include_locator=False) is None
+    assert normalize_resource_reference(bare, include_locator=False, allow_persisted=True) == bare
 
 
 def test_same_sensor_reference_gets_different_stored_token_in_another_install(tmp_path, monkeypatch):
