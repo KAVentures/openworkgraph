@@ -6,9 +6,16 @@ Browser sensors may recognize an allowlisted SaaS object before generic URL
 sanitization removes its identifier. This module accepts only narrowly structured
 references and never accepts or returns a full URL, query string, fragment, page
 content, or arbitrary label.
+
+The browser-side reference is deliberately not the persisted correlation token.
+The paired browser derives a bounded sensor fingerprint with the installation's
+browser-pairing secret. Before persistence the local server HMACs that fingerprint
+again with a separate installation-local API secret. This prevents a copied local
+DB token from being reversed by enumerating short Jira/GitHub/Linear identifiers.
 """
 
 import hashlib
+import hmac
 import re
 from typing import Any
 
@@ -21,13 +28,17 @@ _ALLOWED_KINDS: dict[str, set[str]] = {
     "linear": {"issue"},
 }
 
-_RESOURCE_REF_RE = re.compile(r"^owg:r:[0-9a-f]{24}$")
+_SENSOR_REF_RE = re.compile(r"^owg:e:[0-9a-f]{24}$")
+_STORED_REF_RE = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,200}$")
 _ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
 _SALESFORCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}:[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$")
 _GITHUB_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}/(?:pull|issues)/[1-9][0-9]{0,9}$")
 _LINEAR_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}:[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
+
+_SENSOR_NAMESPACE = "openworkgraph-resource-reference-sensor-v1:"
+_STORE_NAMESPACE = "openworkgraph-resource-reference-store-v1:"
 
 
 def _host_allowed(provider: str, host: str) -> bool:
@@ -76,17 +87,49 @@ def _canonical(provider: str, kind: str, host: str, locator: str) -> str:
     return "|".join((provider, kind, host, locator))
 
 
-def _resource_ref(provider: str, kind: str, host: str, locator: str) -> str:
-    digest = hashlib.sha256(_canonical(provider, kind, host, locator).encode("utf-8")).hexdigest()
-    return f"owg:r:{digest[:24]}"
+def _browser_pairing_secret() -> bytes:
+    # Lazy imports avoid coupling the standalone validation module to server
+    # startup while still reusing OWG's existing high-entropy installation key.
+    from server.local_auth import ensure_browser_secret
+
+    return ensure_browser_secret().encode("utf-8")
+
+
+def _storage_secret() -> bytes:
+    from server.local_auth import ensure_api_token
+
+    return ensure_api_token().encode("utf-8")
+
+
+def _sensor_resource_ref(provider: str, kind: str, host: str, locator: str) -> str:
+    canonical = _canonical(provider, kind, host, locator)
+    digest = hmac.new(
+        _browser_pairing_secret(),
+        (_SENSOR_NAMESPACE + canonical).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"owg:e:{digest[:24]}"
+
+
+def _stored_resource_ref(sensor_ref: str) -> str:
+    digest = hmac.new(
+        _storage_secret(),
+        (_STORE_NAMESPACE + sensor_ref).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"owg:r:{digest[:32]}"
 
 
 def normalize_resource_reference(value: Any, *, include_locator: bool) -> dict[str, str] | None:
-    """Return a bounded structured reference or ``None`` for anything untrusted.
+    """Return a bounded persistence-safe reference or ``None`` for untrusted input.
 
-    When a validated locator is present, the stable OWG correlation token is
-    recomputed locally rather than trusting the sender. In context-only mode an
-    already minimized OWG token may be accepted without the resolver locator.
+    A browser-originated ``owg:e:…`` fingerprint is never persisted verbatim.
+    The server converts it into an installation-keyed ``owg:r:…`` token. When a
+    validated locator is available (Rich enterprise mode), the server derives the
+    expected browser fingerprint itself and rejects a conflicting supplied value.
+
+    Already-hardened ``owg:r:…`` values are accepted unchanged so storage-time
+    privacy re-hardening remains idempotent.
     """
     if not isinstance(value, dict):
         return None
@@ -97,20 +140,28 @@ def normalize_resource_reference(value: Any, *, include_locator: bool) -> dict[s
         return None
 
     locator = str(value.get("resolver_locator") or "").strip()
+    supplied_ref = str(value.get("resource_ref") or "").strip().lower()
+
     if locator:
         if not _locator_valid(provider, kind, locator):
             return None
-        ref = _resource_ref(provider, kind, host, locator)
-    else:
-        ref = str(value.get("resource_ref") or "").strip().lower()
-        if not _RESOURCE_REF_RE.fullmatch(ref):
+        sensor_ref = _sensor_resource_ref(provider, kind, host, locator)
+        if supplied_ref and supplied_ref != sensor_ref:
             return None
+        stored_ref = _stored_resource_ref(sensor_ref)
+    elif _SENSOR_REF_RE.fullmatch(supplied_ref):
+        stored_ref = _stored_resource_ref(supplied_ref)
+    elif _STORED_REF_RE.fullmatch(supplied_ref):
+        # Idempotence for already-persisted rows being re-hardened locally.
+        stored_ref = supplied_ref
+    else:
+        return None
 
     out = {
         "provider": provider,
         "resource_kind": kind,
         "host": host,
-        "resource_ref": ref,
+        "resource_ref": stored_ref,
         "resolution": "observed",
     }
     if include_locator and locator:
