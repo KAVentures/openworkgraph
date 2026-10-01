@@ -1,6 +1,17 @@
 #!/bin/bash
 set -u
 
+MODE="observe"
+if [ "${1:-}" = "--mode" ]; then
+  MODE="${2:-}"
+elif [ "${1:-}" = "--demo" ]; then
+  MODE="demo"
+fi
+if [ "$MODE" != "observe" ] && [ "$MODE" != "demo" ]; then
+  echo "Unknown OpenWorkGraph mode: $MODE"
+  exit 2
+fi
+
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$HOME/Library/Application Support/WorkflowObserver"
 RUNTIME_DIR="$INSTALL_DIR/.runtime"
@@ -67,6 +78,10 @@ if [ ! -f config.json ]; then
   cp config.example.json config.json
 fi
 
-echo "Starting OpenWorkGraph…"
+if [ "$MODE" = "demo" ]; then
+  echo "Starting OpenWorkGraph demo…"
+else
+  echo "Starting OpenWorkGraph…"
+fi
 trap - ERR
-exec .venv/bin/python start.py --mode observe
+exec .venv/bin/python start.py --mode "$MODE"
