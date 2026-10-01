@@ -98,6 +98,33 @@
     document.querySelectorAll('[data-workflow-selection-action]').forEach(button=>button.disabled=!ids.length);
   }
 
+  async function downloadEvidence(index,representation){
+    const ids=selectedIds(index); if(!ids.length) return;
+    const query=new URLSearchParams({execution_ids:ids.join(','),representation,archive:'true'});
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch(`/v1/workflow-evidence/export?${query.toString()}`,{cache:'no-store'});
+      if(!response.ok){
+        let detail='Could not export workflow evidence.';
+        try{detail=String((await response.clone().json())?.detail||detail);}catch(_){}
+        throw new Error(detail);
+      }
+      const blob=await response.blob();
+      const href=URL.createObjectURL(blob);
+      const anchor=document.createElement('a');
+      anchor.href=href;
+      anchor.download='openworkgraph-workflow-evidence.zip';
+      anchor.style.display='none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(()=>URL.revokeObjectURL(href),5000);
+      if(typeof window.toast==='function') window.toast(`${representation==='redacted'?'Redacted':'Stored'} workflow evidence exported.`);
+    }catch(error){
+      if(typeof window.openModal==='function') window.openModal('Export unavailable','Local security',`<p>${esc(error?.message||'Could not authorize this export.')}</p><div class="note">If OpenWorkGraph restarted, reopen the dashboard from the current launcher and try again.</div>`);
+    }
+  }
+
   function openReview(index){
     const item=families[index];
     if(!item) return;
@@ -134,14 +161,9 @@
       else navigator.clipboard?.writeText(text);
       if(typeof window.toast==='function') window.toast('Copied. Paste this into any connected AI; with OWG MCP it can fetch the evidence itself.');
     };
-    const download=representation=>{
-      const ids=selectedIds(index); if(!ids.length) return;
-      const query=new URLSearchParams({execution_ids:ids.join(','),representation,archive:'true'});
-      window.location.href=`/v1/workflow-evidence/export?${query.toString()}`;
-    };
-    if(redacted) redacted.onclick=()=>download('redacted');
+    if(redacted) redacted.onclick=()=>downloadEvidence(index,'redacted');
     if(stored) stored.onclick=()=>{
-      if(confirm('Export the stored privacy-hardened representation? Redacted is safer for sharing outside your intended context.')) download('stored');
+      if(confirm('Export the stored privacy-hardened representation? Redacted is safer for sharing outside your intended context.')) downloadEvidence(index,'stored');
     };
     updateSelectionActions(index);
   }
