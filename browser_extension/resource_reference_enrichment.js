@@ -5,21 +5,23 @@
   const SETTINGS_KEY = "openworkgraph_resource_reference_settings";
   const recent = new Map();
 
-  async function refreshSettings() {
-    let settings = {};
+  async function refreshPolicy() {
+    let data = null;
     try {
-      const response = await fetch(`${API}/v1/browser-context`, {method: "GET", cache: "no-store"});
-      if (response.ok) {
-        const data = await response.json();
-        settings = data?.signal_settings || {};
+      if (typeof getJson === "function") data = await getJson("/v1/browser-context");
+      else {
+        const response = await fetch(`${API}/v1/browser-context`, {method: "GET", cache: "no-store"});
+        if (response.ok) data = await response.json();
       }
     } catch (_) {}
-    try {
-      await ext.storage.local.set({
-        [SETTINGS_KEY]: {settings, checked_at: Date.now()},
-      });
-    } catch (_) {}
-    return settings;
+    const policy = {
+      settings: data?.signal_settings || {},
+      excluded_browser_host_patterns: Array.isArray(data?.excluded_browser_host_patterns) ? data.excluded_browser_host_patterns : [],
+      excluded_title_patterns: Array.isArray(data?.excluded_title_patterns) ? data.excluded_title_patterns : [],
+      checked_at: Date.now(),
+    };
+    try { await ext.storage.local.set({[SETTINGS_KEY]: policy}); } catch (_) {}
+    return policy;
   }
 
   function allowedHost(candidate) {
@@ -31,6 +33,20 @@
     if (provider === "salesforce") return host.endsWith(".salesforce.com") || host.endsWith(".force.com");
     if (provider === "jira") return host.endsWith(".atlassian.net");
     if (provider === "linear") return host === "linear.app";
+    return false;
+  }
+
+  function matchesPattern(value, patterns) {
+    const text = String(value || "");
+    for (const raw of patterns || []) {
+      const pattern = String(raw || "");
+      if (!pattern) continue;
+      try {
+        if (new RegExp(pattern, "i").test(text)) return true;
+      } catch (_) {
+        if (text.toLowerCase().includes(pattern.toLowerCase())) return true;
+      }
+    }
     return false;
   }
 
@@ -82,19 +98,15 @@
 
   ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "workflow_observer_resource_reference_settings_request") {
-      refreshSettings().then(() => sendResponse?.({ok: true})).catch(() => sendResponse?.({ok: false}));
+      refreshPolicy().then(() => sendResponse?.({ok: true})).catch(() => sendResponse?.({ok: false}));
       return true;
     }
     if (message?.type !== "workflow_observer_resource_reference") return;
 
     (async () => {
-      const settings = await refreshSettings();
+      const policy = await refreshPolicy();
+      const settings = policy.settings || {};
       if (!settings.business_object_references) return;
-      const reference = await normalizeCandidate(
-        message.resource_reference,
-        !!settings.resource_reference_locators,
-      );
-      if (!reference || recentlySent(reference)) return;
 
       let tab = sender?.tab || null;
       try {
@@ -102,6 +114,17 @@
       } catch (_) {}
       const page = typeof safeUrl === "function" ? safeUrl(tab?.url || "") : null;
       if (!page) return;
+
+      const candidateHost = String(message?.resource_reference?.host || "").toLowerCase();
+      if (!candidateHost || candidateHost !== String(page.hostname || "").toLowerCase()) return;
+      if (matchesPattern(page.hostname, policy.excluded_browser_host_patterns)) return;
+      if (matchesPattern(tab?.title || "", policy.excluded_title_patterns)) return;
+
+      const reference = await normalizeCandidate(
+        message.resource_reference,
+        !!settings.resource_reference_locators,
+      );
+      if (!reference || recentlySent(reference)) return;
 
       await sendBrowserEvent({
         observed_at: message.observed_at || new Date().toISOString(),
@@ -118,5 +141,5 @@
     })().catch(() => {});
   });
 
-  refreshSettings();
+  refreshPolicy();
 })();
