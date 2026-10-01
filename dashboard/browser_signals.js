@@ -12,6 +12,7 @@
     card.id='browserSignalSettingsCard';
     card.innerHTML=`<h2>Capture & privacy</h2>
       <div class="muted">Choose how much browser business context OpenWorkGraph may keep locally. Privacy-first preserves the previous default behavior.</div>
+      <div class="note" style="margin-top:12px"><strong>What is captured</strong><br><span class="muted">Only the bounded browser signals enabled below. Richer business-object context stays opt-in.</span></div>
       <div style="display:grid;gap:10px;margin-top:12px">
         <label class="note"><strong>Privacy profile</strong><br>
           <select id="browserPrivacyProfile" style="margin-top:6px;max-width:320px">
@@ -27,7 +28,7 @@
         <label class="note" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input id="signalPerformanceTiming" type="checkbox" style="margin-top:4px"><span><strong>Browser performance timing</strong><br><span class="muted">Rounded top-frame navigation timing only. No resource URLs or page contents.</span></span></label>
         <label class="note" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input id="signalFileUploadCategory" type="checkbox" style="margin-top:4px"><span><strong>File upload category</strong> <span class="badge">Off by default</span><br><span class="muted">Coarse MIME category only. No filename, path, exact size, hash, or file contents.</span></span></label>
       </div>
-      <div class="muted" style="margin-top:10px">Typed text, clipboard contents, passwords, file names/paths/contents, raw URL query values and page contents remain outside these profiles.</div>
+      <div class="note" style="margin-top:10px"><strong>Never added by these signals</strong><br><span class="muted">Typed text, clipboard contents, passwords, file names/paths/contents, raw URL query values and page contents remain outside these profiles.</span></div>
       <div id="browserSignalStatus" class="muted" style="margin-top:8px"></div>`;
     panel.prepend(card);
     card.querySelector('#browserPrivacyProfile')?.addEventListener('change',saveProfile);
