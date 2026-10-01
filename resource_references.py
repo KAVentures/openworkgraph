@@ -120,7 +120,12 @@ def _stored_resource_ref(sensor_ref: str) -> str:
     return f"owg:r:{digest[:32]}"
 
 
-def normalize_resource_reference(value: Any, *, include_locator: bool) -> dict[str, str] | None:
+def normalize_resource_reference(
+    value: Any,
+    *,
+    include_locator: bool,
+    allow_persisted: bool = False,
+) -> dict[str, str] | None:
     """Return a bounded persistence-safe reference or ``None`` for untrusted input.
 
     A browser-originated ``owg:e:…`` fingerprint is never persisted verbatim.
@@ -128,8 +133,10 @@ def normalize_resource_reference(value: Any, *, include_locator: bool) -> dict[s
     validated locator is available (Rich enterprise mode), the server derives the
     expected browser fingerprint itself and rejects a conflicting supplied value.
 
-    Already-hardened ``owg:r:…`` values are accepted unchanged so storage-time
-    privacy re-hardening remains idempotent.
+    Persisted-format ``owg:r:…`` values are rejected by default. They are accepted
+    unchanged only when a caller explicitly marks the value as already persisted,
+    which keeps local storage re-hardening idempotent without allowing a browser
+    producer to bypass the re-keying boundary.
     """
     if not isinstance(value, dict):
         return None
@@ -151,8 +158,7 @@ def normalize_resource_reference(value: Any, *, include_locator: bool) -> dict[s
         stored_ref = _stored_resource_ref(sensor_ref)
     elif _SENSOR_REF_RE.fullmatch(supplied_ref):
         stored_ref = _stored_resource_ref(supplied_ref)
-    elif _STORED_REF_RE.fullmatch(supplied_ref):
-        # Idempotence for already-persisted rows being re-hardened locally.
+    elif allow_persisted and _STORED_REF_RE.fullmatch(supplied_ref):
         stored_ref = supplied_ref
     else:
         return None
