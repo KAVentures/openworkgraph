@@ -146,6 +146,15 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.115: human-first demo and distribution refresh
+
+          - **Ordinary human workflows remain the core product:** OpenWorkGraph records desktop/browser work without an AI agent. AI agent observation is an optional additional evidence stream, not a prerequisite for capture.
+          - **Human-first synthetic demo:** the primary demo now contains three repeated Gmail → Salesforce → Google Sheets → Salesforce → Gmail human workflows with timing, browser semantic evidence, installation-keyed Context-mode object correlation and content-free copy/paste linkage.
+          - **Agent example is visibly separate:** one later human+agent coding example uses the real structural agent-ingest contract so testers can compare human-only evidence with optional agent telemetry instead of conflating them.
+          - **Same private runtime for live and demo:** macOS and Windows demo launchers delegate to the same installer/runtime path as normal observation; the stale Windows Python prerequisite and old Workflow Observer setup wording are gone.
+          - **Demo ships in the ZIPs:** release packages now include **TRY_DEMO_OPENWORKGRAPH.command** on macOS and **TRY_DEMO_OPENWORKGRAPH.cmd** on Windows alongside the normal START_OPENWORKGRAPH launcher.
+          - **No unnecessary browser bump:** browser sensor 1.14.0 remains current because v0.115 changes demo/distribution code, not the browser capture protocol.
+
           ### v0.114: configurable browser context with keyed correlation
 
           - **Privacy remains configurable:** Privacy-first keeps business-object references off and now masks known SaaS object-ID positions in stored browser paths; Context correlates repeated work with an installation-keyed token; Rich enterprise explicitly opts into minimal validated provider locators for authorized connector resolution.
@@ -246,7 +255,7 @@ jobs:
           JSON, CSV ZIP and XLSX exports include a **dedicated privacy-safe agent-run table** derived from canonical agent evidence. It uses opaque OpenWorkGraph references and does not expose native run/trace/span identifiers or agent content payloads.
 
           ### macOS / Windows testers
-          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. **OpenWorkGraph-Claude.mcpb** provides the compact Claude Desktop MCP surface for an existing local installation.
+          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. Each ZIP includes a normal live launcher plus a **TRY_DEMO_OPENWORKGRAPH** launcher for isolated synthetic sample evidence. **OpenWorkGraph-Claude.mcpb** provides the compact Claude Desktop MCP surface for an existing local installation.
 
           ### Security note
           Production/self-hosted deployments should still use customer-controlled TLS/network access, secret management, retention/backups, identity infrastructure and endpoint controls appropriate to their environment.
