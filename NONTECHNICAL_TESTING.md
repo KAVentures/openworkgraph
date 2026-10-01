@@ -28,13 +28,17 @@ Plan on about 30 minutes for the first pass (steps 1–6) and a normal working d
 
 **Expected:** the dashboard opens with a dark top bar showing **Recording**, and tabs **Overview, Evidence, Agents, Connect, Organization, History, Export**. Nothing needs an account.
 
-## 2. Add the browser sensor (recommended)
+## 2. Add or update the browser sensor (recommended)
 
-Without it, OpenWorkGraph sees "Google Chrome". With it, it can tell Gmail from Google Sheets from Salesforce.
+Without it, OpenWorkGraph sees "Google Chrome". With it, it can tell Gmail from Google Sheets from Salesforce and can provide richer browser-semantic evidence.
 
 1. Run **`ADD_BROWSER_SENSOR.command`** on macOS or **`ADD_BROWSER_SENSOR.cmd`** on Windows. It opens a folder and your browser's extensions page.
 2. Turn on **Developer mode**, click **Load unpacked**, and choose the folder that opened.
 3. In the dashboard, the "Browser sensor" chip should turn green. If it doesn't, use **Pair / repair browser sensor**.
+
+**After upgrading OpenWorkGraph:** the unpacked browser extension may still be running the previous files. If the server observes an older sensor, **Organization → Capture & privacy** shows **Browser sensor update available** with the running and expected versions. Open the browser's extensions page and click **Reload** for the OpenWorkGraph extension. Ordinary capture can continue while it is stale, but new browser-context features should not be considered active until the version warning disappears.
+
+v0.114 uses browser sensor **1.14.0** for the new business-object reference feature.
 
 ## 3. Work normally, then look at Overview
 
@@ -67,6 +71,27 @@ Safe tests you can do (use fake data only):
 | `Sprint board: In Progress column` | unchanged (not a person) |
 
 Never use real card numbers, passwords or other people's personal numbers for testing.
+
+### v0.114 browser-context privacy profiles
+
+Open **Organization → Capture & privacy**. The browser-context profile is independent of AI context detail and organization sharing.
+
+- **Privacy-first (default):** business-object references are off. Known Google Docs/Drive, GitHub, Salesforce, Jira and Linear object-ID positions are masked in stored browser paths. This is slightly stricter than pre-v0.114 path behavior.
+- **Context:** allowlisted work objects can be correlated across repeated events, but the provider's actual record/thread/document locator is not stored. The browser retry queue uses a pairing-keyed opaque fingerprint, and the local server replaces it with a separate installation-keyed `owg:r:…` token before event persistence.
+- **Rich enterprise:** explicitly keeps the minimal validated provider locator as well, so an authorized connector/AI can resolve the object. It does **not** turn on file-upload categories or any other unrelated optional sensor.
+- **Custom:** lets you set the same switches individually.
+
+Supported reference shapes in v0.114 are Google Docs/Sheets/Slides/Drive, known Gmail conversation routes, GitHub PR/issues, Salesforce records, Jira issues and Linear issues. Unknown sites are not guessed.
+
+Use fake objects for testing. Useful checks:
+
+1. In **Privacy-first**, open a fake/test GitHub PR such as `/owner/repo/pull/123`. Evidence may preserve the useful route structure, but the object position should appear as `:id`; there should be no `resource_reference` metadata.
+2. In **Context**, revisit the same supported object several times. The persisted `resource_ref` should be stable for that installation, begin with `owg:r:`, and should not contain the real PR/issue/record ID or a provider locator.
+3. In **Rich enterprise**, repeat the test with a fake/test object. The validated minimal locator may be present in `resource_reference`, but the full URL, query string and fragment must still be absent.
+4. Add a browser-host/title exclusion and verify that no rich locator from that excluded page is retained.
+5. A Gmail `#search/<query>` route should **not** be treated as a conversation locator.
+
+Do not use real customer, patient, employee, legal, financial or other sensitive records for these tests.
 
 ## 5. Recording controls
 
@@ -120,7 +145,7 @@ A useful test: upload the file to an AI assistant and ask:
 - Some desktop apps expose few button or menu labels; missing labels there are normal.
 - Engagement time is an estimate, not proof of continuous work.
 - Name detection uses a name list and context. An unusual or all-lowercase name can occasionally be missed, and a company that is also a surname can be tokenized. Please report either case.
-- After updating OpenWorkGraph, the browser extension may need a reload (the dashboard tells you).
+- After updating OpenWorkGraph, the browser extension may need a reload (the dashboard tells you when it observes a version mismatch).
 - Deleting local evidence does not recall anything an organization Gateway already received.
 
 ## Reporting problems
