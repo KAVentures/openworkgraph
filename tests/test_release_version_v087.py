@@ -44,7 +44,7 @@ def test_release_notes_are_current_and_version_driven():
     assert "First useful reconstruction" in workflow
     assert "### v0.116: evidence-first workflow skill drafting" in workflow
     assert "get_workflow_evidence" in workflow
-    assert "explicit execution" in workflow_lower
+    assert "explicitly selected" in workflow_lower
     assert "support counts" in workflow_lower
     assert "external ai" in workflow_lower
     assert "### v0.115: human-first demo and distribution refresh" in workflow
