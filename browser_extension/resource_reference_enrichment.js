@@ -5,6 +5,8 @@
   let cachedPolicy = null;
   let cachedPolicyAt = 0;
 
+  const SENSOR_NAMESPACE = "openworkgraph-resource-reference-sensor-v1:";
+
   async function loadPolicy({force = false} = {}) {
     if (!force && cachedPolicy && Date.now() - cachedPolicyAt < 5000) return cachedPolicy;
     let data = null;
@@ -55,10 +57,30 @@
     ].join("|");
   }
 
-  async function sha256Hex(value) {
-    const bytes = new TextEncoder().encode(value);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
+  async function hmacHex(secret, message) {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(String(secret || "")),
+      {name: "HMAC", hash: "SHA-256"},
+      false,
+      ["sign"],
+    );
+    const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(String(message || "")));
     return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function sensorResourceRef(candidate) {
+    // The durable retry queue lives on disk. Do not place a dictionary-attackable
+    // SHA of a short Jira/GitHub/Linear identifier there. The paired extension
+    // already has a high-entropy installation secret, so use it to make the
+    // queue-side fingerprint opaque. The local server HMACs this value again
+    // with a separate installation secret before database persistence.
+    let secret = "";
+    try { secret = String(await globalThis.OWGBrowserAuth?.pairingSecret?.() || ""); } catch (_) {}
+    if (!secret) return "";
+    const digest = await hmacHex(secret, SENSOR_NAMESPACE + canonical(candidate));
+    return `owg:e:${digest.slice(0, 24)}`;
   }
 
   async function normalizeCandidate(candidate, includeLocator) {
@@ -68,12 +90,13 @@
     const host = String(candidate.host || "").toLowerCase();
     const locator = String(candidate.resolver_locator || "");
     if (!provider || !resourceKind || !locator || locator.length > 320) return null;
-    const digest = await sha256Hex(canonical(candidate));
+    const resourceRef = await sensorResourceRef(candidate);
+    if (!resourceRef) return null;
     const out = {
       provider,
       resource_kind: resourceKind,
       host,
-      resource_ref: `owg:r:${digest.slice(0, 24)}`,
+      resource_ref: resourceRef,
       resolution: "observed",
     };
     if (includeLocator) out.resolver_locator = locator;
