@@ -146,6 +146,16 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.113: frontier-aware automation interpretation
+
+          - **Compact evidence keeps work identity:** compact MCP workflow rows retain a bounded protected work surface and title, so browser-heavy work can remain distinguishable as Gmail, Salesforce, Sheets, and similar surfaces without exposing rich metadata.
+          - **Missing historical payload is not future infeasibility:** absent email bodies, clipboard contents, typed text or spreadsheet cells no longer imply that a future automation is blocked; connected AI is told to check whether an authorized agent can retrieve the live input from the source system at execution time.
+          - **Redesign before click imitation:** automation analysis considers eliminating a step, deterministic automation, agent delegation, agent plus approval, or human-only work. A proposed removal must first check managers, reports, controls or downstream teams that may consume the output.
+          - **Find the next autonomy boundary:** when an agent already performs part of a workflow, connected AI is told to inspect the human work before, between and after agent runs rather than recommending automation of work the agent already does.
+          - **Capability map before rejection:** required operations are separated into confirmed, plausible/testable and blocked rather than treating not-observed as unavailable.
+          - **Consequence-aware autonomy:** low-impact reversible work may later use scoped standing authorization when policy permits, while financial, regulated, clinical, irreversible, safety-critical or otherwise high-impact actions retain the appropriate human or organizational control. Repetition alone is not permission.
+          - **Measured interpretation quality:** a fixed six-case evaluation corpus and scorer track both automation underestimation and overreach, including macro-only recommendations, missing-payload pessimism, agent-orchestration blind spots, unjustified financial/clinical autonomy and invented automation for one-off work.
+
           ### v0.112: trustworthy AI answers and agent-run accounting
 
           - **One Claude run, not two:** Claude Code hooks/OTel and native-session fallback now share one opaque cross-sensor identity. Prompt turns stay inside the physical session while genuine subagents keep separate opaque child executions, and matching tool calls are deduplicated by opaque tool identity instead of timestamp proximity alone.
