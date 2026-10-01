@@ -157,6 +157,8 @@ def test_dashboard_exports_through_authenticated_fetch_and_defaults_to_redacted(
     assert "downloadEvidence(index,'redacted')" in source
     assert "Export redacted evidence" in source
     assert "confirm('Export the stored privacy-hardened representation?" in source
+    assert "refreshWorkflowEvidence" in source
+    assert "setInterval" not in source
     assert "window.location" not in source
 
 
