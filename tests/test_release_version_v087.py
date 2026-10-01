@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.112.0"
+EXPECTED_VERSION = "0.113.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -25,6 +25,7 @@ def test_release_version_sources_are_aligned():
 
 def test_release_notes_are_current_and_version_driven():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    workflow_lower = workflow.lower()
     assert 'VERSION="$(tr -d' in workflow
     assert 'TAG="v${VERSION}"' in workflow
     assert "v0.53" not in workflow
@@ -41,6 +42,11 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.113: frontier-aware automation interpretation" in workflow
+    assert "missing historical payload" in workflow_lower
+    assert "next autonomy boundary" in workflow_lower
+    assert "consequence-aware" in workflow_lower
+    assert "evaluation corpus" in workflow_lower
     assert "### v0.112: trustworthy AI answers and agent-run accounting" in workflow
     assert "opaque cross-sensor identity" in workflow
     assert "Token usage" in workflow
@@ -65,11 +71,13 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
-    changelog = (ROOT / "docs" / "CHANGELOG_V0112.md").read_text(encoding="utf-8")
-    assert "opaque" in changelog
-    assert "Token usage" in changelog
-    assert "unknown" in changelog
-    assert "raw tool output" in changelog
+    changelog = (ROOT / "docs" / "CHANGELOG_V0113.md").read_text(encoding="utf-8")
+    changelog_lower = changelog.lower()
+    assert "historical replayability" in changelog_lower
+    assert "next autonomy boundary" in changelog_lower
+    assert "consequence-aware" in changelog_lower
+    assert "underestimation" in changelog_lower
+    assert "overreach" in changelog_lower
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():
