@@ -113,6 +113,7 @@ def reset_demo_data(env: dict[str, str]) -> None:
         "workflow_observer.db", "workflow_observer.db-wal", "workflow_observer.db-shm",
         "outbox.db", "outbox.db-wal", "outbox.db-shm", "events.jsonl",
         "gateway_sync_state.db", "gateway_sync_state.db-wal", "gateway_sync_state.db-shm",
+        "browser_signal_settings.json", "agent_session_policy.json", "agent_working_detail_policy.json",
         ".presentation_people.json", ".display_redaction_key",
     ):
         try:
@@ -136,6 +137,7 @@ def main() -> None:
     print("===========================================")
     print("Evidence is captured and stored locally first. It leaves this computer only through an explicit export/AI connection or an explicitly enrolled organization Gateway.")
     print("Raw rich evidence is canonical; inferred tasks and process labels are regeneratable hints rather than ground truth.")
+    print("Ordinary human workflows are the core product. AI-agent observation is optional additional evidence, not a requirement for capture.")
     print("Keyboard activity is counted for effort/timing, but key identities and typed text are never stored. Click/scroll interactions are enabled; screenshots are OFF by default.")
     print("Local API access is capability-protected; the browser sensor authenticates the OpenWorkGraph server before sending browser evidence.")
     print("Local AI clients use MCP over stdio. HTTP MCP is OFF by default and starts only when explicitly requested for a client that needs it.")
@@ -147,6 +149,7 @@ def main() -> None:
         print("LIVE mode uses its own database; demo data is excluded. Organization Gateway controls are available in the dashboard.")
     else:
         print("DEMO mode uses a separate synthetic-data database, resets on each demo launch, and never synchronizes to an organization Gateway.")
+        print("The primary demo is three repeated human-only workflows; a separate human+agent example follows afterward.")
 
     if port_is_open(API_HOST, API_PORT):
         raise RuntimeError(
@@ -172,6 +175,9 @@ def main() -> None:
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
             webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
+            print("Start with the repeated Gmail → Salesforce → Sheets → Salesforce → Gmail human workflow.")
+            print("It demonstrates ordinary human capture, timing, browser object correlation and copy/paste linkage without an AI agent.")
+            print("A separate synthetic coding-agent handoff later in the timeline demonstrates optional agent telemetry.")
             print("Demo data is isolated from your real observations and is never Gateway-synchronized.")
             print("AI access starts OFF. Enable it in the dashboard only if you want an MCP client to read this run.")
             print("Close this window or press Ctrl+C when finished.\n")
