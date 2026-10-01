@@ -139,7 +139,7 @@ See **[Self-hosting](docs/SELF_HOSTING.md)**.
 
 ---
 
-# Raw rich evidence is canonical
+# Rich persisted evidence is canonical
 
 OpenWorkGraph deliberately separates observed evidence from interpretations.
 
@@ -149,12 +149,14 @@ OpenWorkGraph deliberately separates observed evidence from interpretations.
            +------------+------------+
            |            |            |
          AI reads     search       heuristics
-           |            |            |
-           v            v            v
-   reconstruction    retrieval   task/process hints
+           |            |            v
+           v            v      task/process hints
+   reconstruction    retrieval
 ```
 
 Deterministic task inference can be useful, but it is not treated as ground truth. A newer model should be able to reinterpret old evidence without the capture layer having thrown away useful detail.
+
+Where older OWG documentation or APIs say **raw evidence**, they mean the richest **persisted privacy-hardened local evidence**. OpenWorkGraph does not expose some hidden pre-privacy event stream. **Redacted** is an additional presentation/AI-sharing transformation on top of the stored privacy-hardened representation.
 
 The canonical AI trace preserves, when observed:
 
@@ -213,7 +215,9 @@ See **[Privacy and data handling](docs/PRIVACY_AND_DATA.md)**.
 
 The dashboard can export JSON, XLSX, or CSV ZIP. The AI guide and starter prompt are bundled with context packages.
 
-Use rich raw evidence when accurate reconstruction matters. Derived summaries/tasks are convenience views.
+For workflow-to-skill use, the **Teach your AI from observed work** flow lets you review the exact example runs before export. **Export redacted evidence** is the recommended sharing path. **Export stored evidence** exports the locally persisted privacy-hardened representation; it is not pre-privacy capture and should be reviewed before external sharing.
+
+OpenWorkGraph supplies the evidence. Your connected AI interprets it and drafts the reusable skill/procedure. OWG's inferred families, dominant steps and support counts remain navigation/descriptive aids rather than task truth.
 
 ## 2. Local MCP
 
@@ -239,7 +243,11 @@ AI access starts OFF on every OpenWorkGraph launch. By default AI apps get **Red
 
 The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
-New dashboard-generated connections and the Claude MCP bundle use a compact ten-tool surface so agents have fewer overlapping choices: current context, search, canonical trace, work profile, repeated workflows, task context, descriptive feedback from similar runs, agent-run inspection, grounded prior-agent handoff, and playbooks. Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool surface; OpenWorkGraph does not silently remove those tools underneath existing clients.
+New dashboard-generated connections and the Claude MCP bundle use a compact **13-tool** surface so agents have fewer overlapping choices. For turning observed work into a skill, the intended path is deliberately clear: use `find_repeated_workflows` only to discover candidate examples, select the concrete runs that really belong together, call `get_workflow_evidence` for those execution IDs, and use `get_workflow_trace` only when deeper canonical drill-down is needed. The external AI then drafts the procedure and asks for business rules, source-of-truth choices, escalation criteria or approval boundaries that observation cannot establish.
+
+`get_workflow_evidence` does **not** make support counts, repeated behavior, Playbooks or inferred families authoritative. Repetition is not policy or permission, clipboard contents were not captured, and an AI should prefer current authorized APIs/connectors/tools over literal click replay when they can safely produce the same outcome.
+
+Existing saved configurations that explicitly launch `mcp_server.secure_stdio` keep the legacy 24-tool compatibility surface; OpenWorkGraph does not silently remove existing tool names underneath configured clients.
 
 The canonical evidence tool remains:
 
