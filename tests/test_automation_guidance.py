@@ -111,5 +111,5 @@ def test_capability_brief_distinguishes_historical_capture_from_future_feasibili
     assert "five design moves" in AUTOMATION_CAPABILITIES_MD
     assert "next autonomy boundary" in AUTOMATION_CAPABILITIES_MD.lower()
     assert "scoped standing authorization" in AUTOMATION_CAPABILITIES_MD
-    assert "financial, regulated, clinical" in AUTOMATION_CAPABILITIES_MD
+    assert "financial, regulated, clinical" in AUTOMATION_CAPABILITIES_MD.lower()
     assert "Shadow trials instead of historical replay" in AUTOMATION_CAPABILITIES_MD
