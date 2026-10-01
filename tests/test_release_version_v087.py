@@ -44,7 +44,7 @@ def test_release_notes_are_current_and_version_driven():
     assert "First useful reconstruction" in workflow
     assert "### v0.115: human-first demo and distribution refresh" in workflow
     assert "ordinary human workflows" in workflow_lower
-    assert "ai agent is not required" in workflow_lower
+    assert "ai agent observation is an optional additional evidence stream" in workflow_lower
     assert "try_demo_openworkgraph" in workflow_lower
     assert "### v0.114: configurable browser context with keyed correlation" in workflow
     assert "privacy-first" in workflow_lower
