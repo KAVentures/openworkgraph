@@ -11,6 +11,7 @@ from demo_data import (
     build_human_demo_events,
     demo_resource_references,
 )
+from shared.agent_evidence import agent_event_to_evidence
 from shared.agent_ingress_validation import validate_agent_ingress_event
 
 
@@ -85,13 +86,22 @@ def test_agent_example_is_separate_optional_structural_evidence():
     assert all(event["source"] != "agent" for event in human_handoff)
     assert all((event.get("metadata") or {}).get("demo_scenario") == "human_agent_handoff" for event in human_handoff)
 
-    validated = [validate_agent_ingress_event(payload, now=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)) for payload in agent_payloads]
-    assert len(validated) == 3
-    assert {payload["operation"] for payload in validated} == {"tool_call"}
-    assert {payload["tool_name"] for payload in validated} == {"repository_search", "edit_files", "run_tests"}
-    serialized = repr(validated).lower()
-    for forbidden in ("prompt", "tool_result", "tool_arguments", "clipboard_contents"):
+    validated = [
+        validate_agent_ingress_event(payload, now=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc))
+        for payload in agent_payloads
+    ]
+    canonical = [agent_event_to_evidence(payload) for payload in validated]
+    assert len(canonical) == 3
+    assert {event["source"] for event in canonical} == {"agent"}
+    assert {event["event_type"] for event in canonical} == {"agent_tool_call"}
+    assert {event["metadata"]["tool"]["name"] for event in canonical} == {
+        "repository_search", "edit_files", "run_tests"
+    }
+    serialized = repr(canonical).lower()
+    for forbidden in ("top secret", "do not store argument", "do not store result"):
         assert forbidden not in serialized
+    assert all(event["metadata"]["privacy"]["tool_arguments_captured"] is False for event in canonical)
+    assert all(event["metadata"]["privacy"]["tool_result_content_captured"] is False for event in canonical)
 
 
 def test_demo_launchers_share_the_live_private_runtime_and_ship_in_packages():
