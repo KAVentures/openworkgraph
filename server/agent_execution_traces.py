@@ -21,6 +21,7 @@ _EDIT_TOOL_NAMES = frozenset({
     "edit", "multiedit", "write", "notebookedit", "edit_file", "write_file", "delete_file",
     "file_edit", "file_write", "file_delete", "apply_patch",
 })
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cached_input_tokens", "total_tokens")
 
 
 def _opaque_ref(prefix: str, value: Any) -> str | None:
@@ -54,7 +55,7 @@ def _observation_levels(events: list[dict[str, Any]]) -> list[str]:
 def _safe_usage(meta: dict[str, Any]) -> dict[str, int]:
     raw = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
     out: dict[str, int] = {}
-    for key in ("input_tokens", "output_tokens", "cached_input_tokens", "total_tokens"):
+    for key in _USAGE_KEYS:
         try:
             amount = int(raw.get(key))
         except Exception:
@@ -64,9 +65,80 @@ def _safe_usage(meta: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def _usage_totals(projected: list[dict[str, Any]]) -> dict[str, int]:
+    totals: Counter[str] = Counter()
+    for item in projected:
+        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+        for key in _USAGE_KEYS:
+            if key in usage:
+                totals[key] += int(usage.get(key) or 0)
+    return {key: int(totals[key]) for key in _USAGE_KEYS if key in totals}
+
+
+def _token_observability(
+    projected: list[dict[str, Any]],
+    *,
+    agent: dict[str, str],
+    observation_levels: list[str],
+) -> dict[str, Any]:
+    totals = _usage_totals(projected)
+    if totals:
+        return {
+            "status": "observed",
+            "basis": "canonical_provider_or_sdk_usage_telemetry",
+            "counts": totals,
+            "estimated": False,
+        }
+    framework = str(agent.get("framework") or "").strip().lower()
+    if framework == "cursor":
+        basis = "cursor_hook_does_not_expose_token_usage"
+    elif observation_levels and set(observation_levels) <= {"native_trace"}:
+        basis = "native_structural_observation_has_no_token_usage_signal"
+    else:
+        basis = "token_usage_signal_not_observed"
+    return {
+        "status": "not_observed",
+        "basis": basis,
+        "counts": {},
+        "estimated": False,
+        "absence_means": "not_observed_not_zero",
+    }
+
+
+def _dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove the same tool call observed through hook/OTel and transcript fallback.
+
+    Exact opaque span identity is the only cross-sensor de-duplication key here;
+    adjacent calls with the same tool name are never collapsed. If both exist,
+    prefer a non-native-session sensor because hooks/OTel carry richer facts.
+    """
+    output: list[dict[str, Any]] = []
+    positions: dict[tuple[str, str], int] = {}
+    for event in events:
+        meta, trace = _meta(event)
+        operation = str(meta.get("operation") or "")
+        span = str(trace.get("span_id") or "").strip()
+        key = (operation, span) if operation == "tool_call" and span else None
+        if key is None:
+            output.append(event)
+            continue
+        if key not in positions:
+            positions[key] = len(output)
+            output.append(event)
+            continue
+        current_index = positions[key]
+        current = output[current_index]
+        current_native = str(current.get("sensor_id") or "").startswith("agent:native-session:")
+        candidate_native = str(event.get("sensor_id") or "").startswith("agent:native-session:")
+        if current_native and not candidate_native:
+            output[current_index] = event
+    output.sort(key=lambda item: str(item.get("observed_at") or ""))
+    return output
+
+
 def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
     """What the run did, from content-free tool detail: commands, git/gh
-    operations, test results (including how the run ended), files and lines."""
+    operations, test results (including unknowns), files, lines and observed tokens."""
     commands: Counter[str] = Counter()
     git_ops: Counter[str] = Counter()
     gh_ops: Counter[str] = Counter()
@@ -75,10 +147,8 @@ def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
     read_only: set[str] = set()
     lines_added = lines_removed = 0
     test_runs: list[dict[str, Any]] = []
-    tokens = 0
+    totals = _usage_totals(projected)
     for item in projected:
-        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
-        tokens += int(usage.get("total_tokens") or 0) or int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
         tool = item.get("tool") if isinstance(item.get("tool"), dict) else {}
         detail = (tool.get("detail") or {}) if item.get("operation") == "tool_call" else {}
         if not detail:
@@ -111,11 +181,21 @@ def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
         summary["gh"] = dict(gh_ops.most_common())
     if test_runs:
         last = test_runs[-1]
+        known_failing = sum(1 for t in test_runs if t["status"] == "failing" or t["failed"])
+        known_passing = sum(1 for t in test_runs if t["status"] == "passing")
+        unknown = sum(1 for t in test_runs if t["status"] == "unknown")
         tests: dict[str, Any] = {
             "runs": len(test_runs),
-            "runs_with_failures": sum(1 for t in test_runs if t["status"] == "failing" or t["failed"]),
+            "known_passing_runs": known_passing,
+            "known_failing_runs": known_failing,
+            "unknown_result_runs": unknown,
             "ended": last["status"],
         }
+        if known_failing or unknown == 0:
+            tests["runs_with_failures"] = known_failing
+        else:
+            tests["runs_with_failures"] = None
+            tests["runs_with_failures_status"] = "unknown_no_failure_count_observed"
         if last["status"] != "unknown":
             tests["last_passed"] = last["passed"]
             tests["last_failed"] = last["failed"]
@@ -126,8 +206,12 @@ def _work_summary(projected: list[dict[str, Any]]) -> dict[str, Any]:
         summary["file_types"] = dict(file_types.most_common(8))
     if lines_added or lines_removed:
         summary["lines"] = {"added": lines_added, "removed": lines_removed}
-    if tokens:
-        summary["total_tokens"] = tokens
+    if totals:
+        summary["token_usage_observed"] = True
+        if "total_tokens" in totals:
+            summary["total_tokens"] = totals["total_tokens"]
+        elif "input_tokens" in totals or "output_tokens" in totals:
+            summary["total_tokens"] = int(totals.get("input_tokens") or 0) + int(totals.get("output_tokens") or 0)
     return summary
 
 
@@ -279,7 +363,22 @@ def _workspace(events: list[dict[str, Any]]) -> dict[str, str]:
     return {}
 
 
+def _resolve_outcome(base: dict[str, Any], work_summary: dict[str, Any]) -> tuple[Any, Any]:
+    outcome = base.get("outcome_status")
+    basis = base.get("outcome_basis")
+    if str(outcome or "").lower() not in {"", "unknown", "not_observed"}:
+        return outcome, basis
+    tests = work_summary.get("tests") if isinstance(work_summary.get("tests"), dict) else {}
+    ended = str(tests.get("ended") or "")
+    if ended == "passing":
+        return "success", "latest_observed_test_run_passing"
+    if ended == "failing":
+        return "error", "latest_observed_test_run_failing"
+    return outcome, basis
+
+
 def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, Any]:
+    events = _dedupe_events(events)
     base = _one_execution(events)
     projected = [_event_projection(event) for event in events]
     operation_counts = Counter(str(item.get("operation") or "unknown") for item in projected)
@@ -298,20 +397,26 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
     bounded_events = projected[:max_events]
     levels = _observation_levels(events)
     coverage = _observed_coverage(projected, observation_levels=levels)
+    agent = _agent_descriptor(events)
+    work_summary = _work_summary(projected)
+    outcome_status, outcome_basis = _resolve_outcome(base, work_summary)
+    usage_totals = _usage_totals(projected)
 
     return {
         "execution_id": base["execution_id"],
         "started_at": base.get("started_at"),
         "ended_at": base.get("ended_at"),
-        "agent": _agent_descriptor(events),
+        "agent": agent,
         "observation_level": base.get("observation_level"),
-        "outcome_status": base.get("outcome_status"),
-        "outcome_basis": base.get("outcome_basis"),
+        "outcome_status": outcome_status,
+        "outcome_basis": outcome_basis,
         "observed_family_key": base.get("observed_family_key"),
         "observed_family_basis": base.get("observed_family_basis"),
         "run_start_observed": run_start_observed,
         "run_finish_observed": run_finish_observed,
-        "work_summary": _work_summary(projected),
+        "work_summary": work_summary,
+        "usage_totals": usage_totals,
+        "token_usage": _token_observability(projected, agent=agent, observation_levels=levels),
         **_workspace(events),
         "complete_boundary_observed": run_start_observed and run_finish_observed,
         "event_count_total": len(projected),
@@ -439,6 +544,7 @@ def agent_execution_traces(
             "false_means": "signal_not_observed_not_proof_the_underlying_action_did_not_occur",
             "coverage_is_vendor_capability_claim": False,
             "hidden_reasoning_is_observable": False,
+            "token_usage_not_observed_means_zero": False,
         },
         "context_handoff_semantics": {
             "not_asserted": "no adapter assertion about handoff preparation or runtime delivery",
@@ -456,8 +562,9 @@ def agent_execution_traces(
         "tool_arguments_exposed": False,
         "tool_results_exposed": False,
         "chain_of_thought_exposed": False,
+        "token_counts_are_estimated": False,
         "derived": True,
         "authoritative": False,
         "source": "canonical_agent_evidence",
-        "interpretation": "provider-neutral structural execution traces; completeness depends on which lifecycle events the instrumented agent runtime exposed",
+        "interpretation": "provider-neutral structural execution traces; completeness depends on which lifecycle and usage signals the instrumented agent runtime exposed",
     }

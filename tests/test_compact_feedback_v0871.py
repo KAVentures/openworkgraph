@@ -189,7 +189,7 @@ def test_feedback_without_family_key_returns_selection_when_current_family_is_am
     assert len(result["available_families"]) == 2
 
 
-def test_compact_overview_stays_small_but_canonical_trace_defaults_to_100(monkeypatch):
+def test_compact_overview_stays_small_and_canonical_trace_defaults_to_40(monkeypatch):
     compact, calls = _install_feedback_fakes(monkeypatch)
 
     overview = compact.get_current_work_context()
@@ -206,7 +206,7 @@ def test_compact_overview_stays_small_but_canonical_trace_defaults_to_100(monkey
 
     calls.clear()
     compact.get_workflow_trace()
-    assert calls[-1][1]["limit"] == 100
+    assert calls[-1][1]["limit"] == 40
 
     calls.clear()
     compact.get_workflow_trace(limit=37)

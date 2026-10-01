@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from server import db as server_db
 from server.agent_auth import ensure_agent_ingest_token
 from server.agent_routes import AGENT_CLAUDE_OTEL_PATH, router as agent_router
+from server.agent_session_store import session_ref
 from server.local_auth import ensure_api_token
 
 
@@ -62,7 +63,8 @@ def test_claude_otel_route_requires_write_only_token_and_persists_only_structure
         assert response.status_code == 202, response.text
         assert response.content == b""
 
-    rows = server_db.rows("SELECT * FROM events WHERE session_id = ?", ("claude-route-session",))
+    safe_session = session_ref("claude_code", "claude-route-session")
+    rows = server_db.rows("SELECT * FROM events WHERE session_id = ?", (safe_session,))
     assert len(rows) == 1
     row = rows[0]
     assert row["event_type"] == "agent_model_call"
@@ -71,5 +73,5 @@ def test_claude_otel_route_requires_write_only_token_and_persists_only_structure
     assert row["metadata"]["agent"]["model"] == "claude-sonnet-5"
     assert row["metadata"]["usage"]["total_tokens"] == 30
     serialized = json.dumps(row, ensure_ascii=False)
-    for forbidden in ("SUPERSECRET", "patient@example.com", "native-private-request-id"):
+    for forbidden in ("SUPERSECRET", "patient@example.com", "native-private-request-id", "claude-route-session", "claude-route-prompt"):
         assert forbidden not in serialized

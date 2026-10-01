@@ -146,6 +146,16 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.112: trustworthy AI answers and agent-run accounting
+
+          - **One Claude run, not two:** Claude Code hooks/OTel and native-session fallback now share one opaque cross-sensor identity. Prompt turns stay inside the physical session while genuine subagents keep separate opaque child executions, and matching tool calls are deduplicated by opaque tool identity instead of timestamp proximity alone.
+          - **Truthful test outcomes:** passing, failing and unknown test runs stay distinct. Missing result evidence never becomes a confident zero failures; a later observed passing test can resolve an otherwise-unknown run outcome without erasing the earlier observed failure.
+          - **Token usage is evidence, not an estimate:** exact provider/SDK usage is reported as observed. Runtimes that do not expose usage are reported as not observed with a basis; OpenWorkGraph does not infer tokens from visible text.
+          - **Smaller MCP evidence pages:** get_workflow_trace is compact by default and keeps stable pagination; authorized rich rows remain available explicitly. Aggregate saved-history errors name the exact History grant or date-range alternative.
+          - **Better default scopes:** after a launcher restart, work-profile/context tools can fall back to authorized local today evidence rather than returning a misleading empty current-session answer.
+          - **Readable repeated work:** repeated-workflow candidates expose readable typical steps and retain engaged and foreground evidence, using foreground duration only as an explicit fallback when engagement is zero or unobserved.
+          - **Native sensor health:** clean bootstrap/cleanup no longer increments the error counter; bounded last_error reports only real failure stage/type without paths or provider payloads.
+
           ### v0.111: provenance-safe agent Working Detail
 
           - Working Detail is OFF by default and lives outside the canonical event stream, with separate capture and connected-AI read controls.

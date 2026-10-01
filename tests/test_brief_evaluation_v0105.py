@@ -16,7 +16,6 @@ from server.db import init_db, connect
 from server.agent_ingest import ingest_agent_payloads
 from server.history_retention import initialize_history_retention
 from server import agent_brief, brief_evaluation as ev
-from server.run_memory import _key, _session_ref
 from shared.claude_code_adapter import claude_hook_to_agent_events
 from shared.history_policy import update_retention
 init_db(); initialize_history_retention()
@@ -29,7 +28,7 @@ def session(sid, arm, minute, tests, end=False):
     When an evaluation trial is active, seed the explicit trial assignment too;
     before evaluation this remains an ordinary, non-randomized brief log.
     """
-    ref = _session_ref(sid, key=_key())
+    ref = agent_brief._evaluation_session_ref("claude-code", sid)
     assigned_at = (base + timedelta(minutes=minute)).isoformat()
     with connect() as c:
         agent_brief._ensure_trial_table(c)
@@ -77,7 +76,8 @@ assert agent_brief.deliver("claude-code", session_id="held")["text"] == ""  # /c
 assert agent_brief.deliver("claude-code", session_id="got")["text"].startswith("OpenWorkGraph brief")
 with connect() as c:
     arms = {r[0]: r[1] for r in c.execute("SELECT session_ref, arm FROM agent_brief_log").fetchall()}
-assert arms[_session_ref("held", key=_key())] == "control" and arms[_session_ref("got", key=_key())] == "brief"
+assert arms[agent_brief._evaluation_session_ref("claude-code", "held")] == "control"
+assert arms[agent_brief._evaluation_session_ref("claude-code", "got")] == "brief"
 assert agent_brief.status()["briefs_delivered"] == 3  # hist + n1 + got; held is not counted as delivered
 # Historical non-randomized briefs never enter the trial comparison.
 r = ev.report()
@@ -134,7 +134,7 @@ update_retention(human_mode="ephemeral", human_days=None, agent_mode="ephemeral"
 session("eph", "brief", 10, "1 failed, 1 passed in 1s", end=True)
 with connect() as c:
     assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0  # purged: memory only
-ref = _session_ref("eph", key=_key())
+ref = agent_brief._evaluation_session_ref("claude-code", "eph")
 runs = ev._runs_by_session({ref}, (base - timedelta(days=1)).isoformat())
 assert ev._session_metrics(runs[ref], (base + timedelta(minutes=10)).isoformat())["test_fail_rate"] == 1.0
 assert ev._session_metrics(runs[ref], (base + timedelta(minutes=11)).isoformat())["test_fail_rate"] is None

@@ -13,6 +13,7 @@ from shared.codex_otel_adapter import codex_otel_to_agent_events
 from shared.gemini_otel_adapter import gemini_otel_to_agent_events
 from shared.history_policy import retention_for_kind
 from shared.otel_agent_adapter import otel_payload_to_agent_events
+from .agent_identity import normalize_agent_event
 from .db import insert_events
 
 MAX_AGENT_EVENTS = 500
@@ -40,6 +41,10 @@ def _validated_events(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if isinstance(item, dict) and "pr_watch" in item:
             item = dict(item)
             watch = item.pop("pr_watch")
+        # Defense in depth: direct callers and native OTel adapters pass through
+        # the same opaque identity normalizer as the Claude hook bridge. This is
+        # idempotent and leaves non-Claude runtimes unchanged.
+        item = normalize_agent_event(item)
         event = agent_event_to_evidence(validate_agent_ingress_event(item))
         if watch:
             event["_pr_watch"] = watch

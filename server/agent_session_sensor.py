@@ -23,6 +23,8 @@ from shared.tool_detail import tool_call_detail, workspace_ref
 from shared.time_utils import normalize_timestamp
 from .agent_ingest import ingest_agent_payloads
 from .agent_session_store import (
+    _opaque,
+    init_agent_session_store,
     native_file_ref,
     read_agent_session_policy,
     write_agent_session_policy,
@@ -48,6 +50,7 @@ _STATS: dict[str, Any] = {
     "structural_events": 0,
     "messages_stored": 0,
     "errors": 0,
+    "last_error": None,
     "last_scan_at": None,
 }
 
@@ -71,6 +74,12 @@ _SOURCE_SPECS = {
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _record_error(stage: str, exc: Exception) -> None:
+    """Count a real sensor failure without leaking paths/provider payloads."""
+    _STATS["errors"] += 1
+    _STATS["last_error"] = f"{str(stage)[:80]}: {type(exc).__name__}"
 
 
 def _load_state() -> dict[str, Any]:
@@ -154,11 +163,20 @@ def _paths_from_input(tool_name: str, value: Any) -> list[str]:
     return paths[:8]
 
 
+def _claude_tool_span(session: str, native_tool_id: Any) -> str:
+    raw = str(native_tool_id or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("at:"):
+        return raw
+    return _opaque("at", f"claude_code|{session}|span|{raw}", chars=24)
+
+
 def _structural_payload(
     spec: dict[str, str], *, session: str, observed_at: str, operation: str,
     event_seed: str, status: str = "success", tool_name: str = "",
     tool_category: str = "none", tool_detail: dict[str, Any] | None = None,
-    workspace: str = "", model: str = "",
+    workspace: str = "", model: str = "", span_id: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "event_id": f"native-session:{_fingerprint(event_seed)}",
@@ -176,6 +194,8 @@ def _structural_payload(
         "sensor_id": f"agent:native-session:{spec['client_id']}",
         "device_id": "agent-local",
     }
+    if span_id:
+        payload["span_id"] = span_id
     if tool_detail:
         payload["tool_detail"] = tool_detail
     if workspace:
@@ -215,7 +235,13 @@ def _parse_claude(obj: dict[str, Any], spec: dict[str, str], session: str, ordin
                     detail = tool_call_detail(patch=tool_input.get("patch") or tool_input.get("input"))
                 else:
                     detail = tool_call_detail(paths=_paths_from_input(name, tool_input), new_file_text=(tool_input.get("content") if name.lower() in {"write", "write_file"} else None))
-                structural.append(_structural_payload(spec, session=session, observed_at=observed, operation="tool_call", event_seed=seed+f"|tool|{i}|{name}", tool_name=name, tool_category=_tool_category(name), tool_detail=detail, workspace=workspace))
+                native_tool_id = item.get("id") or item.get("tool_use_id")
+                structural.append(_structural_payload(
+                    spec, session=session, observed_at=observed, operation="tool_call",
+                    event_seed=seed+f"|tool|{i}|{name}", tool_name=name,
+                    tool_category=_tool_category(name), tool_detail=detail, workspace=workspace,
+                    span_id=_claude_tool_span(session, native_tool_id),
+                ))
     elif typ == "system":
         subtype = str(obj.get("subtype") or "").lower()
         if subtype == "turn_duration":
@@ -366,10 +392,9 @@ def _has_richer_equivalent(payload: dict[str, Any]) -> bool:
     """Return true when a non-session adapter already reported this structural step.
 
     Native session files are a zero-config fallback. Hooks/OTel/SDK traces are
-    richer and remain canonical when both observe the same step. Matching is
-    intentionally narrow (same framework/operation/tool/workspace and within a
-    2.5 second window) so two legitimate adjacent calls from the same agent are
-    not collapsed merely because they share a tool name.
+    richer and remain canonical when both observe the same step. Prefer exact
+    opaque span identity when the provider supplies one; retain the narrow
+    time/tool/workspace fallback for older/provider records without an ID.
     """
     operation = str(payload.get("operation") or "")
     framework = str(payload.get("framework") or "")
@@ -377,8 +402,35 @@ def _has_richer_equivalent(payload: dict[str, Any]) -> bool:
     workspace = str(payload.get("workspace_ref") or "")
     observed = str(payload.get("observed_at") or "")
     own_sensor = str(payload.get("sensor_id") or "")
+    session = str(payload.get("session_id") or "")
+    span_id = str(payload.get("span_id") or "")
     if not operation or not observed:
         return False
+
+    if session and span_id:
+        try:
+            with connect() as conn:
+                exact_rows = conn.execute(
+                    """SELECT sensor_id, metadata_json FROM events
+                       WHERE source='agent' AND session_id=? AND event_type=?
+                       ORDER BY id DESC LIMIT 200""",
+                    (session, f"agent_{operation}"),
+                ).fetchall()
+            for row in exact_rows:
+                sensor = str(row["sensor_id"] or "")
+                if not sensor or sensor == own_sensor or sensor.startswith("agent:native-session:"):
+                    continue
+                try:
+                    meta = json.loads(row["metadata_json"] or "{}")
+                except Exception:
+                    continue
+                trace = meta.get("trace") if isinstance(meta.get("trace"), dict) else {}
+                if str(trace.get("span_id") or "") == span_id:
+                    return True
+        except Exception:
+            # Fall through to conservative time/tool matching.
+            pass
+
     try:
         with connect() as conn:
             rows = conn.execute(
@@ -602,10 +654,14 @@ def _scan_once_unlocked() -> dict[str, Any]:
         return status()
     policy = read_agent_session_policy()
     state = _load_state()
+    _STATS["last_error"] = None
     try:
+        # A first scan can race application startup. Initialize the local session
+        # tables before cleanup so bootstrap itself is not reported as an error.
+        init_agent_session_store()
         cleanup_agent_session_messages()
-    except Exception:
-        _STATS["errors"] += 1
+    except Exception as exc:
+        _record_error("session_store_cleanup", exc)
     for source, spec in _SOURCE_SPECS.items():
         active_marker = f"__effective_enabled__:{source}"
         enabled = _source_enabled(source, spec, policy)
@@ -629,8 +685,8 @@ def _scan_once_unlocked() -> dict[str, Any]:
             try:
                 _process_file(source, spec, path, state, policy)
                 _STATS["files_seen"] += 1
-            except Exception:
-                _STATS["errors"] += 1
+            except Exception as exc:
+                _record_error(f"{source}_file", exc)
     _STATS["last_scan_at"] = _now()
     _save_state(state)
     return status()
@@ -666,8 +722,8 @@ def _run() -> None:
         while not _STOP.is_set():
             try:
                 scan_once()
-            except Exception:
-                _STATS["errors"] += 1
+            except Exception as exc:
+                _record_error("scan_loop", exc)
             _STOP.wait(_POLL_SECONDS)
     finally:
         _STATS["running"] = False

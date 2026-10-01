@@ -140,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
         if events:
+            # Make native IDs opaque before the network client can spool or send
+            # them. A normalization failure drops observation rather than risking
+            # a raw session/prompt/tool identifier on disk.
+            from server.agent_identity import normalize_agent_events
+
+            events = normalize_agent_events(events)
             post_agent_events(events)
     except Exception:
         _debug_notice()

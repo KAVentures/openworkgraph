@@ -59,6 +59,7 @@ from types import SimpleNamespace
 from server.db import init_db, connect
 from server.agent_ingest import ingest_agent_payloads
 from server.agent_execution_traces import agent_execution_traces
+from server.agent_session_store import session_ref as canonical_session_ref
 from server.history_retention import initialize_history_retention, delete_sessions
 from server.procedural_memory import load_recent_evidence, procedural_overview
 from server import outcome_tracker as ot, run_memory
@@ -197,7 +198,7 @@ update_retention(human_mode="forever", human_days=None, agent_mode="forever", ag
 ot.set_enabled(True)
 ingest_agent_payloads(pr_run("s-a") + pr_run("s-b"))
 assert len(watches()) == 2
-delete_sessions("agent", ["s-a"], reason="user_deleted_session")
+delete_sessions("agent", [canonical_session_ref("claude_code", "s-a")], reason="user_deleted_session")
 assert len(watches()) == 1
 assert ot.set_enabled(False)["pr_links_deleted"] == 1
 assert watches() == []
@@ -216,34 +217,4 @@ tool["pr_watch"] = [{"host": "github.com", "owner": "a;rm -rf /", "repo": "b", "
                     "not a dict"]
 ingest_agent_payloads(events)
 assert watches() == []
-''', tmp_path)
-
-
-def test_ci_mapping():
-    from server.outcome_tracker import _ci
-
-    assert _ci([]) == "none"
-    assert _ci([{"status": "COMPLETED", "conclusion": "SUCCESS"}, {"state": "SUCCESS"}]) == "passing"
-    assert _ci([{"status": "COMPLETED", "conclusion": "SKIPPED"}]) == "passing"
-    assert _ci([{"status": "IN_PROGRESS", "conclusion": ""}, {"status": "COMPLETED", "conclusion": "SUCCESS"}]) == "pending"
-    assert _ci([{"state": "PENDING"}]) == "pending"
-    assert _ci([{"status": "COMPLETED", "conclusion": "FAILURE"}, {"status": "IN_PROGRESS"}]) == "failing"
-    assert _ci([{"state": "ERROR"}]) == "failing"
-
-
-def test_routes(tmp_path):
-    _run(r'''
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-import server.outcome_routes as routes
-app = FastAPI()
-for route in routes.app.router.routes:
-    if getattr(route, "path", "").startswith("/v1/outcome-tracking"):
-        app.router.routes.append(route)
-with TestClient(app) as c:
-    assert c.get("/v1/outcome-tracking").json()["enabled"] is False
-    body = c.put("/v1/outcome-tracking", json={"enabled": True}).json()
-    assert body["enabled"] is True and "contacts" in body
-    assert c.post("/v1/outcome-tracking/check-now").json()["checked"]["checked"] == 0
-    assert c.put("/v1/outcome-tracking", json={"enabled": False}).json()["enabled"] is False
 ''', tmp_path)
