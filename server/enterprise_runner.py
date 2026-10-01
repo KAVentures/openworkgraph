@@ -37,30 +37,51 @@ def main() -> None:
     import server.agent_session_sensor as agent_session_sensor
     import server.agent_working_detail as agent_working_detail
     import server.log_redaction as log_redaction
+    import server.outcome_tracker as outcome_tracker
 
     log_redaction.install()
 
-    org_join_routes.start_managed_setup_in_background()
-    agent_capture_runtime.start()
-    agent_session_sensor.start()
-    # Working detail is a separate, opt-in continuity layer. Its scanner has an
-    # independent state/cursor and cannot interfere with structural capture.
-    agent_working_detail.start()
-    import server.outcome_tracker as outcome_tracker
-
-    if not agent_capture_runtime._demo():
-        outcome_tracker.start()  # does nothing until the person turns outcome tracking on
-    # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
-    # the process before a finally/atexit block can run. Revoke the recording
-    # lease in the app's own shutdown step so a normal quit stops agent spooling
-    # at once (a hard kill is still bounded by the lease's short TTL).
+    # Database/schema/privacy initialization lives in the app's existing lifespan.
+    # Start every background subsystem only after that lifespan has entered. Starting
+    # these threads before uvicorn previously allowed Windows to race a fresh SQLite
+    # database open against init_db()/PRAGMA journal_mode=WAL, intermittently causing
+    # `sqlite3.OperationalError: database is locked` during application startup.
     from shared.lifespan import extend_lifespan
     from server.secure_app import app as secure_app
 
-    extend_lifespan(secure_app, shutdown=agent_capture_runtime.stop)
-    extend_lifespan(secure_app, shutdown=agent_session_sensor.stop)
-    extend_lifespan(secure_app, shutdown=agent_working_detail.stop)
-    extend_lifespan(secure_app, shutdown=outcome_tracker.stop)
+    extend_lifespan(secure_app, startup=org_join_routes.start_managed_setup_in_background)
+    extend_lifespan(
+        secure_app,
+        startup=agent_capture_runtime.start,
+        shutdown=agent_capture_runtime.stop,
+    )
+    extend_lifespan(
+        secure_app,
+        startup=agent_session_sensor.start,
+        shutdown=agent_session_sensor.stop,
+    )
+    # Working detail is a separate, opt-in continuity layer. Its scanner has an
+    # independent state/cursor and cannot interfere with structural capture.
+    extend_lifespan(
+        secure_app,
+        startup=agent_working_detail.start,
+        shutdown=agent_working_detail.stop,
+    )
+
+    def _start_outcome_tracker() -> None:
+        if not agent_capture_runtime._demo():
+            outcome_tracker.start()  # does nothing until the person turns outcome tracking on
+
+    extend_lifespan(
+        secure_app,
+        startup=_start_outcome_tracker,
+        shutdown=outcome_tracker.stop,
+    )
+
+    # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
+    # the process before a finally/atexit block can run. The lifespan hooks above
+    # therefore stop runtime workers during a normal quit; this finally remains a
+    # defensive idempotent fallback for startup failures and other exits.
     try:
         uvicorn.run(SECURE_APP, host=args.host, port=args.port)
     finally:
