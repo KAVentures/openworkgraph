@@ -196,47 +196,50 @@ def start_session(
     gateway_event_boundary_id: int = 0,
     gateway_agent_message_boundary_id: int = 0,
 ) -> dict[str, Any]:
-    current = read_state()
-    if current.get("enabled"):
-        raise ValueError("an existing Discovery Mode session must be reviewed/exited before starting another")
-    apps = _clean_patterns(allowed_apps)
-    hosts = [x.lower().rstrip(".") for x in _clean_patterns(allowed_browser_hosts)]
-    if not apps and not hosts:
-        raise ValueError("Discovery Mode requires at least one allowed app or browser host")
-    now = _now_dt()
-    if ends_at:
-        end = _parse(ends_at)
-        if end is None:
-            raise ValueError("ends_at must be an ISO-8601 timestamp with timezone")
-    else:
-        try:
-            days = float(duration_days)
-        except Exception as exc:
-            raise ValueError("duration_days must be numeric") from exc
-        if days <= 0 or days > _MAX_DAYS:
-            raise ValueError(f"duration_days must be greater than 0 and at most {_MAX_DAYS}")
-        end = now + timedelta(days=days)
-    if end <= now or end > now + timedelta(days=_MAX_DAYS):
-        raise ValueError(f"Discovery Mode must end within {_MAX_DAYS} days")
-    value = {
-        **_default(),
-        "enabled": True,
-        "status": "active",
-        "session_id": "disc_" + uuid.uuid4().hex[:20],
-        "name": str(name or "Workflow discovery").strip()[:200],
-        "purpose": str(purpose or "").strip()[:2000],
-        "starts_at": now.isoformat(),
-        "ends_at": end.isoformat(),
-        "allowed_apps": apps,
-        "allowed_browser_hosts": hosts,
-        "allow_unresolved_browser_container": bool(allow_unresolved_browser_container),
-        "retention_days_after_end": max(1, min(int(retention_days_after_end or 14), 90)),
-        "gateway_sharing_was_paused": gateway_sharing_was_paused,
-        "gateway_paused_by_discovery": bool(gateway_paused_by_discovery),
-        "gateway_event_boundary_id": max(0, int(gateway_event_boundary_id or 0)),
-        "gateway_agent_message_boundary_id": max(0, int(gateway_agent_message_boundary_id or 0)),
-    }
+    # Keep the enabled-state check and first enabled write atomic within this
+    # process. The HTTP route separately establishes Gateway boundaries before
+    # calling here.
     with _LOCK:
+        current = read_state()
+        if current.get("enabled"):
+            raise ValueError("an existing Discovery Mode session must be reviewed/exited before starting another")
+        apps = _clean_patterns(allowed_apps)
+        hosts = [x.lower().rstrip(".") for x in _clean_patterns(allowed_browser_hosts)]
+        if not apps and not hosts:
+            raise ValueError("Discovery Mode requires at least one allowed app or browser host")
+        now = _now_dt()
+        if ends_at:
+            end = _parse(ends_at)
+            if end is None:
+                raise ValueError("ends_at must be an ISO-8601 timestamp with timezone")
+        else:
+            try:
+                days = float(duration_days)
+            except Exception as exc:
+                raise ValueError("duration_days must be numeric") from exc
+            if days <= 0 or days > _MAX_DAYS:
+                raise ValueError(f"duration_days must be greater than 0 and at most {_MAX_DAYS}")
+            end = now + timedelta(days=days)
+        if end <= now or end > now + timedelta(days=_MAX_DAYS):
+            raise ValueError(f"Discovery Mode must end within {_MAX_DAYS} days")
+        value = {
+            **_default(),
+            "enabled": True,
+            "status": "active",
+            "session_id": "disc_" + uuid.uuid4().hex[:20],
+            "name": str(name or "Workflow discovery").strip()[:200],
+            "purpose": str(purpose or "").strip()[:2000],
+            "starts_at": now.isoformat(),
+            "ends_at": end.isoformat(),
+            "allowed_apps": apps,
+            "allowed_browser_hosts": hosts,
+            "allow_unresolved_browser_container": bool(allow_unresolved_browser_container),
+            "retention_days_after_end": max(1, min(int(retention_days_after_end or 14), 90)),
+            "gateway_sharing_was_paused": gateway_sharing_was_paused,
+            "gateway_paused_by_discovery": bool(gateway_paused_by_discovery),
+            "gateway_event_boundary_id": max(0, int(gateway_event_boundary_id or 0)),
+            "gateway_agent_message_boundary_id": max(0, int(gateway_agent_message_boundary_id or 0)),
+        }
         return _write(value)
 
 
