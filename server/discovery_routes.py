@@ -307,8 +307,20 @@ def get_discovery() -> dict[str, Any]:
 @app.post("/v1/discovery/start")
 async def start_discovery(request: Request) -> dict[str, Any]:
     body = await _payload(request)
+    if read_state().get("enabled"):
+        raise HTTPException(status_code=409, detail="an existing Discovery Mode session must be reviewed/exited before starting another")
+
+    data_dir, _auth_dir = gateway_paths(CONFIG_PATH)
+    event_boundary_id = _max_local_event_id(data_dir)
+    agent_message_boundary_id = _max_local_agent_message_id(data_dir)
+    was_paused: bool | None = None
+    paused_by_discovery = False
     try:
-        state = start_session(
+        # Establish the no-upload boundary before Discovery becomes active. The
+        # first enabled state write then contains the cursor boundaries atomically,
+        # so a concurrent sync worker cannot observe enabled=true with boundary=0.
+        was_paused, paused_by_discovery = _pause_gateway_if_connected()
+        return start_session(
             name=str(body.get("name") or "Workflow discovery"),
             purpose=str(body.get("purpose") or ""),
             allowed_apps=list(body.get("allowed_apps") or []),
@@ -317,23 +329,24 @@ async def start_discovery(request: Request) -> dict[str, Any]:
             ends_at=str(body.get("ends_at") or "") or None,
             allow_unresolved_browser_container=bool(body.get("allow_unresolved_browser_container", False)),
             retention_days_after_end=int(body.get("retention_days_after_end") or 14),
+            gateway_sharing_was_paused=was_paused,
+            gateway_paused_by_discovery=paused_by_discovery,
+            gateway_event_boundary_id=event_boundary_id,
+            gateway_agent_message_boundary_id=agent_message_boundary_id,
         )
-        data_dir, _auth_dir = gateway_paths(CONFIG_PATH)
-        event_boundary_id = _max_local_event_id(data_dir)
-        agent_message_boundary_id = _max_local_agent_message_id(data_dir)
-        was_paused, paused_by_discovery = _pause_gateway_if_connected()
-        state = set_gateway_guard(
-            was_paused=was_paused,
-            paused_by_discovery=paused_by_discovery,
-            event_boundary_id=event_boundary_id,
-            agent_message_boundary_id=agent_message_boundary_id,
-        )
-        return state
     except (TypeError, ValueError) as exc:
+        if paused_by_discovery:
+            try:
+                set_gateway_sharing(CONFIG_PATH, True)
+            except Exception:
+                pass
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        # Fail safe: do not claim review-before-sharing if a connected Gateway
-        # could not be paused.
+        if paused_by_discovery:
+            try:
+                set_gateway_sharing(CONFIG_PATH, True)
+            except Exception:
+                pass
         deactivate_session()
         raise HTTPException(status_code=503, detail=f"could not establish Discovery sharing guard: {exc}") from exc
 
