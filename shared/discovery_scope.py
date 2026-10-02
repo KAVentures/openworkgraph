@@ -88,6 +88,11 @@ def _default() -> dict[str, Any]:
         "allowed_apps": [],
         "allowed_browser_hosts": [],
         "allow_unresolved_browser_container": False,
+        "retention_days_after_end": 14,
+        "purged_at": None,
+        "purged_event_rows": 0,
+        "gateway_sharing_was_paused": None,
+        "gateway_paused_by_discovery": False,
         "employee_review_required": True,
         "share_approved_at": None,
         "excluded_execution_ids": [],
@@ -108,6 +113,13 @@ def _normalize(value: dict[str, Any] | None) -> dict[str, Any]:
     base["allowed_apps"] = _clean_patterns(base.get("allowed_apps"))
     base["allowed_browser_hosts"] = [x.lower().rstrip(".") for x in _clean_patterns(base.get("allowed_browser_hosts"))]
     base["allow_unresolved_browser_container"] = bool(base.get("allow_unresolved_browser_container", False))
+    try:
+        retention_days = int(base.get("retention_days_after_end") or 14)
+    except Exception:
+        retention_days = 14
+    base["retention_days_after_end"] = max(1, min(retention_days, 90))
+    base["purged_event_rows"] = max(0, int(base.get("purged_event_rows") or 0))
+    base["gateway_paused_by_discovery"] = bool(base.get("gateway_paused_by_discovery", False))
     base["employee_review_required"] = True
     base["excluded_execution_ids"] = [
         str(x) for x in (base.get("excluded_execution_ids") or [])
@@ -174,6 +186,7 @@ def start_session(
     duration_days: float = 5,
     ends_at: str | None = None,
     allow_unresolved_browser_container: bool = False,
+    retention_days_after_end: int = 14,
 ) -> dict[str, Any]:
     apps = _clean_patterns(allowed_apps)
     hosts = [x.lower().rstrip(".") for x in _clean_patterns(allowed_browser_hosts)]
@@ -206,6 +219,7 @@ def start_session(
         "allowed_apps": apps,
         "allowed_browser_hosts": hosts,
         "allow_unresolved_browser_container": bool(allow_unresolved_browser_container),
+        "retention_days_after_end": max(1, min(int(retention_days_after_end or 14), 90)),
     }
     with _LOCK:
         return _write(value)
@@ -236,6 +250,22 @@ def deactivate_session() -> dict[str, Any]:
         value["status"] = "inactive"
         value["deactivated_at"] = _now()
         return _write(value)
+
+
+def set_gateway_guard(*, was_paused: bool | None, paused_by_discovery: bool) -> dict[str, Any]:
+    with _LOCK:
+        state = read_state()
+        state["gateway_sharing_was_paused"] = was_paused
+        state["gateway_paused_by_discovery"] = bool(paused_by_discovery)
+        return _write(state)
+
+
+def mark_purged(event_rows: int) -> dict[str, Any]:
+    with _LOCK:
+        state = read_state()
+        state["purged_at"] = _now()
+        state["purged_event_rows"] = max(0, int(event_rows or 0))
+        return _write(state)
 
 
 def set_excluded_execution_ids(values: list[str]) -> dict[str, Any]:
@@ -424,6 +454,8 @@ __all__ = [
     "read_state",
     "save_question",
     "set_excluded_execution_ids",
+    "set_gateway_guard",
+    "mark_purged",
     "start_session",
     "state_path",
 ]
