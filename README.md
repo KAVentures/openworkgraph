@@ -209,6 +209,14 @@ See **[Privacy and data handling](docs/PRIVACY_AND_DATA.md)**.
 
 ---
 
+# Workflow discovery for AI implementations
+
+OpenWorkGraph also has an optional **Discovery Mode** for short, purpose-limited workflow studies. A worker can allowlist only the apps/sites relevant to the implementation, run the study for a fixed period, review observed examples and evidence-grounded questions, then explicitly approve a redacted **Discovery Package** for an AI/implementation team. Discovery Mode is additive: when it is off, normal OpenWorkGraph capture and AI/MCP behavior are unchanged.
+
+See **[Discovery Mode](docs/DISCOVERY_MODE.md)**.
+
+---
+
 # AI access
 
 ## 1. Export and upload
