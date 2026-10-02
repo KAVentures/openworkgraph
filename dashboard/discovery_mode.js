@@ -46,7 +46,7 @@
           <div style="max-width:760px">
             <div class="tag">Optional</div>
             <h2 style="margin:7px 0 5px">Workflow discovery</h2>
-            <div class="muted">Run a temporary, purpose-scoped study for an AI implementation. Only allowlisted apps/sites are persisted during the study; nothing is shared automatically.</div>
+            <div class="muted">Run a temporary, purpose-scoped study for an AI implementation. Canonical workflow evidence is restricted to the allowlisted apps/sites before persistence; nothing is shared automatically.</div>
           </div>
           <button id="startDiscovery">Start discovery mode</button>
         </div>`;
@@ -104,7 +104,7 @@
       <label style="display:block;margin-top:10px"><strong>Duration (days)</strong><input id="discDays" type="number" min="0.1" max="31" step="0.1" value="5" style="width:120px;margin-left:8px"></label>
       <label style="display:block;margin-top:10px"><strong>Delete detailed Discovery evidence after</strong><input id="discRetention" type="number" min="1" max="90" step="1" value="14" style="width:90px;margin:0 7px">days after the study</label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input id="discUnresolvedBrowser" type="checkbox"><span><strong>Keep unresolved browser-container events</strong><span class="muted" style="display:block">Less private. Leave off to drop Chrome/Safari desktop events whose site cannot be proven to be in scope.</span></span></label>
-      <div class="note" style="margin-top:12px">Nothing is uploaded when the study ends. The employee must review and explicitly approve a package before it can be exported.</div>
+      <div class="note" style="margin-top:12px">Nothing in the Discovery study is uploaded through normal Gateway sync before review. Site-level browser scoping works best with the browser sensor; unresolved Chrome/Safari context is dropped by default. Separate opt-in visible agent-session message storage keeps its existing independent local retention policy.</div>
       <div class="modal-actions"><button id="discStartNow">Start scoped discovery</button></div>`);
     document.querySelector('#discStartNow').onclick = async () => {
       const body = {
