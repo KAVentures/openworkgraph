@@ -24,7 +24,13 @@ from shared.discovery_scope import (
     set_gateway_guard,
     start_session,
 )
-from connector.control import set_sharing as set_gateway_sharing, status as gateway_status
+from connector.control import (
+    _max_local_agent_message_id,
+    _max_local_event_id,
+    _paths as gateway_paths,
+    set_sharing as set_gateway_sharing,
+    status as gateway_status,
+)
 from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
 from .db import connect
@@ -312,10 +318,15 @@ async def start_discovery(request: Request) -> dict[str, Any]:
             allow_unresolved_browser_container=bool(body.get("allow_unresolved_browser_container", False)),
             retention_days_after_end=int(body.get("retention_days_after_end") or 14),
         )
+        data_dir, _auth_dir = gateway_paths(CONFIG_PATH)
+        event_boundary_id = _max_local_event_id(data_dir)
+        agent_message_boundary_id = _max_local_agent_message_id(data_dir)
         was_paused, paused_by_discovery = _pause_gateway_if_connected()
         state = set_gateway_guard(
             was_paused=was_paused,
             paused_by_discovery=paused_by_discovery,
+            event_boundary_id=event_boundary_id,
+            agent_message_boundary_id=agent_message_boundary_id,
         )
         return state
     except (TypeError, ValueError) as exc:
