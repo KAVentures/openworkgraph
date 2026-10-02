@@ -178,9 +178,25 @@ def get_discovery() -> dict[str, Any]:
     state = public_state()
     if state.get("enabled"):
         try:
-            families, bundles = _selected_family_runs(state)
+            since, until = _window(state)
+            families = list_workflow_evidence_candidates(
+                since=since,
+                until=until,
+                source_event_limit=25_000,
+                min_runs=2,
+                limit=20,
+            )
             state["candidate_workflow_families"] = len(families.get("families") or [])
-            state["suggested_targeted_questions"] = _suggested_questions(bundles)
+            reviewing = state.get("status") == "review" or bool(state.get("expired"))
+            if reviewing:
+                _families, bundles = _selected_family_runs(state)
+                saved_questions = {str(x.get("question") or "") for x in state.get("questions") or []}
+                state["suggested_targeted_questions"] = [
+                    item for item in _suggested_questions(bundles)
+                    if str(item.get("question") or "") not in saved_questions
+                ]
+            else:
+                state["suggested_targeted_questions"] = []
         except Exception:
             state["candidate_workflow_families"] = 0
             state["suggested_targeted_questions"] = []
