@@ -126,6 +126,11 @@ def install_history_guard(runtime_module: Any) -> None:
                 query = bounded_range(query, use_current_when_off=True)
         elif route == "/v1/agent-execution-traces":
             query = bounded_range(query, use_current_when_off=True)
+        elif route.startswith("/v1/workflow-evidence"):
+            # Skill/procedure evidence may use the current run without saved-history
+            # access. Older evidence is bounded to exactly the range the person
+            # granted, including derived-family discovery.
+            query = bounded_range(query, use_current_when_off=True)
         elif route in _SCOPE_PATHS:
             scope = str(query.get("scope") or "current")
             if scope != "current":

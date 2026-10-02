@@ -146,6 +146,16 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.116: evidence-first workflow skill drafting
+
+          - **Evidence, not inferred truth:** get_workflow_evidence packages explicitly selected observed executions, provenance and bounded canonical evidence. Derived workflow families and support counts remain navigation/descriptive indexes, never semantic ground truth.
+          - **One clear AI path:** users review the concrete runs that belong together, then a connected external AI can fetch the same evidence over MCP or the user can export it. OpenWorkGraph does not contain a skill-authoring model and does not silently create or execute a skill.
+          - **Redacted-first sharing:** dashboard exports default to Redacted. Stored means the locally persisted privacy-hardened representation, never pre-privacy capture, and is a deliberate secondary export choice.
+          - **No authorization from history:** repeated actions, dominant paths, approvals, saves or sends do not establish policy, permission or business intent. Connected AI is instructed to ask for missing business rules, source-of-truth decisions, escalation criteria and approval boundaries.
+          - **Modern automation rather than click replay:** the drafting guide tells the AI to prefer current authorized APIs/connectors/tools when they can achieve the same outcome, and never to invent clipboard values or absent payloads.
+          - **Authenticated local export:** workflow-evidence ZIP downloads keep the existing protected /v1 boundary; the dashboard uses its authenticated session to fetch the archive before downloading it.
+          - **Compact MCP stays synchronized:** the default compact surface now has 13 tools, including get_workflow_evidence; the MCPB manifest, smoke test and architecture docs assert the same exact surface while the legacy 24-tool compatibility entrypoint remains available.
+
           ### v0.115: human-first demo and distribution refresh
 
           - **Ordinary human workflows remain the core product:** OpenWorkGraph records desktop/browser work without an AI agent. AI agent observation is an optional additional evidence stream, not a prerequisite for capture.

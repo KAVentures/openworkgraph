@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.115.0"
+EXPECTED_VERSION = "0.116.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,11 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.116: evidence-first workflow skill drafting" in workflow
+    assert "get_workflow_evidence" in workflow
+    assert "explicitly selected" in workflow_lower
+    assert "support counts" in workflow_lower
+    assert "external ai" in workflow_lower
     assert "### v0.115: human-first demo and distribution refresh" in workflow
     assert "ordinary human workflows" in workflow_lower
     assert "ai agent observation is an optional additional evidence stream" in workflow_lower
@@ -80,13 +85,20 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
 
-    changelog = (ROOT / "docs" / "CHANGELOG_V0115.md").read_text(encoding="utf-8")
+    changelog = (ROOT / "docs" / "CHANGELOG_V0116.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
-    assert "human-only" in changelog_lower
-    assert "ai agent" in changelog_lower
-    assert "copy/paste" in changelog_lower
-    assert "try_demo_openworkgraph" in changelog_lower
-    assert "0.115.0" in changelog
+    assert "evidence-first" in changelog_lower
+    assert "explicit execution" in changelog_lower
+    assert "redacted" in changelog_lower
+    assert "stored privacy-hardened" in changelog_lower
+    assert "13 tools" in changelog_lower
+    assert "0.116.0" in changelog
+
+    prior_115 = (ROOT / "docs" / "CHANGELOG_V0115.md").read_text(encoding="utf-8").lower()
+    assert "human-only" in prior_115
+    assert "ai agent" in prior_115
+    assert "copy/paste" in prior_115
+    assert "try_demo_openworkgraph" in prior_115
 
     prior_114 = (ROOT / "docs" / "CHANGELOG_V0114.md").read_text(encoding="utf-8").lower()
     assert "privacy-first" in prior_114

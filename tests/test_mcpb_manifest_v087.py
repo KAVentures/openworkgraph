@@ -13,6 +13,7 @@ EXPECTED_COMPACT_TOOLS = {
     "get_workflow_trace",
     "get_work_profile",
     "find_repeated_workflows",
+    "get_workflow_evidence",
     "get_task_context",
     "how_did_similar_runs_go",
     "get_agent_runs",
@@ -26,7 +27,8 @@ def test_mcpb_manifest_advertises_exact_compact_default_surface():
     names = {str(item.get("name") or "") for item in manifest.get("tools") or []}
     assert names == EXPECTED_COMPACT_TOOLS
     description = str(manifest.get("long_description") or "")
-    assert "v0.110" in description
+    assert "v0.116" in description
+    assert "explicitly selected" in description
     assert "legacy 24-tool" in description
 
 
@@ -37,6 +39,8 @@ def test_mcp_architecture_docs_name_the_exact_compact_default_surface():
     assert listed == EXPECTED_COMPACT_TOOLS
     assert "MCP `instructions` block" in docs
     assert "next_cursor" in docs and "has_more" in docs
+    assert "explicit execution" in docs.lower()
+    assert "navigation" in docs.lower()
 
 
 def test_experimental_governance_docs_preserve_rest_compatibility_boundary():

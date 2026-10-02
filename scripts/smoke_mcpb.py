@@ -17,6 +17,7 @@ EXPECTED_COMPACT_TOOLS = {
     "get_workflow_trace",
     "get_work_profile",
     "find_repeated_workflows",
+    "get_workflow_evidence",
     "get_task_context",
     "how_did_similar_runs_go",
     "get_agent_runs",
