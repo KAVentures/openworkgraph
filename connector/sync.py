@@ -176,7 +176,7 @@ def _sync_agent_session_messages(
     prepared: list[dict[str, Any]] = []
     id_by_ref: dict[str, int] = {}
     last_local_id = cursor
-    discovery = read_discovery_state()
+    discovery = read_discovery_state(data_dir=db_path.parent)
     discovery_holds = bool(discovery.get("enabled"))
     discovery_boundary = int(discovery.get("gateway_agent_message_boundary_id") or 0)
     for local_id, message in rows:
@@ -394,7 +394,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 prepared: list[dict[str, Any]] = []
                 local_id_by_event_id: dict[str, int] = {}
                 last_local_id = cursor
-                discovery = read_discovery_state()
+                discovery = read_discovery_state(data_dir=data_dir)
                 discovery_holds = bool(discovery.get("enabled"))
                 discovery_boundary = int(discovery.get("gateway_event_boundary_id") or 0)
                 for local_id, event in rows:
