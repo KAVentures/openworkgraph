@@ -9,6 +9,7 @@ When enabled, the positive allowlist is enforced before persistence.
 
 import copy
 import fnmatch
+import hashlib
 import json
 import os
 import tempfile
@@ -452,9 +453,63 @@ def event_allowed(event: dict[str, Any], *, state: dict[str, Any] | None = None)
     return False, "app_out_of_scope"
 
 
+def _scope_gap_event(event: dict[str, Any], reason: str) -> dict[str, Any] | None:
+    """Replace provably out-of-scope activity with timing-only Discovery evidence.
+
+    The marker deliberately stores no app, hostname, title, URL, target label, or
+    original metadata. Unresolved browser-container events remain dropped because
+    they do not prove that the person actually left the configured scope.
+    """
+    event_type = str(event.get("event_type") or "")
+    app = str(event.get("app") or "")
+    is_native_focus_gap = event_type in {"focus_span", "focus_period"} and not _browser_like(app)
+    is_explicit_browser_gap = reason == "browser_host_out_of_scope" and event_type.startswith("browser_")
+    if not is_native_focus_gap and not is_explicit_browser_gap:
+        return None
+
+    observed = _parse(event.get("observed_at")) or _now_dt()
+    try:
+        duration_seconds = max(0.0, float(event.get("duration_seconds") or 0.0))
+    except Exception:
+        duration_seconds = 0.0
+    raw_identity = "|".join([
+        str(event.get("event_id") or ""),
+        str(event.get("session_id") or ""),
+        observed.isoformat(),
+        event_type,
+    ])
+    event_id = "disc_gap_" + hashlib.sha256(raw_identity.encode("utf-8")).hexdigest()[:20]
+    return {
+        "event_id": event_id,
+        "observed_at": observed.isoformat(),
+        "schema_version": str(event.get("schema_version") or "1.0"),
+        "organization_id": str(event.get("organization_id") or ""),
+        "actor_id": str(event.get("actor_id") or ""),
+        "device_id": str(event.get("device_id") or ""),
+        "sensor_id": "discovery_scope",
+        "source": "discovery",
+        "session_id": str(event.get("session_id") or ""),
+        "app": "",
+        "window_title": "",
+        "event_type": "discovery_scope_gap",
+        "duration_seconds": duration_seconds if is_native_focus_gap else 0.0,
+        "metadata": {
+            "discovery_scope_gap": True,
+            "scope_state": "outside_positive_scope",
+            "timing_basis": "blocked_focus_duration" if is_native_focus_gap else "explicit_out_of_scope_browser_observation",
+            "original_surface_stored": False,
+            "original_content_stored": False,
+        },
+    }
+
+
 def prepare_recordable_event(event: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    allowed, _reason = event_allowed(event, state=state)
-    return dict(event) if allowed else None
+    allowed, reason = event_allowed(event, state=state)
+    if allowed:
+        return dict(event)
+    if reason in {"before_discovery_window", "after_discovery_window", "unresolved_browser_context"}:
+        return None
+    return _scope_gap_event(event, reason)
 
 
 def public_state() -> dict[str, Any]:

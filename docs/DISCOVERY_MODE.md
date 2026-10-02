@@ -89,3 +89,12 @@ Discovery Mode does not:
 - claim that a short study observed rare/seasonal exceptions.
 
 Use `get_workflow_evidence` or the Discovery Package with an authorized external AI/implementation process to draft an agent-neutral procedure, then resolve business rules and approval boundaries with the people who own them.
+
+
+## Readable handoff and out-of-scope exceptions
+
+Discovery packages use the same privacy-safe semantic step vocabulary as Context Pulse (for example, `Gmail · Open email → Salesforce · Open account`) rather than exposing internal `surface:` / `action:` tokens or a guessed workflow-family label.
+
+When OWG can prove that activity moved outside the configured positive scope during an observed run, it may retain a synthetic `discovery_scope_gap` marker. The marker contains timing and linkage only: it stores no out-of-scope app/site name, title, URL, target label, or original metadata. Unresolved browser-container activity is still dropped because it does not prove that the person left scope. These markers exist so employee review can ask about approvals, exceptions, and detours without capturing the excluded content itself.
+
+Contextual redaction targets people and obvious personal identifiers. Organization/company names may remain in a redacted Discovery Package, so the review screen explicitly asks the employee to inspect the redacted preview when customer or company names are sensitive.

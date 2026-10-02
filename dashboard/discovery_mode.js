@@ -131,8 +131,8 @@
   }
 
   function workflowTitle(item) {
-    const steps = item.high_support_structural_steps || [];
-    return steps.length ? steps.slice(0,4).map(x => String(x).replace(/^surface:|^action:/,'').replace(/_/g,' ')).join(' → ') : 'Observed repeated work';
+    const readable = Array.isArray(item.readable_steps) ? item.readable_steps.filter(Boolean) : [];
+    return readable.length ? readable.slice(0,4).map(String).join(' → ') : 'Observed repeated work';
   }
 
   async function saveSelection() {
@@ -223,6 +223,7 @@
       ${saved ? `<h3 style="margin-top:18px">Saved employee answers</h3><div>${saved}</div>` : ''}
       <h3 style="margin-top:18px">3. Review and export</h3>
       <div class="note">The package states its observation window and limitations, keeps employee statements separate from captured evidence, and labels structural cases as non-replayable without source-system test data.</div>
+      <div class="note" style="margin-top:8px"><strong>Redaction review:</strong> people and obvious personal identifiers are contextually redacted, but organization/company names may remain. If customer or company names are sensitive, inspect the redacted preview before approving export.</div>
       <div class="modal-actions">
         <button class="secondary" id="discPreviewPackage">Download redacted preview JSON</button>
         <button id="discApproveExport">Approve & download package</button>
