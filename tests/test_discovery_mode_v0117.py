@@ -305,7 +305,7 @@ def test_unresolved_browser_container_does_not_create_false_scope_gap(tmp_path, 
 
 
 def test_discovery_handoff_uses_readable_steps_and_omits_guessed_family_label():
-    from server.discovery_routes import _discovery_handoff_bundle
+    from server.procedural_feedback import _discovery_handoff_bundle
 
     bundle = {
         "format": "openworkgraph.workflow-evidence.v1",
@@ -360,7 +360,7 @@ def test_discovery_handoff_uses_readable_steps_and_omits_guessed_family_label():
 
 
 def test_scope_gap_generates_targeted_privacy_safe_question():
-    from server.discovery_routes import _suggested_questions
+    from server.procedural_feedback import _suggested_questions
 
     bundle = {
         "executions": [
