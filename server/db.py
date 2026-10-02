@@ -482,11 +482,17 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
     is a no-op, preserving ordinary OpenWorkGraph behavior.
     """
     inserted = 0
-    from shared.discovery_scope import prepare_recordable_event as prepare_discovery_event
+    from shared.discovery_scope import (
+        prepare_recordable_event as prepare_discovery_event,
+        read_state as read_discovery_state,
+    )
 
+    # Read once per insert batch. Normal capture must not turn Discovery's local
+    # state file into per-event I/O when the feature is inactive.
+    discovery_state = read_discovery_state()
     prepared_events: list[dict[str, Any]] = []
     for raw in events:
-        prepared = prepare_discovery_event(dict(raw))
+        prepared = prepare_discovery_event(dict(raw), state=discovery_state)
         if prepared is not None:
             prepared_events.append(prepared)
     events = prepared_events
