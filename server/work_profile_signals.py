@@ -21,7 +21,8 @@ def _ts(value: Any) -> float | None:
 
 
 def _rows(since: str | None) -> list[dict[str, Any]]:
-    where = "WHERE observed_at >= ?" if since else ""
+    # Human work only: agent runs are reported on their own.
+    where = "WHERE source != 'agent'" + (" AND observed_at >= ?" if since else "")
     params = (since,) if since else ()
     with connect() as conn:
         rows = conn.execute(

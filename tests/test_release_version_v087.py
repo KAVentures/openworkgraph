@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.116.0"
+EXPECTED_VERSION = "0.117.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.117: a clearer, calmer dashboard" in workflow
+    v117_section = workflow.split("### v0.117: a clearer, calmer dashboard", 1)[1].split("### v0.116:", 1)[0]
+    assert "`" not in v117_section and "<" not in v117_section
+    assert "timeline shows again" in v117_section.lower()
+    assert "fails closed" in v117_section
+    assert "browser sensor 1.14.0 remains current" in v117_section.lower()
     assert "### v0.116: evidence-first workflow skill drafting" in workflow
     assert "get_workflow_evidence" in workflow
     assert "explicitly selected" in workflow_lower
@@ -84,6 +90,14 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
+
+    current = (ROOT / "docs" / "CHANGELOG_V0117.md").read_text(encoding="utf-8")
+    current_lower = current.lower()
+    assert "0.117.0" in current
+    assert "timeline shows again" in current_lower
+    assert "evidence keeps its context" in current_lower
+    assert "settings tab" in current_lower
+    assert "every 5 seconds" in current_lower
 
     changelog = (ROOT / "docs" / "CHANGELOG_V0116.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()

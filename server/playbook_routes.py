@@ -12,9 +12,21 @@ from .secure_app import app
 
 
 @app.get("/v1/playbooks/local")
-def get_local_playbook_families() -> dict[str, Any]:
-    """Repeated workflows in your own history that can be exported (saved-history access for MCP)."""
-    return {"families": playbooks.local_families(), "min_runs": playbooks.MIN_RUNS}
+def get_local_playbook_families(hide_disconnected: bool = False) -> dict[str, Any]:
+    """Repeated workflows in your own history that can be exported (saved-history access for MCP).
+
+    ``hide_disconnected`` applies the Agents tab's default: workflows run only
+    by agents whose Observe switch is off are left out, as their runs are.
+    """
+    families = playbooks.local_families()
+    hidden: set[str] = set()
+    if hide_disconnected:
+        from .connections import hidden_frameworks
+
+        hidden = hidden_frameworks()
+        families = playbooks.without_hidden_frameworks(families, hidden)
+    return {"families": families, "min_runs": playbooks.MIN_RUNS,
+            "hidden_frameworks": sorted(hidden) if hide_disconnected else []}
 
 
 @app.get("/v1/playbooks/imported")

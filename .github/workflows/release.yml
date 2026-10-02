@@ -146,6 +146,17 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.117: a clearer, calmer dashboard
+
+          - **Today's timeline shows again:** a first-run helper hid the timeline card before it loaded and never showed it again. The card now stays visible with loading and empty states.
+          - **Evidence keeps its context:** the Evidence table shows the stored page or window title, the same context exports keep, with names, email addresses, phone numbers and personal numbers as tokens. A second redaction pass runs for display and fails closed; URL paths and raw button labels are still never sent to the dashboard.
+          - **Human views show human work:** agent runs stay on the Agents tab and no longer appear in Evidence or the Work profile. Playbooks follow the same hide-disconnected-agents choice as the Agents tab.
+          - **One place for AI access:** a single AI access switch in Connect with a plain summary of what AI apps can read, including saved history. The duplicate Enable button is gone; that card is now a read-only Recent AI activity log.
+          - **Settings tab:** capture and privacy settings, browser sensor pairing and learned names moved out of Organization, which now only covers joining and sharing with an organization.
+          - **Plain language and calmer controls:** internal terms and keys are replaced with plain labels, single settings are switches that save immediately, delete buttons are quiet until confirmed, and form controls share one style.
+          - **Lighter and phone-friendly:** dashboard status refreshes every 5 seconds instead of every second, only while visible; the tab bar shows that it scrolls on small screens and Work profile tiles use two columns.
+          - **No capture or sensor change:** browser sensor 1.14.0 remains current; capture, storage, MCP and Gateway behavior are unchanged.
+
           ### v0.116: evidence-first workflow skill drafting
 
           - **Evidence, not inferred truth:** get_workflow_evidence packages explicitly selected observed executions, provenance and bounded canonical evidence. Derived workflow families and support counts remain navigation/descriptive indexes, never semantic ground truth.

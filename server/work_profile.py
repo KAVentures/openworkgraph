@@ -198,10 +198,12 @@ def _focus_rows(since: str | None) -> list[dict[str, Any]]:
 
 
 def _context_rows(since: str | None) -> list[dict[str, Any]]:
+    # The work profile describes the person's own work; agent runs are
+    # reported separately (Agents tab, get_agent_runs).
     params: tuple[Any, ...] = ()
-    where = ""
+    where = "WHERE source != 'agent'"
     if since:
-        where = "WHERE observed_at >= ?"
+        where += " AND observed_at >= ?"
         params = (since,)
     with connect() as conn:
         rows = conn.execute(

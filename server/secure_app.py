@@ -271,18 +271,16 @@ def _connection_override_script() -> str:
   };
 
   function activityHtml(items){
-    if(!items||!items.length)return '<span class="muted">No MCP reads this run.</span>';
+    if(!items||!items.length)return '<span class="muted">No AI reads this run.</span>';
     return items.slice(0,6).map(x=>{const t=(x.observed_at||'').replace('T',' ').slice(11,19);const range=(x.range_start||x.range_end)?` · ${esc((x.range_start||'').slice(11,16))}–${esc((x.range_end||'').slice(11,16))}`:'';return `<div style="padding:5px 0;border-bottom:1px solid #eceee8"><strong>${esc(t)}</strong> · ${esc(x.tool)} · ${Number(x.rows||0)} rows · ${Math.round(Number(x.bytes||0)/1024)} KB${range}${x.status==='denied'?' · <span class="off">denied</span>':''}</div>`}).join('');
   }
 
   async function refreshAiPanel(){
     try{
       const [access,activity,http]=await Promise.all([jsonCall('/v1/ai-access'),jsonCall('/v1/mcp-activity?limit=20'),jsonCall('/v1/mcp-http')]);
-      const btn=document.querySelector('#aiAccessToggle');
       const state=document.querySelector('#aiAccessState');
       const log=document.querySelector('#mcpActivityLog');
-      if(btn){btn.textContent=access.enabled?'Turn AI access off':'Enable AI access';btn.className=access.enabled?'secondary':'green';}
-      if(state)state.innerHTML=access.enabled?'<span class="ok">ON for this run</span> — configured clients may read context':'<span class="off">OFF</span> — MCP calls are denied';
+      if(state)state.innerHTML=access.enabled?'Every read by a connected AI app during this run, newest first.':'AI access is off, so every read is refused. Turn it on with the <strong>AI access this run</strong> switch above.';
       if(log)log.innerHTML=activityHtml(activity.items||[]);
       const box=document.querySelector('.statusbox.mcp');
       if(box)box.innerHTML=`<span class="mcpdot"></span><strong>Local MCP:</strong> stdio ready${http.running?` · advanced HTTP <code>${esc(http.endpoint)}</code>`:' · advanced HTTP off'}<div class="muted" style="margin-top:3px">Normal local clients use the stable stdio launcher. HTTP starts only on demand.</div>`;
@@ -309,8 +307,9 @@ def _connection_override_script() -> str:
       connect.parentNode.insertBefore(panel,connect);
     }
     if(panel){
-      panel.innerHTML=`<div style="display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:5px">AI access</h2><div id="aiAccessState" class="muted">Checking…</div><div class="muted" style="margin-top:4px">OFF by default on every launch. Each MCP tool call is checked live.</div></div><div style="display:flex;gap:8px"><button id="aiAccessToggle" class="green">Enable AI access</button><button id="stopHttpMcp" class="ghost" style="display:none">Stop advanced HTTP MCP</button></div></div><div style="margin-top:13px"><strong style="font-size:12px">Recent AI activity</strong><div id="mcpActivityLog" class="muted" style="margin-top:5px">No MCP reads this run.</div></div>`;
-      panel.querySelector('#aiAccessToggle').onclick=async()=>{const s=await jsonCall('/v1/ai-access');await setAiAccess(!s.enabled);refreshAiPanel();};
+      // One AI-access switch: "AI access this run" at the top of Connections
+      // (dashboard/connections.js). This card only shows what was read.
+      panel.innerHTML=`<div style="display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:5px">Recent AI activity</h2><div id="aiAccessState" class="muted">Checking…</div></div><div style="display:flex;gap:8px"><button id="stopHttpMcp" class="ghost" style="display:none">Stop advanced HTTP MCP</button></div></div><div id="mcpActivityLog" class="muted" style="margin-top:10px">No AI reads this run.</div>`;
       panel.querySelector('#stopHttpMcp').onclick=async()=>{await httpMcp('stop');refreshAiPanel();};
     }
     const q=document.querySelector('.quickhelp');

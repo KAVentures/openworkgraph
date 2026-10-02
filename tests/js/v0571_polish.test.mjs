@@ -27,8 +27,9 @@ test('timeline labels are normalized to 24-hour non-wrapping text',()=>{
   assert.match(source,/tickSpans\.length-1/);
 });
 
-test('developer paging note is removed and sharing policy is live',()=>{
-  assert.match(source,/cursor paging is added/i);
+test('developer paging note is gone at the source and sharing policy is live',()=>{
+  const html=fs.readFileSync(path.join(root,'dashboard','index.html'),'utf8');
+  assert.doesNotMatch(html,/cursor paging is added|stacked .*PR|v0\.56\.1/i);
   assert.match(source,/\/v1\/sharing-policy/);
   assert.match(source,/Organization policy is temporarily unavailable/);
   assert.match(source,/sync fails closed/i);

@@ -3,7 +3,9 @@
   let applying=false;
 
   function ensureCard(){
-    const panel=document.querySelector('#panel-organization');
+    // Settings tab (personal capture settings), falling back to Organization
+    // for a page served without it.
+    const panel=document.querySelector('#panel-settings')||document.querySelector('#panel-organization');
     if(!panel) return null;
     let card=document.querySelector('#browserSignalSettingsCard');
     if(card) return card;
@@ -11,12 +13,12 @@
     card.className='card';
     card.id='browserSignalSettingsCard';
     card.innerHTML=`<h2>Capture & privacy</h2>
-      <div class="muted">Choose how much browser business context OpenWorkGraph may keep locally. Privacy-first keeps business-object references off and now masks known SaaS object IDs in stored browser paths.</div>
+      <div class="muted">Choose how much browser business context OpenWorkGraph may keep on this computer. Privacy-first keeps business-object references off and masks known SaaS object IDs in stored browser paths.</div>
       <div id="browserSensorVersionStatus" style="margin-top:10px"></div>
       <div class="note" style="margin-top:12px"><strong>What is captured</strong><br><span class="muted">Only the bounded browser signals enabled below. Richer business-object context stays opt-in.</span></div>
       <div style="display:grid;gap:10px;margin-top:12px">
         <label class="note"><strong>Privacy profile</strong><br>
-          <select id="browserPrivacyProfile" style="margin-top:6px;max-width:320px">
+          <select id="browserPrivacyProfile" style="margin-top:6px;max-width:320px;display:block">
             <option value="privacy_first">Privacy-first</option>
             <option value="context">Context</option>
             <option value="rich_enterprise">Rich enterprise</option>
@@ -105,7 +107,7 @@
       const d=await r.json();
       render(d);
       if(status) status.textContent='Saved locally. The paired browser sensor will pick this up automatically.';
-      if(typeof window.showToast==='function') window.showToast('Capture & privacy settings saved locally.');
+      if(typeof window.toast==='function') window.toast('Capture & privacy settings saved on this computer.');
     }catch(e){if(status) status.textContent=e.message||'Could not save settings.';}
   }
 
@@ -131,6 +133,6 @@
     }finally{applying=false;}
   }
 
-  function install(){ensureCard();load();document.querySelector('#tab-organization')?.addEventListener('click',()=>setTimeout(load,0));}
+  function install(){ensureCard();load();for(const id of ['#tab-settings','#tab-organization'])document.querySelector(id)?.addEventListener('click',()=>setTimeout(load,0));}
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',install); else install();
 })();

@@ -176,38 +176,25 @@
     let card=document.querySelector('#firstValueCard');
     if(card)return card;
     card=document.createElement('div');card.id='firstValueCard';card.className='card first-value-card';
-    card.innerHTML=`<div class="first-value-head"><div><div class="setup-tag">FIRST VALUE</div><h2>See what OpenWorkGraph understands</h2><div id="firstValueLead" class="muted">Keep working normally. OpenWorkGraph will use the evidence already being captured on this computer to show you a factual reconstruction.</div></div><button id="firstValueDismiss" class="ghost" type="button" aria-label="Dismiss first-value guide">Dismiss</button></div><div id="firstValueProgress" class="first-value-progress"></div><div id="firstValueStatus" class="note">Waiting for enough observed activity to form a useful reconstruction.</div><div id="firstValueActions" class="first-value-actions"></div>`;
+    card.innerHTML=`<div class="first-value-head"><div><div class="setup-tag">GETTING STARTED</div><h2>See what OpenWorkGraph understands</h2><div id="firstValueLead" class="muted">Keep working normally. OpenWorkGraph will use the evidence already being captured on this computer to show you a factual reconstruction.</div></div><button id="firstValueDismiss" class="ghost" type="button" aria-label="Dismiss first-value guide">Dismiss</button></div><div id="firstValueProgress" class="first-value-progress"></div><div id="firstValueStatus" class="note">Waiting for enough observed activity to form a useful reconstruction.</div><div id="firstValueActions" class="first-value-actions"></div>`;
     // Value first: the reconstruction leads; the retention choice follows it.
     overview.insertBefore(card,overview.firstChild);
     card.querySelector('#firstValueDismiss').onclick=markDismissed;
     return card;
   }
 
-  function hideStaticTimelinePlaceholder(){
-    const overview=document.querySelector('#panel-overview');if(!overview)return;
-    for(const card of overview.querySelectorAll('.card')){
-      const text=card.textContent||'';
-      if(text.includes('Timeline lanes will activate in the stacked capture/timeline PR. Existing evidence collection is unchanged.'))card.style.display='none';
-    }
-  }
-
-  function hideEmptyPlaceholders(summary){
-    hideStaticTimelinePlaceholder();
-    const patternList=document.querySelector('#patternList');
-    if(patternList){
-      const card=patternList.closest('.card');
-      if(card)card.style.display=n(summary?.repeated_task_pattern_count)>0?'':'none';
-    }
-  }
+  // The timeline and repeated-workflow cards stay visible from the first
+  // second: each renders its own loading and empty state. (Hiding them here
+  // used to hide the timeline for good, because the card was hidden before
+  // the timeline had loaded and nothing ever showed it again.)
 
   function render(state,summary,agentPayload,aiPayload){
-    hideEmptyPlaceholders(summary);
     if(state.evidence_count>0)milestone('first_event');
     if(state.surface_count>1)milestone('first_cross_surface');
     if(state.agent_runs>0)milestone('first_agent_run');
     if(state.ready)milestone('ready');
     const card=ensureCard();if(!card)return;
-    card.querySelector('#firstValueProgress').innerHTML=`<span><strong>${state.evidence_count}</strong> observed events</span><span><strong>${state.surface_count}</strong> work ${state.surface_count===1?'surface':'surfaces'}</span><span><strong>${state.transitions}</strong> observed ${state.transitions===1?'transition':'transitions'}</span><span><strong>${state.agent_runs}</strong> agent ${state.agent_runs===1?'run':'runs'}</span>`;
+    card.querySelector('#firstValueProgress').innerHTML=`<span><strong>${state.evidence_count}</strong> observed events</span><span><strong>${state.surface_count}</strong> ${state.surface_count===1?'tool':'tools'}</span><span><strong>${state.transitions}</strong> observed ${state.transitions===1?'transition':'transitions'}</span><span><strong>${state.agent_runs}</strong> agent ${state.agent_runs===1?'run':'runs'}</span>`;
     const status=card.querySelector('#firstValueStatus'),actions=card.querySelector('#firstValueActions');
     if(state.ready){
       status.className='first-value-ready';status.textContent='OpenWorkGraph has enough observed activity to show a reconstruction. No AI interpretation is required for this view.';
@@ -223,7 +210,7 @@
 
   function traceHtml(items){
     if(!items.length)return '<div class="note">There is not enough bounded recent evidence to render a trace yet.</div>';
-    return `<ol class="first-value-trace">${items.map(item=>`<li><span class="first-value-node ${item.kind==='agent'?'agent':''}"></span><div><strong>${esc(item.surface)}</strong><div class="muted">${esc(item.action)}${item.count>1?` · ${item.count} observations`:''}${item.kind==='agent'?` · ${esc(item.observation_level)}`:''}</div></div></li>`).join('')}</ol>`;
+    return `<ol class="first-value-trace">${items.map(item=>`<li><span class="first-value-node ${item.kind==='agent'?'agent':''}"></span><div><strong>${esc(item.surface)}</strong><div class="muted">${esc(item.action)}${item.count>1?` · ${item.count} observations`:''}${item.kind==='agent'?` · ${esc(typeof window.observationLevelLabel==='function'?window.observationLevelLabel(item.observation_level):item.observation_level)}`:''}</div></div></li>`).join('')}</ol>`;
   }
 
   function openReconstruction(summary,agentPayload,aiPayload,state){
@@ -243,7 +230,7 @@
     setTimeout(()=>{
       const copy=document.querySelector('#firstValueCopyPrompt');if(copy)copy.onclick=async()=>{try{await navigator.clipboard.writeText(prompt);copy.textContent='Copied';}catch(_){window.prompt('Copy this:',prompt);}};
       const connect=document.querySelector('#firstValueConnectAI');if(connect)connect.onclick=()=>{window.closeModal?.();window.activateTab?.('connect');};
-      const browser=document.querySelector('#firstValueBrowser');if(browser)browser.onclick=()=>{window.closeModal?.();window.activateTab?.('organization');};
+      const browser=document.querySelector('#firstValueBrowser');if(browser)browser.onclick=()=>{window.closeModal?.();window.activateTab?.('settings');};
       const agent=document.querySelector('#firstValueAgent');if(agent)agent.onclick=()=>{window.closeModal?.();window.activateTab?.('connect');setTimeout(()=>document.querySelector('#agent-observation-setup')?.scrollIntoView({behavior:'smooth',block:'start'}),0);};
     },0);
   }
@@ -273,7 +260,7 @@
   }
 
   function install(){
-    ensureStyle();hideStaticTimelinePlaceholder();refresh(true);
+    ensureStyle();refresh(true);
     document.querySelector('#tab-overview')?.addEventListener('click',()=>setTimeout(()=>refresh(true),0));
     setInterval(()=>refresh(false),POLL_MS);
   }

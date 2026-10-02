@@ -67,30 +67,19 @@
   };
 
   async function refreshAiAccessSurface() {
-    const panel=document.querySelector('#aiAccessPanel');
+    // Only the top-bar chip. The on/off switch lives in Connect > Connections
+    // and the read log in the "Recent AI reads" card (server/secure_app.py).
     const chip=document.querySelector('#aiStatusChip');
     try {
-      const [access, activity, http] = await Promise.all([
-        gwCall('/v1/ai-access'), gwCall('/v1/mcp-activity?limit=20'), gwCall('/v1/mcp-http'),
-      ]);
+      const [access, activity] = await Promise.all([gwCall('/v1/ai-access'), gwCall('/v1/mcp-activity?limit=20')]);
       const reads=(activity.items||[]).filter(x=>x.status!=='denied').length;
       if (chip) {
-        chip.textContent=access.enabled ? `AI access: on · ${reads} reads` : 'AI access: off · Enable';
+        chip.textContent=access.enabled ? `AI access: on · ${reads} ${reads===1?'read':'reads'}` : 'AI access: off · Enable';
+        chip.title=access.enabled ? 'Connected AI apps can read your work context during this run. Resets to off when OpenWorkGraph restarts.' : 'Connected AI apps cannot read anything. Turn it on in Connect.';
         chip.classList.toggle('on',!!access.enabled); chip.classList.toggle('off',!access.enabled);
-      }
-      if (panel) {
-        const activityHtml=(activity.items||[]).slice(0,8).map(x=>`<div style="padding:6px 0;border-bottom:1px solid #eceee8"><strong>${e(String(x.observed_at||'').replace('T',' ').slice(11,19))}</strong> · ${e(x.tool||'MCP read')} · ${Number(x.rows||0)} rows${x.status==='denied'?' · denied':''}</div>`).join('') || '<span class="muted">No MCP reads this run.</span>';
-        panel.innerHTML=`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">AI access</h2><div><strong>${access.enabled?'ON for this run':'OFF'}</strong></div><div class="muted" style="margin-top:4px">Off by default on every launch. Every MCP tool call is checked live.</div></div><div class="modal-actions"><button id="aiAccessToggle" class="${access.enabled?'secondary':'green'}">${access.enabled?'Turn AI access off':'Enable AI access'}</button>${http.running?'<button id="stopHttpMcp" class="secondary">Stop HTTP MCP</button>':''}</div></div><div style="margin-top:14px"><strong style="font-size:12px">Recent AI activity</strong><div class="muted" style="margin-top:5px">${activityHtml}</div></div>`;
-        panel.querySelector('#aiAccessToggle').onclick=async()=>{
-          await gwCall('/v1/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!access.enabled})});
-          await refreshAiAccessSurface();
-        };
-        const stop=panel.querySelector('#stopHttpMcp');
-        if (stop) stop.onclick=async()=>{await gwCall('/v1/mcp-http',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stop'})});await refreshAiAccessSurface();};
       }
     } catch (_) {
       if (chip) chip.textContent='AI access: unavailable';
-      if (panel) panel.innerHTML='<h2>AI access</h2><div class="muted">Secure AI-access status is unavailable.</div>';
     }
   }
   window.refreshDashboardAiAccess=refreshAiAccessSurface;
@@ -110,12 +99,22 @@
     }
   }
 
+  let clock=null;
+  function tickClock() {
+    const label=document.querySelector('#captureLabel');
+    if (!clock || !label) return;
+    const elapsed=clock.base+(Date.now()-clock.at)/1000;
+    label.textContent=`Recording · ${fmtDuration(elapsed)}`+clock.suffix;
+  }
+
   function renderCaptureStatus(s) {
     const label=document.querySelector('#captureLabel');
     const dot=document.querySelector('#captureDot');
     const buttons=document.querySelector('#captureButtons');
     if (!label || !dot || !buttons) return;
+    window.__owgCaptureStatusLive=true;  // this poller now owns the recording label
     if (s.demo) {
+      clock=null;
       label.textContent='Demo data · not recording'; dot.style.background='#8b8f8b'; buttons.innerHTML=''; return;
     }
     const state=String(s.state||'recording');
@@ -123,18 +122,21 @@
       const names={accessibility:'Accessibility',input_monitoring:'Input Monitoring'};
       const missing=(s.missing_permissions||[]).map(p=>names[p]||p);
       // Short enough for the header; the hover text names each missing permission.
-      label.textContent=`Recording · ${fmtDuration(s.run_elapsed_seconds)}`+(s.away?' · away':'')+(missing.length?' · macOS permission missing':'');
+      clock={base:Number(s.run_elapsed_seconds)||0,at:Date.now(),suffix:(s.collector_alive===false?' · waiting for the recorder':'')+(s.away?' · away':'')+(missing.length?' · macOS permission missing':'')};
+      tickClock();
       label.title=missing.length?`OpenWorkGraph cannot see everything: allow it under System Settings → Privacy & Security → ${missing.join(' / ')}, then restart OpenWorkGraph.`:'';
       dot.style.background='#d25a5a';
       buttons.innerHTML='<button class="secondary" id="pauseCapture">Pause</button><button class="secondary" id="stopCapture">Stop</button>';
       buttons.querySelector('#pauseCapture').onclick=()=>captureAction('pause');
       buttons.querySelector('#stopCapture').onclick=()=>captureAction('stop');
     } else if (state==='paused') {
+      clock=null;
       label.textContent='Paused · not recording'; dot.style.background='#d49a2f';
       buttons.innerHTML='<button class="secondary" id="resumeCapture">Resume</button><button class="secondary" id="stopCapture">Stop</button>';
       buttons.querySelector('#resumeCapture').onclick=()=>captureAction('resume');
       buttons.querySelector('#stopCapture').onclick=()=>captureAction('stop');
     } else {
+      clock=null;
       label.textContent='Stopped · data kept locally'; dot.style.background='#8b8f8b';
       buttons.innerHTML='<button class="secondary" id="startCapture">Start new run</button>';
       buttons.querySelector('#startCapture').onclick=()=>captureAction('start');
@@ -151,7 +153,7 @@
     if (!host) return;
     const spans=payload.spans||[];
     if (!spans.length) {
-      host.className='timeline-placeholder'; host.innerHTML='No completed focus spans yet.'; return;
+      host.className='timeline-placeholder'; host.innerHTML='<div><strong>Your timeline starts here</strong><div class="muted" style="margin-top:4px">Keep working normally. Each tool gets its own lane after its first minute in front.</div></div>'; return;
     }
     const starts=spans.map(x=>Date.parse(x.start)).filter(Number.isFinite);
     const ends=spans.map(x=>Date.parse(x.end)).filter(Number.isFinite);
@@ -176,10 +178,10 @@
     const patterns=payload.patterns||[];
     host.innerHTML=patterns.map((p,i)=>{
       const steps=(p.steps||[]).map(step=>`<span class="pill"><span class="surface-dot" style="--surface:${typeof window.surfaceColor==='function'?window.surfaceColor(step.surface):'#657'}"></span>${e(step.surface)}${step.action?` · ${e(String(step.action).replaceAll('_',' '))}`:''}</span>`).join('');
-      const runs=(p.runs||[]).map(run=>`<tr><td>${e(String(run.started_at||'').replace('T',' ').slice(0,16))}–${e(String(run.ended_at||'').slice(11,16))}</td><td>${(run.surfaces||[]).map(e).join(' → ')}</td><td>${fmtDuration(run.engaged_seconds)}</td><td>${e((run.boundary||{}).end_reason||'')}</td></tr>`).join('');
+      const runs=(p.runs||[]).map(run=>`<tr><td>${e(String(run.started_at||'').replace('T',' ').slice(0,16))}–${e(String(run.ended_at||'').slice(11,16))}</td><td>${(run.surfaces||[]).map(e).join(' → ')}</td><td>${fmtDuration(run.engaged_seconds)}</td><td>${e(String((run.boundary||{}).end_reason||'').replace(/_/g,' '))}</td></tr>`).join('');
       const data=encodeURIComponent(JSON.stringify({name:p.name,signature:p.signature,event_ids:(p.runs||[]).flatMap(r=>r.event_ids||[])}));
-      return `<div class="pattern" id="rich-pattern-${i}"><div class="pattern-head"><div><strong>${e(p.name)}</strong> <span class="badge">Needs review · ${e(p.confidence||'low')}</span><div style="margin-top:7px">${steps}</div></div><div><strong>×${Number(p.observed_count||p.runs?.length||0)}</strong><div class="muted">median ${fmtDuration(p.median_engaged_seconds)} · total ${fmtDuration(p.total_engaged_seconds)}</div></div></div><div class="pattern-actions"><button class="secondary" data-show-runs="${i}">Show the ${Number(p.runs?.length||p.observed_count||0)} runs</button><button class="secondary" data-automation="${i}">Prepare automation context</button><button class="secondary" data-pattern-export="${data}">Export evidence IDs</button></div><div class="pattern-runs"><div class="table-wrap"><table><thead><tr><th>Time window</th><th>Steps</th><th>Effort</th><th>Boundary evidence</th></tr></thead><tbody>${runs||'<tr><td colspan="4">Execution windows are unavailable for this pattern.</td></tr>'}</tbody></table></div></div></div>`;
-    }).join('') || '<div class="muted">No completed workflow has repeated yet.</div>';
+      return `<div class="pattern" id="rich-pattern-${i}"><div class="pattern-head"><div><strong>${e(p.name)}</strong> <span class="badge">Needs review · ${e(p.confidence||'low')}</span><div style="margin-top:7px">${steps}</div></div><div><strong>×${Number(p.observed_count||p.runs?.length||0)}</strong><div class="muted">median ${fmtDuration(p.median_engaged_seconds)} · total ${fmtDuration(p.total_engaged_seconds)}</div></div></div><div class="pattern-actions"><button class="secondary" data-show-runs="${i}">Show the ${Number(p.runs?.length||p.observed_count||0)} runs</button><button class="secondary" data-automation="${i}">Prepare automation context</button><button class="secondary" data-pattern-export="${data}">Export evidence IDs</button></div><div class="pattern-runs"><div class="table-wrap"><table><thead><tr><th>When</th><th>Steps</th><th>Engaged time</th><th>How it ended</th></tr></thead><tbody>${runs||'<tr><td colspan="4">Execution windows are unavailable for this pattern.</td></tr>'}</tbody></table></div></div></div>`;
+    }).join('') || (typeof window.emptyState==='function' ? window.emptyState('No repeated workflow yet','When you do the same sequence of steps across tools at least twice, it appears here with how long each run took.') : '<div class="muted">No repeated workflow yet.</div>');
     host.querySelectorAll('[data-show-runs]').forEach(btn=>btn.onclick=()=>document.querySelector(`#rich-pattern-${btn.dataset.showRuns}`)?.classList.toggle('expanded'));
     host.querySelectorAll('[data-automation]').forEach(btn=>btn.onclick=()=>{if(typeof window.activateTab==='function')window.activateTab('connect');if(typeof window.toast==='function')window.toast('Connect your AI, then ask it to inspect this repeated workflow through OpenWorkGraph MCP.');});
     host.querySelectorAll('[data-pattern-export]').forEach(btn=>btn.onclick=()=>{
@@ -241,6 +243,10 @@
       window.renderOverview=function(data){baseRender(data);refreshOverviewDerived();};
     }
     refreshGatewayPanel(); refreshAiAccessSurface(); refreshCaptureStatus(); refreshOverviewDerived();
-    setInterval(()=>{if(!document.hidden){refreshGatewayPanel();refreshAiAccessSurface();refreshCaptureStatus();refreshOverviewDerived();}},1000);
+    // Server state every 5 s while the dashboard is visible; the recording
+    // clock ticks locally in between so it still counts every second.
+    setInterval(()=>{if(!document.hidden){refreshGatewayPanel();refreshAiAccessSurface();refreshCaptureStatus();refreshOverviewDerived();}},5000);
+    setInterval(()=>{if(!document.hidden)tickClock();},1000);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshCaptureStatus();refreshAiAccessSurface();refreshOverviewDerived();}});
   });
 })();

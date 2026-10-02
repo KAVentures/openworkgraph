@@ -26,7 +26,7 @@ Plan on about 30 minutes for the first pass (steps 1–6) and a normal working d
 3. This tester build is not yet signed, so SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**, but only for a file you downloaded from the OpenWorkGraph Releases page.
 4. The first start downloads a private runtime (no Python needed). The dashboard then opens at `http://127.0.0.1:8787`.
 
-**Expected:** the dashboard opens with a dark top bar showing **Recording**, and tabs **Overview, Evidence, Agents, Connect, Organization, History, Export**. Nothing needs an account.
+**Expected:** the dashboard opens with a dark top bar showing **Recording**, and tabs **Overview, Evidence, Agents, Connect, History, Export, Settings, Organization**. Nothing needs an account. On a narrow window the tab bar scrolls sideways; its edge fades when there are more tabs.
 
 ## 2. Add or update the browser sensor (recommended)
 
@@ -34,9 +34,9 @@ Without it, OpenWorkGraph sees "Google Chrome". With it, it can tell Gmail from 
 
 1. Run **`ADD_BROWSER_SENSOR.command`** on macOS or **`ADD_BROWSER_SENSOR.cmd`** on Windows. It opens a folder and your browser's extensions page.
 2. Turn on **Developer mode**, click **Load unpacked**, and choose the folder that opened.
-3. In the dashboard, the "Browser sensor" chip should turn green. If it doesn't, use **Pair / repair browser sensor**.
+3. In the dashboard, the "Browser sensor not connected" chip should disappear. If it doesn't, click it (or open **Settings**) and use **Pair / repair browser sensor**.
 
-**After upgrading OpenWorkGraph:** the unpacked browser extension may still be running the previous files. If the server observes an older sensor, **Organization → Capture & privacy** shows **Browser sensor update available** with the running and expected versions. Open the browser's extensions page and click **Reload** for the OpenWorkGraph extension. Ordinary capture can continue while it is stale, but new browser-context features should not be considered active until the version warning disappears.
+**After upgrading OpenWorkGraph:** the unpacked browser extension may still be running the previous files. If the server observes an older sensor, **Settings → Capture & privacy** shows **Browser sensor update available** with the running and expected versions. Open the browser's extensions page and click **Reload** for the OpenWorkGraph extension. Ordinary capture can continue while it is stale, but new browser-context features should not be considered active until the version warning disappears.
 
 v0.114 uses browser sensor **1.14.0** for the new business-object reference feature.
 
@@ -48,13 +48,16 @@ Work for 10–15 minutes as you normally would: email, a spreadsheet, a CRM, doc
 
 - **See what OpenWorkGraph understands:** a first reconstruction of what you just did, with friendly names (Gmail, Google Sheets) rather than web addresses.
 - **Keep this beyond today?:** directly under it. New installs start with "Don't keep after session". Choose **Keep 90 days** if you want OpenWorkGraph to learn patterns across days. You can change this at any time in **History**.
-- Separate lanes per tool in the timeline, with time and effort that look plausible.
+- **Today's timeline:** separate lanes per tool, with time that looks plausible. It is visible from the start (it says "Your timeline starts here" until the first minute of activity), and it updates when you come back to Overview.
+- **Repeated workflows** and **Time by tool** below it, then the **Work profile**. Empty sections explain what will appear instead of disappearing.
 
 ## 4. Check what is stored (privacy)
 
-Open **Evidence** and look at recent rows.
+Open **Evidence** and look at recent rows. The **Page or window** column shows the title; **Navigation loops** and **Transitions** switch the view, and **Events** brings the table back.
 
 **Expected:**
+
+- **Only your own work:** coding-agent runs are on the **Agents** tab, not in Evidence.
 
 - **Context is kept:** titles such as `Re: Contract renewal Q4 - Gmail`, `Q4 pipeline - Customer tracker - Google Sheets`, `Acme Logistics AB | Account | Salesforce`.
 - **Personal details are tokens:** detected names, email addresses, phone numbers and personal identity numbers appear as tokens such as `PERSON_1A2B3C`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`. The same person always gets the same token.
@@ -74,7 +77,7 @@ Never use real card numbers, passwords or other people's personal numbers for te
 
 ### v0.114 browser-context privacy profiles
 
-Open **Organization → Capture & privacy**. The browser-context profile is independent of AI context detail and organization sharing.
+Open **Settings → Capture & privacy**. The browser-context profile is independent of AI context detail and organization sharing.
 
 - **Privacy-first (default):** business-object references are off. Known Google Docs/Drive, GitHub, Salesforce, Jira and Linear object-ID positions are masked in stored browser paths. This is slightly stricter than pre-v0.114 path behavior.
 - **Context:** allowlisted work objects can be correlated across repeated events, but the provider's actual record/thread/document locator is not stored. The browser retry queue uses a pairing-keyed opaque fingerprint, and the local server replaces it with a separate installation-keyed `owg:r:…` token before event persistence.
@@ -101,7 +104,7 @@ Use **Pause**, work for a minute, then **Resume**.
 
 ## 6. Connect your AI (Connect tab)
 
-**Expected:** apps found on this computer are listed first under **Recommended**, and the rest are folded under "Other apps". Each app has up to three switches:
+**Expected:** at the top, one **AI access this run** switch and a line saying what AI apps can read right now (this run, and older saved history). It turns itself off every time OpenWorkGraph starts. Below it, apps found on this computer are listed first under **Recommended**, and the rest are folded under "Other apps". Each app has up to three switches:
 
 - **Context:** your AI can read the work context you allow. Try it: turn on Context for Claude Desktop or Claude Code, restart that app, and ask it *"What have I been working on today?"*.
 - **Observe** (coding agents): OpenWorkGraph records how the agent works (steps, tests, files changed, tokens), never your prompts or its answers.
@@ -109,7 +112,7 @@ Use **Pause**, work for a minute, then **Resume**.
 
 The card under each app says what to do if something isn't arriving (for example "Start a new Claude Code session").
 
-**AI context detail** (further down) is **Redacted** by default. Leave it there.
+**AI context detail** (further down) is **Redacted** by default. Leave it there. **Recent AI activity** lists every read an AI app made during this run.
 
 ## 7. Agents tab (if you use a coding agent)
 
@@ -119,11 +122,15 @@ With **Observe** on, run a coding agent (Claude Code, Codex, Cursor) for a few t
 
 - **Session briefs:** "Preview brief" shows exactly what an agent would receive. "Measure whether briefs help" holds the brief back from a random 1 in 5 sessions and compares outcomes. It says "not enough data yet" until each group has 10 sessions.
 - **Did agent work hold up?** (off by default): checks whether pull requests your agents opened were merged and whether CI passed, using your own `gh` login.
-- **Playbooks:** export a repeated workflow as a small file someone else (or their AI) can use, or import one.
+- **Playbooks:** export a repeated workflow as a small file someone else (or their AI) can use, or import one. Like the runs list, it hides agents whose Observe is off unless you tick "Show past runs from agents whose Observe is off".
 
 ## 8. History
 
-**Expected:** your retention choices for human and agent work, **Run memory** (a small content-free summary of each run, kept 90 days, which you can turn off or delete), **AI access to saved history** (off by default), and a list of saved sessions you can export or delete.
+**Expected:** your retention choices for human and agent work, **Run memory** (a small content-free summary of each run, kept 90 days; the switch saves immediately and asks before turning off, because that deletes it), **AI access to saved history** (off by default), and a list of saved sessions you can export or delete.
+
+## 8b. Settings
+
+**Expected:** **Capture & privacy** (privacy profile and optional browser signals), **Browser sensor** (pair or repair), and **People OpenWorkGraph has learned** (reset learned names; your history is not deleted). **Organization** only covers joining and sharing with an organization.
 
 Delete one session. **Expected:** it disappears and does not come back.
 

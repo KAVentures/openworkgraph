@@ -219,8 +219,8 @@ For old rows that were already irreversibly pseudonymized as payment cards in an
 | Layer | What it is | Who sees it |
 |---|---|---|
 | **Raw** | Rich local evidence as stored: full titles and labels, with detected names and other sensitive details already tokenized (see "Titles" above). | Local analysis (patterns, findings, work profile). Never sent to AI by default. |
-| **Redacted** | The original text with only sensitive spans replaced by typed stable tokens (`PERSON_…`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`, `ID_…`): `Re: Contract for PERSON_1A2B3C - Gmail`. | **Default for every Context MCP tool**, and optionally exports (**Redact names in export**). |
-| **Safe allowlist** | Only known safe phrases; everything else dropped. | Dashboard glance views and organization (Gateway) sharing. Unchanged. |
+| **Redacted** | The original text with only sensitive spans replaced by typed stable tokens (`PERSON_…`, `EMAIL_…`, `PHONE_…`, `PERSONNUMMER_…`, `ID_…`): `Re: Contract for PERSON_1A2B3C - Gmail`. | **Default for every Context MCP tool**, exports (**Redacted**, on by default), and since v0.117 the page/window title in the dashboard **Evidence** table. The dashboard runs this pass again for display and fails closed (shows only the tool name) if it cannot. |
+| **Safe allowlist** | Only known safe phrases; everything else dropped. | Dashboard glance views (summary, repeated-workflow steps, work profile, Evidence actions; URL paths and raw button labels are never sent to the dashboard) and organization (Gateway) sharing. |
 
 The **AI context detail** setting (Connect tab → Connections) chooses what AI apps get: **Redacted** (default) or **Full** (labels and titles as stored). Since v0.108, stored titles already have detected names and contact details tokenized, so Full mostly differs from Redacted by skipping a second redaction pass. Detection is best effort, so Redacted remains the recommended setting. An organization can force Redacted. Every MCP response carries `detail_level` so the AI knows which it received. The AI setting never modifies the database. See [OWNER_REDACTION.md](OWNER_REDACTION.md#contextual-redaction-for-ai-context).
 
@@ -238,7 +238,7 @@ See [OWNER_REDACTION.md](OWNER_REDACTION.md) for details.
 
 ## Reset learned person aliases
 
-The dashboard exposes **Reset learned person aliases**, backed by:
+The dashboard exposes this as **Settings → People OpenWorkGraph has learned → Reset learned names** (before v0.117: **Reset learned person aliases** under Organization), backed by:
 
 ```text
 POST /v1/privacy/reset-learned-names

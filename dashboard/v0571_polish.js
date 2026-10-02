@@ -90,12 +90,6 @@
     });
   }
 
-  function removeDeveloperNotes() {
-    document.querySelectorAll('#evidenceTableView .evidence-meta .muted').forEach(node=>{
-      if (/cursor paging is added/i.test(node.textContent||'')) node.remove();
-    });
-  }
-
   function findSharingCard() {
     return [...document.querySelectorAll('#panel-organization .card')].find(card=>
       /what would be shared/i.test(card.querySelector('h2')?.textContent||'')
@@ -120,6 +114,14 @@
     const allowed=policy.deny_all_event_types ? 'None' : (policy.allowed_event_types||[]).length ? (policy.allowed_event_types||[]).join(', ') : 'All privacy-hardened event types';
     const stripped=(policy.strip_metadata_keys||[]).length ? (policy.strip_metadata_keys||[]).join(', ') : 'None beyond baseline privacy hardening';
     return `<div class="muted" style="margin:4px 0 9px">${escapeHtml(title)}</div><div class="table-wrap"><table style="min-width:0"><tbody><tr><th>Window titles</th><td>${yn(policy.share_window_titles)}</td></tr><tr><th>Safe metadata</th><td>${yn(policy.share_metadata)}</td></tr><tr><th>Locally excluded events</th><td>${yn(policy.share_excluded)}</td></tr><tr><th>Allowed event types</th><td>${escapeHtml(allowed)}</td></tr><tr><th>Additional stripped metadata</th><td>${escapeHtml(stripped)}</td></tr></tbody></table></div>`;
+  }
+
+  function levelLabel(value) {
+    return typeof window.observationLevelLabel==='function' ? window.observationLevelLabel(value) : String(value||'').replace(/_/g,' ');
+  }
+
+  function emptyBox(title,text) {
+    return typeof window.emptyState==='function' ? window.emptyState(title,text) : `<div class="muted">${escapeHtml(title)}. ${escapeHtml(text)}</div>`;
   }
 
   function escapeHtml(value) {
@@ -180,8 +182,8 @@
         <div class="metric-card"><div class="metric" id="agentApprovalCount">—</div><div class="label">Approval requests</div></div>
         <div class="metric-card"><div class="metric" id="agentHandoffCount">—</div><div class="label">Handoffs</div></div>
       </div>
-      <div class="card"><h2>Agent reports</h2><div class="muted">Provider-neutral aggregates over privacy-safe structural execution evidence. These are observed runs, not productivity scores.</div><div id="agentReportTable" class="table-wrap" style="margin-top:10px"></div></div>
-      <div class="card"><div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2>Recent agent runs</h2><div class="muted">Click a run to inspect model calls, tool calls, handoffs, approvals, errors, context-delivery assertions and observation coverage.</div></div><button id="agentRefreshButton" class="secondary" type="button">Refresh</button></div><div class="note" style="margin-top:12px"><strong>Coverage is evidence-presence based.</strong> A missing signal means <em>not observed</em>, not that the underlying agent did not perform it. Hidden reasoning is never reported as observable.</div><div id="agentRunsTable" class="table-wrap" style="margin-top:10px"></div><div id="agentCoverageNote" class="muted" style="margin-top:8px"></div></div>`;
+      <div class="card"><h2>Agent reports</h2><div class="muted">Totals per agent from the runs OpenWorkGraph observed (steps, tools, outcomes; never prompts or answers). These are observed runs, not productivity scores.</div><div id="agentReportTable" class="table-wrap" style="margin-top:10px"></div></div>
+      <div class="card"><div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2>Recent agent runs</h2><div class="muted">Open a run to see its steps (model calls, tool calls, handoffs, approvals, errors) and how much of the run was visible.</div></div><button id="agentRefreshButton" class="secondary" type="button">Refresh</button></div><div class="note" style="margin-top:12px"><strong>Coverage is evidence-presence based.</strong> A missing signal means <em>not observed</em>, not that the underlying agent did not perform it. Hidden reasoning is never reported as observable.</div><div id="agentRunsTable" class="table-wrap" style="margin-top:10px"></div><div id="agentCoverageNote" class="muted" style="margin-top:8px"></div></div>`;
     main.insertBefore(panel,connectPanel||null);
 
     if (!document.querySelector('#agent-observability-style')) {
@@ -249,10 +251,10 @@
     }
     const reportRows=[...grouped.values()].sort((a,b)=>b.runs-a.runs);
     const report=document.querySelector('#agentReportTable');
-    report.innerHTML=reportRows.length?`<table><thead><tr><th>Agent</th><th>Runs</th><th>Successful</th><th>Failures</th><th>Tool calls</th><th>Approvals</th><th>Avg duration</th><th>Observed level</th></tr></thead><tbody>${reportRows.map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong><div class="muted">${escapeHtml([row.provider,row.framework].filter(Boolean).join(' · ')||'Provider/framework not reported')}</div></td><td>${row.runs}</td><td>${row.success}</td><td>${row.failures}</td><td>${row.tools}</td><td>${row.approvals}</td><td>${row.durationCount?fmtTime(row.duration/row.durationCount):'—'}</td><td>${[...row.levels].map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('')||'<span class="muted">not reported</span>'}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">No native or instrumented agent runs have been observed yet. Connect an agent adapter and its runs will appear here automatically.</div>';
+    report.innerHTML=reportRows.length?`<table><thead><tr><th>Agent</th><th>Runs</th><th>Successful</th><th>Failures</th><th>Tool calls</th><th>Approvals</th><th>Avg duration</th><th>Observed level</th></tr></thead><tbody>${reportRows.map(row=>`<tr><td><strong>${escapeHtml(row.name)}</strong><div class="muted">${escapeHtml([row.provider,row.framework].filter(Boolean).join(' · ')||'Provider/framework not reported')}</div></td><td>${row.runs}</td><td>${row.success}</td><td>${row.failures}</td><td>${row.tools}</td><td>${row.approvals}</td><td>${row.durationCount?fmtTime(row.duration/row.durationCount):'—'}</td><td>${[...row.levels].map(x=>`<span class="pill">${escapeHtml(levelLabel(x))}</span>`).join('')||'<span class="muted">not reported</span>'}</td></tr>`).join('')}</tbody></table>`:emptyBox('No agent runs yet','Turn on Observe for a coding agent (Claude Code, Codex, Cursor) in Connect. Its runs appear here automatically.');
 
     const runsHost=document.querySelector('#agentRunsTable');
-    runsHost.innerHTML=runs.length?`<table><thead><tr><th>Started</th><th>Agent</th><th>Status</th><th>Duration</th><th>Observed work</th><th>Coverage</th><th></th></tr></thead><tbody>${runs.map(run=>{const id=agentIdentity(run);const status=String(run.outcome_status||'unknown');const coverage=run.observed_coverage||{};const levels=coverage.observation_levels_observed||[];const complete=run.complete_boundary_observed===true;return `<tr><td>${run.started_at?escapeHtml(new Date(run.started_at).toLocaleString()):'—'}</td><td><strong>${escapeHtml(id.name)}</strong><div class="muted">${escapeHtml([id.provider,id.framework].filter(Boolean).join(' · '))}</div></td><td><span class="agent-status ${escapeHtml(status)}">${escapeHtml(status)}</span></td><td>${executionDuration(run)?fmtTime(executionDuration(run)):'—'}</td><td>${operationCount(run,'model_call')} model · ${operationCount(run,'tool_call')} tools · ${operationCount(run,'handoff')} handoffs<div class="muted">${Number(run.approval_request_count||0)} approval requests · ${operationCount(run,'error')} explicit errors</div></td><td><span class="agent-coverage">${complete?'Complete observed boundaries':'Partial observed boundaries'}</span><div class="muted">${escapeHtml(levels.join(', ')||run.observation_level||'unknown')}</div></td><td><button class="secondary" type="button" data-agent-execution="${escapeHtml(run.execution_id||'')}">View trace</button></td></tr>`;}).join('')}</tbody></table>`:'<div class="muted">No agent executions are available in the current evidence window.</div>';
+    runsHost.innerHTML=runs.length?`<table><thead><tr><th>Started</th><th>Agent</th><th>Status</th><th>Duration</th><th>Observed work</th><th>Coverage</th><th></th></tr></thead><tbody>${runs.map(run=>{const id=agentIdentity(run);const status=String(run.outcome_status||'unknown');const coverage=run.observed_coverage||{};const levels=coverage.observation_levels_observed||[];const complete=run.complete_boundary_observed===true;return `<tr><td>${run.started_at?escapeHtml(new Date(run.started_at).toLocaleString()):'—'}</td><td><strong>${escapeHtml(id.name)}</strong><div class="muted">${escapeHtml([id.provider,id.framework].filter(Boolean).join(' · '))}</div></td><td><span class="agent-status ${escapeHtml(status)}">${escapeHtml(status)}</span></td><td>${executionDuration(run)?fmtTime(executionDuration(run)):'—'}</td><td>${operationCount(run,'model_call')} model · ${operationCount(run,'tool_call')} tools · ${operationCount(run,'handoff')} handoffs<div class="muted">${Number(run.approval_request_count||0)} approval requests · ${operationCount(run,'error')} explicit errors</div></td><td><span class="agent-coverage">${complete?'Start and end seen':'Partly seen'}</span><div class="muted">${escapeHtml((levels.length?levels:[run.observation_level||'']).map(levelLabel).join(', '))}</div></td><td><button class="secondary" type="button" data-agent-execution="${escapeHtml(run.execution_id||'')}">View trace</button></td></tr>`;}).join('')}</tbody></table>`:((payload?.hidden_frameworks||[]).length?emptyBox('Some runs are hidden','Runs from agents whose Observe is off are hidden. Tick “Show past runs from agents whose Observe is off” at the top of this tab to see them.'):'<div class="muted">Nothing to show yet.</div>');
     bindTraceButtons();
     const considered=Number(payload?.agent_execution_count_considered||runs.length);
     document.querySelector('#agentCoverageNote').textContent=considered>runs.length?`Showing ${runs.length} of ${considered} observed executions in this bounded view.`:`${runs.length} observed execution${runs.length===1?'':'s'} in this bounded view.`;
@@ -295,7 +297,6 @@
   }
 
   function polish() {
-    removeDeveloperNotes();
     polishTimeline();
     restyleVisibleSurfaces();
   }

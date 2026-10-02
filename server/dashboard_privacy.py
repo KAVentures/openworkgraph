@@ -47,9 +47,9 @@ DASHBOARD_PRIVACY_JS = r"""
   window.load=privacySafeLoad;
 
   const privacyLine=document.querySelector('.privacy-line');
-  if(privacyLine) privacyLine.textContent='Dashboard shows privacy-normalized workflow data · rich local evidence stays on this computer';
+  if(privacyLine) privacyLine.textContent='Stays on this computer · names and contact details shown as tokens · typed text is never captured';
   const searchLabel=document.querySelector('label[for="evidenceSearch"]');
-  if(searchLabel) searchLabel.textContent='Search surface or action';
+  if(searchLabel) searchLabel.textContent='Search titles, tools or actions';
 
   if(document.readyState!=='loading') privacySafeLoad();
 })();

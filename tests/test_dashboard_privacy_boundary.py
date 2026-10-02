@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
-def test_paged_dashboard_evidence_searches_rich_index_but_returns_minimized_rows():
+def _insert_context_row(event_id, *, source, surface, action, title, locator, label, text, event_type):
     from server import db
-    from server.evidence_query import query_evidence
-
-    db.init_db()
-    event_id = "dashboard-private-canary-evidence"
-    private_subject = "PRIVATE_SUBJECT_CANARY_91827"
-    private_name = "Anna Svensson"
-    private_path = "mail.google.com/mail/u/0/#inbox/private-anna-case"
 
     with db.connect() as conn:
         conn.execute("DELETE FROM context_events WHERE event_id = ?", (event_id,))
@@ -23,36 +17,79 @@ def test_paged_dashboard_evidence_searches_rich_index_but_returns_minimized_rows
               resource_title, resource_locator, target_label, context_text, metadata_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                event_id,
-                "2099-01-01T12:00:00+00:00",
-                "dashboard-privacy-session",
-                "browser_extension",
-                "Gmail",
-                "click",
-                f"{private_name} — {private_subject}",
-                private_path,
-                f"Send to {private_name}",
-                f"Gmail | click | {private_name} | {private_subject} | {private_path}",
-                json.dumps({"event_type": "browser_click"}),
-            ),
+            (event_id, "2099-01-01T12:00:00+00:00", "dashboard-privacy-session", source, surface, action,
+             title, locator, label, text, json.dumps({"event_type": event_type})),
         )
 
-    result = query_evidence(scope="all", since=None, limit=20, q=private_subject)
+
+def test_paged_dashboard_evidence_keeps_title_context_with_sensitive_details_tokenized():
+    from server import db
+    from server.evidence_query import query_evidence
+
+    db.init_db()
+    event_id = "dashboard-private-canary-evidence"
+    subject = "Contract renewal SUBJECT_CANARY_91827"
+    private_name = "Anna Svensson"
+    private_email = "anna.svensson@example.com"
+    private_path = "mail.google.com/mail/u/0/#inbox/private-anna-case"
+    # A row stored before titles were protected at rest: the display pass
+    # must still tokenize the name and address.
+    _insert_context_row(
+        event_id, source="browser_extension", surface="Gmail", action="click",
+        title=f"{subject} - {private_name} <{private_email}> - Gmail", locator=private_path,
+        label=f"Send to {private_name}", text=f"Gmail | click | {private_name} | {subject} | {private_path}",
+        event_type="browser_click",
+    )
+
+    result = query_evidence(scope="all", since=None, limit=20, q="SUBJECT_CANARY_91827")
     item = next(x for x in result["items"] if x["event_id"] == event_id)
     blob = json.dumps(item, ensure_ascii=False)
 
-    # Rich local search remains useful, but arbitrary visible content never
-    # crosses the browser boundary.
+    # Context is kept (the subject and the tool), sensitive details are tokens.
     assert result["total"] >= 1
-    assert private_subject not in blob
+    assert subject in item["page"]
+    assert item["page"] == item["resource_title"]
+    assert re.search(r"PERSON_[0-9A-F]{6}", item["page"])
     assert private_name not in blob
+    assert private_email not in blob
+    # URL paths and raw UI labels never cross the dashboard boundary.
     assert private_path not in blob
+    assert "inbox" not in blob
     assert item["surface"] == "Gmail"
-    assert item["page"] == "Gmail"
-    assert item["resource_title"] == ""
     assert item["action"] == "Send"
-    assert result["presentation_layer"] == "dashboard_content_minimized"
+    assert result["presentation_layer"] == "dashboard_sensitive_details_tokenized"
+
+
+def test_paged_dashboard_evidence_is_human_work_only_by_default():
+    from server import db
+    from server.evidence_query import query_evidence
+
+    db.init_db()
+    _insert_context_row(
+        "dashboard-agent-row", source="agent", surface="Claude Code", action="tool_call",
+        title="", locator="", label="", text="Claude Code | tool_call | AGENT_ROW_CANARY_5521",
+        event_type="agent_tool_call",
+    )
+    human = query_evidence(scope="all", since=None, limit=50, q="AGENT_ROW_CANARY_5521")
+    assert human["total"] == 0 and human["items"] == []
+    assert all(f["surface"] != "Claude Code" for f in query_evidence(scope="all", since=None, limit=1)["surfaces"])
+    with_agents = query_evidence(scope="all", since=None, limit=50, q="AGENT_ROW_CANARY_5521", include_agents=True)
+    assert [x["event_id"] for x in with_agents["items"]] == ["dashboard-agent-row"]
+
+
+def test_dashboard_title_display_fails_closed():
+    from server import evidence_query
+
+    import browser_title_privacy
+
+    original = browser_title_privacy.protect_text
+    browser_title_privacy.protect_text = lambda value: (_ for _ in ()).throw(RuntimeError("detector down"))
+    try:
+        item = evidence_query._row_item({"event_id": "x", "surface": "Gmail", "resource_title": "Anna Svensson - Gmail",
+                                         "metadata_json": "{}"})
+    finally:
+        browser_title_privacy.protect_text = original
+    assert item["resource_title"] == "" and item["page"] == "Gmail"
 
 
 def test_shared_dashboard_action_rule_keeps_semantics_without_private_text():

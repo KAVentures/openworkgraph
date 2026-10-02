@@ -12,6 +12,7 @@ _CURSOR_VERSION = 1
 _MAX_LIMIT = 500
 _MAX_QUERY = 200
 _MAX_SURFACE = 160
+_MAX_TITLE = 300
 
 
 def _norm_filter(value: str | None, limit: int) -> str:
@@ -88,9 +89,13 @@ def _where(
     surface: str,
     query: str,
     include_surface: bool = True,
+    include_agents: bool = False,
 ) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
+    if not include_agents:
+        # Agent runs have their own tab; this is the human evidence view.
+        clauses.append("source != 'agent'")
     if since:
         clauses.append("observed_at >= ?")
         params.append(str(since))
@@ -107,13 +112,34 @@ def _sql_where(clauses: list[str]) -> str:
     return " WHERE " + " AND ".join(clauses) if clauses else ""
 
 
-def _row_item(row: Any) -> dict[str, Any]:
-    """Minimize rich context before it crosses the human dashboard boundary.
+def _display_title(value: Any, cache: dict[str, str]) -> str:
+    """The stored title with sensitive details tokenized, checked once more.
 
-    Context rows remain useful locally for server-side search and explicitly
-    authorized AI retrieval. The browser receives only a safe surface plus a
-    canonical semantic action (or structural event type), never arbitrary
-    resource titles, URL paths or target labels.
+    Titles are protected before storage (browser_title_privacy): names, email
+    addresses, phone numbers and personal identity numbers are already stable
+    tokens. This runs the same protection again for display, so anything stored
+    before that protection existed is covered too. Fails closed to "".
+    """
+    text = " ".join(str(value or "").split())[:_MAX_TITLE]
+    if not text:
+        return ""
+    if text not in cache:
+        try:
+            from browser_title_privacy import protect_text
+
+            cache[text] = protect_text(text)
+        except Exception:
+            cache[text] = ""
+    return cache[text]
+
+
+def _row_item(row: Any, cache: dict[str, str] | None = None) -> dict[str, Any]:
+    """One evidence row for the human dashboard.
+
+    The page or window title keeps its context (subjects, documents, projects,
+    companies) with sensitive details shown as tokens, the same as exports and
+    redacted AI context. URL paths and raw target labels are not sent: the
+    action is a canonical semantic verb (or the structural event type).
     """
     value = dict(row)
     try:
@@ -127,12 +153,13 @@ def _row_item(row: Any) -> dict[str, Any]:
         event_type=event_type,
     )
     surface = str(value.get("surface") or "Unknown")
+    title = _display_title(value.get("resource_title"), {} if cache is None else cache)
     return {
         "event_id": str(value.get("event_id") or ""),
         "observed_at": str(value.get("observed_at") or ""),
         "surface": surface,
-        "page": surface,
-        "resource_title": "",
+        "page": title or surface,
+        "resource_title": title,
         "action": action,
         "source": str(value.get("source") or ""),
         "event_type": event_type,
@@ -147,6 +174,7 @@ def query_evidence(
     cursor: str | None = None,
     surface: str | None = None,
     q: str | None = None,
+    include_agents: bool = False,
 ) -> dict[str, Any]:
     if scope not in {"current", "all"}:
         raise ValueError("scope must be current or all")
@@ -165,6 +193,7 @@ def query_evidence(
         surface=selected_surface,
         query=query,
         include_surface=True,
+        include_agents=include_agents,
     )
     page_clauses = list(base_clauses)
     page_params = list(base_params)
@@ -184,6 +213,7 @@ def query_evidence(
         surface="",
         query=query,
         include_surface=False,
+        include_agents=include_agents,
     )
 
     with db.connect() as conn:
@@ -201,7 +231,8 @@ def query_evidence(
 
     has_more = len(rows) > page_limit
     visible = rows[:page_limit]
-    items = [_row_item(row) for row in visible]
+    titles: dict[str, str] = {}
+    items = [_row_item(row, titles) for row in visible]
     next_cursor = None
     if has_more and visible:
         last = visible[-1]
@@ -233,5 +264,6 @@ def query_evidence(
         ],
         "cursor_kind": "observed_at_id_keyset_v1",
         "source_layer": "privacy_hardened_context_events",
-        "presentation_layer": "dashboard_content_minimized",
+        "presentation_layer": "dashboard_sensitive_details_tokenized",
+        "includes_agent_runs": include_agents,
     }

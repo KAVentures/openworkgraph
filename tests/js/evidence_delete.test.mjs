@@ -22,7 +22,14 @@ test('evidence deletion uses inline confirmation and authenticated local endpoin
   assert.doesNotMatch(source,/window\.confirm\(/);
 });
 
-test('v0.57 release label is applied by the final dashboard layer',()=>{
-  assert.match(source,/versionLabel/);
-  assert.match(source,/v0\.57\.0/);
+test('the delete layer never overwrites the real version label',()=>{
+  // It used to write a fixed "v0.57.0" until the summary arrived.
+  assert.doesNotMatch(source,/versionLabel/);
+  assert.doesNotMatch(source,/v0\.\d+\.\d+/);
+});
+
+test('delete controls sit below the evidence and stay quiet until confirmed',()=>{
+  assert.match(source,/panel\.appendChild\(controls\)/);
+  assert.match(source,/class="danger-quiet small" id="delete15m"/);
+  assert.match(source,/id="confirmEvidenceDelete" style="background:var\(--red\)/);
 });
