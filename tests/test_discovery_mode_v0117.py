@@ -237,3 +237,23 @@ def test_discovery_state_can_be_read_from_explicit_endpoint_data_dir(tmp_path, m
     assert state["session_id"] == "disc_endpoint"
     assert state["gateway_event_boundary_id"] == 42
     assert state["gateway_agent_message_boundary_id"] == 7
+
+
+def test_discovery_start_persists_gateway_boundaries_in_initial_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    from shared.discovery_scope import start_session
+
+    state = start_session(
+        name="Atomic boundary",
+        purpose="Avoid sync race",
+        allowed_apps=["Microsoft Excel"],
+        duration_days=1,
+        gateway_sharing_was_paused=False,
+        gateway_paused_by_discovery=True,
+        gateway_event_boundary_id=123,
+        gateway_agent_message_boundary_id=9,
+    )
+    assert state["enabled"] is True
+    assert state["gateway_paused_by_discovery"] is True
+    assert state["gateway_event_boundary_id"] == 123
+    assert state["gateway_agent_message_boundary_id"] == 9
