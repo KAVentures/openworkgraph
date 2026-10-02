@@ -93,6 +93,8 @@ def _default() -> dict[str, Any]:
         "purged_event_rows": 0,
         "gateway_sharing_was_paused": None,
         "gateway_paused_by_discovery": False,
+        "gateway_event_boundary_id": 0,
+        "gateway_agent_message_boundary_id": 0,
         "employee_review_required": True,
         "share_approved_at": None,
         "excluded_execution_ids": [],
@@ -120,6 +122,8 @@ def _normalize(value: dict[str, Any] | None) -> dict[str, Any]:
     base["retention_days_after_end"] = max(1, min(retention_days, 90))
     base["purged_event_rows"] = max(0, int(base.get("purged_event_rows") or 0))
     base["gateway_paused_by_discovery"] = bool(base.get("gateway_paused_by_discovery", False))
+    base["gateway_event_boundary_id"] = max(0, int(base.get("gateway_event_boundary_id") or 0))
+    base["gateway_agent_message_boundary_id"] = max(0, int(base.get("gateway_agent_message_boundary_id") or 0))
     base["employee_review_required"] = True
     base["excluded_execution_ids"] = [
         str(x) for x in (base.get("excluded_execution_ids") or [])
@@ -252,11 +256,19 @@ def deactivate_session() -> dict[str, Any]:
         return _write(value)
 
 
-def set_gateway_guard(*, was_paused: bool | None, paused_by_discovery: bool) -> dict[str, Any]:
+def set_gateway_guard(
+    *,
+    was_paused: bool | None,
+    paused_by_discovery: bool,
+    event_boundary_id: int = 0,
+    agent_message_boundary_id: int = 0,
+) -> dict[str, Any]:
     with _LOCK:
         state = read_state()
         state["gateway_sharing_was_paused"] = was_paused
         state["gateway_paused_by_discovery"] = bool(paused_by_discovery)
+        state["gateway_event_boundary_id"] = max(0, int(event_boundary_id or 0))
+        state["gateway_agent_message_boundary_id"] = max(0, int(agent_message_boundary_id or 0))
         return _write(state)
 
 
