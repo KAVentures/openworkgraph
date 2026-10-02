@@ -21,7 +21,6 @@ from shared.discovery_scope import (
     read_state,
     save_question,
     set_excluded_execution_ids,
-    set_gateway_guard,
     start_session,
 )
 from connector.control import (
