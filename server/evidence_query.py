@@ -13,19 +13,21 @@ _MAX_LIMIT = 500
 _MAX_QUERY = 200
 _MAX_SURFACE = 160
 _MAX_TITLE = 300
+_MAX_TITLE_INPUT = 8_192
 
 
 def _norm_filter(value: str | None, limit: int) -> str:
     return " ".join(str(value or "").strip().split())[:limit]
 
 
-def _fingerprint(scope: str, surface: str, query: str, since: str | None) -> str:
+def _fingerprint(scope: str, surface: str, query: str, since: str | None, *, include_agents: bool = False) -> str:
     raw = json.dumps(
         {
             "scope": scope,
             "surface": surface.casefold(),
             "q": query.casefold(),
             "since": str(since or ""),
+            "include_agents": bool(include_agents),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -120,14 +122,20 @@ def _display_title(value: Any, cache: dict[str, str]) -> str:
     tokens. This runs the same protection again for display, so anything stored
     before that protection existed is covered too. Fails closed to "".
     """
-    text = " ".join(str(value or "").split())[:_MAX_TITLE]
+    text = " ".join(str(value or "").split())
     if not text:
+        return ""
+    # Do not truncate before privacy protection: cutting through an email,
+    # identifier, or name can turn it into a fragment the detector no longer
+    # recognises. Very large legacy values fail closed instead.
+    if len(text) > _MAX_TITLE_INPUT:
         return ""
     if text not in cache:
         try:
             from browser_title_privacy import protect_text
 
-            cache[text] = protect_text(text)
+            protected = protect_text(text)
+            cache[text] = protected[:_MAX_TITLE] if isinstance(protected, str) else ""
         except Exception:
             cache[text] = ""
     return cache[text]
@@ -181,7 +189,13 @@ def query_evidence(
     page_limit = max(1, min(int(limit), _MAX_LIMIT))
     selected_surface = _norm_filter(surface, _MAX_SURFACE)
     query = _norm_filter(q, _MAX_QUERY)
-    fingerprint = _fingerprint(scope, selected_surface, query, since)
+    fingerprint = _fingerprint(
+        scope,
+        selected_surface,
+        query,
+        since,
+        include_agents=include_agents,
+    )
     cursor_ts = ""
     cursor_id = 0
     offset = 0
