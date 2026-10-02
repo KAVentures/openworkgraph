@@ -14,7 +14,7 @@ v0.117 is a dashboard release. Capture, storage, MCP and the browser sensor are 
 
 ### Evidence keeps its context
 
-The Evidence table used to show only the tool name in the Page column. It now shows the stored page or window title, the same context exports and redacted AI context already keep (for example "Re: Contract renewal Q4 - PERSON_1A2B3C - Gmail"). Names, email addresses, phone numbers and personal identity numbers are tokens before storage, and the dashboard runs the same protection once more for display, so anything stored before that protection existed is covered too. It fails closed: if the check cannot run, only the tool name is shown. URL paths and raw button labels are still never sent to the dashboard.
+The Evidence table used to show only the tool name in the Page column. It now shows the stored page or window title, the same context exports and redacted AI context already keep (for example "Re: Contract renewal Q4 - PERSON_1A2B3C - Gmail"). Detected names, email addresses, phone numbers and personal identity numbers are tokenized before storage, and the dashboard runs the same best-effort protection once more for display, including legacy rows. Display protection runs before title truncation so a cutoff cannot turn a sensitive identifier into an unrecognisable fragment. It fails closed: if the check cannot run, only the tool name is shown. URL paths and raw button labels are still never sent to the dashboard.
 
 ### Human views show human work
 
