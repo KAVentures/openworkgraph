@@ -54,8 +54,8 @@ def _data_dir() -> Path:
     return path
 
 
-def state_path() -> Path:
-    return _data_dir() / "discovery_session.json"
+def state_path(data_dir: Path | None = None) -> Path:
+    return (Path(data_dir) if data_dir is not None else _data_dir()) / "discovery_session.json"
 
 
 def _clean_patterns(values: Any) -> list[str]:
@@ -148,10 +148,10 @@ def _normalize(value: dict[str, Any] | None) -> dict[str, Any]:
     return base
 
 
-def read_state() -> dict[str, Any]:
+def read_state(*, data_dir: Path | None = None) -> dict[str, Any]:
     with _LOCK:
         try:
-            raw = json.loads(state_path().read_text(encoding="utf-8"))
+            raw = json.loads(state_path(data_dir).read_text(encoding="utf-8"))
         except Exception:
             return _default()
         return _normalize(raw if isinstance(raw, dict) else None)
