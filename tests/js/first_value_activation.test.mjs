@@ -30,5 +30,12 @@ test('first-value guide is dismissible and does not trap advanced navigation', (
   assert.match(source, /owg_first_value_dismissed_v1/);
   assert.match(source, /window\.activateTab\?\.\('evidence'\)/);
   assert.match(source, /window\.activateTab\?\.\('connect'\)/);
-  assert.match(source, /window\.activateTab\?\.\('organization'\)/);
+  // Browser sensor setup lives in Settings.
+  assert.match(source, /window\.activateTab\?\.\('settings'\)/);
+});
+
+test('first-value layer never hides the timeline or repeated-workflow cards', () => {
+  // Hiding the timeline card before it loaded used to hide it for good.
+  assert.doesNotMatch(source, /style\.display='none'/);
+  assert.doesNotMatch(source, /hideStaticTimelinePlaceholder|hideEmptyPlaceholders/);
 });

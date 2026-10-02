@@ -75,7 +75,7 @@
     panel.insertBefore(intro,panel.firstChild);
     const history=intro.querySelector('#showDisconnectedAgents');
     try{history.checked=localStorage.getItem('owg_show_disconnected_agents')==='1';}catch(_){}
-    history.onchange=()=>{try{localStorage.setItem('owg_show_disconnected_agents',history.checked?'1':'0');}catch(_){}window.refreshAgentObservability?.(true);window.refreshAgentDashboard?.(true);};
+    history.onchange=()=>{try{localStorage.setItem('owg_show_disconnected_agents',history.checked?'1':'0');}catch(_){}window.refreshAgentObservability?.(true);window.refreshAgentDashboard?.(true);window.refreshHistory?.();};
     intro.querySelector('#openAgentSetup').onclick=()=>{window.activateTab?.('connect');setTimeout(()=>document.querySelector('#agent-observation-setup')?.scrollIntoView({behavior:'smooth',block:'start'}),0);};
   }
 

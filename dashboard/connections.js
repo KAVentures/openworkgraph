@@ -6,6 +6,7 @@
   let aiAccess=null;
   let diagnostics=null;
   let briefState=null;
+  let historyAccess=null;
   let busy=new Set();
   let lastMessage={};
 
@@ -62,7 +63,7 @@
     if(!card){
       card=document.createElement('div');
       card.id='owgConnections';card.className='card';
-      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). <strong>Brief</strong> starts new agent sessions with a short summary of how past runs went. Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div id="owgAiDetail" class="ai-detail"></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
+      card.innerHTML=`<div class="conn-head"><div><h2 style="margin-bottom:5px">Connections</h2><div class="muted"><strong>Context</strong> lets an app read the work context you allow. <strong>Observe</strong> lets OpenWorkGraph record how an agent runs (never prompts, responses, tool arguments or results). <strong>Brief</strong> starts new agent sessions with a short summary of how past runs went. Flip a switch to turn either on or off. The first time sets the app up (with a backup of its settings); after that, on/off is instant.</div></div><div class="conn-master" id="owgMaster"></div></div><div class="sub" id="owgAccessSummary" style="margin-top:10px;font-size:12.5px"></div><div id="owgConnTable"><div class="muted" style="margin-top:12px">Checking your apps…</div></div><div id="owgAiDetail" class="ai-detail"></div><div class="sub" id="owgCloudNote" style="margin-top:12px;font-size:12.5px"><strong>Cloud apps</strong> (ChatGPT, Lovable, Microsoft 365 Copilot) run on their servers, so they can't reach OpenWorkGraph on this computer directly. They need a secure tunnel: <button class="linkish" type="button" onclick="openConnect('chatgpt')">how to connect a cloud app</button></div><div class="cli"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><strong>For agents and scripts</strong> <span class="muted">(same switches, JSON output; works from any folder)</span></span><button class="linkish" id="owgCliCopy" type="button">Copy</button></div><code id="owgCli">…</code></div>`;
       panel.insertBefore(card,panel.firstChild);
     }
     // Everything the table already covers moves into one collapsed section.
@@ -172,6 +173,15 @@
       master.title='Master switch for all Context connections. It resets to OFF whenever OpenWorkGraph restarts.';
       master.querySelector('#owgMasterSwitch').onclick=toggleMaster;
     }
+    // Everything an AI app can read, in one place: this run (the switch) and
+    // older saved history (granted separately in History).
+    const summary=card.querySelector('#owgAccessSummary');
+    if(summary&&aiAccess){
+      const mode=String(historyAccess?.mode||'off');
+      const saved=mode==='all_saved'?'all saved history':mode==='selected_range'?'selected dates':'off';
+      summary.innerHTML=`<strong>What AI apps can read:</strong> ${aiAccess.enabled?'this run’s work context':'nothing right now'} · older saved history: <strong>${esc(saved)}</strong> <button class="linkish" type="button" id="owgHistoryAccessLink">change in History</button><br>The switch turns itself off every time OpenWorkGraph starts, so an AI app can never read your work unless you turned it on for this run.`;
+      summary.querySelector('#owgHistoryAccessLink').onclick=()=>window.activateTab?.('history');
+    }
     const row=client=>{
       const anyInstalled=(client.mcp.installed)||(client.observe.supported&&client.observe.installed);
       const manual=client.observe.supported?`<button class="linkish" data-manual="${esc(client.id)}">Manual setup</button>`:'';
@@ -206,13 +216,14 @@
 
   async function refresh(){
     try{
-      const [connections,access,activity,traces,diag,brief]=await Promise.all([
+      const [connections,access,activity,traces,diag,brief,savedAccess]=await Promise.all([
         api('/v1/connections'),api('/v1/ai-access'),api('/v1/mcp-activity?limit=200').catch(()=>({items:[]})),
         api('/v1/agent-execution-traces?limit=50&evidence_limit=25000&max_events_per_execution=1').catch(()=>({executions:[]})),
         api('/v1/agent-telemetry/diagnostics').catch(()=>null),
         api('/v1/agent-brief').catch(()=>null),
+        api('/v1/history/ai-access').catch(()=>null),
       ]);
-      diagnostics=diag;briefState=brief;
+      diagnostics=diag;briefState=brief;historyAccess=savedAccess?.access||historyAccess;
       const lastUsed={},lastObserved={};
       for(const item of activity.items||[]){if(item.client&&item.status==='ok'&&!lastUsed[item.client])lastUsed[item.client]=item.observed_at;}
       for(const run of traces.executions||[]){

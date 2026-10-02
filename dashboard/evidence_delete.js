@@ -25,7 +25,7 @@
   }
 
   function showConfirm(host, since, until) {
-    host.innerHTML=`<div class="note" style="margin-top:10px"><strong>Delete local evidence?</strong><div style="margin-top:5px">Delete everything overlapping <strong>${esc(readable(since))}</strong> through <strong>${esc(readable(until))}</strong>? This cannot be undone on this computer.</div><div class="muted" style="margin-top:5px">Unsent and late local copies are blocked from future organization sharing. Evidence already synchronized to an organization Gateway is not automatically recalled.</div><div class="modal-actions"><button id="confirmEvidenceDelete">Delete evidence</button><button class="secondary" id="cancelEvidenceDelete">Cancel</button></div></div>`;
+    host.innerHTML=`<div class="note" style="margin-top:10px"><strong>Delete local evidence?</strong><div style="margin-top:5px">Delete everything overlapping <strong>${esc(readable(since))}</strong> through <strong>${esc(readable(until))}</strong>? This cannot be undone on this computer.</div><div class="muted" style="margin-top:5px">Unsent and late local copies are blocked from future organization sharing. Evidence already synchronized to an organization Gateway is not automatically recalled.</div><div class="modal-actions"><button id="confirmEvidenceDelete" style="background:var(--red);border-color:var(--red)">Delete evidence</button><button class="secondary" id="cancelEvidenceDelete">Cancel</button></div></div>`;
     host.querySelector('#cancelEvidenceDelete').onclick=()=>{host.innerHTML='';};
     host.querySelector('#confirmEvidenceDelete').onclick=async()=>{
       const button=host.querySelector('#confirmEvidenceDelete');
@@ -50,17 +50,15 @@
   }
 
   function install() {
-    const version=document.querySelector('#versionLabel');
-    if (version) version.textContent='v0.57.0';
-
     const panel=document.querySelector('#panel-evidence .card');
     const table=document.querySelector('#evidenceTableView');
     if (!panel || !table || document.querySelector('#evidenceDeleteControls')) return;
     const controls=document.createElement('div');
     controls.id='evidenceDeleteControls';
-    controls.style.margin='10px 0 4px';
-    controls.innerHTML=`<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><button class="secondary" id="delete15m">Delete last 15 minutes</button><button class="secondary" id="delete1h">Delete last 1 hour</button><button class="secondary" id="deleteCustom">Custom range</button><span class="muted">Deletes local evidence; already-shared Gateway copies are not recalled.</span></div><div id="evidenceDeleteCustom" hidden style="margin-top:10px"><div class="filter-row" style="align-items:end"><div class="search-box" style="margin-left:0"><label for="deleteSince">From</label><input id="deleteSince" type="datetime-local"></div><div class="search-box" style="margin-left:0"><label for="deleteUntil">Until</label><input id="deleteUntil" type="datetime-local"></div><button id="reviewCustomDelete" class="secondary">Review deletion</button></div></div><div id="evidenceDeleteConfirm"></div>`;
-    table.parentNode.insertBefore(controls,table);
+    controls.style.cssText='margin:16px 0 0;padding-top:12px;border-top:1px solid #eceee8';
+    controls.innerHTML=`<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-weight:700">Delete recent evidence:</span><button class="danger-quiet small" id="delete15m">Delete last 15 minutes</button><button class="danger-quiet small" id="delete1h">Delete last 1 hour</button><button class="danger-quiet small" id="deleteCustom">Custom range</button></div><div id="evidenceDeleteCustom" hidden style="margin-top:10px"><div class="filter-row" style="align-items:end"><div class="search-box" style="margin-left:0"><label for="deleteSince">From</label><input id="deleteSince" type="datetime-local"></div><div class="search-box" style="margin-left:0"><label for="deleteUntil">Until</label><input id="deleteUntil" type="datetime-local"></div><button id="reviewCustomDelete" class="secondary">Review deletion</button></div></div><div id="evidenceDeleteConfirm"></div>`;
+    // Below the evidence, not above it: deleting is available but not the first thing you see.
+    panel.appendChild(controls);
     const confirmHost=controls.querySelector('#evidenceDeleteConfirm');
     controls.querySelector('#delete15m').onclick=()=>preset(confirmHost,15);
     controls.querySelector('#delete1h').onclick=()=>preset(confirmHost,60);

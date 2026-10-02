@@ -53,7 +53,7 @@ This prevents phrases such as `Transition to In Progress` or `Meeting with Legal
 
 The learned-person registry is stored locally in `.presentation_people.json`. It stores keyed hashes of aliases and pseudonym tokens rather than literal learned names.
 
-The dashboard exposes **Reset learned person aliases**. Resetting removes only this local registry. It does **not**:
+The dashboard exposes **Settings → Reset learned names** (called **Reset learned person aliases** before v0.117). Resetting removes only this local registry. It does **not**:
 
 - delete captured event history
 - change event IDs, counts, timestamps or durations

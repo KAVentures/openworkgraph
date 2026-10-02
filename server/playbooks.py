@@ -315,4 +315,10 @@ def delete(playbook_id: str) -> int:
         return int(conn.execute("DELETE FROM playbooks WHERE playbook_id = ?", (str(playbook_id),)).rowcount or 0)
 
 
-__all__ = ["FORMAT", "PlaybookError", "build", "delete", "import_playbook", "imported", "local_families", "sanitize"]
+def without_hidden_frameworks(families: list[dict[str, Any]], hidden: set[str]) -> list[dict[str, Any]]:
+    """Drop workflows run only by hidden agent frameworks (the Agents tab's default view)."""
+    return [f for f in families if not f.get("agent_frameworks") or not set(f["agent_frameworks"]) <= hidden]
+
+
+__all__ = ["FORMAT", "PlaybookError", "build", "delete", "import_playbook", "imported", "local_families", "sanitize",
+           "without_hidden_frameworks"]

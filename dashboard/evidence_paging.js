@@ -90,15 +90,16 @@
     const body=document.querySelector('#evidenceTable');
     if (body) body.innerHTML=(payload.items||[]).map(item=>{
       const surface=displaySurface(item.surface||'Unknown');
-      const page=item.page||item.resource_title||'';
-      return `<tr><td>${item.observed_at?new Date(item.observed_at).toLocaleTimeString():''}</td><td><span class="surface-dot" style="--surface:${color(surface)}"></span>${html(surface)}</td><td class="mono">${html(page)}</td><td>${html(item.action||item.event_type||'')}</td></tr>`;
-    }).join('')||'<tr><td colspan="4">No matching evidence.</td></tr>';
+      // The title keeps its context; names and contact details arrive as tokens.
+      const page=item.resource_title||item.page||'';
+      return `<tr><td style="white-space:nowrap">${item.observed_at?new Date(item.observed_at).toLocaleTimeString():''}</td><td style="white-space:nowrap"><span class="surface-dot" style="--surface:${color(surface)}"></span>${html(surface)}</td><td style="overflow-wrap:anywhere">${html(page)}</td><td>${html(item.action||item.event_type||'')}</td></tr>`;
+    }).join('')||`<tr><td colspan="4">${currentQuery()||selectedSurface?'Nothing matches this search or filter.':'No evidence in this run yet. Keep working normally; events appear here within a few seconds.'}</td></tr>`;
 
     const count=document.querySelector('#evidenceCount');
     if (count) {
       count.textContent=payload.total
         ? `Showing ${Number(payload.position_start||0)}–${Number(payload.position_end||0)} of ${Number(payload.total||0)} events`
-        : '0 of 0 events';
+        : 'No events';
     }
     const controls=ensureControls();
     if (controls) {

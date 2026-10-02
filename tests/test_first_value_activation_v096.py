@@ -74,13 +74,14 @@ def test_existing_mcp_and_browser_permissions_are_untouched_by_activation_layer(
     assert "first_value_activation" not in legacy
 
 
-def test_stale_first_run_placeholders_are_hidden_without_deleting_their_dom():
+def test_timeline_and_workflow_cards_are_never_hidden_by_the_first_value_layer():
+    # v0.117: hiding the timeline card before the timeline loaded hid it for
+    # good. The cards now show their own loading and empty states instead.
     js = JS.read_text(encoding="utf-8")
-    assert "Timeline lanes will activate in the stacked capture/timeline PR" in js
-    assert "card.style.display='none'" in js
-    assert "repeated_task_pattern_count" in js
-    # The base dashboard remains the source of the advanced interfaces; this
-    # layer only changes first-run presentation at runtime.
+    assert "style.display='none'" not in js
+    assert "Timeline lanes will activate" not in js
     html = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
-    for tab in ("overview", "evidence", "connect", "organization", "export"):
+    assert "Timeline lanes will activate" not in html
+    assert 'id="timelineCard"' in html and "Loading your timeline" in html
+    for tab in ("overview", "evidence", "connect", "export", "settings", "organization"):
         assert f'data-tab="{tab}"' in html
