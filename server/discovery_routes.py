@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Authenticated local API for temporary, employee-reviewed workflow discovery."""
 
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from pathlib import Path
@@ -15,16 +16,108 @@ from shared.discovery_scope import (
     approve_share,
     deactivate_session,
     finish_session,
+    mark_purged,
     public_state,
+    read_state,
     save_question,
     set_excluded_execution_ids,
+    set_gateway_guard,
     start_session,
 )
+from connector.control import set_sharing as set_gateway_sharing, status as gateway_status
+from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
+from .db import connect
+from .main import CONFIG_PATH
 from .secure_app import app
 from .workflow_evidence import build_workflow_evidence, list_workflow_evidence_candidates
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _pause_gateway_if_connected() -> tuple[bool | None, bool]:
+    """Pause an already-connected Gateway so review happens before any upload."""
+    try:
+        before = gateway_status(CONFIG_PATH)
+    except Exception:
+        return None, False
+    was_paused = bool(before.get("sharing_paused"))
+    if was_paused:
+        return True, False
+    if before.get("mode") != "connected":
+        return False, False
+    set_gateway_sharing(CONFIG_PATH, False)
+    return False, True
+
+
+def _restore_gateway_if_we_paused(state: dict[str, Any]) -> dict[str, Any] | None:
+    if not state.get("gateway_paused_by_discovery"):
+        return None
+    try:
+        return set_gateway_sharing(CONFIG_PATH, True)
+    except Exception as exc:
+        return {"error": str(exc), "sharing_remains_paused": True}
+
+
+def _purge_discovery_evidence(*, force: bool = False) -> dict[str, Any]:
+    state = read_state()
+    if state.get("purged_at"):
+        return {
+            "purged": True,
+            "purged_at": state.get("purged_at"),
+            "deleted_event_rows": int(state.get("purged_event_rows") or 0),
+        }
+    start = _parse_time(state.get("starts_at"))
+    end = _parse_time(state.get("ends_at"))
+    if start is None or end is None:
+        return {"purged": False, "reason": "no_completed_discovery_window"}
+    if not force:
+        due = end + timedelta(days=int(state.get("retention_days_after_end") or 14))
+        if datetime.now(timezone.utc) < due:
+            return {"purged": False, "reason": "retention_not_due", "purge_due_at": due.isoformat()}
+    if str(state.get("status") or "") == "active" and datetime.now(timezone.utc) < end:
+        return {"purged": False, "reason": "discovery_still_active"}
+
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT event_id FROM events WHERE observed_at >= ? AND observed_at < ?",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        event_ids = [str(row["event_id"]) for row in rows]
+        for offset in range(0, len(event_ids), 500):
+            chunk = event_ids[offset:offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            conn.execute(f"DELETE FROM context_events WHERE event_id IN ({placeholders})", tuple(chunk))
+            conn.execute(f"DELETE FROM normalized_events WHERE event_id IN ({placeholders})", tuple(chunk))
+            conn.execute(f"DELETE FROM events WHERE event_id IN ({placeholders})", tuple(chunk))
+    marked = mark_purged(len(event_ids))
+    return {
+        "purged": True,
+        "purged_at": marked.get("purged_at"),
+        "deleted_event_rows": len(event_ids),
+        "scope": "canonical events observed inside the Discovery Mode window",
+        "agent_session_message_retention": "separate existing opt-in policy",
+    }
+
+
+def _startup_discovery_cleanup() -> None:
+    try:
+        _purge_discovery_evidence(force=False)
+    except Exception:
+        pass
+
+
+extend_lifespan(app, startup=_startup_discovery_cleanup)
 
 
 async def _payload(request: Request) -> dict[str, Any]:
