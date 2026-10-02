@@ -268,6 +268,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/v1/discovery")
 def get_discovery() -> dict[str, Any]:
+    _purge_discovery_evidence(force=False)
     state = public_state()
     if state.get("enabled"):
         try:
@@ -300,7 +301,7 @@ def get_discovery() -> dict[str, Any]:
 async def start_discovery(request: Request) -> dict[str, Any]:
     body = await _payload(request)
     try:
-        return start_session(
+        state = start_session(
             name=str(body.get("name") or "Workflow discovery"),
             purpose=str(body.get("purpose") or ""),
             allowed_apps=list(body.get("allowed_apps") or []),
@@ -308,9 +309,21 @@ async def start_discovery(request: Request) -> dict[str, Any]:
             duration_days=float(body.get("duration_days") or 5),
             ends_at=str(body.get("ends_at") or "") or None,
             allow_unresolved_browser_container=bool(body.get("allow_unresolved_browser_container", False)),
+            retention_days_after_end=int(body.get("retention_days_after_end") or 14),
         )
+        was_paused, paused_by_discovery = _pause_gateway_if_connected()
+        state = set_gateway_guard(
+            was_paused=was_paused,
+            paused_by_discovery=paused_by_discovery,
+        )
+        return state
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        # Fail safe: do not claim review-before-sharing if a connected Gateway
+        # could not be paused.
+        deactivate_session()
+        raise HTTPException(status_code=503, detail=f"could not establish Discovery sharing guard: {exc}") from exc
 
 
 @app.post("/v1/discovery/finish")
@@ -320,7 +333,12 @@ def finish_discovery() -> dict[str, Any]:
 
 @app.post("/v1/discovery/deactivate")
 def deactivate_discovery() -> dict[str, Any]:
-    return deactivate_session()
+    before = read_state()
+    result = deactivate_session()
+    restored = _restore_gateway_if_we_paused(before)
+    if restored is not None:
+        result["gateway_restore"] = restored
+    return result
 
 
 @app.post("/v1/discovery/selection")
@@ -362,6 +380,18 @@ def approve_discovery_share() -> dict[str, Any]:
         return approve_share()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/discovery/purge")
+async def purge_discovery(request: Request) -> dict[str, Any]:
+    body = await _payload(request)
+    if str(body.get("confirm") or "") != "DELETE DISCOVERY":
+        raise HTTPException(status_code=422, detail='confirm must equal "DELETE DISCOVERY"')
+    state = read_state()
+    end = _parse_time(state.get("ends_at"))
+    if str(state.get("status") or "") == "active" and end and datetime.now(timezone.utc) < end:
+        raise HTTPException(status_code=409, detail="finish the Discovery study before deleting its evidence")
+    return _purge_discovery_evidence(force=True)
 
 
 @app.get("/v1/discovery/package")
