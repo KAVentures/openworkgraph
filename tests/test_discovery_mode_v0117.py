@@ -159,3 +159,51 @@ def test_discovery_deactivate_restores_normal_capture(tmp_path, monkeypatch):
     state = deactivate_session()
     assert state["enabled"] is False
     assert event_allowed(_event(app="Slack", observed_at=now))[0] is True
+
+
+def test_review_changes_invalidate_package_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    from shared.discovery_scope import (
+        approve_share,
+        finish_session,
+        save_question,
+        set_excluded_execution_ids,
+        start_session,
+    )
+
+    start_session(
+        name="Scoped study",
+        purpose="Review integrity",
+        allowed_apps=["Microsoft Excel"],
+        duration_days=1,
+    )
+    finish_session()
+    state = approve_share()
+    assert state["share_approved_at"]
+
+    state = save_question(question="Why did this vary?", answer="Manager approval")
+    assert state["share_approved_at"] is None
+
+    state = approve_share()
+    assert state["share_approved_at"]
+    state = set_excluded_execution_ids(["exec_1"])
+    assert state["share_approved_at"] is None
+
+
+def test_cannot_replace_unfinished_discovery_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    from shared.discovery_scope import start_session
+
+    start_session(
+        name="First",
+        purpose="Keep it",
+        allowed_apps=["Microsoft Excel"],
+        duration_days=1,
+    )
+    with pytest.raises(ValueError, match="existing Discovery Mode session"):
+        start_session(
+            name="Second",
+            purpose="Should not overwrite",
+            allowed_apps=["Slack"],
+            duration_days=1,
+        )
