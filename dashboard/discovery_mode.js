@@ -251,7 +251,7 @@
   function install() {
     host();
     refresh();
-    setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+    setInterval(() => { if (!document.hidden && state?.enabled && state?.status === 'active') refresh(); }, 15000);
   }
 
   window.refreshDiscoveryMode = refresh;
