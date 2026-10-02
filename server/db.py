@@ -475,9 +475,21 @@ def protect_existing_titles(*, batch_size: int = 1000) -> int:
 
 
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
-    """Persist rich evidence plus operational and context derivatives atomically."""
+    """Persist rich evidence plus operational and context derivatives atomically.
+
+    Discovery Mode, when explicitly enabled, applies a positive scope allowlist
+    here at the final pre-persistence boundary. With Discovery Mode inactive this
+    is a no-op, preserving ordinary OpenWorkGraph behavior.
+    """
     inserted = 0
-    events = [dict(raw) for raw in events]
+    from shared.discovery_scope import prepare_recordable_event as prepare_discovery_event
+
+    prepared_events: list[dict[str, Any]] = []
+    for raw in events:
+        prepared = prepare_discovery_event(dict(raw))
+        if prepared is not None:
+            prepared_events.append(prepared)
+    events = prepared_events
     try:
         # Learn "Name <email>" links first, so every event (including the one that
         # revealed the link) gets the same person token when titles are protected.
