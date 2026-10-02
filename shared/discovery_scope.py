@@ -192,6 +192,9 @@ def start_session(
     allow_unresolved_browser_container: bool = False,
     retention_days_after_end: int = 14,
 ) -> dict[str, Any]:
+    current = read_state()
+    if current.get("enabled"):
+        raise ValueError("an existing Discovery Mode session must be reviewed/exited before starting another")
     apps = _clean_patterns(allowed_apps)
     hosts = [x.lower().rstrip(".") for x in _clean_patterns(allowed_browser_hosts)]
     if not apps and not hosts:
@@ -284,6 +287,7 @@ def set_excluded_execution_ids(values: list[str]) -> dict[str, Any]:
     with _LOCK:
         state = read_state()
         state["excluded_execution_ids"] = [str(x) for x in values if str(x or "").strip()][:500]
+        state["share_approved_at"] = None
         return _write(state)
 
 
@@ -321,6 +325,7 @@ def save_question(
         if str(answer or "").strip():
             existing["answer"] = str(answer).strip()[:10000]
             existing["answered_at"] = now
+        state["share_approved_at"] = None
         return _write(state)
 
 
@@ -335,6 +340,7 @@ def answer_question(question_id: str, answer: str) -> dict[str, Any]:
             raise ValueError("question not found")
         existing["answer"] = str(answer or "").strip()[:10000]
         existing["answered_at"] = _now() if existing["answer"] else None
+        state["share_approved_at"] = None
         return _write(state)
 
 
@@ -343,6 +349,9 @@ def approve_share() -> dict[str, Any]:
         state = read_state()
         if not state.get("enabled"):
             raise ValueError("no Discovery Mode session is available for review")
+        end = _parse(state.get("ends_at"))
+        if state.get("status") == "active" and (end is None or _now_dt() < end):
+            raise ValueError("finish the Discovery study before approving its package")
         state["share_approved_at"] = _now()
         return _write(state)
 
