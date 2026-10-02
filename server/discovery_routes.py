@@ -283,6 +283,7 @@ def get_discovery() -> dict[str, Any]:
             state["candidate_workflow_families"] = len(families.get("families") or [])
             reviewing = state.get("status") == "review" or bool(state.get("expired"))
             if reviewing:
+                state["review_candidates"] = list(families.get("families") or [])
                 _families, bundles = _selected_family_runs(state)
                 saved_questions = {str(x.get("question") or "") for x in state.get("questions") or []}
                 state["suggested_targeted_questions"] = [
