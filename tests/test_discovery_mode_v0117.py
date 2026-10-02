@@ -207,3 +207,33 @@ def test_cannot_replace_unfinished_discovery_session(tmp_path, monkeypatch):
             allowed_apps=["Slack"],
             duration_days=1,
         )
+
+
+def test_discovery_state_can_be_read_from_explicit_endpoint_data_dir(tmp_path, monkeypatch):
+    from shared.discovery_scope import read_state, state_path
+
+    other = tmp_path / "other-default"
+    endpoint = tmp_path / "endpoint-live"
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(other))
+    endpoint.mkdir(parents=True, exist_ok=True)
+    state_path(endpoint).write_text(json.dumps({
+        "version": 1,
+        "enabled": True,
+        "status": "review",
+        "session_id": "disc_endpoint",
+        "name": "Endpoint study",
+        "purpose": "Gateway guard",
+        "starts_at": datetime.now(timezone.utc).isoformat(),
+        "ends_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "allowed_apps": ["Microsoft Excel"],
+        "allowed_browser_hosts": [],
+        "gateway_event_boundary_id": 42,
+        "gateway_agent_message_boundary_id": 7,
+        "questions": [],
+        "excluded_execution_ids": [],
+    }), encoding="utf-8")
+
+    state = read_state(data_dir=endpoint)
+    assert state["session_id"] == "disc_endpoint"
+    assert state["gateway_event_boundary_id"] == 42
+    assert state["gateway_agent_message_boundary_id"] == 7
