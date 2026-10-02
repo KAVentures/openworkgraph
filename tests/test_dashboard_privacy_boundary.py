@@ -92,6 +92,60 @@ def test_dashboard_title_display_fails_closed():
     assert item["resource_title"] == "" and item["page"] == "Gmail"
 
 
+def test_dashboard_title_redacts_before_display_truncation():
+    from server import evidence_query
+
+    import browser_title_privacy
+
+    title = ("Q" * 292) + " anna.svensson@example.com - Gmail"
+    seen = []
+    original = browser_title_privacy.protect_text
+    browser_title_privacy.protect_text = lambda value: seen.append(value) or value.replace(
+        "anna.svensson@example.com", "EMAIL_TOKEN"
+    )
+    try:
+        displayed = evidence_query._display_title(title, {})
+    finally:
+        browser_title_privacy.protect_text = original
+
+    # The privacy pass must see the complete value. Truncating first can cut an
+    # identifier into an unrecognisable fragment and then expose that fragment.
+    assert seen == [title]
+    assert len(displayed) <= evidence_query._MAX_TITLE
+    assert "anna.svensson@" not in displayed
+
+
+def test_dashboard_title_oversize_legacy_value_fails_closed():
+    from server import evidence_query
+
+    import browser_title_privacy
+
+    called = False
+    original = browser_title_privacy.protect_text
+
+    def protect(value):
+        nonlocal called
+        called = True
+        return value
+
+    browser_title_privacy.protect_text = protect
+    try:
+        displayed = evidence_query._display_title("X" * (evidence_query._MAX_TITLE_INPUT + 1), {})
+    finally:
+        browser_title_privacy.protect_text = original
+
+    assert displayed == ""
+    assert called is False
+
+
+def test_evidence_cursor_fingerprint_includes_agent_scope():
+    from server.evidence_query import _fingerprint
+
+    human = _fingerprint("all", "", "", None, include_agents=False)
+    mixed = _fingerprint("all", "", "", None, include_agents=True)
+    assert human != mixed
+
+
 def test_shared_dashboard_action_rule_keeps_semantics_without_private_text():
     from server.dashboard_privacy_policy import safe_dashboard_action
 
