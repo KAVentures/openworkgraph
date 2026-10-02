@@ -191,6 +191,10 @@ def start_session(
     ends_at: str | None = None,
     allow_unresolved_browser_container: bool = False,
     retention_days_after_end: int = 14,
+    gateway_sharing_was_paused: bool | None = None,
+    gateway_paused_by_discovery: bool = False,
+    gateway_event_boundary_id: int = 0,
+    gateway_agent_message_boundary_id: int = 0,
 ) -> dict[str, Any]:
     current = read_state()
     if current.get("enabled"):
@@ -227,6 +231,10 @@ def start_session(
         "allowed_browser_hosts": hosts,
         "allow_unresolved_browser_container": bool(allow_unresolved_browser_container),
         "retention_days_after_end": max(1, min(int(retention_days_after_end or 14), 90)),
+        "gateway_sharing_was_paused": gateway_sharing_was_paused,
+        "gateway_paused_by_discovery": bool(gateway_paused_by_discovery),
+        "gateway_event_boundary_id": max(0, int(gateway_event_boundary_id or 0)),
+        "gateway_agent_message_boundary_id": max(0, int(gateway_agent_message_boundary_id or 0)),
     }
     with _LOCK:
         return _write(value)
