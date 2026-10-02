@@ -123,8 +123,8 @@ def test_db_persistence_boundary_uses_discovery_allowlist(tmp_path, monkeypatch)
     import server.db as db
     from shared.discovery_scope import start_session
 
-    db.DATA_DIR = tmp_path
-    db.DB_PATH = tmp_path / "workflow_observer.db"
+    monkeypatch.setattr(db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "workflow_observer.db")
     db.init_db()
 
     start_session(
