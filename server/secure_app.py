@@ -326,7 +326,11 @@ def _connection_override_script() -> str:
 def _dashboard_html() -> str:
     html = DASHBOARD.read_text(encoding="utf-8")
     html = html.replace("</head>", _bootstrap_script() + "\n</head>")
-    html = html.replace("</body>", _connection_override_script() + "\n</body>")
+    html = html.replace(
+        "</body>",
+        _connection_override_script()
+        + '\n<script src="/discovery-mode.js"></script>\n</body>',
+    )
     return html
 
 
@@ -559,6 +563,7 @@ app.include_router(_agent_router)
 
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
+from . import discovery_routes as _discovery_routes  # noqa: E402,F401
 from . import ai_context_routes as _ai_context_routes  # noqa: E402,F401
 
 __all__ = ["app"]

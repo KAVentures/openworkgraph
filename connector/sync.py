@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from shared.discovery_scope import read_state as read_discovery_state
+
 from .config import load_device_token, load_gateway_settings
 from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
@@ -174,8 +176,15 @@ def _sync_agent_session_messages(
     prepared: list[dict[str, Any]] = []
     id_by_ref: dict[str, int] = {}
     last_local_id = cursor
+    discovery = read_discovery_state(data_dir=db_path.parent)
+    discovery_holds = bool(discovery.get("enabled"))
+    discovery_boundary = int(discovery.get("gateway_agent_message_boundary_id") or 0)
     for local_id, message in rows:
         last_local_id = local_id
+        # Discovery Mode never silently uploads evidence/messages created after
+        # its start boundary. Advancing the cursor makes the exclusion durable.
+        if discovery_holds and local_id > discovery_boundary:
+            continue
         if state.agent_message_skipped(local_id):
             continue
         ref = str(message.get("message_ref") or "")
@@ -385,8 +394,15 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 prepared: list[dict[str, Any]] = []
                 local_id_by_event_id: dict[str, int] = {}
                 last_local_id = cursor
+                discovery = read_discovery_state(data_dir=data_dir)
+                discovery_holds = bool(discovery.get("enabled"))
+                discovery_boundary = int(discovery.get("gateway_event_boundary_id") or 0)
                 for local_id, event in rows:
                     last_local_id = local_id
+                    # Evidence created during an active/reviewing Discovery study
+                    # is processed locally but never uploaded by normal Gateway sync.
+                    if discovery_holds and local_id > discovery_boundary:
+                        continue
                     if state.skipped(local_id):
                         continue
                     item = prepare_event_for_gateway(event, policy)

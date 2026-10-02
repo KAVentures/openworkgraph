@@ -130,6 +130,25 @@ def test_owner_first_name_is_always_owner(monkeypatch, tmp_path):
     assert safe["label"] == "Re: Question for OWNER"
 
 
+def test_email_backed_identity_is_reused_for_same_full_name_cue(monkeypatch, tmp_path):
+    presentation = _presentation(monkeypatch, tmp_path)
+    from server.privacy_pipeline import redact_for_display_now
+
+    payload = {
+        "surface": "Gmail",
+        "hostname": "mail.google.com",
+        "title": "Re: Contract - Anna Svensson <anna.svensson@acme.se> - Gmail",
+        "target": {"label": "Reply to Anna Svensson"},
+    }
+    _learn(payload)
+    safe = redact_for_display_now(payload)
+
+    title_token = safe["title"].split("PERSON_", 1)[1][:6]
+    target_token = safe["target"]["label"].split("PERSON_", 1)[1][:6]
+    assert title_token == target_token
+    assert safe["target"]["label"] == f"Reply to PERSON_{title_token}"
+
+
 def test_registry_migrates_old_single_token_format(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
     token = presentation._token("PERSON", "anna.s@acme.com")

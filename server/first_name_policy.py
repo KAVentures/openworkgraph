@@ -237,9 +237,21 @@ def build_redactor(presentation: Any, *, persist_registry: bool = False):
                     if len(name_words(name)) == 1:
                         merge_alias(aliases, name, "PERSON")
                     else:
-                        token = presentation._token("PERSON", name)
-                        merge_alias(aliases, name, token)
-                        remember_alias(name, token, registry)
+                        key = presentation._clean_name_candidate(name).casefold()
+                        known = aliases.get(key) or registry_replacement(name, registry)
+                        if known:
+                            # Stronger evidence in this payload (for example a
+                            # display-name + email pair) already established the
+                            # identity. Reuse it instead of minting a second token
+                            # from the plain name and turning one person into an
+                            # artificial collision.
+                            merge_alias(aliases, name, known)
+                            if known != "PERSON":
+                                remember_alias(name, known, registry)
+                        else:
+                            token = presentation._token("PERSON", name)
+                            merge_alias(aliases, name, token)
+                            remember_alias(name, token, registry)
 
             if email_context:
                 for match in presentation.EMAIL_SELECT_RE.finditer(text):
@@ -249,9 +261,16 @@ def build_redactor(presentation: Any, *, persist_registry: bool = False):
                     if len(name_words(name)) == 1:
                         merge_alias(aliases, name, "PERSON")
                     else:
-                        token = presentation._token("PERSON", name)
-                        merge_alias(aliases, name, token)
-                        remember_alias(name, token, registry)
+                        key = presentation._clean_name_candidate(name).casefold()
+                        known = aliases.get(key) or registry_replacement(name, registry)
+                        if known:
+                            merge_alias(aliases, name, known)
+                            if known != "PERSON":
+                                remember_alias(name, known, registry)
+                        else:
+                            token = presentation._token("PERSON", name)
+                            merge_alias(aliases, name, token)
+                            remember_alias(name, token, registry)
 
         def visit(item: Any, *, email_context: bool = False) -> None:
             if isinstance(item, dict):

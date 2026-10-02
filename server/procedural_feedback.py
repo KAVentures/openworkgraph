@@ -9,6 +9,7 @@ changing family keys or exposing arbitrary UI text, hostnames, URLs, names, or I
 """
 
 from collections import Counter, defaultdict
+import copy
 from statistics import median
 import re
 from typing import Any
@@ -428,4 +429,258 @@ def readable_feedback(
     }
 
 
-__all__ = ["readable_feedback", "_human_runs", "_semantic_steps"]
+def _canonical_events_by_execution(bundle: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for item in bundle.get("canonical_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        execution_id = str(item.get("execution_id") or "")
+        events = [x for x in (item.get("events") or []) if isinstance(x, dict)]
+        if execution_id:
+            rows[execution_id] = events
+    return rows
+
+
+def _readable_alignment(readable_by_execution: dict[str, list[str]], threshold: int) -> dict[str, Any]:
+    total = len(readable_by_execution)
+    stats: dict[str, dict[str, Any]] = {}
+    transitions: dict[tuple[str, str], list[str]] = {}
+    for execution_id, steps in readable_by_execution.items():
+        first_position: dict[str, int] = {}
+        for index, step in enumerate(steps):
+            first_position.setdefault(str(step), index)
+        for step, position in first_position.items():
+            slot = stats.setdefault(step, {"positions": [], "execution_ids": []})
+            slot["positions"].append(position)
+            slot["execution_ids"].append(execution_id)
+        seen_pairs: set[tuple[str, str]] = set()
+        for left, right in zip(steps, steps[1:]):
+            pair = (str(left), str(right))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            transitions.setdefault(pair, []).append(execution_id)
+
+    step_rows: list[dict[str, Any]] = []
+    for step, slot in stats.items():
+        support = len(slot["execution_ids"])
+        step_rows.append({
+            "step": step,
+            "support_runs": support,
+            "runs_total": total,
+            "support_fraction": round(support / total, 4) if total else 0.0,
+            "median_zero_based_position": round(float(median(slot["positions"])), 3),
+            "supporting_execution_ids": slot["execution_ids"][:10],
+            "interpretation": "privacy-safe readable step observed in these runs; position is descriptive, not required order",
+        })
+    step_rows.sort(key=lambda row: (-int(row["support_runs"]), float(row["median_zero_based_position"]), str(row["step"])))
+
+    transition_rows: list[dict[str, Any]] = []
+    for (left, right), execution_ids in transitions.items():
+        support = len(execution_ids)
+        if support < threshold:
+            continue
+        transition_rows.append({
+            "from_step": left,
+            "to_step": right,
+            "support_runs": support,
+            "runs_total": total,
+            "support_fraction": round(support / total, 4) if total else 0.0,
+            "supporting_execution_ids": execution_ids[:10],
+            "interpretation": "adjacent privacy-safe readable transition observed; not a prescribed transition",
+        })
+    transition_rows.sort(key=lambda row: (-int(row["support_runs"]), str(row["from_step"]), str(row["to_step"])))
+    return {
+        "method": "privacy-safe semantic steps derived from canonical evidence; no semantic workflow meaning is inferred",
+        "step_vocabulary": "privacy_safe_semantic",
+        "high_support_minimum_runs": threshold,
+        "high_support_steps": [row for row in step_rows if int(row["support_runs"]) >= threshold],
+        "less_common_observed_steps": [row for row in step_rows if int(row["support_runs"]) < threshold],
+        "high_support_adjacent_transitions": transition_rows,
+        "common_path_claimed": False,
+    }
+
+
+def _discovery_handoff_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Project generic workflow evidence into a label-free, readable Discovery handoff."""
+    result = copy.deepcopy(bundle)
+    events_by_execution = _canonical_events_by_execution(bundle)
+    readable_by_execution: dict[str, list[str]] = {}
+    source_executions = {
+        str(item.get("execution_id") or ""): item
+        for item in bundle.get("executions") or []
+        if isinstance(item, dict)
+    }
+    for execution_id, execution in source_executions.items():
+        readable_by_execution[execution_id] = _semantic_steps(
+            execution,
+            events_by_execution.get(execution_id, []),
+        )
+
+    for execution in result.get("executions") or []:
+        if not isinstance(execution, dict):
+            continue
+        execution_id = str(execution.get("execution_id") or "")
+        execution.pop("family_key", None)
+        execution.pop("family_basis", None)
+        execution["steps"] = readable_by_execution.get(execution_id, [])
+        execution["step_vocabulary"] = "privacy_safe_semantic"
+
+    selector = result.get("selector") if isinstance(result.get("selector"), dict) else {}
+    selector.pop("family_key", None)
+    selector.pop("family_keys_present", None)
+    selector["family_label_included"] = False
+    selector["family_grouping_used_for_navigation_only"] = True
+
+    raw_alignment = bundle.get("structural_alignment") if isinstance(bundle.get("structural_alignment"), dict) else {}
+    threshold = max(1, int(raw_alignment.get("high_support_minimum_runs") or 1))
+    result["format"] = "openworkgraph.discovery-workflow-evidence.v1"
+    result["structural_alignment"] = _readable_alignment(readable_by_execution, threshold)
+    result["discovery_presentation"] = {
+        "readable_steps_first": True,
+        "step_vocabulary": "privacy_safe_semantic",
+        "derived_family_label_omitted": True,
+        "machine_structural_tokens_omitted": True,
+        "canonical_evidence_preserved": bool(result.get("canonical_evidence_included")),
+    }
+    return result
+
+
+def _format_gap_duration(seconds: float) -> str:
+    value = max(0.0, float(seconds or 0.0))
+    if value <= 0:
+        return ""
+    if value < 60:
+        return f"about {max(1, int(round(value)))} seconds"
+    minutes = value / 60.0
+    rounded = round(minutes)
+    if abs(minutes - rounded) < 0.15:
+        return f"about {int(rounded)} minute" + ("" if int(rounded) == 1 else "s")
+    return f"about {minutes:.1f} minutes"
+
+
+def _scope_gap_question(bundle: dict[str, Any]) -> dict[str, Any] | None:
+    executions = {
+        str(item.get("execution_id") or ""): item
+        for item in bundle.get("executions") or []
+        if isinstance(item, dict)
+    }
+    total = len(executions)
+    if not total:
+        return None
+    affected: list[str] = []
+    durations: list[float] = []
+    next_steps: list[str] = []
+    for execution_id, events in _canonical_events_by_execution(bundle).items():
+        gaps = [event for event in events if str(event.get("event_type") or "") == "discovery_scope_gap"]
+        if not gaps or execution_id not in executions:
+            continue
+        affected.append(execution_id)
+        duration = sum(max(0.0, float(event.get("duration_seconds") or 0.0)) for event in gaps)
+        if duration > 0:
+            durations.append(duration)
+        last_gap_at = max((str(event.get("observed_at") or "") for event in gaps), default="")
+        execution = executions[execution_id]
+        if last_gap_at and execution.get("ended_at"):
+            after = {"started_at": last_gap_at, "ended_at": execution.get("ended_at")}
+            readable = _semantic_steps(after, events)
+            if readable:
+                next_steps.append(readable[0])
+    if not affected:
+        return None
+
+    duration_phrase = _format_gap_duration(float(median(durations))) if durations else ""
+    next_step = Counter(next_steps).most_common(1)[0][0] if next_steps else ""
+    where = f" before {next_step}" if next_step else " before continuing the scoped workflow"
+    timing = f" for {duration_phrase}" if duration_phrase else ""
+    support = len(affected)
+    return {
+        "question_key": f"scope-gap|{support}|{total}|{int(round(float(median(durations)))) if durations else 0}|{next_step}",
+        "question": (
+            f"In {support} of {total} selected runs, the observed work left the configured Discovery scope"
+            f"{timing}{where}. What happened there, and is it a business rule, approval, exception, or unrelated work?"
+        ),
+        "reason": "content_free_scope_gap",
+        "related_execution_ids": affected[:12],
+        "derived": True,
+        "authoritative": False,
+        "privacy_note": "The marker contains timing only; the out-of-scope app/site/content was not stored.",
+    }
+
+
+def _review_candidates_with_readable_steps(
+    families: dict[str, Any], bundles: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    presented = [_discovery_handoff_bundle(bundle) for bundle in bundles]
+    by_execution: dict[str, list[str]] = {}
+    for bundle in presented:
+        readable = [
+            str(row.get("step") or "")
+            for row in (bundle.get("structural_alignment") or {}).get("high_support_steps") or []
+            if str(row.get("step") or "")
+        ]
+        for execution in bundle.get("executions") or []:
+            execution_id = str(execution.get("execution_id") or "")
+            if execution_id:
+                by_execution[execution_id] = readable
+    rows = copy.deepcopy(list(families.get("families") or []))
+    for family in rows:
+        ids = [str(x) for x in family.get("execution_ids") or []]
+        readable = next((by_execution[x] for x in ids if x in by_execution and by_execution[x]), [])
+        family["readable_steps"] = readable
+    return rows
+
+
+def _suggested_questions(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for bundle in bundles:
+        executions = bundle.get("executions") or []
+        ids = [str(x.get("execution_id") or "") for x in executions if isinstance(x, dict)]
+        total = len(ids)
+        gap = _scope_gap_question(bundle)
+        if gap is not None and str(gap.get("question_key") or "") not in seen:
+            seen.add(str(gap.get("question_key") or ""))
+            rows.append(gap)
+            if len(rows) >= 12:
+                return rows
+        presented = _discovery_handoff_bundle(bundle)
+        alignment = presented.get("structural_alignment") if isinstance(presented.get("structural_alignment"), dict) else {}
+        for item in (alignment.get("less_common_observed_steps") or [])[:4]:
+            if not isinstance(item, dict):
+                continue
+            step = str(item.get("step") or "").strip()
+            support = int(item.get("support_runs") or 0)
+            if not step or support <= 0 or not total:
+                continue
+            key = f"{step}|{support}|{total}"
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "question_key": key,
+                "question": (
+                    f"We observed {step} in {support} of {total} selected runs. "
+                    "What caused that variation, and does it represent a business rule, exception, or noise?"
+                ),
+                "reason": "observed_structural_variation",
+                "related_execution_ids": ids[:12],
+                "derived": True,
+                "authoritative": False,
+            })
+            if len(rows) >= 12:
+                return rows
+    return rows
+
+
+
+
+__all__ = [
+    "readable_feedback",
+    "_human_runs",
+    "_semantic_steps",
+    "_discovery_handoff_bundle",
+    "_review_candidates_with_readable_steps",
+    "_scope_gap_question",
+    "_suggested_questions",
+]
