@@ -70,7 +70,7 @@
           <div class="muted">${esc(state.purpose || 'Purpose not specified')}</div>
           <div style="margin-top:10px"><strong>Scope:</strong> ${scope.map(x => `<span class="pill">${esc(x)}</span>`).join(' ') || '—'}</div>
           <div class="muted" style="margin-top:7px">Study window: ${esc(formatDate(state.starts_at))} → ${esc(formatDate(state.ends_at))}. Positive allowlist is enforced before persistence. Unresolved browser-container events are ${state.allow_unresolved_browser_container ? 'allowed when the browser app is allowlisted' : 'dropped'}.</div>
-          <div class="muted" style="margin-top:5px">${Number(state.candidate_workflow_families || 0)} candidate workflow families · ${answered} employee answers saved · automatic sharing off.</div>
+          <div class="muted" style="margin-top:5px">${Number(state.candidate_workflow_families || 0)} candidate workflow families · ${answered} employee answers saved · automatic sharing off · detailed canonical evidence retained for ${Number(state.retention_days_after_end || 14)} day(s) after the study unless deleted sooner.</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
           ${reviewing ? '<button id="reviewDiscovery">Review discovery</button>' : '<button id="finishDiscovery">Finish & review</button>'}
@@ -102,6 +102,7 @@
       <label style="display:block;margin-top:10px"><strong>Native apps to include</strong><textarea id="discApps" rows="3" style="width:100%;margin-top:5px" placeholder="Salesforce Desktop&#10;Microsoft Excel"></textarea><div class="muted">One per line. Do not add Chrome/Safari here when you want site-level scoping; use browser hosts below.</div></label>
       <label style="display:block;margin-top:10px"><strong>Browser hosts to include</strong><textarea id="discHosts" rows="3" style="width:100%;margin-top:5px" placeholder="mail.google.com&#10;docs.google.com&#10;*.salesforce.com"></textarea></label>
       <label style="display:block;margin-top:10px"><strong>Duration (days)</strong><input id="discDays" type="number" min="0.1" max="31" step="0.1" value="5" style="width:120px;margin-left:8px"></label>
+      <label style="display:block;margin-top:10px"><strong>Delete detailed Discovery evidence after</strong><input id="discRetention" type="number" min="1" max="90" step="1" value="14" style="width:90px;margin:0 7px">days after the study</label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input id="discUnresolvedBrowser" type="checkbox"><span><strong>Keep unresolved browser-container events</strong><span class="muted" style="display:block">Less private. Leave off to drop Chrome/Safari desktop events whose site cannot be proven to be in scope.</span></span></label>
       <div class="note" style="margin-top:12px">Nothing is uploaded when the study ends. The employee must review and explicitly approve a package before it can be exported.</div>
       <div class="modal-actions"><button id="discStartNow">Start scoped discovery</button></div>`);
@@ -112,6 +113,7 @@
         allowed_apps: splitValues(document.querySelector('#discApps').value),
         allowed_browser_hosts: splitValues(document.querySelector('#discHosts').value),
         duration_days: Number(document.querySelector('#discDays').value || 5),
+        retention_days_after_end: Number(document.querySelector('#discRetention').value || 14),
         allow_unresolved_browser_container: !!document.querySelector('#discUnresolvedBrowser').checked
       };
       try {
@@ -125,12 +127,7 @@
   }
 
   async function loadFamilies() {
-    if (!state?.starts_at || !state?.ends_at) return [];
-    const q = new URLSearchParams({since:state.starts_at, until:state.ends_at, min_runs:'2', limit:'20'});
-    try {
-      const data = await call('/v1/workflow-evidence/families?' + q.toString());
-      return Array.isArray(data.families) ? data.families : [];
-    } catch (_) { return []; }
+    return Array.isArray(state?.review_candidates) ? state.review_candidates : [];
   }
 
   function workflowTitle(item) {
@@ -229,6 +226,7 @@
       <div class="modal-actions">
         <button class="secondary" id="discPreviewPackage">Download redacted preview JSON</button>
         <button id="discApproveExport">Approve & download package</button>
+        <button class="ghost" id="discDeleteEvidence">Delete Discovery evidence now</button>
       </div>`);
 
     document.querySelector('#discSaveSelection').onclick = async () => { await saveSelection(); window.toast?.('Discovery example selection saved.'); };
@@ -238,6 +236,18 @@
     document.querySelector('#discPreviewPackage').onclick = async () => { await saveSelection(); await previewPackage(); };
     document.querySelector('#discApproveExport').onclick = async () => {
       try { await approveAndExport(); } catch (error) { window.toast?.(error.message); }
+    };
+    document.querySelector('#discDeleteEvidence').onclick = async () => {
+      if (!confirm('Permanently delete canonical evidence observed inside this Discovery window? This cannot be undone.')) return;
+      try {
+        const result = await call('/v1/discovery/purge', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({confirm:'DELETE DISCOVERY'})
+        });
+        window.toast?.(`Deleted ${Number(result.deleted_event_rows || 0)} Discovery evidence rows.`);
+        window.closeModal?.();
+        await refresh();
+      } catch (error) { window.toast?.(error.message); }
     };
   }
 
