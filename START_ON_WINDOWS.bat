@@ -2,7 +2,10 @@
 setlocal
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0START_ON_WINDOWS.ps1"
+set "OWG_MODE_ARGS="
+if /I "%OWG_INSTALL_MODE%"=="demo" set "OWG_MODE_ARGS=-Mode demo"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0START_ON_WINDOWS.ps1" %OWG_MODE_ARGS%
 set "OWG_EXIT=%ERRORLEVEL%"
 
 if not "%OWG_EXIT%"=="0" (
