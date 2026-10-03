@@ -41,17 +41,17 @@ An AI can reconstruct the workflow from the evidence rather than depending on Op
 
 ## Recommended: one-command install
 
-This keeps the existing local-first architecture and uses the same tested release launchers as the ZIPs. It does **not** replace the capture/runtime path with a second installer implementation.
+The bootstrap installer and the application ZIP are published together in the same GitHub Release. The installer is version-pinned to its matching package, so new users never run installer code from `main` against an older release.
 
 ### macOS
 
 Open Terminal and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
+curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
 ```
 
-The installer downloads the latest release, runs the existing OpenWorkGraph launcher, and adds **OpenWorkGraph** to `~/Applications` for later launches. The Applications item is only a local shortcut: it opens the same stable launcher under `~/Library/Application Support/WorkflowObserver`, so updates keep the existing runtime, configuration and recorded data.
+The installer runs the established release launcher and adds **OpenWorkGraph** to `~/Applications` for later launches. That Applications item is only a convenience launcher: it opens the same stable installation under `~/Library/Application Support/WorkflowObserver`, so upgrades keep the existing private runtime, configuration and recorded data.
 
 Approve Accessibility/Input Monitoring if macOS asks. No system Python installation is required.
 
@@ -60,16 +60,36 @@ Approve Accessibility/Input Monitoring if macOS asks. No system Python installat
 Open PowerShell and paste:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
 ```
 
-The installer downloads the latest release, runs the existing OpenWorkGraph launcher, and adds **OpenWorkGraph** to the current user's Start menu. The shortcut points at the same stable installation under `%LOCALAPPDATA%\OpenWorkGraph`; it does not create a second copy of the data or runtime.
+The installer runs the established release launcher and adds **OpenWorkGraph** to the current user's Start menu. The shortcut points at the same stable installation under `%LOCALAPPDATA%\OpenWorkGraph`; it does not create a second runtime or data directory.
 
 No system Python installation is required.
 
 > These bootstrap commands are an easier distribution path, not a substitute for platform signing. If your organization blocks downloaded scripts or unsigned software, use the signed installer when available or ask IT to deploy OpenWorkGraph.
 
 Inspect remote scripts before executing them if that is your security policy.
+
+## Uninstall
+
+Uninstalling removes the convenience launcher, OpenWorkGraph's private runtime and configuration, **and the locally recorded evidence for this user**. The uninstall helper asks you to type `DELETE` before doing this and refuses to run while port 8787 is in use. Quit OpenWorkGraph first.
+
+macOS:
+
+```bash
+tmp="$(mktemp)" && curl -fL https://github.com/KAVentures/openworkgraph/releases/latest/download/uninstall.sh -o "$tmp" && bash "$tmp"; rm -f "$tmp"
+```
+
+Windows PowerShell:
+
+```powershell
+$p = Join-Path $env:TEMP "openworkgraph-uninstall.ps1"
+Invoke-WebRequest https://github.com/KAVentures/openworkgraph/releases/latest/download/uninstall.ps1 -OutFile $p
+powershell -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
+The optional browser extension is managed by Chrome/Edge/Safari separately; remove it from the browser's Extensions page if you installed it.
 
 ## Manual tester ZIPs
 
