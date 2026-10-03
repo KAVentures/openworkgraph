@@ -250,6 +250,8 @@ jobs:
           VERSION="$(tr -d '[:space:]' < VERSION)"
           TAG="v${VERSION}"
 
+          cp install.sh install.ps1 uninstall.sh uninstall.ps1 release-assets/
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; leaving it immutable."
             echo "Bump VERSION to publish a new GitHub Release."
@@ -260,6 +262,14 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.119: easier local installation without a second runtime
+
+          - **Release-matched bootstrap installers:** install.sh and install.ps1 ship as release assets and are pinned to the same v0.119 package instead of mixing main-branch installer code with a different latest-release ZIP.
+          - **Normal places to reopen:** the macOS bootstrap adds OpenWorkGraph to the current user's Applications folder; Windows adds a current-user Start-menu shortcut. Both delegate to the established per-user installation rather than owning a second runtime or data directory.
+          - **Installer smoke coverage:** CI now runs the real bootstrap against the freshly built ZIP on macOS and Windows, checks local health, relaunches through the generated app/shortcut, and exercises uninstall.
+          - **Explicit uninstall:** release assets include uninstall helpers that require confirmation before deleting the local runtime, configuration and evidence, and refuse to proceed while port 8787 is in use.
+          - **No capture semantics change:** collectors, local databases, MCP, Gateway, browser evidence, privacy behavior and agent integrations are unchanged.
 
           ### v0.118: Basic and Advanced views, one Privacy tab
 
@@ -416,6 +426,10 @@ jobs:
             release-assets/OpenWorkGraph-Agent-Python.py \
             release-assets/OpenWorkGraph-Agent-Node.mjs \
             release-assets/OpenWorkGraph-Agent-Node.d.ts \
+            release-assets/install.sh \
+            release-assets/install.ps1 \
+            release-assets/uninstall.sh \
+            release-assets/uninstall.ps1 \
             --target "$GITHUB_SHA" \
             --title "OpenWorkGraph ${TAG}" \
             --notes-file /tmp/openworkgraph-release-notes.md
