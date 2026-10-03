@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response
 
-from shared.discovery_package import observed_tools_inventory
+from shared.discovery_package import build_brief_markdown, observed_tools_inventory
 from shared.discovery_scope import (
     answer_question,
     approve_share,
@@ -573,33 +573,7 @@ def export_discovery_package(representation: str = "redacted") -> Response:
         payload["exact_local_object_locators_available_in_full_local_ai_context"] = True
     payload["export_representation"] = "contextually_redacted" if mode == "redacted" else "stored_privacy_hardened"
     body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    study = payload.get("study") if isinstance(payload.get("study"), dict) else {}
-    implementation = study.get("implementation_context") if isinstance(study.get("implementation_context"), dict) else {}
-    inventory = payload.get("observed_tools") if isinstance(payload.get("observed_tools"), dict) else {}
-    app_lines = "\n".join(
-        f"- {item.get('name')}: {int(item.get('observations') or 0)} observations"
-        for item in inventory.get("apps") or []
-        if isinstance(item, dict)
-    ) or "- No native app count available"
-    site_lines = "\n".join(
-        f"- {item.get('hostname')}: {int(item.get('observations') or 0)} observations"
-        for item in inventory.get("sites") or []
-        if isinstance(item, dict)
-    ) or "- No browser host count available"
-    build_brief = (
-        "# Build brief\n\n"
-        "## Human-provided implementation context\n\n"
-        f"**Goal:** {implementation.get('goal') or '(not provided)'}\n\n"
-        f"**Worker description:** {implementation.get('description') or '(not provided)'}\n\n"
-        "These statements are human-provided context, not facts inferred from the observed trace.\n\n"
-        "## Observed tools\n\n"
-        "### Apps\n" + app_lines + "\n\n"
-        "### Sites\n" + site_lines + "\n\n"
-        f"> {inventory.get('caveat') or 'Observed use does not prove API access, licensing, or permission.'}\n\n"
-        "## Handoff purpose\n\n"
-        f"{payload.get('handoff', {}).get('purpose') or 'automate'}\n\n"
-        f"{payload.get('handoff', {}).get('recommended_next_step') or ''}\n"
-    ).encode("utf-8")
+    build_brief = build_brief_markdown(payload).encode("utf-8")
     guide = (
         "# Start here\n\n"
         "This package is evidence for an authorized AI or implementation team. Start with BUILD_BRIEF.md, "
