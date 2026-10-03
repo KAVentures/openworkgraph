@@ -26,8 +26,9 @@ test('status is evidence based and the CLI is shown for agents',()=>{
   assert.match(source,/owg_connect|state\.cli/);
 });
 
-test('context switch respects the per-run AI access master switch',()=>{
-  assert.match(source,/AI access this run/);
+test('context switch respects the AI access master switch and says whether it resets',()=>{
+  assert.match(source,/AI access: <strong>/);
+  assert.match(source,/resets_on_restart/);
   assert.match(source,/\/v1\/ai-access/);
 });
 

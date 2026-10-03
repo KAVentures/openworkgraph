@@ -98,7 +98,7 @@ def test_one_ai_access_switch_and_no_stale_developer_text():
     # The old second toggle is gone; the card only shows reads.
     assert "aiAccessToggle" not in secure and "aiAccessToggle" not in gateway
     assert "Recent AI activity" in secure
-    assert "AI access this run" in _read("dashboard/connections.js")
+    assert "AI access: <strong>" in _read("dashboard/connections.js")
     assert "/v1/history/ai-access" in _read("dashboard/connections.js")
     for stale in ("v0.56.1", "Cursor paging is added", "stacked pattern", "stacked capture/timeline"):
         assert stale not in html, stale

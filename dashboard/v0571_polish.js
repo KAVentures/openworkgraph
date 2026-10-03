@@ -107,7 +107,12 @@
       card.innerHTML=`<h2>What would be shared?</h2><div class="note"><strong>Organization policy is temporarily unavailable.</strong><div class="muted" style="margin-top:5px">OpenWorkGraph sync fails closed in this state; it does not upload using a broader assumed policy.</div></div>${policyTable(local,'Local policy floor')}`;
       return;
     }
-    card.innerHTML=`<h2>What would be shared?</h2>${policyTable(effective||local,payload.connected?'Effective local + organization policy':'Local policy — no organization connected')}<div class="muted" style="margin-top:10px">Typed text, clipboard contents, ordinary key identities, password values, and screenshot bytes are never shared by the Gateway path.</div>`;
+    if (!payload.connected) {
+      // Not connected: nothing is shared, so do not show a "Yes" table that reads as current sharing.
+      card.innerHTML=`<h2>What would be shared?</h2><div class="muted">Nothing is shared: this computer is not connected to an organization. If you join one, you will see exactly what it would receive before anything is sent.</div><details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Your local sharing limits (apply if you connect)</summary>${policyTable(local,'Local policy')}</details>`;
+      return;
+    }
+    card.innerHTML=`<h2>What would be shared?</h2>${policyTable(effective||local,'Effective local + organization policy')}<div class="muted" style="margin-top:10px">Typed text, clipboard contents, ordinary key identities, password values, and screenshot bytes are never shared by the Gateway path.</div>`;
   }
 
   function policyTable(policy,title) {

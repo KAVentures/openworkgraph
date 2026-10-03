@@ -258,7 +258,7 @@ An export is a file the user can inspect before uploading.
 
 With MCP, an AI client can decide which tool to call after access has been enabled. **Evidence returned by an MCP call is sent to the AI provider so that model can process it.** Keeping the OpenWorkGraph database local does not mean the returned tool data stays local to the computer.
 
-The per-run AI-access switch and local activity view exist to make that boundary explicit.
+The AI-access switch (off on a new install; remembered after a restart unless you choose otherwise) and the local activity view exist to make that boundary explicit.
 
 ---
 

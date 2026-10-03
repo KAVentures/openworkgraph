@@ -63,7 +63,7 @@ OpenWorkGraph has one list of AI apps, on the dashboard's **Connect** tab under 
 - **Restart needed.** Some apps load this config only when they start. The ChatGPT app (Codex engine) does this for Observe, and Claude Desktop does it for Context. If the app has been running since before OpenWorkGraph changed its config, the row says so ("Quit and reopen the ChatGPT app (⌘Q)…"). Opening a new chat is not enough.
 - **Agents tab history.** Runs from an agent whose Observe is off or removed are hidden by default. Tick *Show past runs from agents whose Observe is off* to see them. Nothing is deleted.
 - **Remove** deletes OpenWorkGraph's entry from the app's config file (with a backup).
-- **Context also needs AI access.** The dashboard's **AI access** master switch resets to OFF each time OpenWorkGraph starts. Turning a Context switch on also turns AI access on for the current run.
+- **Context also needs AI access.** The dashboard's **AI access** master switch (top of **AI apps**, and in **Privacy**) is the one gate for every app. It is off on a new install; since v0.118 your choice is remembered after a restart unless you turn on **Turn AI access off every time OpenWorkGraph starts** (Privacy, Advanced view). Turning a Context switch on also turns AI access on.
 
 ## For agents and scripts
 

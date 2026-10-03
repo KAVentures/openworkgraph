@@ -34,6 +34,8 @@ def main() -> None:
     import server.agent_session_routes  # noqa: F401
     import server.workflow_evidence_routes  # noqa: F401
     import server.workflow_evidence_dashboard  # noqa: F401
+    # Last: its dashboard script arranges what the other layers built (Basic/Advanced).
+    import server.basic_mode_routes  # noqa: F401
 
     import server.agent_capture_runtime as agent_capture_runtime
     import server.agent_session_sensor as agent_session_sensor

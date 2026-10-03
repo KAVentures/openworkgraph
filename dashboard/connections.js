@@ -169,8 +169,8 @@
     const card=ensureLayout();if(!card||!state)return;
     const master=card.querySelector('#owgMaster');
     if(master&&aiAccess){
-      master.innerHTML=`<span>AI access this run: <strong>${aiAccess.enabled?'ON':'OFF'}</strong></span><button class="sw" role="switch" id="owgMasterSwitch" aria-checked="${aiAccess.enabled?'true':'false'}" aria-label="AI access for this run"></button>`;
-      master.title='Master switch for all Context connections. It resets to OFF whenever OpenWorkGraph restarts.';
+      master.innerHTML=`<span>AI access: <strong>${aiAccess.enabled?'ON':'OFF'}</strong></span><button class="sw" role="switch" id="owgMasterSwitch" aria-checked="${aiAccess.enabled?'true':'false'}" aria-label="AI access"></button>`;
+      master.title=aiAccess.resets_on_restart?'Master switch for all Context connections. It turns off whenever OpenWorkGraph restarts (your Privacy setting).':'Master switch for all Context connections. Your choice is remembered after a restart.';
       master.querySelector('#owgMasterSwitch').onclick=toggleMaster;
     }
     // Everything an AI app can read, in one place: this run (the switch) and
@@ -179,8 +179,8 @@
     if(summary&&aiAccess){
       const mode=String(historyAccess?.mode||'off');
       const saved=mode==='all_saved'?'all saved history':mode==='selected_range'?'selected dates':'off';
-      summary.innerHTML=`<strong>What AI apps can read:</strong> ${aiAccess.enabled?'this run’s work context':'nothing right now'} · older saved history: <strong>${esc(saved)}</strong> <button class="linkish" type="button" id="owgHistoryAccessLink">change in History</button><br>The switch turns itself off every time OpenWorkGraph starts, so an AI app can never read your work unless you turned it on for this run.`;
-      summary.querySelector('#owgHistoryAccessLink').onclick=()=>window.activateTab?.('history');
+      summary.innerHTML=`<strong>What AI apps can read:</strong> ${aiAccess.enabled?'your recent work, with names shown as tokens':'nothing right now'} · older history: <strong>${esc(saved)}</strong> <button class="linkish" type="button" id="owgHistoryAccessLink">change in Privacy</button><br>${aiAccess.enabled?'This switch is the one gate for every app below: turn it off and no app can read anything.':'Turn this switch on, then turn on Context for the apps you want.'} ${aiAccess.resets_on_restart?'It turns itself off every time OpenWorkGraph starts.':'Your choice is remembered after a restart.'}`;
+      summary.querySelector('#owgHistoryAccessLink').onclick=()=>{window.activateTab?.('privacy');window.refreshPrivacyTab?.();};
     }
     const row=client=>{
       const anyInstalled=(client.mcp.installed)||(client.observe.supported&&client.observe.installed);

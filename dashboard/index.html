@@ -29,6 +29,71 @@
     @media(max-width:1000px){.wp-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:1000px){.metrics{grid-template-columns:repeat(3,1fr)}.row{grid-template-columns:1fr}.connect-grid{grid-template-columns:1fr 1fr}.export-grid{grid-template-columns:1fr}.privacy-line{width:100%;text-align:left}.status-spacer{display:none}}
     @media(max-width:620px){.topbar{position:static;align-items:flex-start;flex-direction:column;padding:11px 13px}.capture-pill{width:100%;justify-content:space-between;flex-wrap:wrap}.shell{padding:12px 12px 48px}.metrics{grid-template-columns:1fr 1fr}.connect-grid{grid-template-columns:1fr}.bar-row{grid-template-columns:110px 1fr}.bar-row .bar-value{display:none}.filter-row{align-items:stretch}.search-box{margin-left:0;width:100%;min-width:0}.status-chip{max-width:100%}.brand{flex-wrap:wrap}.tabs{margin-left:-12px;margin-right:-12px;padding:0 8px}.metric{font-size:22px;white-space:normal}.metric-card{min-height:0;padding:12px}.card{padding:15px}.wp-metrics{gap:7px}.capture-pill button{min-height:32px}}
+    /* ---- v0.118 visual layer: calmer surfaces, one type scale, Basic/Advanced pieces ---- */
+    :root{--bg:#f4f5f1;--ink:#18201b;--muted:#5a635c;--line:#e2e5dc;--panel:#fff;--green:#1f6b47;--green-ink:#174f35;--green-soft:#eaf5ee;--blue:#2f5bb0;--red:#b23b3b;--radius:16px;--shadow:0 1px 2px rgba(20,32,24,.04),0 10px 28px rgba(20,32,24,.05)}
+    body{background:radial-gradient(1200px 380px at 50% -120px,#e9ede4 0%,rgba(233,237,228,0) 70%),var(--bg);font-size:14px;-webkit-font-smoothing:antialiased}
+    .topbar{background:linear-gradient(180deg,#1c2420,#161b18);box-shadow:0 1px 0 rgba(255,255,255,.04),0 6px 20px rgba(0,0,0,.12)}
+    .brandmark{width:16px;height:16px;border-radius:5px;background:linear-gradient(135deg,#7fd3a5,#2f8a5d);box-shadow:none}
+    .brand strong{font-size:16.5px;letter-spacing:-.01em}
+    button,.btn{border-radius:11px;transition:background-color .15s,border-color .15s,box-shadow .15s,transform .05s}button:active:not(:disabled){transform:translateY(1px)}
+    button:not(.sw):not(.linkish):not([role="tab"]):hover:not(:disabled){box-shadow:0 2px 8px rgba(20,32,24,.12)}
+    .secondary:hover:not(:disabled){border-color:#b9bfb5!important;background:#fafbf8!important}
+    .green{background:var(--green)!important;border-color:var(--green)!important}.green:hover:not(:disabled){background:var(--green-ink)!important}
+    .tabs{gap:3px;border-bottom:0;background:#e8ebe4;border-radius:14px;padding:4px;margin:2px 0 18px;box-shadow:inset 0 1px 2px rgba(20,32,24,.06)}
+    .tabs button{min-height:40px;border-radius:10px;border:0;padding:8px 15px;color:#4c554e;font-weight:700}
+    .tabs button:hover{color:#18201b;background:rgba(255,255,255,.55)}
+    .tabs button[aria-selected="true"]{background:#fff;color:#18201b;border-bottom-color:transparent;box-shadow:0 1px 3px rgba(20,32,24,.12),0 1px 1px rgba(20,32,24,.05)}
+    .card{border-radius:var(--radius);border-color:var(--line);padding:20px 22px;box-shadow:var(--shadow);margin-bottom:14px}
+    .card h2{font-size:18px;font-weight:750;letter-spacing:-.015em;margin-bottom:6px}.card h3{font-size:14px;font-weight:700}
+    .muted{color:var(--muted);line-height:1.5}
+    .metric-card{border-radius:var(--radius);border-color:var(--line);box-shadow:var(--shadow);padding:16px 18px}
+    .metric{font-size:26px;font-weight:760;letter-spacing:-.03em}.label{color:#69726b;letter-spacing:.07em}
+    .status-chip{border-color:var(--line);box-shadow:0 1px 2px rgba(20,32,24,.04)}
+    .note{background:#f6f7f3;border-color:#e6e8e1;border-radius:12px}
+    .modal{border-radius:22px}.toast{border-radius:14px}
+    .owg-basic-hide{}body.mode-basic .owg-basic-hide{display:none!important}.owg-superseded{display:none!important}
+    body.mode-basic #panel-overview>.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .mode-switch{display:inline-flex;background:#2a312d;border:1px solid #3a423d;border-radius:12px;padding:3px;gap:2px;margin-left:auto}
+    .mode-switch button{min-height:32px;padding:4px 12px;font-size:12.5px;border:0;border-radius:9px;background:transparent;color:#b8c0b9;font-weight:700}
+    .mode-switch button.on{background:#f3f6f2;color:#18201b}
+    .mode-switch button:hover:not(.on){color:#fff;box-shadow:none!important}
+    .hero{display:grid;gap:16px;background:linear-gradient(135deg,#ffffff 0%,#f4faf6 100%);border-color:#d7e6dc}
+    .hero-main{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
+    .hero-status{display:flex;gap:14px;align-items:center}.hero-status h2{font-size:21px;margin:0 0 3px}
+    .hero-dot{width:12px;height:12px;border-radius:50%;background:#9aa29b;flex:none;box-shadow:0 0 0 5px rgba(154,162,155,.18)}
+    .hero-dot.rec{background:#d24b4b;box-shadow:0 0 0 5px rgba(210,75,75,.16);animation:owgPulse 2.4s ease-in-out infinite}
+    .hero-dot.paused{background:#d49a2f;box-shadow:0 0 0 5px rgba(212,154,47,.18)}
+    @keyframes owgPulse{0%,100%{box-shadow:0 0 0 4px rgba(210,75,75,.16)}50%{box-shadow:0 0 0 8px rgba(210,75,75,.06)}}
+    @media(prefers-reduced-motion:reduce){.hero-dot.rec{animation:none}}
+    .hero-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .checklist{border-top:1px solid #e3ece6;padding-top:14px}.checklist-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+    .checklist ol{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+    .checklist li{display:grid;grid-template-columns:30px 1fr auto;gap:12px;align-items:center;background:#fff;border:1px solid #e3e8e2;border-radius:12px;padding:10px 12px}
+    .checklist li.done{opacity:.72}.checklist li button{min-height:36px;padding:6px 14px}
+    .step-mark{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;background:#eef1ec;color:#4c554e}
+    .checklist li.done .step-mark{background:var(--green);color:#fff}
+    .pv-intro{display:flex;gap:16px;align-items:flex-start;background:linear-gradient(135deg,#fff,#f3f8f5)}
+    .pv-shield{width:44px;height:44px;border-radius:13px;background:var(--green-soft);color:var(--green);display:flex;align-items:center;justify-content:center;flex:none}
+    .pv-row{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:15px 0;border-top:1px solid #eef0ea}
+    .pv-row:first-child{border-top:0;padding-top:2px}.pv-row:last-child{padding-bottom:2px}
+    .pv-row h3{margin:0 0 3px;font-size:14.5px}.pv-row .muted{max-width:640px}
+    .pv-sub{padding-left:22px;position:relative}.pv-sub::before{content:"";position:absolute;left:6px;top:0;bottom:50%;width:10px;border-left:2px solid #e3e6df;border-bottom:2px solid #e3e6df;border-bottom-left-radius:8px}
+    .pv-control{flex:none;display:flex;gap:8px;align-items:center}.pv-control select{min-width:190px}
+    .seg{display:inline-flex;background:#eef0eb;border-radius:11px;padding:3px;gap:2px}
+    .seg button{min-height:34px;padding:5px 13px;border:0;border-radius:8px;background:transparent;color:#4c554e;font-size:13px}
+    .seg button[aria-checked="true"]{background:#fff;color:#18201b;box-shadow:0 1px 3px rgba(20,32,24,.14)}
+    .pv-lists{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:14px}
+    .pv-list{border:1px solid var(--line);border-radius:13px;padding:13px;background:#fafbf8}.pv-list h3{margin:0 0 8px}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;min-height:30px;margin-bottom:10px}
+    .chip{display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #dfe3dc;border-radius:999px;padding:3px 4px 3px 11px;font-size:12.5px}
+    .chip button{min-height:22px;width:22px;padding:0;border:0;border-radius:50%;background:transparent;color:#6b736c;font-size:15px;line-height:1}
+    .chip button:hover{background:#fbe9e9;color:var(--red);box-shadow:none!important}
+    .chip-add{display:flex;gap:6px}.chip-add input{flex:1;min-width:0;min-height:36px}.chip-add button{min-height:36px;padding:5px 12px}
+    .pv-delete{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .pv-more{margin:4px 4px 0}
+    .auth-banner{background:#fff4e0;border:1px solid #f0d49b;color:#5d4310;border-radius:14px;padding:13px 16px;margin-bottom:12px;font-size:13.5px;line-height:1.5}
+    @media(max-width:1000px){.pv-lists{grid-template-columns:1fr}}
+    @media(max-width:620px){.mode-switch{margin-left:0}.pv-row{flex-direction:column;align-items:stretch;gap:10px}.pv-control{justify-content:flex-start}.pv-control select{width:100%}.checklist li{grid-template-columns:28px 1fr}.checklist li>button,.checklist li>span:last-child{grid-column:2;justify-self:start}.hero-status h2{font-size:18px}.tabs{border-radius:0;margin-left:-12px;margin-right:-12px;padding:4px 8px}}
   </style>
 </head>
 <body>
@@ -71,7 +136,7 @@
     </section>
 
     <section class="tabpanel" role="tabpanel" id="panel-evidence" aria-labelledby="tab-evidence" data-panel="evidence" hidden>
-      <div class="card"><h2>Evidence</h2><div class="muted">Everything you did in apps and the browser, newest first. Titles keep their context; detected names, email addresses, phone numbers and personal numbers are shown as tokens such as PERSON_1A2B3C. Detection is best effort. Typed text and clipboard contents are never captured. Agent runs are on the Agents tab.</div>
+      <div class="card"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap"><h2>Activity</h2><button type="button" class="secondary" id="openExport" onclick="activateTab('export')">Export…</button></div><div class="muted">Everything you did in apps and the browser, newest first. Titles keep their context; detected names, email addresses, phone numbers and personal numbers are shown as tokens such as PERSON_1A2B3C. Detection is best effort. Typed text and clipboard contents are never captured. Agent runs are on the Agents tab.</div>
         <div class="filter-row" role="group" aria-label="Evidence view"><button class="filter-chip active" data-evidence-view="all">Events</button><button class="filter-chip" data-evidence-view="loops">Navigation loops</button><button class="filter-chip" data-evidence-view="transitions">Transitions</button></div><div class="filter-row" id="evidenceFilterRow"><div id="surfaceFilters" style="display:flex;gap:6px;flex-wrap:wrap"><button class="filter-chip active" data-filter="all">All</button></div><div class="search-box"><label for="evidenceSearch">Search titles, tools or actions</label><input id="evidenceSearch" type="search" autocomplete="off" placeholder="Search evidence"></div></div>
         <div id="evidenceTableView"><div class="table-wrap"><table><thead><tr><th>Time</th><th>Tool</th><th>Page or window</th><th>Action</th></tr></thead><tbody id="evidenceTable"></tbody></table></div><div class="evidence-meta"><span class="muted" id="evidenceCount"></span></div></div>
         <div id="loopView" hidden><div class="table-wrap"><table><thead><tr><th>Observed navigation loop</th><th>Count</th></tr></thead><tbody id="seqTable"></tbody></table></div></div>
@@ -101,7 +166,7 @@
     </section>
 
     <section class="tabpanel" role="tabpanel" id="panel-export" aria-labelledby="tab-export" data-panel="export" hidden>
-      <div class="card"><h2>Export this run</h2><div class="muted">Exports keep full titles and labels (subjects, documents, projects, companies). Detected names, email addresses, phone numbers and personal identity numbers are replaced with stable tokens such as PERSON_1A2B3C before anything is stored. Name detection is best effort, so review a file before sharing it outside your organization.</div><div class="export-grid"><div class="export-card"><strong>XLSX</strong><div class="muted">Best for reviewing evidence in Excel or uploading to an AI.</div><button onclick="downloadExport('xlsx')">Export XLSX</button></div><div class="export-card"><strong>CSV ZIP</strong><div class="muted">Portable tables for analysis tools.</div><button class="secondary" onclick="downloadExport('csvzip')">Export CSV ZIP</button></div><div class="export-card"><strong>JSON</strong><div class="muted">Full structured export for code and reproducibility.</div><button class="secondary" onclick="downloadExport('json')">Export JSON</button></div></div><label class="raw-toggle" for="includeRaw"><input type="checkbox" id="includeRaw" checked> Include every captured event <span class="muted">(off: summaries and the normalized event layer only)</span></label><label class="raw-toggle" for="redactNames"><input type="checkbox" id="redactNames" checked> Redacted <span class="muted">(recommended: runs the same redaction again as AI context, which also covers anything captured before this version)</span></label><div class="muted" style="margin-top:8px">Business context such as customer, company and project names stays in the file.</div></div>
+      <div class="card"><h2>Export this run</h2><div class="muted">Exports keep full titles and labels (subjects, documents, projects, companies). Detected names, email addresses, phone numbers and personal identity numbers are replaced with stable tokens such as PERSON_1A2B3C before anything is stored. Name detection is best effort, so review a file before sharing it outside your organization.</div><div class="export-grid"><div class="export-card"><strong>XLSX</strong><div class="muted">Best for reviewing evidence in Excel or uploading to an AI.</div><button onclick="downloadExport('xlsx')">Export XLSX</button></div><div class="export-card"><strong>CSV ZIP</strong><div class="muted">Portable tables for analysis tools.</div><button class="secondary" onclick="downloadExport('csvzip')">Export CSV ZIP</button></div><div class="export-card"><strong>JSON</strong><div class="muted">Full structured export for code and reproducibility.</div><button class="secondary" onclick="downloadExport('json')">Export JSON</button></div></div><label class="raw-toggle" for="includeRaw"><input type="checkbox" id="includeRaw"> Include every individual event <span class="muted">(larger file for detailed analysis; off: summaries, workflows and one row per activity)</span></label><label class="raw-toggle" for="redactNames"><input type="checkbox" id="redactNames" checked> Redacted <span class="muted">(recommended: runs the same redaction again as AI context, which also covers anything captured before this version)</span></label><div class="muted" style="margin-top:8px">Business context such as customer, company and project names stays in the file.</div></div>
     </section>
   </main>
   <div class="muted" id="updated" style="margin-top:18px"></div>

@@ -75,7 +75,7 @@
       const reads=(activity.items||[]).filter(x=>x.status!=='denied').length;
       if (chip) {
         chip.textContent=access.enabled ? `AI access: on · ${reads} ${reads===1?'read':'reads'}` : 'AI access: off · Enable';
-        chip.title=access.enabled ? 'Connected AI apps can read your work context during this run. Resets to off when OpenWorkGraph restarts.' : 'Connected AI apps cannot read anything. Turn it on in Connect.';
+        chip.title=access.enabled ? 'Connected AI apps can read your recent work, with names shown as tokens. Change it in Privacy or AI apps.' : 'Connected AI apps cannot read anything. Turn it on in Privacy or AI apps.';
         chip.classList.toggle('on',!!access.enabled); chip.classList.toggle('off',!access.enabled);
       }
     } catch (_) {
