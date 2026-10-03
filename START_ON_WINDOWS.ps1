@@ -33,6 +33,22 @@ function Fail([string]$Message) {
 try {
     Write-Host "Preparing OpenWorkGraph in $InstallDir ..."
 
+    # Fail before downloading anything when another service owns the local API port.
+    # This is intentionally a plain TCP probe: the launcher must never send evidence
+    # to an unknown localhost process merely because it happens to answer HTTP.
+    $portBusy = $false
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $async = $client.BeginConnect("127.0.0.1", 8787, $null, $null)
+        if ($async.AsyncWaitHandle.WaitOne(250, $false) -and $client.Connected) {
+            $portBusy = $true
+        }
+        $client.Close()
+    } catch {}
+    if ($portBusy) {
+        Fail "Port 8787 is already in use. Close the existing OpenWorkGraph window/service (or the other app using 127.0.0.1:8787), then launch OpenWorkGraph again."
+    }
+
     $sourceFull = [System.IO.Path]::GetFullPath($SourceDir).TrimEnd('\')
     $installFull = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
     if ($sourceFull -ne $installFull) {
@@ -67,7 +83,7 @@ try {
     $env:UV_CACHE_DIR = Join-Path $RuntimeDir "cache"
 
     if (-not (Test-Path $UvBin)) {
-        Write-Host "First-time setup: installing OpenWorkGraph's private runtime manager ..."
+        Write-Host "Downloading runtime (first launch can take about 1 minute) ..."
         Write-Host "No system Python installation is required."
         New-Item -ItemType Directory -Force -Path $UvBinDir | Out-Null
         $installer = Join-Path $RuntimeDir "uv-install.ps1"
@@ -81,7 +97,7 @@ try {
 
     $Python = Join-Path $InstallDir ".venv\Scripts\python.exe"
     if (-not (Test-Path $Python)) {
-        Write-Host "First-time setup: downloading OpenWorkGraph's private Python runtime ..."
+        Write-Host "Downloading Python runtime (first launch can take about 1 minute) ..."
         Remove-Item (Join-Path $InstallDir ".venv") -Recurse -Force -ErrorAction SilentlyContinue
         & $UvBin venv --python 3.12 --managed-python .venv
         if ($LASTEXITCODE -ne 0) {

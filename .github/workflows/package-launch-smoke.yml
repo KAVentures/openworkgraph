@@ -1,0 +1,110 @@
+name: packaged-launch-smoke
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-zip-launch-twice:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tester ZIP
+        shell: powershell
+        run: ./scripts/build_windows_release.ps1
+      - name: Extract into a clean folder
+        shell: powershell
+        run: |
+          $extract = Join-Path $env:RUNNER_TEMP "owg-package-smoke"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path "dist\OpenWorkGraph-Windows.zip" -DestinationPath $extract
+          "OWG_SMOKE_PACKAGE=$((Get-ChildItem $extract -Directory | Select-Object -First 1).FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $local = Join-Path $env:RUNNER_TEMP "owg-localapp"
+          Remove-Item $local -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $local | Out-Null
+          "LOCALAPPDATA=$local" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Launch demo ZIP twice and reach health
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          function Invoke-Launch([string]$label) {
+            Write-Host "Starting $label launch..."
+            $launcher = Join-Path $env:OWG_SMOKE_PACKAGE "TRY_DEMO_OPENWORKGRAPH.cmd"
+            $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/d", "/c", ('"' + $launcher + '"') -PassThru -WindowStyle Hidden
+            try {
+              $ok = $false
+              for ($i = 0; $i -lt 120; $i++) {
+                if ($proc.HasExited) { throw "$label launcher exited early with code $($proc.ExitCode)" }
+                try {
+                  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/health" -TimeoutSec 2
+                  if ($health.status -eq "ok") { $ok = $true; break }
+                } catch {}
+                Start-Sleep -Seconds 2
+              }
+              if (-not $ok) { throw "$label launch never reached /health" }
+            } finally {
+              & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+              Start-Sleep -Seconds 2
+            }
+          }
+          Invoke-Launch "first"
+          Invoke-Launch "second"
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA "OpenWorkGraph-logs\setup.log"))) {
+            throw "Expected external setup log was not created"
+          }
+
+  macos-zip-launch-twice:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tester ZIP
+        run: bash scripts/build_macos_release.sh
+      - name: Extract into a clean folder
+        run: |
+          set -euo pipefail
+          EXTRACT="$RUNNER_TEMP/owg-package-smoke"
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+          /usr/bin/ditto -x -k dist/OpenWorkGraph-macOS.zip "$EXTRACT"
+          PACKAGE="$(find "$EXTRACT" -maxdepth 1 -type d -name 'OpenWorkGraph-macOS-v*' | head -1)"
+          test -n "$PACKAGE"
+          echo "OWG_SMOKE_PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
+          HOME_DIR="$RUNNER_TEMP/owg-home"
+          rm -rf "$HOME_DIR"
+          mkdir -p "$HOME_DIR"
+          echo "HOME=$HOME_DIR" >> "$GITHUB_ENV"
+      - name: Launch demo ZIP twice and reach health
+        run: |
+          set -euo pipefail
+          terminate_tree() {
+            local parent="$1"
+            for child in $(pgrep -P "$parent" 2>/dev/null || true); do terminate_tree "$child"; done
+            kill -TERM "$parent" 2>/dev/null || true
+          }
+          launch_once() {
+            local label="$1"
+            echo "Starting $label launch..."
+            "$OWG_SMOKE_PACKAGE/TRY_DEMO_OPENWORKGRAPH.command" >"$RUNNER_TEMP/owg-$label.log" 2>&1 &
+            local pid=$!
+            local ok=0
+            for _ in $(seq 1 120); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                cat "$RUNNER_TEMP/owg-$label.log"
+                echo "$label launcher exited early" >&2
+                return 1
+              fi
+              if curl --fail --silent --max-time 2 http://127.0.0.1:8787/health >/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            if [ "$ok" -ne 1 ]; then cat "$RUNNER_TEMP/owg-$label.log"; return 1; fi
+            terminate_tree "$pid"
+            sleep 2
+          }
+          launch_once first
+          launch_once second
