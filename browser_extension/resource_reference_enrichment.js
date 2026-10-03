@@ -129,6 +129,10 @@
     try {
       if (!currentTab?.url && currentTab?.id != null) currentTab = await ext.tabs.get(currentTab.id);
     } catch (_) {}
+    // Browsers can expose incognito/private tabs to an extension only after the
+    // user explicitly enables extension access there. OWG still treats private
+    // browsing as out of scope and never emits evidence from those tabs.
+    if (currentTab?.incognito) return;
 
     const page = typeof safeUrl === "function" ? safeUrl(rawUrl || currentTab?.url || "") : null;
     if (!page) return;
