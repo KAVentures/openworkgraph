@@ -2,6 +2,18 @@
 
 Historical release notes consolidated from the former per-version files. New release notes should be added here rather than creating another changelog file.
 
+# OpenWorkGraph v0.119.0
+
+This release makes the existing local-first tester path easier to install and remove without introducing a second runtime or data architecture.
+
+- **Release-matched bootstrap installers:** `install.sh` and `install.ps1` are GitHub Release assets pinned to the same v0.119 ZIP they install, instead of executing installer code from `main` against a separately moving latest package.
+- **Normal OS relaunch points:** macOS gets a per-user Applications launcher and Windows gets a current-user Start-menu shortcut; both delegate to the established stable local installation.
+- **End-to-end installer CI:** macOS and Windows CI execute the real bootstrap against the freshly built ZIP, verify local `/health`, relaunch through the generated app/shortcut, and exercise uninstall.
+- **Explicit uninstall:** release assets include guarded uninstall helpers that require confirmation before deleting the private runtime, configuration and local evidence, and refuse while port 8787 is in use.
+- **Distribution only:** capture semantics, local evidence schema, privacy behavior, MCP, Gateway, browser evidence and agent integrations are unchanged.
+
+---
+
 <!-- Source: docs/CHANGELOG_V035.md -->
 # OpenWorkGraph v0.35.0
 
