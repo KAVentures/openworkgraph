@@ -96,8 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var python: URL {
         let marker = appRoot.appendingPathComponent("EMBEDDED_PYTHON.txt")
-        let relative = (try? String(contentsOf: marker, encoding: .utf8))
-            ?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let contents = (try? String(contentsOf: marker, encoding: .utf8)) ?? ""
+        let relative = contents.trimmingCharacters(in: .whitespacesAndNewlines)
         return appRoot.appendingPathComponent(relative)
     }
 
