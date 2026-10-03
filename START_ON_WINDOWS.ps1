@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $InstallDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
 $RuntimeDir = Join-Path $InstallDir ".runtime"
-$LogDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph\logs"
+$LogDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph-logs"
 $LogFile = Join-Path $LogDir "setup.log"
 $UvVersion = "0.12.15"
 $UvBinDir = Join-Path $RuntimeDir "bin"
@@ -65,7 +65,7 @@ try {
             "/NJH",
             "/NJS",
             "/NP",
-            "/XD", ".git", ".github", ".venv", ".runtime", ".pytest_cache", "__pycache__", "data", "dist",
+            "/XD", ".git", ".github", ".venv", ".runtime", ".pytest_cache", "__pycache__", "data", "dist", "logs",
             "/XF", "config.json"
         )
         & robocopy @robocopyArgs | Out-Host
