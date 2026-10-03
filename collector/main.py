@@ -104,6 +104,47 @@ def load_config(path: Path) -> dict:
     return cfg
 
 
+
+_LIVE_EXCLUSION_KEYS = ("excluded_apps", "excluded_title_patterns")
+
+
+def refresh_live_exclusions(config_path: Path, cfg: dict, cache: dict) -> bool:
+    """Refresh only the privacy exclusions that are safe to change while running.
+
+    The collector intentionally keeps the rest of its configuration stable for a
+    run.  The Privacy tab, however, promises that newly excluded apps/title
+    patterns take effect before new evidence is persisted.  A cheap stat check is
+    performed on each foreground poll and interaction snapshot; the file is read
+    only when it changed.
+    """
+    try:
+        stat = config_path.stat()
+        stamp = (int(stat.st_mtime_ns), int(stat.st_size))
+    except Exception:
+        return False
+    if cache.get("stamp") == stamp:
+        return False
+    try:
+        value = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        # Keep the last known-good exclusions.  Do not cache a malformed file so
+        # a subsequent repaired write is picked up immediately.
+        return False
+    if not isinstance(value, dict):
+        return False
+    for key in _LIVE_EXCLUSION_KEYS:
+        raw = value.get(key)
+        if isinstance(raw, list):
+            cfg[key] = list(raw)
+    cache["stamp"] = stamp
+    return True
+
+
+def _live_public_window(config_path: Path, cfg: dict, cache: dict, window=None) -> dict:
+    refresh_live_exclusions(config_path, cfg, cache)
+    return _public_window(window if window is not None else active_window(), cfg)
+
+
 def screenshot(event_id: str) -> str | None:
     try:
         import mss
@@ -610,6 +651,10 @@ def _run_locked(config_path: Path) -> None:
     last_poll_mono = 0.0
     last_poll_wall_epoch = 0.0
     run_started_mono = time.monotonic()
+    # Mutable stamp shared by the foreground loop and interaction callbacks.
+    # Only exclusion lists are hot-reloaded; all other capture settings remain
+    # stable for the run.
+    live_exclusion_state: dict = {}
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
@@ -632,7 +677,7 @@ def _run_locked(config_path: Path) -> None:
 
     def snapshot_context() -> dict | None:
         try:
-            return _public_window(active_window(), cfg)
+            return _live_public_window(config_path, cfg, live_exclusion_state)
         except Exception:
             return None
 
@@ -782,6 +827,10 @@ def _run_locked(config_path: Path) -> None:
         now_wall = now_dt.isoformat()
         now_wall_epoch = now_dt.timestamp()
         expected_poll = max(0.5, float(cfg.get("poll_seconds", 2)))
+        # Privacy exclusions are the only capture settings that hot-reload. Do
+        # this before any new foreground state can trigger UI-label lookup or a
+        # screenshot for a newly excluded app/title.
+        refresh_live_exclusions(config_path, cfg, live_exclusion_state)
 
         # Detect suspend/lock/stall generically by an unexpectedly large polling
         # gap. Never attribute the unobserved interval to the previously focused app.
