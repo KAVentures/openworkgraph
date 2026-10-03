@@ -34,6 +34,8 @@ jobs:
           test -x "$PAYLOAD/$PYTHON_RELATIVE"
           test -f "$PAYLOAD/OFFLINE_RUNTIME"
           plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist dist/com.kinvectum.openworkgraph.plist
+      - name: Build clickable macOS installer
+        run: bash scripts/build_macos_installer_pkg.sh
       - name: Smoke-test embedded macOS runtime twice
         run: |
           set -euo pipefail
@@ -84,6 +86,8 @@ jobs:
           path: |
             dist/OpenWorkGraph-macOS.zip
             dist/OpenWorkGraph-macOS.zip.sha256
+            dist/OpenWorkGraph-macOS-v*.pkg
+            dist/OpenWorkGraph-macOS-v*.pkg.sha256
           if-no-files-found: error
 
   windows-package:
@@ -171,6 +175,7 @@ jobs:
             dist/OpenWorkGraph-Windows.zip
             dist/OpenWorkGraph-Windows.zip.sha256
             dist/OpenWorkGraph-Windows-Setup-v*.exe
+            dist/OpenWorkGraph-Windows-Setup-v*.exe.sha256
           if-no-files-found: error
 
   mcpb-package:
@@ -269,6 +274,15 @@ jobs:
 
           cp install.sh install.ps1 uninstall.sh uninstall.ps1 release-assets/
 
+          MAC_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-macOS-v*.pkg' ! -name '*.sha256' | head -n 1)"
+          WIN_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Setup-v*.exe' | head -n 1)"
+          test -n "$MAC_VERSIONED" && test -f "$MAC_VERSIONED"
+          test -n "$WIN_VERSIONED" && test -f "$WIN_VERSIONED"
+          cp "$MAC_VERSIONED" release-assets/OpenWorkGraph-macOS.pkg
+          cp "$WIN_VERSIONED" release-assets/OpenWorkGraph-Windows-Setup.exe
+          sha256sum release-assets/OpenWorkGraph-macOS.pkg > release-assets/OpenWorkGraph-macOS.pkg.sha256
+          sha256sum release-assets/OpenWorkGraph-Windows-Setup.exe > release-assets/OpenWorkGraph-Windows-Setup.exe.sha256
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; leaving it immutable."
             echo "Bump VERSION to publish a new GitHub Release."
@@ -279,6 +293,15 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.120: real desktop installers
+
+          - **No ZIP or terminal for normal users:** GitHub Releases now publish stable **OpenWorkGraph-macOS.pkg** and **OpenWorkGraph-Windows-Setup.exe** assets intended for direct website download.
+          - **Offline runtime included:** both desktop installers include the private Python runtime and dependencies, so users do not install Python or wait for a first-run runtime download.
+          - **Same local state:** the macOS app keeps its signed runtime sealed inside the app bundle while syncing source into the established user Library installation and preserving **data/** and **config.json**; Windows keeps its established per-user LocalAppData install.
+          - **Advanced paths remain:** release-matched shell installers and tester ZIPs remain available for technical users and troubleshooting.
+          - **Signing-ready:** the normal release produces usable unsigned early-prototype installers; the existing signing workflow can produce notarized macOS and signed Windows variants when signing credentials are configured.
+          - **No capture semantics change:** collection, evidence schema, privacy controls, MCP, Gateway, exports and agent integrations are unchanged.
 
           ### v0.119: easier local installation without a second runtime
 
@@ -427,16 +450,24 @@ jobs:
           ### Exports
           JSON, CSV ZIP and XLSX exports include a **dedicated privacy-safe agent-run table** derived from canonical agent evidence. It uses opaque OpenWorkGraph references and does not expose native run/trace/span identifiers or agent content payloads.
 
-          ### macOS / Windows testers
-          Download **OpenWorkGraph-macOS.zip** or **OpenWorkGraph-Windows.zip** from this release. Each ZIP includes a normal live launcher plus a **TRY_DEMO_OPENWORKGRAPH** launcher for isolated synthetic sample evidence. **OpenWorkGraph-Claude.mcpb** provides the compact Claude Desktop MCP surface for an existing local installation.
+          ### macOS / Windows installation
+          Normal users should download **OpenWorkGraph-macOS.pkg** or **OpenWorkGraph-Windows-Setup.exe**. These include the offline runtime and install into the normal OS application locations. The ZIPs and shell installers remain available as advanced/tester fallbacks. **OpenWorkGraph-Claude.mcpb** provides the compact Claude Desktop MCP surface for an existing local installation.
 
           ### Security note
           Production/self-hosted deployments should still use customer-controlled TLS/network access, secret management, retention/backups, identity infrastructure and endpoint controls appropriate to their environment.
           EOF
 
           gh release create "$TAG" \
+            release-assets/OpenWorkGraph-macOS.pkg \
+            release-assets/OpenWorkGraph-macOS.pkg.sha256 \
+            "$MAC_VERSIONED" \
+            "$MAC_VERSIONED.sha256" \
             release-assets/OpenWorkGraph-macOS.zip \
             release-assets/OpenWorkGraph-macOS.zip.sha256 \
+            release-assets/OpenWorkGraph-Windows-Setup.exe \
+            release-assets/OpenWorkGraph-Windows-Setup.exe.sha256 \
+            "$WIN_VERSIONED" \
+            "$WIN_VERSIONED.sha256" \
             release-assets/OpenWorkGraph-Windows.zip \
             release-assets/OpenWorkGraph-Windows.zip.sha256 \
             release-assets/OpenWorkGraph-Claude.mcpb \
