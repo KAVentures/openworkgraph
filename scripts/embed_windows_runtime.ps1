@@ -14,20 +14,27 @@ if (-not $Uv) {
     throw "uv is required at build time. In GitHub Actions use astral-sh/setup-uv before this script."
 }
 
-$Venv = Join-Path $Payload ".venv"
-$Python = Join-Path $Venv "Scripts\python.exe"
-$Pythonw = Join-Path $Venv "Scripts\pythonw.exe"
+$RuntimeRoot = Join-Path $Payload ".runtime\python"
+if (Test-Path $RuntimeRoot) {
+    Remove-Item $RuntimeRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
-if (Test-Path $Venv) {
-    Remove-Item $Venv -Recurse -Force
+& $Uv python install 3.12 --install-dir $RuntimeRoot
+if ($LASTEXITCODE -ne 0) { throw "uv python install failed with exit code $LASTEXITCODE" }
+
+$Python = Get-ChildItem $RuntimeRoot -Recurse -Filter python.exe |
+    Where-Object { $_.FullName -match "\\python\.exe$" } |
+    Select-Object -First 1 -ExpandProperty FullName
+$Pythonw = Get-ChildItem $RuntimeRoot -Recurse -Filter pythonw.exe |
+    Select-Object -First 1 -ExpandProperty FullName
+if (-not $Python -or -not $Pythonw) {
+    throw "Embedded CPython executables were not found under $RuntimeRoot"
 }
 
 Push-Location $Payload
 try {
-    & $Uv venv --python 3.12 --managed-python ".venv"
-    if ($LASTEXITCODE -ne 0) { throw "uv venv failed with exit code $LASTEXITCODE" }
-
-    & $Uv pip install --python $Python "."
+    & $Uv pip install --python $Python --system --link-mode copy "."
     if ($LASTEXITCODE -ne 0) { throw "uv pip install failed with exit code $LASTEXITCODE" }
 
     & $Python -c "import fastapi, mcp, pystray, win32com.client, uiautomation; import server.secure_app, collector.main"
@@ -36,9 +43,8 @@ try {
     Pop-Location
 }
 
-if (-not (Test-Path $Pythonw)) {
-    throw "Embedded pythonw.exe was not created: $Pythonw"
-}
-
-Set-Content -Path (Join-Path $Payload "OFFLINE_RUNTIME") -Value "OpenWorkGraph $Version embedded Windows runtime" -Encoding ascii
-Write-Host "Embedded Windows runtime: $Venv"
+$RelativePythonw = [IO.Path]::GetRelativePath($Payload, $Pythonw)
+Set-Content -Path (Join-Path $Payload "EMBEDDED_PYTHONW.txt") -Value $RelativePythonw -Encoding ascii
+Set-Content -Path (Join-Path $Payload "OFFLINE_RUNTIME") -Value "OpenWorkGraph $Version embedded Windows CPython runtime" -Encoding ascii
+Write-Host "Embedded Windows runtime: $RuntimeRoot"
+Write-Host "pythonw relative path: $RelativePythonw"
