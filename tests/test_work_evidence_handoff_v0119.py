@@ -74,7 +74,7 @@ def test_observed_tools_inventory_is_deterministic_and_has_api_caveat():
 
 
 def test_xlsx_on_demand_extraction_reads_cells_without_copying_file(tmp_path):
-    from server.evidence_file_routes import _extract
+    from server.evidence_paging import _extract
 
     path = tmp_path / "Rates.xlsx"
     with zipfile.ZipFile(path, "w") as archive:
