@@ -113,6 +113,11 @@ def _bootstrap_script() -> str:
       headers.set('Authorization', `OWG-Session ${dashboardSession}`);
     }
     const response = await nativeFetch(input, {...init, headers});
+    if (response.status === 401 && !dashboardSession) {
+      // Opened without a valid launch link (for example a tab kept open across a
+      // restart): the dashboard shows a banner explaining how to reopen it.
+      window.__owgAuthLost = true;
+    }
     if (response.status === 401 && dashboardSession) {
       let detail = '';
       try { detail = String((await response.clone().json())?.detail || ''); } catch (_) {}
@@ -280,7 +285,7 @@ def _connection_override_script() -> str:
       const [access,activity,http]=await Promise.all([jsonCall('/v1/ai-access'),jsonCall('/v1/mcp-activity?limit=20'),jsonCall('/v1/mcp-http')]);
       const state=document.querySelector('#aiAccessState');
       const log=document.querySelector('#mcpActivityLog');
-      if(state)state.innerHTML=access.enabled?'Every read by a connected AI app during this run, newest first.':'AI access is off, so every read is refused. Turn it on with the <strong>AI access this run</strong> switch above.';
+      if(state)state.innerHTML=access.enabled?'Every read by a connected AI app since OpenWorkGraph started, newest first.':'AI access is off, so every read is refused. Turn it on with the <strong>AI access</strong> switch above.';
       if(log)log.innerHTML=activityHtml(activity.items||[]);
       const box=document.querySelector('.statusbox.mcp');
       if(box)box.innerHTML=`<span class="mcpdot"></span><strong>Local MCP:</strong> stdio ready${http.running?` · advanced HTTP <code>${esc(http.endpoint)}</code>`:' · advanced HTTP off'}<div class="muted" style="margin-top:3px">Normal local clients use the stable stdio launcher. HTTP starts only on demand.</div>`;
@@ -307,7 +312,7 @@ def _connection_override_script() -> str:
       connect.parentNode.insertBefore(panel,connect);
     }
     if(panel){
-      // One AI-access switch: "AI access this run" at the top of Connections
+      // One AI-access switch: "AI access" at the top of Connections
       // (dashboard/connections.js). This card only shows what was read.
       panel.innerHTML=`<div style="display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:5px">Recent AI activity</h2><div id="aiAccessState" class="muted">Checking…</div></div><div style="display:flex;gap:8px"><button id="stopHttpMcp" class="ghost" style="display:none">Stop advanced HTTP MCP</button></div></div><div id="mcpActivityLog" class="muted" style="margin-top:10px">No AI reads this run.</div>`;
       panel.querySelector('#stopHttpMcp').onclick=async()=>{await httpMcp('stop');refreshAiPanel();};
@@ -480,10 +485,10 @@ def get_claude_mcpb():
 
 @app.get("/v1/ai-access")
 def get_ai_access(client: str | None = None):
-    from .ai_access import ai_access_enabled
+    from .ai_access import ai_access_enabled, resets_on_restart
     global_enabled = ai_access_enabled()
     if not client:
-        return {"enabled": global_enabled, "resets_on_restart": True}
+        return {"enabled": global_enabled, "resets_on_restart": resets_on_restart()}
     from .connections import is_enabled
     client_enabled = is_enabled(client, "mcp")
     return {
@@ -491,18 +496,24 @@ def get_ai_access(client: str | None = None):
         "global_enabled": global_enabled,
         "client": client,
         "client_enabled": client_enabled,
-        "resets_on_restart": True,
+        "resets_on_restart": resets_on_restart(),
     }
 
 
 @app.post("/v1/ai-access")
 async def update_ai_access(request: Request):
-    from .ai_access import set_ai_access
+    from .ai_access import resets_on_restart, set_ai_access, set_reset_on_restart
     try:
         payload = await request.json()
     except Exception:
         return _json_error("invalid AI access request", 400)
-    return {"enabled": set_ai_access(bool(payload.get("enabled"))), "resets_on_restart": True}
+    if not isinstance(payload, dict):
+        return _json_error("invalid AI access request", 400)
+    if "reset_on_restart" in payload:
+        set_reset_on_restart(bool(payload.get("reset_on_restart")))
+    enabled = set_ai_access(bool(payload.get("enabled"))) if "enabled" in payload else None
+    from .ai_access import ai_access_enabled
+    return {"enabled": ai_access_enabled() if enabled is None else enabled, "resets_on_restart": resets_on_restart()}
 
 
 @app.get("/v1/mcp-activity")

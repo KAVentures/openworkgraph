@@ -131,7 +131,7 @@ History retention ("Don't keep after session", or a number of days) deletes raw 
 - **When it is kept:**
   - Kept when **retention** removes a session: ephemeral close, expiry, or crash recovery.
   - Deleted when **you** delete a session or a date range: its records go too.
-- **Retention and switch:** memory has its own retention (default 90 days) and an on/off switch in History. Turning it off deletes all of it.
+- **Retention and switch:** memory has its own retention (default 90 days) and an on/off switch in History. Turning it off deletes all of it. Since v0.118, the **Keep my history** choice in the Privacy tab sets it together with history retention: **This session only** turns run memory off (keeping nothing after the session), and a number of days keeps run memory for the same number of days.
 - **Where it stays:** run memory itself stays on this computer. The Gateway connector can separately synchronize explicitly opted-in visible agent-session messages through their own content channel; that does not synchronize run-memory records.
 - **AI access:** MCP reads it only through procedural memory, which requires saved-history AI access to be set to "All saved history".
 
@@ -259,15 +259,21 @@ OpenWorkGraph is not designed to erase every business fact. The following may re
 
 This is a deliberate utility/privacy tradeoff. A rich export should be reviewed before it is shared beyond the intended analysis context. Browser business-object IDs/locators are separately governed by the v0.114 browser-context profile rather than assumed safe merely because they are business references.
 
-## Excluded applications/pages
+## Excluded applications/pages ("Never record")
 
 Configured excluded applications/title patterns and excluded browser contexts are handled specially. Excluded rows can retain timing/activity evidence while omitting sensitive content labels/titles.
+
+Since v0.118 the lists are visible and editable in the dashboard (**Privacy → Never record**: apps, websites, and words in a window title). They are stored in the local `config.json` (`excluded_apps`, `excluded_browser_host_patterns`, `excluded_title_patterns`). The desktop recorder reads them when it starts, and the server applies them again when desktop activity arrives, so a change takes effect immediately without restarting the recorder. Changes apply to new activity; already recorded activity is not rewritten (use **Delete recorded activity**). The default list (1Password, Bitwarden, KeePass, Keychain Access; titles containing password, private, incognito or bank) can be restored at any time.
 
 This lets broad effort timing remain useful without preserving content from deliberately excluded surfaces. v0.114 checks these exclusions before a Rich enterprise resource locator enters the browser retry queue and again at server ingest.
 
 ## Browser URL handling
 
 Browser evidence removes query strings and fragments. Token-like or identifier-like path segments are normalized where possible. Authentication/recovery/invite/token-related path segments receive additional sanitization. Since v0.114, known Google Docs/Drive, GitHub, Salesforce, Jira and Linear object-ID route positions are also masked in Privacy-first and Context modes; a separately validated provider locator is available only when the Rich enterprise locator switch is explicitly enabled.
+
+## AI access switch
+
+AI access is the single gate for every MCP read. It is **off on a new install**, and every MCP tool call checks it live. Since v0.118 the person's choice is remembered across restarts (stored as `ai_access.json` in the local auth directory with owner-only permissions). **Turn AI access off every time OpenWorkGraph starts** (Privacy tab, Advanced view) restores the earlier per-run behavior. If the state file is missing or unreadable, access stays off. Saved-history access is a separate grant that always expires (at most 24 hours).
 
 ## MCP trust boundary
 

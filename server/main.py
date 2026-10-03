@@ -220,7 +220,12 @@ def health() -> dict[str, str]:
 
 @app.post("/v1/events")
 def ingest(batch: EventBatch) -> dict[str, int]:
-    events = [e.model_dump() for e in batch.events]
+    # The "never record" lists apply here too, so a change made in the
+    # dashboard takes effect without restarting the desktop recorder.
+    from .capture_exclusions import apply_to_desktop_event
+
+    config = _runtime_config()
+    events = [apply_to_desktop_event(e.model_dump(), config) for e in batch.events]
     learn_persistent_identities(events)
     return {"inserted": insert_events(events)}
 

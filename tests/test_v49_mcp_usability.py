@@ -145,7 +145,8 @@ def test_default_trace_budget_is_compact_for_one_hundred_events(v49_api):
 
 def test_ai_access_is_off_by_default_and_secure_runtime_checks_every_call(v49_api):
     state = httpx.get(v49_api["base"] + "/v1/ai-access", headers=v49_api["headers"]).json()
-    assert state == {"enabled": False, "resets_on_restart": True}
+    # Off on a new install; since v0.118 the person's choice is remembered unless they ask otherwise.
+    assert state == {"enabled": False, "resets_on_restart": False}
 
     code = "from mcp_server.secure_runtime import authorize_tool; authorize_tool('get_workflow_trace')"
     denied = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=v49_api["env"], capture_output=True, text=True)

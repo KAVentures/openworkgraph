@@ -146,6 +146,16 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.118: Basic and Advanced views, one Privacy tab
+
+          - **Basic by default:** four tabs (Today, Activity, AI apps, Privacy). Agents and Organization appear as soon as they are in use. The Advanced switch in the top bar shows every tab and setting; nothing was removed.
+          - **One Privacy tab:** recording, how long history is kept, AI access, older-history access, name hiding, browser detail, never-record lists and delete, in one place.
+          - **Never record, now visible:** apps, websites and words in a window title can be edited in the dashboard and apply to new activity immediately, without restarting the recorder. The default password-manager and title list can be restored.
+          - **One retention choice:** "This session only" now also turns off the small run summaries, so it keeps nothing after the session.
+          - **AI access is remembered:** still off on a new install and checked on every MCP call; your choice now survives a restart unless you turn on "Turn AI access off every time OpenWorkGraph starts".
+          - **Clearer first run:** one status line and a three-step setup checklist replace the stacked first-run cards; summary exports by default; no misleading sharing table when no organization is connected; stale dashboard tabs explain how to reopen.
+          - **Calmer look:** segmented tabs, softer cards, one type scale and consistent switches, at desktop and phone width.
+
           ### v0.117: a clearer, calmer dashboard
 
           - **Today's timeline shows again:** a first-run helper hid the timeline card before it loaded and never showed it again. The card now stays visible with loading and empty states.

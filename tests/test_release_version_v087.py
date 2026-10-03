@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.117.0"
+EXPECTED_VERSION = "0.118.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,11 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.118: Basic and Advanced views, one Privacy tab" in workflow
+    v118_section = workflow.split("### v0.118: Basic and Advanced views, one Privacy tab", 1)[1].split("### v0.117:", 1)[0]
+    assert "`" not in v118_section and "<" not in v118_section
+    assert "never record" in v118_section.lower()
+    assert "off on a new install" in v118_section
     assert "### v0.117: a clearer, calmer dashboard" in workflow
     v117_section = workflow.split("### v0.117: a clearer, calmer dashboard", 1)[1].split("### v0.116:", 1)[0]
     assert "`" not in v117_section and "<" not in v117_section
@@ -90,6 +95,10 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Python.py" in workflow
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
+
+    v118 = (ROOT / "docs" / "CHANGELOG_V0118.md").read_text(encoding="utf-8")
+    assert "0.118.0" in v118 and "Privacy tab" in v118 and "Never record" in v118
+    assert "off on a new install" in v118
 
     current = (ROOT / "docs" / "CHANGELOG_V0117.md").read_text(encoding="utf-8")
     current_lower = current.lower()
