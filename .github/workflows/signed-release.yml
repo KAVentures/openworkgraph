@@ -76,6 +76,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
 
       - name: Require Windows signing credentials
         shell: powershell
@@ -89,6 +92,10 @@ jobs:
       - name: Build existing Windows payload
         shell: powershell
         run: ./scripts/build_windows_release.ps1
+
+      - name: Embed private Python runtime and dependencies
+        shell: powershell
+        run: ./scripts/embed_windows_runtime.ps1
 
       - name: Install Inno Setup
         shell: powershell
