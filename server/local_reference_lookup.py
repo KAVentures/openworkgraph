@@ -109,6 +109,33 @@ def resolve_file_reference(reference: str) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
+
+
+def forget_references(references: set[str] | list[str] | tuple[str, ...]) -> int:
+    """Remove selected local-only resolver entries.
+
+    Callers should first ensure the reference is no longer needed by retained
+    canonical evidence. This function never touches the canonical event store.
+    """
+    wanted = {str(item or "").strip() for item in references}
+    wanted.discard("")
+    if not wanted:
+        return 0
+    removed = 0
+    with _LOCK:
+        data = _read()
+        for bucket in ("resources", "files"):
+            refs = data.get(bucket)
+            if not isinstance(refs, dict):
+                continue
+            for token in list(wanted):
+                if token in refs:
+                    refs.pop(token, None)
+                    removed += 1
+        if removed:
+            _write(data)
+    return removed
+
 def expand_resource_references(value: Any) -> Any:
     if isinstance(value, list):
         return [expand_resource_references(item) for item in value]
@@ -129,5 +156,6 @@ __all__ = [
     "remember_file_reference",
     "resolve_resource_reference",
     "resolve_file_reference",
+    "forget_references",
     "expand_resource_references",
 ]
