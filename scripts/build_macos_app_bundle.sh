@@ -90,15 +90,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var child: Process?
 
-    private var appRoot: URL {
+    private var bundlePayload: URL {
         Bundle.main.resourceURL!.appendingPathComponent("openworkgraph", isDirectory: true)
     }
 
+    private var installRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("WorkflowObserver", isDirectory: true)
+    }
+
     private var python: URL {
-        let marker = appRoot.appendingPathComponent("EMBEDDED_PYTHON.txt")
+        let marker = bundlePayload.appendingPathComponent("EMBEDDED_PYTHON.txt")
         let contents = (try? String(contentsOf: marker, encoding: .utf8)) ?? ""
         let relative = contents.trimmingCharacters(in: .whitespacesAndNewlines)
-        return appRoot.appendingPathComponent(relative)
+        return bundlePayload.appendingPathComponent(relative)
+    }
+
+    private func prepareStablePayload() throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: installRoot, withIntermediateDirectories: true)
+
+        // Keep the signed runtime sealed inside the app bundle, but run the
+        // OpenWorkGraph source from the same stable user-writable installation
+        // used by the existing launcher. Preserve local evidence and config.
+        let rsync = Process()
+        rsync.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
+        rsync.arguments = [
+            "-a", "--delete",
+            "--exclude", ".venv/",
+            "--exclude", ".runtime/",
+            "--exclude", ".pytest_cache/",
+            "--exclude", "__pycache__/",
+            "--exclude", "data/",
+            "--exclude", "config.json",
+            bundlePayload.path + "/",
+            installRoot.path + "/",
+        ]
+        try rsync.run()
+        rsync.waitUntilExit()
+        if rsync.terminationStatus != 0 {
+            throw NSError(
+                domain: "OpenWorkGraph",
+                code: Int(rsync.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Could not prepare the local OpenWorkGraph installation."]
+            )
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -143,15 +181,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startChild() {
         if child?.isRunning == true { return }
         let process = Process()
-        process.executableURL = python
-        process.arguments = ["start.py", "--mode", "observe"]
-        process.currentDirectoryURL = appRoot
         process.terminationHandler = { _ in
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
         }
         do {
+            try prepareStablePayload()
+            process.executableURL = python
+            process.arguments = [
+                installRoot.appendingPathComponent("start.py").path,
+                "--mode", "observe",
+            ]
+            process.currentDirectoryURL = installRoot
             try process.run()
             child = process
         } catch {
