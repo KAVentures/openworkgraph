@@ -464,8 +464,14 @@ def search_work(
     limit: int = 100,
     cursor: str | None = None,
     scope: str = "all",
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
-    """Search prior work through one bounded interface."""
+    """Search captured text lexically, using concrete terms, synonyms, and dates.
+
+    No matches does not prove absence of the workflow. Inspect chronological
+    evidence and ask the person for terms, dates, and rules not captured.
+    """
     name = "search_work"
     core._begin(name)
     selected = str(layer or "evidence").strip().lower()
@@ -479,10 +485,12 @@ def search_work(
                 cursor=cursor,
                 limit=limit,
                 scope=scope,
-            ),
+            ) | {key: value for key, value in {"since": since, "until": until}.items() if value},
         )
-        return core._finish(name, {"layer": selected, "query": query, "trace": result})
+        return core._finish(name, {"layer": selected, "query": query, "trace": result, "search_semantics": "lexical", "no_match_is_absence_proof": False})
     if selected == "semantic":
+        if since or until:
+            raise ToolError("Date filtering is available for layer=evidence")
         if cursor not in (None, "") or session_id not in (None, ""):
             raise ToolError("cursor and session_id are available only for layer=evidence")
         payload = secure_runtime.secure_get(
@@ -623,52 +631,49 @@ def find_repeated_workflows(
     task_family: str = "",
     max_events: int = 25_000,
     limit: int = 20,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
-    """Return repeated-workflow candidates plus readable steps and family keys."""
+    """Find repeated structural work in the permitted evidence window.
+
+    Uses the current recording when saved-history access is off, or the granted
+    dates when selected. Supply dates for older examples. Family names are only
+    navigation hints; ask the person about intent and missing decision rules.
+    """
     name = "find_repeated_workflows"
     core._begin(name)
-    bounded_events = _bounded(max_events, maximum=100_000)
-    tasks = _history_get("/v1/tasks", {"limit": bounded_events, "scope": "all"})
-    summary = _history_get("/v1/summary", {"limit": bounded_events, "scope": "all"})
-    overview = _history_get("/v1/procedural-memory", {"limit": bounded_events, "min_support": 1})
-    available_rows = _family_rows(overview, limit=100)
-    available_keys = {str(item.get("family_key") or "") for item in available_rows}
-    family = str(task_family or "").strip().casefold()
-    examples = []
-    for task in list(tasks.get("tasks") or []):
-        if not isinstance(task, dict):
-            continue
-        if family:
-            candidate = str(task.get("task_family") or "").casefold()
-            label = str(task.get("suggested_label") or "").casefold()
-            if candidate != family and family not in label:
-                continue
-        examples.append(_task_with_family_key(task, available_keys))
-        if len(examples) >= _bounded(limit, maximum=100):
-            break
-    patterns = [
-        _with_family_key(x, available_keys)
-        for x in list(tasks.get("patterns") or [])[:_bounded(limit, maximum=100)]
-        if isinstance(x, dict)
-    ]
-    automation = [
-        _with_family_key(x, available_keys)
-        for x in list(summary.get("repeated_task_patterns") or [])[:_bounded(limit, maximum=100)]
-        if isinstance(x, dict)
-    ]
-    return core._finish(name, {
-        "task_family": task_family,
-        "patterns": patterns,
-        "automation_candidates": automation,
-        "examples": examples,
-        "procedural_families": available_rows[:_bounded(limit, maximum=100)],
-        "duration_semantics": "engaged time when observed; foreground time is the fallback when engagement is zero/unobserved",
-        "next_step": "Pass an exact family_key from this result to how_did_similar_runs_go.",
-        "evidence_tool": "get_workflow_trace",
-        "needs_human_review": True,
-        "derived": True,
-        "authoritative": False,
-    })
+    params = {"source_event_limit": _bounded(max_events, maximum=100_000),
+              "limit": 100, "min_runs": 2}
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    try:
+        result = secure_runtime.secure_get("/v1/workflow-evidence/families", params)
+    except Exception as exc:
+        if _history_access_problem(exc):
+            raise ToolError("Choose dates inside your permitted history range, or use the current recording. Use get_workflow_trace with since/until to inspect specific evidence.") from exc
+        raise
+    query = str(task_family or "").strip().casefold()
+    families = [row for row in result.get("families", [])
+                if not query or query in str(row).casefold()]
+    selected = families[:_bounded(limit, maximum=100)]
+    patterns = [dict(row, observed_count=row.get("execution_count", 0),
+                     typical_steps=row.get("high_support_structural_steps", []),
+                     typical_duration_seconds=row.get("median_execution_duration_seconds", 0),
+                     duration_basis="observed_execution_elapsed_time") for row in selected]
+    examples = [dict(run, family_key=row.get("family_key"))
+                for row in selected for run in row.get("executions", [])][:_bounded(limit, maximum=100)]
+    result.update({"patterns": patterns, "examples": examples,
+                   "automation_candidates": selected,
+                   "procedural_families": selected,
+                   "returned": len(selected),
+                   "families": families[:_bounded(limit, maximum=100)],
+                   "task_family": task_family,
+                   "search_semantics": "lexical match over derived family identifiers and structural steps",
+                   "next_step": "Select examples, then call get_workflow_evidence with execution_ids and the same dates. Ask about business rules not observed.",
+                   "needs_human_review": True})
+    return core._finish(name, result)
 
 
 @mcp.tool()

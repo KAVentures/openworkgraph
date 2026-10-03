@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException
 
@@ -107,6 +108,21 @@ def create_human_enterprise_app(
             ),
         }
         return payload
+
+    if human_access.mcp_resource_url:
+        from .conversation_mcp import create_conversation_mcp
+        remote_mcp, transport = create_conversation_mcp(db, human_access, app.state.human_oidc_verifier)
+        previous_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def with_remote_mcp(instance):
+            async with previous_lifespan(instance) as state:
+                async with remote_mcp.session_manager.run():
+                    yield state
+
+        app.router.lifespan_context = with_remote_mcp
+        app.state.conversation_mcp = remote_mcp
+        app.mount("/", transport)
 
     return app
 

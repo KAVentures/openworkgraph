@@ -8,6 +8,7 @@ import zipfile
 from typing import Any
 
 from fastapi import HTTPException, Response
+from pydantic import BaseModel
 
 from .ai_context import redact_contextually
 from .secure_app import app
@@ -219,3 +220,41 @@ __all__ = [
     "get_workflow_evidence_families",
     "export_workflow_evidence",
 ]
+
+
+# Reviewed context is deliberately separate from the canonical events table.
+from shared.workflow_knowledge import KnowledgeStore, KnowledgeWrite
+from . import db as _knowledge_db
+
+
+class _LocalKnowledgeDB:
+    connect = staticmethod(_knowledge_db.connect)
+
+    @staticmethod
+    def _execute(conn, sql, params=()):
+        return conn.execute(sql, params)
+
+
+_knowledge = KnowledgeStore(_LocalKnowledgeDB())
+
+
+@app.get("/v1/workflow-knowledge")
+def get_workflow_knowledge(workflow_id: str = "", limit: int = 50) -> dict[str, Any]:
+    return _knowledge.list("local", workflow_id, limit)
+
+
+@app.post("/v1/workflow-knowledge")
+def save_workflow_knowledge(request: KnowledgeWrite) -> dict[str, Any]:
+    try:
+        return _knowledge.save("local", request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class KnowledgeForget(BaseModel):
+    workflow_id: str
+
+
+@app.post("/v1/workflow-knowledge/forget")
+def forget_workflow_knowledge(request: KnowledgeForget) -> dict[str, Any]:
+    return _knowledge.forget("local", request.workflow_id)

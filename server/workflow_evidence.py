@@ -72,13 +72,12 @@ def _parse_execution_ids(value: str | Iterable[str] | None) -> list[str]:
 
 def _load(*, limit: int, since: str | None, until: str | None) -> list[dict[str, Any]]:
     bounded = max(1, min(int(limit), MAX_SOURCE_EVENTS))
-    events = load_recent_evidence(limit=bounded, since=since)
-    if until:
-        end = _ts(until)
-        if end is None:
-            raise WorkflowEvidenceError("until must be an ISO-8601 timestamp")
-        events = [event for event in events if (_ts(event.get("observed_at")) or float("inf")) < end]
-    return events
+    for name, value in (("since", since), ("until", until)):
+        if value and _ts(value) is None:
+            raise WorkflowEvidenceError(f"{name} must be an ISO-8601 timestamp")
+    if since and until and _ts(since) >= _ts(until):
+        raise WorkflowEvidenceError("until must be after since")
+    return load_recent_evidence(limit=bounded, since=since, until=until)
 
 
 def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +103,7 @@ def _select_executions(
         by_id = {str(item.get("execution_id") or "").lower(): item for item in executions}
         missing = [value for value in execution_ids if value not in by_id]
         if missing:
-            raise WorkflowEvidenceError("one or more selected executions are unavailable in the permitted evidence range")
+            raise WorkflowEvidenceError("One or more selected executions are unavailable in this bounded permitted evidence window. Pass since/until from the selected examples; narrow the window if the source limit was reached.")
         return [by_id[value] for value in execution_ids][:bounded]
     key = str(family_key or "").strip().lower()
     if not key:
@@ -435,9 +434,10 @@ def build_workflow_evidence(
     max_runs: int = 12,
     max_events_per_run: int = 100,
     include_canonical_evidence: bool = True,
+    _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ids = _parse_execution_ids(execution_ids)
-    raw = _load(limit=source_event_limit, since=since, until=until)
+    raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
     executions = derive_executions(raw)
     selected = _select_executions(
         executions,
@@ -503,6 +503,10 @@ def build_workflow_evidence(
         "provenance": {
             "source": "canonical_local_event_store",
             "source_event_rows_considered": len(raw),
+            "source_event_limit": max(1, min(int(source_event_limit), MAX_SOURCE_EVENTS)),
+            "source_limit_reached": len(raw) >= max(1, min(int(source_event_limit), MAX_SOURCE_EVENTS)),
+            "requested_window": {"since": since, "until": until},
+            "coverage_note": "A reached source limit may omit earlier events or partial runs; narrow the dates and inspect the canonical trace before claiming completeness.",
             "selected_execution_ids": [str(execution.get("execution_id") or "") for execution in selected],
             "canonical_drilldown_tool": "get_workflow_trace",
             "derived_indexes_regeneratable": True,
@@ -552,8 +556,9 @@ def list_workflow_evidence_candidates(
     source_event_limit: int = 25_000,
     min_runs: int = 2,
     limit: int = 20,
+    _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    raw = _load(limit=source_event_limit, since=since, until=until)
+    raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
     executions = derive_executions(raw)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
@@ -597,6 +602,8 @@ def list_workflow_evidence_candidates(
         "total": len(items),
         "minimum_runs": threshold,
         "source_event_rows_considered": len(raw),
+        "source_limit_reached": len(raw) >= max(1, min(int(source_event_limit), MAX_SOURCE_EVENTS)),
+        "requested_window": {"since": since, "until": until},
         "derived": True,
         "authoritative": False,
         "family_grouping_is_navigation_only": True,

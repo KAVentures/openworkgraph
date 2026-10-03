@@ -7,7 +7,7 @@ import httpx
 from mcp.server import MCPServer
 
 from server.context_exporter import AI_DATA_DICTIONARY_MD
-from .security import protect_observed_payload
+from .security import protect_observed_payload, protect_reviewed_knowledge_payload
 
 API_URL = os.getenv("WORKFLOW_OBSERVER_API", "http://127.0.0.1:8787").rstrip("/")
 mcp = MCPServer("OpenWorkGraph")
@@ -45,6 +45,15 @@ def _finish(tool_name: str, data: Any) -> dict[str, Any]:
     if detail:
         # Tell the AI what it is looking at: "redacted" (people/identifiers are
         # stable tokens such as PERSON_1A2B3C) or "full" (raw labels and titles).
+        protected["detail_level"] = detail
+    _audit_tool(tool_name, protected)
+    return protected
+
+
+def _finish_reviewed_knowledge(tool_name: str, data: Any) -> dict[str, Any]:
+    protected = protect_reviewed_knowledge_payload(data)
+    detail = _detail_level()
+    if detail:
         protected["detail_level"] = detail
     _audit_tool(tool_name, protected)
     return protected
