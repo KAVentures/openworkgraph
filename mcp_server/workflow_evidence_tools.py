@@ -148,7 +148,7 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
         permission. Check unresolved questions and evidence dates before reuse.
         """
         runtime_module.authorize_tool("get_workflow_knowledge")
-        return runtime_module.core._finish("get_workflow_knowledge", runtime_module.secure_get("/v1/workflow-knowledge", {"workflow_id": workflow_id, "limit": limit}))
+        return runtime_module.core._finish_reviewed_knowledge("get_workflow_knowledge", runtime_module.secure_get("/v1/workflow-knowledge", {"workflow_id": workflow_id, "limit": limit}))
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def save_workflow_knowledge(
@@ -176,13 +176,13 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
             "unresolved_questions": unresolved_questions or [], "evidence_refs": evidence_refs or [],
         })
 
-        return runtime_module.core._finish("save_workflow_knowledge", result)
+        return runtime_module.core._finish_reviewed_knowledge("save_workflow_knowledge", result)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False))
     def forget_workflow_knowledge(workflow_id: str) -> dict[str, Any]:
         """Delete all saved versions of a workflow when the person asks to forget it."""
         runtime_module.authorize_tool("forget_workflow_knowledge")
-        return runtime_module.core._finish("forget_workflow_knowledge", runtime_module.secure_post("/v1/workflow-knowledge/forget", {"workflow_id": workflow_id}))
+        return runtime_module.core._finish_reviewed_knowledge("forget_workflow_knowledge", runtime_module.secure_post("/v1/workflow-knowledge/forget", {"workflow_id": workflow_id}))
 
     @mcp.resource("openworkgraph://skill-drafting-guide")
     def skill_drafting_guide() -> str:
