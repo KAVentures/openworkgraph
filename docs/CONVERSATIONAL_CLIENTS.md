@@ -12,7 +12,9 @@ individual client switches apply to every evidence and knowledge tool. In Privac
 choose whether to include older history for 24 hours or **until I revoke access**.
 History also offers selected dates with either temporary or standing access.
 Standing access is an explicit choice; the default remains off. Turning the master
-AI switch off revokes the history grant. The optional reset-on-restart setting
+AI switch off blocks every local MCP read, but the separate saved-history grant
+remains until its own expiry or explicit revocation; turning AI access back on can
+therefore resume that still-valid grant. The optional reset-on-restart setting
 still applies. Retention and AI disclosure remain separate choices.
 
 Use `search_work` with concrete app names, document terms and dates. Search is
