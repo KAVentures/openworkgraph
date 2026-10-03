@@ -43,7 +43,7 @@ try {
     Pop-Location
 }
 
-$PayloadPrefix = $Payload.TrimEnd("\\", "/") + [IO.Path]::DirectorySeparatorChar
+$PayloadPrefix = $Payload + [IO.Path]::DirectorySeparatorChar
 if (-not $Pythonw.StartsWith($PayloadPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Embedded pythonw.exe is unexpectedly outside the packaged payload: $Pythonw"
 }
