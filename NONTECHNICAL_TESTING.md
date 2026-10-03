@@ -6,36 +6,36 @@ Plan on about 30 minutes for the first pass (steps 1–6) and a normal working d
 
 ## 1. Install and start
 
-The recommended tester path is now the one-command bootstrap because it uses the existing release launcher but leaves a normal place to reopen OpenWorkGraph afterward.
+The recommended tester path is now the desktop installer. A nontechnical tester should not need Terminal, PowerShell, a ZIP, or a system Python installation.
 
 ### macOS
 
-1. Open Terminal and paste:
-   ```bash
-   curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
-   ```
-2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
-3. Approve **Accessibility** and **Input Monitoring** when asked.
-4. The dashboard opens at `http://127.0.0.1:8787`.
-5. Quit and reopen **OpenWorkGraph** from your user **Applications** folder. It must reopen the same local installation and existing data.
+1. Download **OpenWorkGraph-macOS.pkg** from the latest GitHub Release.
+2. Double-click the package and complete the macOS Installer.
+3. Open **OpenWorkGraph** from Applications.
+4. Approve **Accessibility** and **Input Monitoring** when asked.
+5. The dashboard opens at `http://127.0.0.1:8787`.
+6. Quit OpenWorkGraph, reopen it from Applications, and verify the same local data is still there.
 
-If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-macOS.zip** release remains available and uses the same underlying launcher.
+The current open-source package may show an unverified-developer warning until Developer ID signing/notarization is configured. Record the exact warning and whether the documented macOS override path is understandable; do not fall back to Terminal unless you are specifically testing the advanced installer.
 
 ### Windows
 
-1. Open PowerShell and paste:
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
-   ```
-2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
-3. The dashboard opens at `http://127.0.0.1:8787`.
-4. Quit and reopen **OpenWorkGraph** from the Start menu. It must reopen the same `%LOCALAPPDATA%\OpenWorkGraph` installation and existing data.
+1. Download **OpenWorkGraph-Windows-Setup.exe** from the latest GitHub Release.
+2. Double-click it and complete Setup.
+3. Open **OpenWorkGraph** from the Start menu.
+4. The dashboard opens at `http://127.0.0.1:8787`.
+5. Quit OpenWorkGraph, reopen it from the Start menu, and verify the same local data is still there.
 
-If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-Windows.zip** release remains available and uses the same underlying launcher.
+The current open-source installer may show Windows SmartScreen until code signing is configured. Record the exact warning and whether the override path is understandable.
+
+### Advanced fallback check
+
+Only after the normal installer path has been tested, optionally verify the release-matched `install.sh` / `install.ps1` bootstrap or tester ZIP. These are fallback/debug paths, not the expected nontechnical onboarding.
 
 ### Uninstall check
 
-After the rest of your test, quit OpenWorkGraph and use the release's uninstall helper. It must ask you to type **DELETE** before removing anything, remove the Applications/Start-menu launcher and local OpenWorkGraph installation/data, and leave browser-extension removal to the browser. If port 8787 is still in use, it should refuse instead of deleting files.
+After the rest of your test, quit OpenWorkGraph. Remove the installed desktop app through the normal OS path, then use the release uninstall helper if you also want to verify full local-data removal. The helper must ask you to type **DELETE** before deleting the local installation/data and must refuse while port 8787 is still in use. Browser-extension removal remains browser-managed.
 
 **Expected:** the dashboard opens in the **Basic** view with four tabs: **Today, Activity, AI apps, Privacy**. Nothing needs an account. **Agents** appears once a coding agent is observed, and **Organization** once this computer joins one. The **Basic / Advanced** switch in the top bar shows every tab (History, Export, Settings and the rest); try it, then switch back. Your choice is remembered on this computer.
 
