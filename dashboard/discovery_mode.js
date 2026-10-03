@@ -98,7 +98,9 @@
     window.openModal('Start workflow discovery', 'Purpose-limited observation', `
       <p>Use this when a worker is temporarily mapping a workflow for an AI/automation implementation. The allowlist is applied before evidence is stored.</p>
       <label><strong>Study name</strong><input id="discName" type="text" value="Workflow discovery" style="width:100%;margin-top:5px"></label>
-      <label style="display:block;margin-top:10px"><strong>Purpose</strong><textarea id="discPurpose" rows="3" style="width:100%;margin-top:5px" placeholder="e.g. Map customer pricing requests for an agent implementation"></textarea></label>
+      <label style="display:block;margin-top:10px"><strong>Purpose of the study</strong><textarea id="discPurpose" rows="2" style="width:100%;margin-top:5px" placeholder="e.g. Observe how customer pricing requests are handled"></textarea></label>
+      <label style="display:block;margin-top:10px"><strong>What are you trying to build or change?</strong><input id="discImplementationGoal" type="text" style="width:100%;margin-top:5px" placeholder="e.g. Build an AI-assisted pricing workflow"></label>
+      <label style="display:block;margin-top:10px"><strong>Describe the desired result in your own words</strong><textarea id="discImplementationDescription" rows="3" style="width:100%;margin-top:5px" placeholder="Human-provided implementation context; OWG will keep this separate from observed evidence"></textarea></label>
       <label style="display:block;margin-top:10px"><strong>Native apps to include</strong><textarea id="discApps" rows="3" style="width:100%;margin-top:5px" placeholder="Salesforce Desktop&#10;Microsoft Excel"></textarea><div class="muted">One per line. Do not add Chrome/Safari here when you want site-level scoping; use browser hosts below.</div></label>
       <label style="display:block;margin-top:10px"><strong>Browser hosts to include</strong><textarea id="discHosts" rows="3" style="width:100%;margin-top:5px" placeholder="mail.google.com&#10;docs.google.com&#10;*.salesforce.com"></textarea></label>
       <label style="display:block;margin-top:10px"><strong>Duration (days)</strong><input id="discDays" type="number" min="0.1" max="31" step="0.1" value="5" style="width:120px;margin-left:8px"></label>
@@ -110,6 +112,9 @@
       const body = {
         name: document.querySelector('#discName').value,
         purpose: document.querySelector('#discPurpose').value,
+        implementation_goal: document.querySelector('#discImplementationGoal').value,
+        implementation_description: document.querySelector('#discImplementationDescription').value,
+        handoff_purpose: 'automate',
         allowed_apps: splitValues(document.querySelector('#discApps').value),
         allowed_browser_hosts: splitValues(document.querySelector('#discHosts').value),
         duration_days: Number(document.querySelector('#discDays').value || 5),
@@ -137,11 +142,32 @@
 
   async function saveSelection() {
     const excluded = [...document.querySelectorAll('[data-disc-run]')].filter(x => !x.checked).map(x => x.value);
+    const excludedEvents = [...document.querySelectorAll('[data-disc-step]')].filter(x => !x.checked).map(x => x.value);
     await call('/v1/discovery/selection', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({excluded_execution_ids: excluded})
+      body:JSON.stringify({excluded_execution_ids: excluded, excluded_event_ids: excludedEvents})
     });
     state.excluded_execution_ids = excluded;
+    state.excluded_event_ids = excludedEvents;
+  }
+
+  async function saveImplementationContext() {
+    const goal = document.querySelector('#discImplementationGoalReview')?.value || '';
+    const description = document.querySelector('#discImplementationDescriptionReview')?.value || '';
+    await call('/v1/discovery/implementation-context', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({goal, description})
+    });
+    state.implementation_context = {goal, description, source:'human_provided'};
+  }
+
+  async function saveHandoffPurpose() {
+    const handoff_purpose = document.querySelector('#discHandoffPurpose')?.value || 'automate';
+    await call('/v1/discovery/handoff-purpose', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({handoff_purpose})
+    });
+    state.handoff_purpose = handoff_purpose;
   }
 
   async function saveSuggestedQuestion(index) {
@@ -176,6 +202,8 @@
   async function approveAndExport() {
     if (!confirm('I reviewed the selected examples/questions and approve creating this redacted Discovery Package. This still does not upload it anywhere.')) return;
     await saveSelection();
+    await saveImplementationContext();
+    await saveHandoffPurpose();
     await call('/v1/discovery/approve-share', {method:'POST'});
     const response = await fetch('/v1/discovery/export?representation=redacted', {cache:'no-store'});
     if (!response.ok) {
@@ -195,6 +223,9 @@
     if (typeof window.openModal !== 'function') return;
     families = await loadFamilies();
     const excluded = new Set((state.excluded_execution_ids || []).map(String));
+    const excludedEvents = new Set((state.excluded_event_ids || []).map(String));
+    const implementation = state.implementation_context || {};
+    const reviewSteps = Array.isArray(state.review_steps) ? state.review_steps : [];
     const runRows = families.map((family, familyIndex) => {
       const runs = family.executions || [];
       return `<div style="border-top:${familyIndex?'1px solid #eceee8':'0'};padding:10px 0">
@@ -202,6 +233,12 @@
         <div style="margin-top:5px">${runs.map(run => `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:5px"><input type="checkbox" data-disc-run value="${esc(run.execution_id||'')}" ${excluded.has(String(run.execution_id||''))?'':'checked'}><span>${esc(formatDate(run.started_at))} · ${esc(run.outcome_status||'unknown')}</span></label>`).join('')}</div>
       </div>`;
     }).join('') || '<div class="muted">No repeated workflow family with at least two runs was observed in this study window.</div>';
+
+    const stepRows = reviewSteps.map((item,index) => `
+      <label style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:${index?'1px solid #f0f1ed':'0'}">
+        <input type="checkbox" data-disc-step value="${esc(item.event_id||'')}" ${excludedEvents.has(String(item.event_id||''))?'':'checked'}>
+        <span><strong>${esc(item.step||'Observed step')}</strong><span class="muted" style="display:block">${esc(formatDate(item.observed_at))}</span></span>
+      </label>`).join('') || '<div class="muted">No individual browser/screen steps are available for step-level review.</div>';
 
     const questions = (state.suggested_targeted_questions || []).map((item,index) => `
       <div style="border-top:${index?'1px solid #eceee8':'0'};padding:10px 0">
@@ -218,10 +255,27 @@
       <p class="muted">Uncheck runs that do not belong. This affects only this Discovery Package; it does not delete canonical OWG history.</p>
       <div style="max-height:250px;overflow:auto">${runRows}</div>
       <div class="modal-actions"><button class="secondary" id="discSaveSelection">Save example selection</button></div>
-      <h3 style="margin-top:18px">2. Explain observed variations</h3>
+      <h3 style="margin-top:18px">2. Remove unrelated steps</h3>
+      <p class="muted">Uncheck a step that was captured inside an otherwise relevant walkthrough but should not be part of the handoff. Canonical OWG history is not deleted.</p>
+      <div style="max-height:220px;overflow:auto">${stepRows}</div>
+      <h3 style="margin-top:18px">3. Implementation context</h3>
+      <p class="muted">This is human-provided context and remains explicitly separate from observed evidence. Editing it clears any previous export approval.</p>
+      <label><strong>Build/change goal</strong><input id="discImplementationGoalReview" type="text" value="${esc(implementation.goal||'')}" style="width:100%;margin-top:5px"></label>
+      <label style="display:block;margin-top:8px"><strong>Your description</strong><textarea id="discImplementationDescriptionReview" rows="3" style="width:100%;margin-top:5px">${esc(implementation.description||'')}</textarea></label>
+      <h3 style="margin-top:18px">4. Explain observed variations</h3>
       <div>${questions}</div>
       ${saved ? `<h3 style="margin-top:18px">Saved employee answers</h3><div>${saved}</div>` : ''}
-      <h3 style="margin-top:18px">3. Review and export</h3>
+      <h3 style="margin-top:18px">5. Choose the AI handoff</h3>
+      <label><strong>What should the AI do with this?</strong>
+        <select id="discHandoffPurpose" style="margin-left:8px">
+          <option value="understand" ${state.handoff_purpose==='understand'?'selected':''}>Understand</option>
+          <option value="improve" ${state.handoff_purpose==='improve'?'selected':''}>Improve</option>
+          <option value="automate" ${!state.handoff_purpose || state.handoff_purpose==='automate'?'selected':''}>Automate</option>
+          <option value="build_tool" ${state.handoff_purpose==='build_tool'?'selected':''}>Build a tool</option>
+        </select>
+      </label>
+      <div class="muted" style="margin-top:5px">The package gets a short purpose-specific instruction; the underlying evidence does not change.</div>
+      <h3 style="margin-top:18px">6. Review and export</h3>
       <div class="note">The package states its observation window and limitations, keeps employee statements separate from captured evidence, and labels structural cases as non-replayable without source-system test data.</div>
       <div class="note" style="margin-top:8px"><strong>Redaction review:</strong> people and obvious personal identifiers are contextually redacted, but organization/company names may remain. If customer or company names are sensitive, inspect the redacted preview before approving export.</div>
       <div class="modal-actions">
@@ -230,11 +284,21 @@
         <button class="ghost" id="discDeleteEvidence">Delete Discovery evidence now</button>
       </div>`);
 
-    document.querySelector('#discSaveSelection').onclick = async () => { await saveSelection(); window.toast?.('Discovery example selection saved.'); };
+    document.querySelector('#discSaveSelection').onclick = async () => {
+      await saveSelection();
+      await saveImplementationContext();
+      await saveHandoffPurpose();
+      window.toast?.('Discovery review choices saved.');
+    };
     document.querySelectorAll('[data-save-disc-answer]').forEach(button => {
       button.onclick = () => saveSuggestedQuestion(Number(button.dataset.saveDiscAnswer || 0));
     });
-    document.querySelector('#discPreviewPackage').onclick = async () => { await saveSelection(); await previewPackage(); };
+    document.querySelector('#discPreviewPackage').onclick = async () => {
+      await saveSelection();
+      await saveImplementationContext();
+      await saveHandoffPurpose();
+      await previewPackage();
+    };
     document.querySelector('#discApproveExport').onclick = async () => {
       try { await approveAndExport(); } catch (error) { window.toast?.(error.message); }
     };
