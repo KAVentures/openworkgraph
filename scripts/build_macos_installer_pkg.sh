@@ -28,7 +28,7 @@ pkgbuild \
   --version "$VERSION" \
   "$VERSIONED"
 
-pkgutil --payload-files "$VERSIONED" | grep -q '^./Applications/OpenWorkGraph.app/'
+pkgutil --payload-files "$VERSIONED" | grep -Eq '^(\./)?Applications/OpenWorkGraph\.app/'
 HASH="$(shasum -a 256 "$VERSIONED" | awk '{print $1}')"
 printf '%s  %s\n' "$HASH" "$(basename "$VERSIONED")" > "$VERSIONED.sha256"
 
