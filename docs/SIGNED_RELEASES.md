@@ -8,42 +8,43 @@ This separation is intentional: missing or expired certificates must never break
 
 The signed workflow:
 
-1. builds the existing macOS payload;
-2. imports a **Developer ID Installer** certificate into a temporary CI keychain;
-3. creates a `.pkg` installer targeting `/Applications/OpenWorkGraph`;
-4. signs the installer with `productsign`;
-5. submits it to Apple's notarization service using `notarytool`;
-6. staples and validates the notarization ticket;
-7. verifies the installer assessment with `spctl`;
-8. uploads the signed `.pkg` and SHA-256 checksum as workflow artifacts.
+1. builds a real `OpenWorkGraph.app` menu-bar bundle with stable bundle identifier `com.kinvectum.openworkgraph`;
+2. embeds a private CPython runtime plus OpenWorkGraph dependencies inside the app, so first launch does not download Python;
+3. imports separate **Developer ID Application** and **Developer ID Installer** certificates into a temporary CI keychain;
+4. signs embedded Mach-O code and the app with hardened runtime;
+5. notarizes and staples the app itself;
+6. packages the app plus its login LaunchAgent into a `.pkg`;
+7. signs, notarizes and staples the installer;
+8. verifies both app execution and installer assessments with `spctl`;
+9. uploads the signed `.pkg` and SHA-256 checksum as workflow artifacts.
 
 Required GitHub Actions secrets:
 
+- `APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64`
+- `APPLE_APPLICATION_CERTIFICATE_PASSWORD`
+- `APPLE_APPLICATION_IDENTITY`
 - `APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64`
-- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_INSTALLER_CERTIFICATE_PASSWORD`
 - `APPLE_INSTALLER_IDENTITY`
 - `APPLE_ID`
 - `APPLE_APP_PASSWORD`
 - `APPLE_TEAM_ID`
 
-The temporary certificate/keychain is removed after the job.
+The temporary certificates/keychain are removed after the job.
 
-### Important macOS limitation
-
-The current desktop prototype still launches a private Python runtime after installation. A signed/notarized installer materially improves distribution trust, but it is **not the final stable macOS application identity for Accessibility/Input Monitoring (TCC)**. For a fully managed enterprise Mac deployment, the next packaging milestone should be a real signed `.app` bundle with a stable bundle identifier and embedded/signed runtime. The existing launcher is preserved until that app bundle is independently validated.
-
-Do not market the current `.pkg` as solving every TCC/MDM approval concern.
+The app starts as a menu-bar process and the installer includes a LaunchAgent for login start. Code signing gives the executable a stable application identity suitable for managed Accessibility/Input Monitoring approval, but organizations still need to configure the corresponding MDM/TCC policy where required.
 
 ## Windows
 
 The signed workflow:
 
 1. builds the existing Windows payload;
-2. installs Inno Setup in CI;
-3. creates a per-user OpenWorkGraph installer `.exe`;
-4. signs the installer with Authenticode using `signtool.exe` and an RFC3161 timestamp;
-5. verifies the Authenticode signature;
-6. uploads the signed installer and SHA-256 checksum.
+2. embeds a private CPython runtime plus OpenWorkGraph dependencies, so first launch does not download Python and does not require PowerShell;
+3. installs Inno Setup in CI;
+4. creates a per-user OpenWorkGraph installer `.exe` with tray launch and optional login autostart;
+5. signs the installer with Authenticode using `signtool.exe` and an RFC3161 timestamp;
+6. verifies the Authenticode signature;
+7. uploads the signed installer and SHA-256 checksum.
 
 Required GitHub Actions secrets:
 
