@@ -43,6 +43,11 @@ if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
   exit 2
 fi
 
+# uv may create convenience aliases beside the real versioned runtime. Those
+# symlinks are unnecessary in the app bundle and can make codesign reject the
+# bundle as having an invalid symlink destination, so ship only the real tree.
+find "$RUNTIME_ROOT" -maxdepth 1 -type l -delete
+
 pushd "$PAYLOAD" >/dev/null
 uv pip install --python "$PYTHON" --system --break-system-packages --link-mode copy .
 "$PYTHON" - <<'PY'
@@ -51,7 +56,8 @@ import server.secure_app, collector.main
 print("embedded macOS runtime imports OK")
 PY
 popd >/dev/null
-ln -s "${PYTHON#"$PAYLOAD/.runtime/"}" "$PAYLOAD/.runtime/python3"
+PYTHON_RELATIVE="${PYTHON#"$PAYLOAD/"}"
+printf '%s\n' "$PYTHON_RELATIVE" > "$PAYLOAD/EMBEDDED_PYTHON.txt"
 printf 'OpenWorkGraph %s embedded macOS CPython runtime\n' "$VERSION" > "$PAYLOAD/OFFLINE_RUNTIME"
 
 cat > "$CONTENTS/Info.plist" <<EOF
@@ -89,7 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var python: URL {
-        appRoot.appendingPathComponent(".runtime/python3")
+        let marker = appRoot.appendingPathComponent("EMBEDDED_PYTHON.txt")
+        let relative = (try? String(contentsOf: marker, encoding: .utf8))
+            ?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return appRoot.appendingPathComponent(relative)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
