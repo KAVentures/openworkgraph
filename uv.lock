@@ -899,11 +899,11 @@ name = "pynput"
 version = "1.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "evdev", marker = "'linux' in sys_platform" },
+    { name = "evdev", marker = "(python_full_version < '3.12' and 'linux' in sys_platform) or (python_full_version >= '3.14' and 'linux' in sys_platform) or (sys_platform != 'emscripten' and 'linux' in sys_platform)" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
-    { name = "python-xlib", marker = "'linux' in sys_platform" },
-    { name = "six" },
+    { name = "python-xlib", marker = "(python_full_version < '3.12' and 'linux' in sys_platform) or (python_full_version >= '3.14' and 'linux' in sys_platform) or (sys_platform != 'emscripten' and 'linux' in sys_platform)" },
+    { name = "six", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/c6/e2d415610cfbc78308bee44218a46124aaa3301b1df08814df819b2254a1/pynput-1.8.2.tar.gz", hash = "sha256:f493c87157cd3861b4468f7f896857051762f44ed26f1b641e7cc5840a457087", size = 82818, upload-time = "2026-05-12T19:11:39.464Z" }
 wheels = [
@@ -931,10 +931,10 @@ name = "pyobjc-framework-applicationservices"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-coretext" },
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-core", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-cocoa", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-coretext", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-quartz", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/29/40/b792ecc88a9fa639318509c127f0b153cd334bd27b47df373f4b7362a36d/pyobjc_framework_applicationservices-12.2.2.tar.gz", hash = "sha256:0bcc09531d5854598fd74706d999e4ae3b7c503204d318910d02eba30e8eecef", size = 109668, upload-time = "2026-08-11T19:43:45.347Z" }
 wheels = [
@@ -953,7 +953,7 @@ name = "pyobjc-framework-cocoa"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
+    { name = "pyobjc-core", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/75/76/49c6da2c6a831020b4854ba20079d5a1030474bffc776b7b73c2eeff8c15/pyobjc_framework_cocoa-12.2.2.tar.gz", hash = "sha256:c96c0ef69a71afbbb0e6a7d594b455c5fe47d62e0db376ee7a2b4b828c16ace9", size = 3132831, upload-time = "2026-08-11T19:44:02.288Z" }
 wheels = [
@@ -972,9 +972,9 @@ name = "pyobjc-framework-coretext"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-core", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-cocoa", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-quartz", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6d/66/405006d3502ffcd3bc69e0b7249ab7c05a5b43a07fa3959ce6b2a84f3278/pyobjc_framework_coretext-12.2.2.tar.gz", hash = "sha256:64ddc02303217028e32e22c7cc00b5112d84e9d9a67c37d00c2e54f9172284ab", size = 97658, upload-time = "2026-08-11T19:44:17.207Z" }
 wheels = [
@@ -993,8 +993,8 @@ name = "pyobjc-framework-quartz"
 version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-cocoa", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/35/b1/426a37c7ae37280b3ffca2571fb48f211946aee2f4ca31a603ed1943c4a7/pyobjc_framework_quartz-12.2.2.tar.gz", hash = "sha256:810f97b210cfd93704d240860286dfd6df09f9f1c52525fc5c2166723aea3f9e", size = 3218295, upload-time = "2026-08-11T19:45:15.189Z" }
 wheels = [
@@ -1006,6 +1006,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/25/eb/7482fdd384521916e98a6164be220494b1f7794792b1d60fa3f5207d84a4/pyobjc_framework_quartz-12.2.2-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:ebf8167ca2096cf3a05199decfa517be0df4c56048f49cf132bd6b1a6ab9c086", size = 224726, upload-time = "2026-08-11T19:40:28.718Z" },
     { url = "https://files.pythonhosted.org/packages/33/67/b4b0ffc486b08492bfef4b33731d044b295f1696c8fb7d119c8367079139/pyobjc_framework_quartz-12.2.2-cp315-cp315-macosx_10_15_universal2.whl", hash = "sha256:cee63b891c2b6b7ccf98f233175411529f3e80286f58438793b3634af79858f1", size = 219827, upload-time = "2026-08-11T19:40:29.764Z" },
     { url = "https://files.pythonhosted.org/packages/aa/eb/5fb627c2457046883c6fd12d25c44db40c12bcde4622dc0f30851108e106/pyobjc_framework_quartz-12.2.2-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:8f58c589b5a76ba98f186b1f3b19fb1c8b730e82351f81fb62e6194f64a71622", size = 224767, upload-time = "2026-08-11T19:40:30.991Z" },
+]
+
+[[package]]
+name = "pystray"
+version = "0.19.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
+    { name = "python-xlib", marker = "sys_platform == 'linux'" },
+    { name = "six", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/64/927a4b9024196a4799eba0180e0ca31568426f258a4a5c90f87a97f51d28/pystray-0.19.5-py2.py3-none-any.whl", hash = "sha256:a0c2229d02cf87207297c22d86ffc57c86c227517b038c0d3c59df79295ac617", size = 49068, upload-time = "2023-09-17T13:44:26.872Z" },
 ]
 
 [[package]]
@@ -1047,7 +1061,7 @@ name = "python-xlib"
 version = "0.33"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six" },
+    { name = "six", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
 wheels = [
@@ -1381,7 +1395,7 @@ name = "uiautomation"
 version = "2.0.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "comtypes" },
+    { name = "comtypes", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bc/23/8238b5cb73e54c3618ce4d443c1830a2749264a0d61a9b61637096b8dc7a/uiautomation-2.0.29.tar.gz", hash = "sha256:3c169112043ce21065aead1d79c3baebdafc9cf03bd24ded02b2db11d423d88d", size = 203970, upload-time = "2025-08-05T05:14:41.194Z" }
 wheels = [
@@ -1673,6 +1687,7 @@ dependencies = [
     { name = "psutil" },
     { name = "pynput", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
+    { name = "pystray", marker = "sys_platform == 'win32'" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "uiautomation", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1703,6 +1718,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'gateway'", specifier = ">=2.10,<3" },
     { name = "pynput", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=1.8,<2" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'", specifier = ">=11,<13" },
+    { name = "pystray", marker = "sys_platform == 'win32'", specifier = ">=0.19,<1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=306,<312" },
     { name = "uiautomation", marker = "sys_platform == 'win32'", specifier = "==2.0.29" },
