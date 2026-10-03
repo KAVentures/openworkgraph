@@ -336,6 +336,7 @@ def get_discovery() -> dict[str, Any]:
     _purge_discovery_evidence(force=False)
     state = public_state()
     if state.get("enabled"):
+        state["handoff_instruction"] = _handoff_instruction(state)
         try:
             since, until = _window(state)
             families = list_workflow_evidence_candidates(
