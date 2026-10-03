@@ -36,21 +36,36 @@ jobs:
           plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist dist/com.kinvectum.openworkgraph.plist
       - name: Build clickable macOS installer
         run: bash scripts/build_macos_installer_pkg.sh
-      - name: Smoke-test embedded macOS runtime twice
+      - name: Smoke-test embedded macOS runtime with stable user state
         run: |
           set -euo pipefail
           PAYLOAD="$PWD/dist/OpenWorkGraph.app/Contents/Resources/openworkgraph"
           PYTHON_RELATIVE="$(tr -d '\r\n' < "$PAYLOAD/EMBEDDED_PYTHON.txt")"
           PYTHON="$PAYLOAD/$PYTHON_RELATIVE"
           "$PYTHON" -c "import fastapi, mcp; import server.secure_app, collector.main"
+
           export HOME="$RUNNER_TEMP/owg-macos-app-home"
+          INSTALL="$HOME/Library/Application Support/WorkflowObserver"
           mkdir -p "$HOME"
+
+          sync_payload() {
+            mkdir -p "$INSTALL"
+            /usr/bin/rsync -a --delete \
+              --exclude '.venv/' \
+              --exclude '.runtime/' \
+              --exclude '.pytest_cache/' \
+              --exclude '__pycache__/' \
+              --exclude 'data/' \
+              --exclude 'config.json' \
+              "$PAYLOAD/" "$INSTALL/"
+          }
 
           launch_demo() {
             label="$1"
+            sync_payload
             (
-              cd "$PAYLOAD"
-              "$PYTHON" start.py --mode demo
+              cd "$INSTALL"
+              "$PYTHON" "$INSTALL/start.py" --mode demo
             ) >"$RUNNER_TEMP/owg-$label.log" 2>&1 &
             pid=$!
             ok=0
@@ -77,8 +92,13 @@ jobs:
             /usr/bin/pkill -KILL -P "$pid" 2>/dev/null || true
             kill -KILL "$pid" 2>/dev/null || true
           }
+
           launch_demo first
+          test -f "$INSTALL/config.json"
+          mkdir -p "$INSTALL/data/live"
+          printf 'preserve-me\n' > "$INSTALL/data/live/desktop-installer-smoke.txt"
           launch_demo second
+          grep -q 'preserve-me' "$INSTALL/data/live/desktop-installer-smoke.txt"
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
