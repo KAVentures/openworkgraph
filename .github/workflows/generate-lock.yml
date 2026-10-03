@@ -22,7 +22,7 @@ jobs:
         run: uv lock
       - name: Commit lockfile if changed
         run: |
-          if git diff --quiet -- uv.lock && test -f uv.lock; then
+          if test -z "$(git status --porcelain -- uv.lock)"; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
