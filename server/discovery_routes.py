@@ -543,10 +543,15 @@ def export_discovery_package(representation: str = "redacted") -> Response:
         raise HTTPException(status_code=422, detail="representation must be redacted or stored")
     package = _package(state)
     payload = redact_contextually(package) if mode == "redacted" else package
-    # Approval is the boundary for exposing real provider locators from the
-    # installation-local lookup. Pre-approval previews remain opaque.
-    payload = expand_resource_references(payload)
-    payload["approved_local_object_locators_included"] = True
+    # Redacted exports deliberately keep provider IDs opaque even after approval.
+    # An explicitly requested stored package may include local resolver locators;
+    # Full local AI context can also resolve them without copying them into OWG.
+    if mode == "stored":
+        payload = expand_resource_references(payload)
+        payload["approved_local_object_locators_included"] = True
+    else:
+        payload["approved_local_object_locators_included"] = False
+        payload["exact_local_object_locators_available_in_full_local_ai_context"] = True
     payload["export_representation"] = "contextually_redacted" if mode == "redacted" else "stored_privacy_hardened"
     body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     study = payload.get("study") if isinstance(payload.get("study"), dict) else {}
