@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   macos-signed-installer:
@@ -150,3 +150,49 @@ jobs:
             dist/OpenWorkGraph-Windows-Setup-v*.exe
             dist/OpenWorkGraph-Windows-Setup-v*.exe.sha256
           if-no-files-found: error
+
+  publish-signed-installers:
+    needs: [macos-signed-installer, windows-signed-installer]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download signed macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenWorkGraph-macOS-Signed
+          path: signed-assets
+      - name: Download signed Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenWorkGraph-Windows-Signed
+          path: signed-assets
+      - name: Replace release installer assets with signed builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="v${VERSION}"
+          gh release view "$TAG" >/dev/null
+
+          MAC_VERSIONED="$(find signed-assets -maxdepth 1 -type f -name 'OpenWorkGraph-macOS-v*.pkg' ! -name '*.sha256' | head -n 1)"
+          WIN_VERSIONED="$(find signed-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Setup-v*.exe' | head -n 1)"
+          test -n "$MAC_VERSIONED" && test -f "$MAC_VERSIONED"
+          test -n "$WIN_VERSIONED" && test -f "$WIN_VERSIONED"
+
+          cp "$MAC_VERSIONED" signed-assets/OpenWorkGraph-macOS.pkg
+          cp "$WIN_VERSIONED" signed-assets/OpenWorkGraph-Windows-Setup.exe
+          sha256sum signed-assets/OpenWorkGraph-macOS.pkg > signed-assets/OpenWorkGraph-macOS.pkg.sha256
+          sha256sum signed-assets/OpenWorkGraph-Windows-Setup.exe > signed-assets/OpenWorkGraph-Windows-Setup.exe.sha256
+
+          gh release upload "$TAG" \
+            "$MAC_VERSIONED" \
+            "$MAC_VERSIONED.sha256" \
+            "$WIN_VERSIONED" \
+            "$WIN_VERSIONED.sha256" \
+            signed-assets/OpenWorkGraph-macOS.pkg \
+            signed-assets/OpenWorkGraph-macOS.pkg.sha256 \
+            signed-assets/OpenWorkGraph-Windows-Setup.exe \
+            signed-assets/OpenWorkGraph-Windows-Setup.exe.sha256 \
+            --clobber
