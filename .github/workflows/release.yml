@@ -27,11 +27,63 @@ jobs:
 
   windows-package:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
       - name: Build standalone Windows tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
+      - name: Embed offline runtime for installer
+        shell: powershell
+        run: ./scripts/embed_windows_runtime.ps1
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+      - name: Build unsigned offline installer
+        shell: powershell
+        run: ./scripts/build_windows_installer.ps1
+      - name: Smoke-test installed offline runtime twice
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $Installer = (Resolve-Path "dist\OpenWorkGraph-Windows-Setup-v$Version.exe").Path
+          $InstallDir = Join-Path $env:RUNNER_TEMP "owg-installed"
+          Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=$InstallDir", "/MERGETASKS=!startup" -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Installer exited with $($proc.ExitCode)" }
+          $Payload = Join-Path $InstallDir ".openworkgraph-src"
+          $Python = Join-Path $Payload ".venv\Scripts\python.exe"
+          $Pythonw = Join-Path $Payload ".venv\Scripts\pythonw.exe"
+          if (-not (Test-Path $Python) -or -not (Test-Path $Pythonw) -or -not (Test-Path (Join-Path $Payload "OFFLINE_RUNTIME"))) {
+            throw "Offline runtime is missing from installed payload"
+          }
+          & $Python -c "import fastapi, mcp, pystray, win32com.client, uiautomation"
+          if ($LASTEXITCODE -ne 0) { throw "Installed runtime import smoke failed" }
+
+          function Launch-Demo([string]$label) {
+            $app = Start-Process -FilePath $Python -ArgumentList "start.py", "--mode", "demo" -WorkingDirectory $Payload -PassThru -WindowStyle Hidden
+            try {
+              $ok = $false
+              for ($i=0; $i -lt 90; $i++) {
+                if ($app.HasExited) { throw "$label offline launch exited early: $($app.ExitCode)" }
+                try {
+                  $health = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 2
+                  if ($health.status -eq "ok") { $ok = $true; break }
+                } catch {}
+                Start-Sleep -Seconds 1
+              }
+              if (-not $ok) { throw "$label offline launch never reached health" }
+            } finally {
+              & taskkill.exe /PID $app.Id /T /F 2>$null | Out-Null
+              Start-Sleep -Seconds 2
+            }
+          }
+          Launch-Demo "first"
+          Launch-Demo "second"
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -39,6 +91,7 @@ jobs:
           path: |
             dist/OpenWorkGraph-Windows.zip
             dist/OpenWorkGraph-Windows.zip.sha256
+            dist/OpenWorkGraph-Windows-Setup-v*.exe
           if-no-files-found: error
 
   mcpb-package:
