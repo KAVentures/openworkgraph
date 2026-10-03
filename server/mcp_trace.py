@@ -36,13 +36,13 @@ def _filter_clauses(
     app_name: str | None,
     session_id: str | None,
 ) -> tuple[list[str], list[Any]]:
-    clauses = ["observed_at <= ?"]
+    clauses = ["julianday(observed_at) <= julianday(?)"]
     params: list[Any] = [snapshot_until]
     if since:
-        clauses.append("observed_at >= ?")
+        clauses.append("julianday(observed_at) >= julianday(?)")
         params.append(since)
     if until:
-        clauses.append("observed_at <= ?")
+        clauses.append("julianday(observed_at) <= julianday(?)")
         params.append(until)
     if app_name:
         clauses.append("LOWER(COALESCE(app,'')) = LOWER(?)")
@@ -135,6 +135,15 @@ def workflow_trace(
         effective_scope = scope if scope in {"current", "all"} else "current"
         if effective_scope == "current" and not effective_since:
             effective_since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") or None
+
+    # Cursor filters are bookmarks, not authorization. Intersect explicit bounds
+    # on every page so a narrower/revoked MCP history grant cannot be bypassed.
+    def instant(value):
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    if since:
+        effective_since = max(filter(None, [effective_since, since]), key=instant)
+    if until:
+        effective_until = min(filter(None, [effective_until, until]), key=instant)
 
     token_query = _redacted_token_query(effective_query)
     clauses, params = _filter_clauses(

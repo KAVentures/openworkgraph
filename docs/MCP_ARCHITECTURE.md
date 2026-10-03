@@ -27,7 +27,7 @@ Local AI access starts OFF on every OpenWorkGraph launch and can be disabled aga
 
 ### Compact surface for new connections
 
-New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use this 15-tool compact surface:
+New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use this 18-tool compact surface:
 
 ```text
 get_current_work_context
@@ -38,6 +38,9 @@ get_workflow_trace
 get_work_profile
 find_repeated_workflows
 get_workflow_evidence
+get_workflow_knowledge
+save_workflow_knowledge
+forget_workflow_knowledge
 get_task_context
 how_did_similar_runs_go
 get_agent_runs

@@ -21,6 +21,7 @@ from .query import workflow_trace
 _TEAM_SCOPE_RE = re.compile(r"^team:([A-Za-z0-9._-]{1,128}):evidence:read$")
 _ALLOWED_STATIC_SCOPES = {
     "self:evidence:read",
+    "self:knowledge:write",
     "org:evidence:read",
     "aggregate:read",
     "pseudonymous:evidence:read",
@@ -78,6 +79,8 @@ def _normalize_group_map(value: str) -> dict[str, frozenset[str]]:
 
 @dataclass(frozen=True)
 class HumanAccessSettings:
+    mcp_resource_url: str = ""
+    mcp_oauth_scope: str = ""
     issuer: str = ""
     audience: str = ""
     jwks_url: str = ""
@@ -97,6 +100,8 @@ class HumanAccessSettings:
     def from_env(cls) -> "HumanAccessSettings":
         group_map = _normalize_group_map(os.getenv("OWG_GATEWAY_OIDC_GROUP_SCOPE_MAP", ""))
         value = cls(
+            mcp_oauth_scope=str(os.getenv("OWG_GATEWAY_MCP_OAUTH_SCOPE", "") or "").strip(),
+            mcp_resource_url=str(os.getenv("OWG_GATEWAY_MCP_RESOURCE_URL", "") or "").strip(),
             issuer=str(os.getenv("OWG_GATEWAY_OIDC_ISSUER", "") or "").strip(),
             audience=str(os.getenv("OWG_GATEWAY_OIDC_AUDIENCE", "") or "").strip(),
             jwks_url=str(os.getenv("OWG_GATEWAY_OIDC_JWKS_URL", "") or "").strip(),

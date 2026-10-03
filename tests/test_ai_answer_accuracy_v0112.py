@@ -261,7 +261,7 @@ def test_aggregate_history_error_names_exact_fix(monkeypatch):
     with pytest.raises(ToolError) as caught:
         compact.find_repeated_workflows()
     text = str(caught.value)
-    assert "All saved history" in text
+    assert "permitted history range" in text
     assert "get_workflow_trace" in text
     assert "since/until" in text
 
@@ -295,23 +295,13 @@ def test_simulated_workday_answer_shape_is_specific_without_sensitive_content(mo
     monkeypatch.setattr(compact.core, "_finish", lambda _name, value: value)
 
     pattern = {
-        "suggested_label": "Compose and send email",
-        "task_family": "crm.update",
-        "observed_count": 3,
-        "action_skeleton": ["gmail:open_email", "salesforce:open_account", "google_sheets:update_status", "gmail:send"],
-        "surfaces": ["Gmail", "Salesforce", "Google Sheets", "Gmail"],
-        "median_engaged_seconds": 0,
-        "total_foreground_seconds": 1980,
+        "family_key": "human:crm.update", "execution_count": 3,
+        "high_support_structural_steps": ["Gmail · Open Email", "Salesforce · Open Account", "Google Sheets · Update Status", "Gmail · Send"],
+        "median_execution_duration_seconds": 660,
     }
-
     def fake_get(path: str, params=None):
-        if path == "/v1/tasks":
-            return {"tasks": [], "patterns": [pattern]}
-        if path == "/v1/summary":
-            return {"repeated_task_patterns": [pattern]}
-        if path == "/v1/procedural-memory":
-            return {"families": [{"family_key": "human:crm.update", "actor_kind": "human", "family_basis": "observed", "execution_count": 3}]}
-        raise AssertionError(path)
+        assert path == "/v1/workflow-evidence/families"
+        return {"families": [pattern]}
 
     monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
     result = compact.find_repeated_workflows()

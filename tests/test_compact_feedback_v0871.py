@@ -67,6 +67,8 @@ def _install_feedback_fakes(monkeypatch):
     def fake_get(path: str, params: dict | None = None):
         params = dict(params or {})
         calls.append((path, params))
+        if path == "/v1/workflow-evidence/families":
+            return {"families": [dict(overview["families"][0], executions=[{"execution_id": "execution:example"}])]}
         if path == "/v1/tasks":
             return tasks
         if path == "/v1/summary":
@@ -121,7 +123,7 @@ def test_repeated_workflow_key_feeds_feedback_loop(monkeypatch):
     compact, _calls = _install_feedback_fakes(monkeypatch)
 
     repeated = compact.find_repeated_workflows(task_family="email.compose_send")
-    assert repeated["patterns"][0]["task_family"] == "email.compose_send"
+    assert repeated["patterns"][0]["execution_count"] == 3
     assert repeated["patterns"][0]["family_key"] == "human:email.compose_send"
     assert repeated["examples"][0]["family_key"] == "human:email.compose_send"
 

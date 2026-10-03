@@ -173,8 +173,9 @@
         </div>
         <div class="pv-row pv-sub" id="pvHistoryRow">
           <div><h3>Include older history</h3><div class="muted" id="pvHistoryText">Off: AI apps only see the current run.</div></div>
-          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvHistorySwitch" aria-checked="false" aria-label="Let AI apps read older history"></button></div>
+          <div class="pv-control"><select id="pvHistoryDuration" aria-label="Older history access duration"><option value="1440">24 hours</option><option value="standing">Until I revoke access</option></select><button type="button" class="sw" role="switch" id="pvHistorySwitch" aria-checked="false" aria-label="Let AI apps read older history"></button></div>
         </div>
+        <div class="muted">Procedures you explicitly save in an AI conversation are separate from recording history. Ask your AI to list or forget them.</div>
         <div class="pv-row pv-sub" id="pvRestartRow">
           <div><h3>Turn AI access off every time OpenWorkGraph starts</h3><div class="muted">Off: your choice above is remembered after a restart.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvRestartSwitch" aria-checked="false" aria-label="Turn AI access off every time OpenWorkGraph starts"></button></div>
@@ -255,12 +256,14 @@
     setSwitch('#pvHistorySwitch', historyMode !== 'off');
     const historySwitch = $('#pvHistorySwitch');
     if (historySwitch) historySwitch.disabled = !on && historyMode === 'off';
+    const duration = $('#pvHistoryDuration');
+    if (duration && historyMode !== 'off') duration.value = p.history?.expires_at ? '1440' : 'standing';
     const historyText = $('#pvHistoryText');
     if (historyText) {
       const until = p.history?.expires_at ? new Date(p.history.expires_at).toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'}) : '';
       historyText.textContent = historyMode === 'off'
         ? (on ? 'Off: AI apps only see the current run.' : 'Turn on AI access first.')
-        : `On${historyMode === 'selected_range' ? ' for selected dates' : ''}${until ? ` until ${until}` : ''}. It always switches itself off again.`;
+        : `On${historyMode === 'selected_range' ? ' for selected dates' : ''}${until ? ` until ${until}` : ''}${until ? '. Access expires automatically.' : '. Access stays on until you revoke it.'}`;
     }
     // Redaction
     if (p.detail) {
@@ -354,8 +357,8 @@
     panel.querySelector('#pvHistorySwitch').onclick = async () => {
       const on = String(privacy.history?.mode || 'off') !== 'off';
       try {
-        await api('/v1/history/ai-access', send('POST', on ? {mode: 'off'} : {mode: 'all_saved', expires_minutes: 1440}));
-        toast(on ? 'AI apps can no longer read older history.' : 'AI apps can read older history for the next 24 hours.');
+        await api('/v1/history/ai-access', send('POST', on ? {mode: 'off'} : {mode: 'all_saved', expires_minutes: panel.querySelector('#pvHistoryDuration').value === 'standing' ? null : 1440}));
+        toast(on ? 'AI apps can no longer read older history.' : panel.querySelector('#pvHistoryDuration').value === 'standing' ? 'AI apps can read older history until you revoke access.' : 'AI apps can read older history for the next 24 hours.');
         window.refreshHistory?.();
       } catch (error) { toast(error.message || 'Could not change history access.'); }
       refreshPrivacy();

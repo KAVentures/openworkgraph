@@ -375,11 +375,17 @@ class GatewayDB:
     ) -> list[dict[str, Any]]:
         clauses = ["organization_id = ?"]
         params: list[Any] = [organization_id]
+        # observed_at is intentionally stored as portable ISO text. Valid ISO
+        # instants can have different textual spellings (Z, +00:00, fractional
+        # seconds), so lexical comparison can duplicate/skip cursor rows. Parse
+        # instants in the database for bounds, cursor progression, and ordering.
+        instant = "CAST(observed_at AS TIMESTAMPTZ)" if self.is_postgres else "julianday(observed_at)"
+        value = "CAST(? AS TIMESTAMPTZ)" if self.is_postgres else "julianday(?)"
         if since:
-            clauses.append("observed_at >= ?")
+            clauses.append(f"{instant} >= {value}")
             params.append(since)
         if until:
-            clauses.append("observed_at <= ?")
+            clauses.append(f"{instant} <= {value}")
             params.append(until)
         if actor_id:
             clauses.append("actor_id = ?")
@@ -398,9 +404,9 @@ class GatewayDB:
             clauses.append("(COALESCE(app,'') LIKE ? OR COALESCE(window_title,'') LIKE ? OR event_type LIKE ? OR metadata_json LIKE ?)")
             params.extend([like, like, like, like])
         if after_at:
-            clauses.append("(observed_at > ? OR (observed_at = ? AND event_id > ?))")
+            clauses.append(f"({instant} > {value} OR ({instant} = {value} AND event_id > ?))")
             params.extend([after_at, after_at, after_event_id or ""])
-        sql = f"SELECT * FROM evidence_events WHERE {' AND '.join(clauses)} ORDER BY observed_at ASC, event_id ASC LIMIT ?"
+        sql = f"SELECT * FROM evidence_events WHERE {' AND '.join(clauses)} ORDER BY {instant} ASC, event_id ASC LIMIT ?"
         params.append(max(1, min(int(limit), 5001)))
         with self.connect() as conn:
             cur = self._execute(conn, sql, tuple(params))
@@ -424,7 +430,8 @@ class GatewayDB:
         if device_id:
             clauses.append("device_id = ?")
             params.append(device_id)
-        sql = f"SELECT * FROM evidence_events WHERE {' AND '.join(clauses)} ORDER BY observed_at DESC, event_id DESC LIMIT ?"
+        instant = "CAST(observed_at AS TIMESTAMPTZ)" if self.is_postgres else "julianday(observed_at)"
+        sql = f"SELECT * FROM evidence_events WHERE {' AND '.join(clauses)} ORDER BY {instant} DESC, event_id DESC LIMIT ?"
         params.append(max(1, min(int(limit), 500)))
         with self.connect() as conn:
             cur = self._execute(conn, sql, tuple(params))
