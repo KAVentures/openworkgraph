@@ -9,7 +9,11 @@ from .history_guard import install_history_guard
 
 install_history_guard(_secure_runtime)
 register_agent_tools(mcp)
-register_automation_guidance(mcp, instructions=LEGACY_MCP_SERVER_INSTRUCTIONS)
+register_automation_guidance(
+    mcp,
+    instructions=LEGACY_MCP_SERVER_INSTRUCTIONS,
+    expose_capability_tool=False,
+)
 
 
 if __name__ == "__main__":
