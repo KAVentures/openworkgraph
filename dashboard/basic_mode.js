@@ -532,6 +532,29 @@
 
   // ------------------------------------------------------------------ data + lifecycle
 
+  async function checkForUpdate() {
+    try {
+      const status = await api('/v1/update-status');
+      let chip = $('#updateStatusChip');
+      if (!status?.update_available || !status?.release_url) {
+        chip?.remove();
+        return;
+      }
+      if (!chip) {
+        chip = document.createElement('button');
+        chip.id = 'updateStatusChip';
+        chip.type = 'button';
+        chip.className = 'status-chip action on';
+        const row = $('.status-row');
+        const spacer = row?.querySelector('.status-spacer');
+        if (row) row.insertBefore(chip, spacer || null);
+      }
+      chip.textContent = `Update v${status.latest_version} available`;
+      chip.title = 'Open the official OpenWorkGraph GitHub release. The version check sends no work evidence.';
+      chip.onclick = () => window.open(status.release_url, '_blank', 'noopener,noreferrer');
+    } catch (_) {}
+  }
+
   let factsLoading = false;
   async function refreshFacts() {
     if (factsLoading || window.__owgAuthLost) return;
@@ -569,7 +592,7 @@
       window.renderGlobal.__owgHero = true;
     }
     new MutationObserver(scheduleApply).observe($('main') || document.body, {childList: true, subtree: true});
-    refreshPrivacy(); refreshFacts();
+    refreshPrivacy(); refreshFacts(); checkForUpdate();
     // Light polling, only while visible: the hero and Privacy reflect switches flipped elsewhere.
     setInterval(() => { if (!document.hidden) { refreshPrivacy(); renderAuthBanner(); } }, 5000);
     setInterval(() => { if (!document.hidden) refreshFacts(); }, 30000);
