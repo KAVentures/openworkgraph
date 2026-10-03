@@ -96,44 +96,33 @@ def test_release_notes_are_current_and_version_driven():
     assert "OpenWorkGraph-Agent-Node.mjs" in workflow
     assert "OpenWorkGraph-Agent-Node.d.ts" in workflow
 
-    v118 = (ROOT / "docs" / "CHANGELOG_V0118.md").read_text(encoding="utf-8")
-    assert "0.118.0" in v118 and "Privacy tab" in v118 and "Never record" in v118
-    assert "off on a new install" in v118
-
-    current = (ROOT / "docs" / "CHANGELOG_V0117.md").read_text(encoding="utf-8")
-    current_lower = current.lower()
-    assert "0.117.0" in current
-    assert "timeline shows again" in current_lower
-    assert "evidence keeps its context" in current_lower
-    assert "settings tab" in current_lower
-    assert "every 5 seconds" in current_lower
-
-    changelog = (ROOT / "docs" / "CHANGELOG_V0116.md").read_text(encoding="utf-8")
+    changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert "0.118.0" in changelog and "Privacy tab" in changelog and "Never record" in changelog
+    assert "off on a new install" in changelog
+    assert "0.117.0" in changelog
+    assert "timeline shows again" in changelog_lower
+    assert "evidence keeps its context" in changelog_lower
+    assert "settings tab" in changelog_lower
+    assert "every 5 seconds" in changelog_lower
     assert "evidence-first" in changelog_lower
     assert "explicit execution" in changelog_lower
     assert "redacted" in changelog_lower
     assert "stored privacy-hardened" in changelog_lower
     assert "13 tools" in changelog_lower
     assert "0.116.0" in changelog
-
-    prior_115 = (ROOT / "docs" / "CHANGELOG_V0115.md").read_text(encoding="utf-8").lower()
-    assert "human-only" in prior_115
-    assert "ai agent" in prior_115
-    assert "copy/paste" in prior_115
-    assert "try_demo_openworkgraph" in prior_115
-
-    prior_114 = (ROOT / "docs" / "CHANGELOG_V0114.md").read_text(encoding="utf-8").lower()
-    assert "privacy-first" in prior_114
-    assert "rich enterprise" in prior_114
-    assert "hmac" in prior_114
-
-    prior = (ROOT / "docs" / "CHANGELOG_V0113.md").read_text(encoding="utf-8").lower()
-    assert "historical replayability" in prior
-    assert "next autonomy boundary" in prior
-    assert "consequence-aware" in prior
-    assert "underestimation" in prior
-    assert "overreach" in prior
+    assert "human-only" in changelog_lower
+    assert "ai agent" in changelog_lower
+    assert "copy/paste" in changelog_lower
+    assert "try_demo_openworkgraph" in changelog_lower
+    assert "privacy-first" in changelog_lower
+    assert "rich enterprise" in changelog_lower
+    assert "hmac" in changelog_lower
+    assert "historical replayability" in changelog_lower
+    assert "next autonomy boundary" in changelog_lower
+    assert "consequence-aware" in changelog_lower
+    assert "underestimation" in changelog_lower
+    assert "overreach" in changelog_lower
 
 
 def test_generic_otel_docs_use_exact_json_trace_endpoint():

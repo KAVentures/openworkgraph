@@ -82,6 +82,12 @@ def _default() -> dict[str, Any]:
         "session_id": None,
         "name": "",
         "purpose": "",
+        "implementation_context": {
+            "goal": "",
+            "description": "",
+            "source": "human_provided",
+        },
+        "handoff_purpose": "automate",
         "starts_at": None,
         "ends_at": None,
         "finished_at": None,
@@ -99,6 +105,7 @@ def _default() -> dict[str, Any]:
         "employee_review_required": True,
         "share_approved_at": None,
         "excluded_execution_ids": [],
+        "excluded_event_ids": [],
         "questions": [],
     }
 
@@ -130,6 +137,19 @@ def _normalize(value: dict[str, Any] | None) -> dict[str, Any]:
         str(x) for x in (base.get("excluded_execution_ids") or [])
         if str(x or "").strip()
     ][:500]
+    base["excluded_event_ids"] = [
+        str(x) for x in (base.get("excluded_event_ids") or [])
+        if str(x or "").strip()
+    ][:2000]
+    context = base.get("implementation_context")
+    context = context if isinstance(context, dict) else {}
+    base["implementation_context"] = {
+        "goal": str(context.get("goal") or "")[:2000],
+        "description": str(context.get("description") or "")[:10000],
+        "source": "human_provided",
+    }
+    handoff = str(base.get("handoff_purpose") or "automate").strip().lower()
+    base["handoff_purpose"] = handoff if handoff in {"understand", "improve", "automate", "build_tool"} else "automate"
     questions = []
     for item in base.get("questions") or []:
         if not isinstance(item, dict):
@@ -186,6 +206,9 @@ def start_session(
     *,
     name: str,
     purpose: str,
+    implementation_goal: str = "",
+    implementation_description: str = "",
+    handoff_purpose: str = "automate",
     allowed_apps: list[str] | None = None,
     allowed_browser_hosts: list[str] | None = None,
     duration_days: float = 5,
@@ -230,6 +253,16 @@ def start_session(
             "session_id": "disc_" + uuid.uuid4().hex[:20],
             "name": str(name or "Workflow discovery").strip()[:200],
             "purpose": str(purpose or "").strip()[:2000],
+            "implementation_context": {
+                "goal": str(implementation_goal or "").strip()[:2000],
+                "description": str(implementation_description or "").strip()[:10000],
+                "source": "human_provided",
+            },
+            "handoff_purpose": (
+                str(handoff_purpose or "automate").strip().lower()
+                if str(handoff_purpose or "automate").strip().lower() in {"understand", "improve", "automate", "build_tool"}
+                else "automate"
+            ),
             "starts_at": now.isoformat(),
             "ends_at": end.isoformat(),
             "allowed_apps": apps,
@@ -299,6 +332,39 @@ def set_excluded_execution_ids(values: list[str]) -> dict[str, Any]:
     with _LOCK:
         state = read_state()
         state["excluded_execution_ids"] = [str(x) for x in values if str(x or "").strip()][:500]
+        state["share_approved_at"] = None
+        return _write(state)
+
+
+def set_excluded_event_ids(values: list[str]) -> dict[str, Any]:
+    with _LOCK:
+        state = read_state()
+        state["excluded_event_ids"] = [
+            str(x) for x in values if str(x or "").strip()
+        ][:2000]
+        state["share_approved_at"] = None
+        return _write(state)
+
+
+def set_implementation_context(*, goal: str, description: str) -> dict[str, Any]:
+    with _LOCK:
+        state = read_state()
+        state["implementation_context"] = {
+            "goal": str(goal or "").strip()[:2000],
+            "description": str(description or "").strip()[:10000],
+            "source": "human_provided",
+        }
+        state["share_approved_at"] = None
+        return _write(state)
+
+
+def set_handoff_purpose(value: str) -> dict[str, Any]:
+    selected = str(value or "").strip().lower()
+    if selected not in {"understand", "improve", "automate", "build_tool"}:
+        raise ValueError("handoff_purpose must be understand, improve, automate, or build_tool")
+    with _LOCK:
+        state = read_state()
+        state["handoff_purpose"] = selected
         state["share_approved_at"] = None
         return _write(state)
 
@@ -541,6 +607,9 @@ __all__ = [
     "read_state",
     "save_question",
     "set_excluded_execution_ids",
+    "set_excluded_event_ids",
+    "set_implementation_context",
+    "set_handoff_purpose",
     "set_gateway_guard",
     "mark_purged",
     "start_session",

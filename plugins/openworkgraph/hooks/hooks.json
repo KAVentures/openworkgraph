@@ -1,0 +1,13 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/check-openworkgraph.mjs\"",
+          "timeout": 5
+        }
+      ]
+    }
+  ]
+}

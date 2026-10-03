@@ -24,6 +24,8 @@ DEFAULT_TOOLS = {
     "get_agent_runs",
     "get_agent_handoff",
     "get_playbooks",
+    "get_automation_capabilities",
+    "read_evidence_file",
 }
 EXPERIMENTAL_GOVERNANCE_TOOLS = {
     "get_action_policy_advisory",

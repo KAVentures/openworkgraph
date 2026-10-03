@@ -19,6 +19,8 @@ EXPECTED_COMPACT_TOOLS = {
     "get_agent_runs",
     "get_agent_handoff",
     "get_playbooks",
+    "get_automation_capabilities",
+    "read_evidence_file",
 }
 
 

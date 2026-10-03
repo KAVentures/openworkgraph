@@ -13,7 +13,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from collector.privacy import should_exclude
-from resource_references import normalize_resource_reference
+from resource_references import normalize_resource_reference, remember_normalized_reference
 
 SENSITIVE_PATH_PREDECESSORS = {
     "auth", "authenticate", "callback", "confirm", "invite", "invitation",
@@ -263,6 +263,9 @@ def harden_browser_event(event: dict[str, Any], config: dict[str, Any]) -> dict[
         return e
 
     if reference:
+        # Exact provider locator stays in a separate local-only lookup. Context
+        # mode keeps only the opaque token in canonical evidence.
+        remember_normalized_reference(reference, raw_reference)
         meta["resource_reference"] = reference
     if page:
         meta["page"] = page

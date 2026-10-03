@@ -55,7 +55,7 @@ export UV_PYTHON_BIN_DIR="$RUNTIME_DIR/python-bin"
 export UV_CACHE_DIR="$RUNTIME_DIR/cache"
 
 if [ ! -x "$UV_BIN" ]; then
-  echo "First-time setup: installing a private app runtime…"
+  echo "Downloading runtime (first launch can take about 1 minute)…"
   echo "No system Python installation is required."
   mkdir -p "$RUNTIME_DIR/bin"
   INSTALLER="$RUNTIME_DIR/uv-install.sh"
@@ -67,7 +67,7 @@ if [ ! -x "$UV_BIN" ]; then
 fi
 
 if [ ! -x .venv/bin/python ]; then
-  echo "First-time setup: downloading OpenWorkGraph's private Python runtime…"
+  echo "Downloading Python runtime (first launch can take about 1 minute)…"
   rm -rf .venv
   "$UV_BIN" venv --python 3.12 --managed-python .venv
   echo "Installing OpenWorkGraph dependencies…"

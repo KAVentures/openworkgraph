@@ -129,6 +129,10 @@
     try {
       if (!currentTab?.url && currentTab?.id != null) currentTab = await ext.tabs.get(currentTab.id);
     } catch (_) {}
+    // Browsers can expose incognito/private tabs to an extension only after the
+    // user explicitly enables extension access there. OWG still treats private
+    // browsing as out of scope and never emits evidence from those tabs.
+    if (currentTab?.incognito) return;
 
     const page = typeof safeUrl === "function" ? safeUrl(rawUrl || currentTab?.url || "") : null;
     if (!page) return;
@@ -143,7 +147,11 @@
     if (policy.excluded_title_patterns.length && !title) return;
     if (matchesPattern(title, policy.excluded_title_patterns)) return;
 
-    const reference = await normalizeCandidate(candidate, !!settings.resource_reference_locators);
+    // Always send the validated provider locator over authenticated loopback so
+    // the local server can maintain its local-only resolver dictionary. Whether
+    // that locator enters canonical evidence remains controlled server-side by
+    // resource_reference_locators.
+    const reference = await normalizeCandidate(candidate, true);
     if (!reference || recentlySent(reference)) return;
 
     await sendBrowserEvent({

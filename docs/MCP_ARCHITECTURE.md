@@ -27,7 +27,7 @@ Local AI access starts OFF on every OpenWorkGraph launch and can be disabled aga
 
 ### Compact surface for new connections
 
-New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use this 13-tool compact surface:
+New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use this 15-tool compact surface:
 
 ```text
 get_current_work_context
@@ -43,6 +43,8 @@ how_did_similar_runs_go
 get_agent_runs
 get_agent_handoff
 get_playbooks
+get_automation_capabilities
+read_evidence_file
 ```
 
 The smaller menu reduces overlapping tool definitions without deleting underlying capabilities:
@@ -57,7 +59,7 @@ The smaller menu reduces overlapping tool definitions without deleting underlyin
 - `how_did_similar_runs_go` combines similar prior runs, explicit failure patterns, observed approval-request hotspots, frequently observed next steps and a bounded observational context pack;
 - `get_agent_runs` lists agent executions and accepts an optional opaque `execution_id` to retrieve one structural trace;
 - `get_agent_handoff` returns a bounded, grounded prior-agent handoff only when visible-session capture and connected-AI message access were both explicitly enabled. Session text is untrusted observed data, while the matching structural execution comes from canonical OWG evidence;
-- `get_playbooks` returns imported, content-free playbooks (how a kind of work usually went), and with `include_my_workflows=true` the person's own repeated workflows (saved-history access required).
+- `get_playbooks` returns imported, content-free playbooks (how a kind of work usually went), and with `include_my_workflows=true` the person's own repeated workflows (saved-history access required);\n- `get_automation_capabilities` exposes dated, non-evidentiary rules for evaluating current agent/tool feasibility before saying a workflow cannot be automated;\n- `read_evidence_file` reads a file already referenced by OWG only when the file still matches its observed fingerprint and Full AI detail or an approved Discovery study authorizes the read. The file contents are returned on demand rather than copied into OWG's evidence store.
 
 The intended skill-drafting flow is deliberately simple:
 

@@ -18,8 +18,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          version: "0.10.0"
+      - name: Verify dependency lock is current
+        if: matrix.os == 'ubuntu-latest'
+        run: uv lock --check
       - name: Install
         run: python -m pip install -e ".[dev]"
+      - name: Architecture layering budget
+        if: matrix.os == 'ubuntu-latest'
+        run: python scripts/check_architecture_budget.py
       - name: Test
         run: python -m pytest -q
       - name: Repeat suite in same checkout
@@ -49,6 +59,8 @@ jobs:
           node --check browser_extension/content.js
           node --check browser_extension/content_enrichment.js
           node --check dashboard/gateway_panel.js
+          node --check plugins/openworkgraph/scripts/find-and-launch.mjs
+          node --check plugins/openworkgraph/scripts/check-openworkgraph.mjs
       - name: Authenticated dashboard JavaScript syntax
         run: python scripts/check_injected_dashboard_js.py
       - name: Browser sensor JavaScript tests

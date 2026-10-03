@@ -10,14 +10,33 @@ $OutputBase = "OpenWorkGraph-Windows-Setup-v$Version"
 if (-not (Test-Path $Package)) {
     throw "Expected $Package. Run scripts/build_windows_release.ps1 first."
 }
+$Payload = Join-Path $Package ".openworkgraph-src"
+$PythonwMarker = Join-Path $Payload "EMBEDDED_PYTHONW.txt"
+$TrayHost = Join-Path $Payload "windows_tray.py"
+if (-not (Test-Path $PythonwMarker) -or -not (Test-Path $TrayHost)) {
+    throw "Signed installer requires the embedded offline runtime. Run scripts/embed_windows_runtime.ps1 before this script."
+}
+$PythonwRelative = (Get-Content $PythonwMarker -Raw).Trim()
+$EmbeddedPythonw = Join-Path $Payload $PythonwRelative
+if (-not (Test-Path $EmbeddedPythonw)) {
+    throw "Embedded pythonw.exe not found at $EmbeddedPythonw"
+}
+$PythonwInApp = "{app}\.openworkgraph-src\" + $PythonwRelative.Replace("/", "\")
 
 $Iscc = $env:ISCC_PATH
 if (-not $Iscc) {
+    $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    $ProgramFiles64 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
     $Candidates = @(
-        "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-    )
+        (Join-Path $ProgramFilesX86 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $ProgramFiles64 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ChocolateyInstall "bin\ISCC.exe")
+    ) | Where-Object { $_ }
     $Iscc = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $Iscc) {
+        $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($Command) { $Iscc = $Command.Source }
+    }
 }
 if (-not $Iscc -or -not (Test-Path $Iscc)) {
     throw "Inno Setup 6 (ISCC.exe) is required. Set ISCC_PATH if it is installed elsewhere."
@@ -55,11 +74,17 @@ LicenseFile=$PackageEscaped\\LICENSE
 [Files]
 Source: "$PackageEscaped\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Tasks]
+Name: "startup"; Description: "Start OpenWorkGraph when I sign in"; GroupDescription: "Startup"; Flags: checkedonce
+
 [Icons]
-Name: "{autoprograms}\OpenWorkGraph"; Filename: "{cmd}"; Parameters: "/c ""{app}\START_OPENWORKGRAPH.cmd"""; WorkingDir: "{app}"
+Name: "{autoprograms}\OpenWorkGraph"; Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OpenWorkGraph"; ValueData: """$PythonwInApp"" ""{app}\.openworkgraph-src\windows_tray.py"""; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
-Filename: "{cmd}"; Parameters: "/c ""{app}\START_OPENWORKGRAPH.cmd"""; WorkingDir: "{app}"; Description: "Start OpenWorkGraph"; Flags: postinstall nowait skipifsilent
+Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"; Description: "Start OpenWorkGraph"; Flags: postinstall nowait skipifsilent
 "@ | Set-Content -Path $Iss -Encoding utf8
 
 & $Iscc $Iss

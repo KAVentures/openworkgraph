@@ -8,6 +8,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from collector.outbox import EventOutbox
@@ -23,8 +24,10 @@ from .agent_execution_traces import agent_execution_traces
 from .context_layers import factual_context_timeline
 from .db import DATA_DIR, connect
 from .evidence_delete import remove_local_screenshots
+from .local_reference_lookup import forget_references
 
 _ACTIVITY_BREAK_SECONDS = 30 * 60
+_LOCAL_REFERENCE_RE = re.compile(r"owg:(?:r:[0-9a-f]{32}|f:[0-9a-f]{24})")
 
 
 def _parse(value: Any) -> datetime | None:
@@ -143,6 +146,11 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
         event_ids = [str(row["event_id"]) for row in chosen]
         local_ids = [int(row["id"]) for row in chosen]
         screenshots = [str(row["screenshot_path"]) for row in chosen if row["screenshot_path"]]
+        candidate_references: set[str] = set()
+        for row in chosen:
+            candidate_references.update(
+                _LOCAL_REFERENCE_RE.findall(str(row["metadata_json"] or ""))
+            )
     # Retention keeps a content-free record of each run (run memory) before the
     # raw evidence goes; a person deleting the session deletes that memory too.
     memory_kept = memory_deleted = 0
@@ -153,11 +161,20 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
             memory_kept = run_memory.remember(chosen_events)
     except Exception:
         memory_kept = 0
+    removable_references: set[str] = set()
     with connect() as conn:
         if event_ids:
             _delete_ids(conn, "context_events", event_ids)
             _delete_ids(conn, "normalized_events", event_ids)
             _delete_ids(conn, "events", event_ids)
+        for reference in candidate_references:
+            retained = conn.execute(
+                "SELECT 1 FROM events WHERE metadata_json LIKE ? LIMIT 1",
+                (f"%{reference}%",),
+            ).fetchone()
+            if retained is None:
+                removable_references.add(reference)
+    deleted_reference_entries = forget_references(removable_references)
 
     jsonl_removed = _rewrite_jsonl_sessions(selected, ids)
     outbox = EventOutbox(DATA_DIR / "collector_outbox.db")
@@ -175,6 +192,7 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
         "collector_outbox_events_removed": outbox_removed,
         "gateway_local_rows_marked_never_share": skipped_gateway,
         "screenshots_removed": screenshots_removed,
+        "local_reference_entries_removed": deleted_reference_entries,
         "late_delivery_suppressed": True,
         "run_memory_kept": memory_kept,
         "run_memory_deleted": memory_deleted,

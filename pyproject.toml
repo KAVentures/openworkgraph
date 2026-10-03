@@ -20,6 +20,8 @@ dependencies = [
   "pynput>=1.8,<2; platform_system == 'Darwin' or platform_system == 'Windows'",
   "pyobjc-framework-ApplicationServices>=11,<13; platform_system == 'Darwin'",
   "uiautomation==2.0.29; platform_system == 'Windows'",
+  "pywin32>=306,<312; platform_system == 'Windows'",
+  "pystray>=0.19,<1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

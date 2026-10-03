@@ -175,4 +175,119 @@ def normalize_resource_reference(
     return out
 
 
-__all__ = ["normalize_resource_reference"]
+def remember_normalized_reference(reference: dict[str, str] | None, raw_value: Any) -> None:
+    """Keep the validated real locator in the local-only resolver dictionary."""
+    if not reference or not isinstance(raw_value, dict):
+        return
+    locator = str(raw_value.get("resolver_locator") or "").strip()
+    if not locator:
+        return
+    provider = str(reference.get("provider") or "")
+    kind = str(reference.get("resource_kind") or "")
+    host = str(reference.get("host") or "")
+    if not _locator_valid(provider, kind, locator) or not _host_allowed(provider, host):
+        return
+    from server.local_reference_lookup import remember_resource_reference
+
+    remember_resource_reference(reference, locator)
+
+
+def resource_reference_from_url(
+    raw_url: str,
+    *,
+    include_locator: bool = False,
+    remember_locator: bool = False,
+) -> dict[str, str] | None:
+    """Parse an allowlisted business object without retaining the full URL."""
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(str(raw_url or ""))
+    except Exception:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower().rstrip(".")
+    parts = [part for part in parsed.path.split("/") if part]
+    provider = kind = locator = ""
+
+    if host == "docs.google.com" and len(parts) >= 3 and parts[1] == "d":
+        mapping = {
+            "document": "document",
+            "spreadsheets": "spreadsheet",
+            "presentation": "presentation",
+        }
+        kind = mapping.get(parts[0], "")
+        if kind and _SAFE_ID_RE.fullmatch(parts[2]):
+            provider, locator = "google_drive", f"{kind}:{parts[2]}"
+    elif (
+        host == "drive.google.com"
+        and len(parts) >= 3
+        and parts[:2] == ["file", "d"]
+        and _SAFE_ID_RE.fullmatch(parts[2])
+    ):
+        provider, kind, locator = "google_drive", "file", f"file:{parts[2]}"
+    elif (
+        host == "github.com"
+        and len(parts) >= 4
+        and re.fullmatch(r"[1-9][0-9]{0,9}", parts[3])
+        and parts[2] in {"pull", "issues"}
+    ):
+        provider = "github"
+        kind = "pull_request" if parts[2] == "pull" else "issue"
+        locator = f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}"
+    elif (host.endswith(".salesforce.com") or host.endswith(".force.com")) and "r" in parts:
+        index = parts.index("r")
+        if index + 2 < len(parts):
+            candidate = f"{parts[index + 1]}:{parts[index + 2]}"
+            if _SALESFORCE_RE.fullmatch(candidate):
+                provider, kind, locator = "salesforce", "record", candidate
+    elif host.endswith(".atlassian.net") and "browse" in parts:
+        index = parts.index("browse")
+        if index + 1 < len(parts) and _ISSUE_KEY_RE.fullmatch(parts[index + 1]):
+            provider, kind, locator = "jira", "issue", parts[index + 1]
+    elif host == "linear.app" and "issue" in parts:
+        index = parts.index("issue")
+        if index > 0 and index + 1 < len(parts):
+            candidate = f"{parts[index - 1]}:{parts[index + 1]}"
+            if _LINEAR_RE.fullmatch(candidate):
+                provider, kind, locator = "linear", "issue", candidate
+    elif host == "mail.google.com":
+        fragment = str(parsed.fragment or "").lstrip("#")
+        fragments = [part for part in fragment.split("/") if part]
+        direct = {
+            "inbox", "all", "sent", "drafts", "spam", "trash",
+            "starred", "snoozed", "important",
+        }
+        token = ""
+        if len(fragments) == 2 and fragments[0].lower() in direct:
+            token = fragments[1]
+        elif len(fragments) >= 3 and fragments[0].lower() == "search":
+            token = fragments[-1]
+        if re.fullmatch(r"[A-Za-z0-9_-]{12,80}", token or ""):
+            provider, kind = "gmail", "thread_locator"
+            locator = f"web-thread:{token}"
+
+    if not (provider and kind and locator):
+        return None
+    sensor_ref = _sensor_resource_ref(provider, kind, host, locator)
+    reference = normalize_resource_reference(
+        {
+            "provider": provider,
+            "resource_kind": kind,
+            "host": host,
+            "resolver_locator": locator,
+            "resource_ref": sensor_ref,
+        },
+        include_locator=include_locator,
+    )
+    if remember_locator:
+        remember_normalized_reference(reference, {"resolver_locator": locator})
+    return reference
+
+
+__all__ = [
+    "normalize_resource_reference",
+    "remember_normalized_reference",
+    "resource_reference_from_url",
+]

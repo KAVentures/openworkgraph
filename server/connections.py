@@ -303,11 +303,26 @@ def _restart_needed(client_id: str, kind: str, target: Target) -> dict[str, Any]
 
 def _claude_observe() -> Target:
     from adapters.claude_code_hook import settings_fragment
+
+    def install() -> dict[str, Any]:
+        result = writer.claude_connect(settings_fragment)
+        # A connected Claude Code client should receive the structural session
+        # brief by default. This remains an explicit, reversible local setting.
+        from . import agent_brief
+        result["session_start_brief"] = agent_brief.set_enabled("claude-code", True)
+        return result
+
+    def remove() -> dict[str, Any]:
+        result = writer.claude_disconnect()
+        from . import agent_brief
+        result["session_start_brief"] = agent_brief.set_enabled("claude-code", False)
+        return result
+
     return Target(
         path=writer.claude_settings_path,
         installed=lambda: bool(writer.claude_status().get("configured")),
-        install=lambda: writer.claude_connect(settings_fragment),
-        remove=writer.claude_disconnect,
+        install=install,
+        remove=remove,
         applies="in new Claude Code sessions",
     )
 

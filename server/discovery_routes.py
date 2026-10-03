@@ -6,11 +6,13 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import zipfile
 from typing import Any
 
 from fastapi import HTTPException, Request, Response
 
+from shared.discovery_package import build_brief_markdown, observed_tools_inventory
 from shared.discovery_scope import (
     answer_question,
     approve_share,
@@ -21,6 +23,9 @@ from shared.discovery_scope import (
     read_state,
     save_question,
     set_excluded_execution_ids,
+    set_excluded_event_ids,
+    set_implementation_context,
+    set_handoff_purpose,
     start_session,
 )
 from connector.control import (
@@ -33,17 +38,21 @@ from connector.control import (
 from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
 from .db import connect
-from .main import CONFIG_PATH
+from .main import CONFIG_PATH, COLLECTOR_STATUS
+from .local_reference_lookup import expand_resource_references, forget_references
 from .procedural_feedback import (
     _discovery_handoff_bundle,
     _review_candidates_with_readable_steps,
     _scope_gap_question,
     _suggested_questions,
+    _safe_event_action,
+    _safe_event_surface,
 )
 from .secure_app import app
 from .workflow_evidence import build_workflow_evidence, list_workflow_evidence_candidates
 
 ROOT = Path(__file__).resolve().parents[1]
+_LOCAL_REFERENCE_RE = re.compile(r"owg:(?:r:[0-9a-f]{32}|f:[0-9a-f]{24})")
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -54,6 +63,73 @@ def _parse_time(value: Any) -> datetime | None:
         return parsed.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _capture_running() -> bool:
+    """Discovery should never start while the desktop collector is absent/stale."""
+    received = _parse_time(COLLECTOR_STATUS.get("received_at"))
+    if received is None:
+        return False
+    return (datetime.now(timezone.utc) - received).total_seconds() <= 20
+
+
+def _filter_excluded_events(bundle: dict[str, Any], excluded: set[str]) -> dict[str, Any]:
+    if not excluded:
+        return bundle
+    for group in bundle.get("canonical_evidence") or []:
+        if not isinstance(group, dict):
+            continue
+        group["events"] = [
+            event for event in (group.get("events") or [])
+            if str((event or {}).get("event_id") or "") not in excluded
+        ]
+    return bundle
+
+
+def _review_steps(bundles: list[dict[str, Any]], excluded: set[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    last_browser_surface = ""
+    for bundle in bundles:
+        for group in bundle.get("canonical_evidence") or []:
+            execution_id = str(group.get("execution_id") or "")
+            for event in group.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                event_id = str(event.get("event_id") or "")
+                event_type = str(event.get("event_type") or "")
+                if not event_id or not event_type.startswith(("browser_", "screen_")):
+                    continue
+                surface = _safe_event_surface(event, last_browser_surface=last_browser_surface)
+                if event_type.startswith("browser_") and surface and surface != "Browser":
+                    last_browser_surface = surface
+                action = _safe_event_action(event)
+                if not action:
+                    continue
+                rows.append({
+                    "event_id": event_id,
+                    "execution_id": execution_id,
+                    "step": f"{surface} · {action}",
+                    "observed_at": event.get("observed_at"),
+                    "included": event_id not in excluded,
+                })
+                if len(rows) >= 500:
+                    return rows
+    return rows
+
+
+_HANDOFF_INSTRUCTIONS = {
+    "understand": "Use the package to understand how the work actually happens. Separate observed evidence from employee-provided explanations and identify material unknowns.",
+    "improve": "Use the package to identify friction, redundant handoffs, and process improvements. Verify downstream dependencies before proposing that an observed step be removed.",
+    "automate": "Use the package to design automation against the current capability frontier. Check live tools/connectors, treat missing historical payload as potentially fetchable at execution time, and use TEST where feasibility is uncertain.",
+    "build_tool": "Use the package as implementation evidence for a tool that supports this workflow. Preserve human-provided goals separately from observations, define interfaces around the real tools/files/records observed, and validate with live source-system test data.",
+}
+
+
+def _handoff_instruction(state: dict[str, Any]) -> str:
+    return _HANDOFF_INSTRUCTIONS.get(
+        str(state.get("handoff_purpose") or "automate"),
+        _HANDOFF_INSTRUCTIONS["automate"],
+    )
 
 
 def _pause_gateway_if_connected() -> tuple[bool | None, bool]:
@@ -99,23 +175,40 @@ def _purge_discovery_evidence(*, force: bool = False) -> dict[str, Any]:
     if str(state.get("status") or "") == "active" and datetime.now(timezone.utc) < end:
         return {"purged": False, "reason": "discovery_still_active"}
 
+    removable_references: set[str] = set()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT event_id FROM events WHERE observed_at >= ? AND observed_at < ?",
+            "SELECT event_id, metadata_json FROM events WHERE observed_at >= ? AND observed_at < ?",
             (start.isoformat(), end.isoformat()),
         ).fetchall()
         event_ids = [str(row["event_id"]) for row in rows]
+        candidate_references: set[str] = set()
+        for row in rows:
+            candidate_references.update(
+                _LOCAL_REFERENCE_RE.findall(str(row["metadata_json"] or ""))
+            )
         for offset in range(0, len(event_ids), 500):
             chunk = event_ids[offset:offset + 500]
             placeholders = ",".join("?" for _ in chunk)
             conn.execute(f"DELETE FROM context_events WHERE event_id IN ({placeholders})", tuple(chunk))
             conn.execute(f"DELETE FROM normalized_events WHERE event_id IN ({placeholders})", tuple(chunk))
             conn.execute(f"DELETE FROM events WHERE event_id IN ({placeholders})", tuple(chunk))
+        # Keep a resolver entry if the same file/resource reference is still
+        # present in retained canonical evidence outside this Discovery window.
+        for reference in candidate_references:
+            retained = conn.execute(
+                "SELECT 1 FROM events WHERE metadata_json LIKE ? LIMIT 1",
+                (f"%{reference}%",),
+            ).fetchone()
+            if retained is None:
+                removable_references.add(reference)
+    deleted_reference_entries = forget_references(removable_references)
     marked = mark_purged(len(event_ids))
     return {
         "purged": True,
         "purged_at": marked.get("purged_at"),
         "deleted_event_rows": len(event_ids),
+        "deleted_local_reference_entries": deleted_reference_entries,
         "scope": "canonical events observed inside the Discovery Mode window",
         "agent_session_message_retention": "separate existing opt-in policy",
     }
@@ -178,6 +271,10 @@ def _selected_family_runs(state: dict[str, Any]) -> tuple[dict[str, Any], list[d
             )
         except Exception:
             continue
+        bundle = _filter_excluded_events(
+            bundle,
+            {str(x) for x in state.get("excluded_event_ids") or []},
+        )
         bundles.append(bundle)
     return families, bundles
 
@@ -189,6 +286,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
     unanswered = [x for x in saved if not str(x.get("answer") or "").strip()]
     suggested = _suggested_questions(bundles)
     handoff_bundles = [_discovery_handoff_bundle(bundle) for bundle in bundles]
+    observed_tools = observed_tools_inventory(bundles)
     selected_runs = sum(len((b.get("selector") or {}).get("execution_ids") or (b.get("executions") or [])) for b in bundles)
     return {
         "format": "openworkgraph.discovery-package.v1",
@@ -196,6 +294,11 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             "session_id": state.get("session_id"),
             "name": state.get("name"),
             "purpose": state.get("purpose"),
+            "implementation_context": {
+                **(state.get("implementation_context") or {}),
+                "source": "human_provided",
+            },
+            "handoff_purpose": state.get("handoff_purpose") or "automate",
             "starts_at": state.get("starts_at"),
             "ends_at": state.get("ends_at"),
             "status": public_state().get("status"),
@@ -220,6 +323,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             ],
         },
         "workflow_evidence": handoff_bundles,
+        "observed_tools": observed_tools,
         "human_statements": answered,
         "saved_unanswered_questions": unanswered,
         "suggested_targeted_questions": suggested,
@@ -228,17 +332,15 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             "share_approved_at": state.get("share_approved_at"),
             "automatic_sharing": False,
             "excluded_execution_ids": state.get("excluded_execution_ids") or [],
+            "excluded_event_ids": state.get("excluded_event_ids") or [],
             "redaction_notice": (
                 "People and obvious personal identifiers are contextually redacted, but organization/company names may remain. "
                 "Review the redacted preview before approval when company/customer names are sensitive."
             ),
         },
         "handoff": {
-            "recommended_next_step": (
-                "Give this package to the authorized AI/implementation team. Reconstruct outcomes from canonical evidence, "
-                "use human statements as attributed business context, resolve remaining questions, then draft an agent-neutral "
-                "workflow specification. Do not infer authorization from observed actions."
-            ),
+            "purpose": state.get("handoff_purpose") or "automate",
+            "recommended_next_step": _handoff_instruction(state),
             "structural_cases_are_replayable_business_inputs": False,
             "source_system_test_data_required_for_execution_evals": True,
         },
@@ -253,6 +355,7 @@ def get_discovery() -> dict[str, Any]:
     _purge_discovery_evidence(force=False)
     state = public_state()
     if state.get("enabled"):
+        state["handoff_instruction"] = _handoff_instruction(state)
         try:
             since, until = _window(state)
             families = list_workflow_evidence_candidates(
@@ -267,6 +370,10 @@ def get_discovery() -> dict[str, Any]:
             if reviewing:
                 _families, bundles = _selected_family_runs(state)
                 state["review_candidates"] = _review_candidates_with_readable_steps(families, bundles)
+                state["review_steps"] = _review_steps(
+                    bundles,
+                    {str(x) for x in state.get("excluded_event_ids") or []},
+                )
                 saved_questions = {str(x.get("question") or "") for x in state.get("questions") or []}
                 state["suggested_targeted_questions"] = [
                     item for item in _suggested_questions(bundles)
@@ -285,6 +392,11 @@ async def start_discovery(request: Request) -> dict[str, Any]:
     body = await _payload(request)
     if read_state().get("enabled"):
         raise HTTPException(status_code=409, detail="an existing Discovery Mode session must be reviewed/exited before starting another")
+    if not _capture_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Discovery capture is not running yet. Start/keep OpenWorkGraph live observation running, then try again.",
+        )
 
     data_dir, _auth_dir = gateway_paths(CONFIG_PATH)
     event_boundary_id = _max_local_event_id(data_dir)
@@ -299,6 +411,9 @@ async def start_discovery(request: Request) -> dict[str, Any]:
         return start_session(
             name=str(body.get("name") or "Workflow discovery"),
             purpose=str(body.get("purpose") or ""),
+            implementation_goal=str(body.get("implementation_goal") or ""),
+            implementation_description=str(body.get("implementation_description") or ""),
+            handoff_purpose=str(body.get("handoff_purpose") or "automate"),
             allowed_apps=list(body.get("allowed_apps") or []),
             allowed_browser_hosts=list(body.get("allowed_browser_hosts") or []),
             duration_days=float(body.get("duration_days") or 5),
@@ -346,9 +461,32 @@ def deactivate_discovery() -> dict[str, Any]:
 async def update_discovery_selection(request: Request) -> dict[str, Any]:
     body = await _payload(request)
     values = body.get("excluded_execution_ids")
+    event_values = body.get("excluded_event_ids", [])
     if not isinstance(values, list):
         raise HTTPException(status_code=422, detail="excluded_execution_ids must be a list")
-    return set_excluded_execution_ids([str(x) for x in values])
+    if not isinstance(event_values, list):
+        raise HTTPException(status_code=422, detail="excluded_event_ids must be a list")
+    state = set_excluded_execution_ids([str(x) for x in values])
+    state = set_excluded_event_ids([str(x) for x in event_values])
+    return state
+
+
+@app.post("/v1/discovery/implementation-context")
+async def update_discovery_implementation_context(request: Request) -> dict[str, Any]:
+    body = await _payload(request)
+    return set_implementation_context(
+        goal=str(body.get("goal") or ""),
+        description=str(body.get("description") or ""),
+    )
+
+
+@app.post("/v1/discovery/handoff-purpose")
+async def update_discovery_handoff_purpose(request: Request) -> dict[str, Any]:
+    body = await _payload(request)
+    try:
+        return set_handoff_purpose(str(body.get("handoff_purpose") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/discovery/questions")
@@ -424,18 +562,34 @@ def export_discovery_package(representation: str = "redacted") -> Response:
         raise HTTPException(status_code=422, detail="representation must be redacted or stored")
     package = _package(state)
     payload = redact_contextually(package) if mode == "redacted" else package
+    # Redacted exports deliberately keep provider IDs opaque even after approval.
+    # An explicitly requested stored package may include local resolver locators;
+    # Full local AI context can also resolve them without copying them into OWG.
+    if mode == "stored":
+        payload = expand_resource_references(payload)
+        payload["approved_local_object_locators_included"] = True
+    else:
+        payload["approved_local_object_locators_included"] = False
+        payload["exact_local_object_locators_available_in_full_local_ai_context"] = True
     payload["export_representation"] = "contextually_redacted" if mode == "redacted" else "stored_privacy_hardened"
     body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    build_brief = build_brief_markdown(payload).encode("utf-8")
     guide = (
-        "# OpenWorkGraph Discovery Package\n\n"
-        "This package contains purpose-scoped observed workflow evidence plus separately attributed employee answers. "
-        "It is not an authorization record and does not claim unobserved exceptions are absent.\n\n"
-        "Use the evidence to draft an agent-neutral workflow specification, resolve unanswered business rules, and obtain "
-        "live test inputs from the source systems before treating structural cases as executable evaluations.\n"
+        "# Start here\n\n"
+        "This package is evidence for an authorized AI or implementation team. Start with BUILD_BRIEF.md, "
+        "then inspect DISCOVERY_PACKAGE.json for the observed runs and canonical event evidence.\n\n"
+        f"**Purpose-specific instruction:** {payload.get('handoff', {}).get('recommended_next_step') or ''}\n\n"
+        "Important boundaries:\n"
+        "- Observed work is descriptive evidence, not permission or policy.\n"
+        "- Human statements are explicitly attributed and separate from captured evidence.\n"
+        "- Unobserved exceptions may exist.\n"
+        "- Missing historical content may be available from the live source system at implementation time.\n"
+        "- Obtain live source-system test data before treating structural cases as executable evaluations.\n"
     ).encode("utf-8")
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("DISCOVERY_PACKAGE.json", body)
+        archive.writestr("BUILD_BRIEF.md", build_brief)
         archive.writestr("START_HERE.md", guide)
     return Response(
         buffer.getvalue(),

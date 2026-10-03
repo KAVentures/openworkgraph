@@ -59,7 +59,7 @@ def test_compact_mcp_exposes_guidance_as_prompt_resource_and_server_instructions
     _assert_common_guidance(prompts, resources, instructions)
     assert "list_history" in tools
     assert "list_history" in instructions
-    assert "get_automation_capabilities" not in tools
+    assert "get_automation_capabilities" in tools
     assert "find_automation_opportunities" not in tools
 
 
