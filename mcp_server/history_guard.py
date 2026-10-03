@@ -122,8 +122,8 @@ def install_history_guard(runtime_module: Any) -> None:
         if route == "/v1/history":
             query = bounded_range(query, use_current_when_off=False)
         elif route == "/v1/workflow-trace":
-            if str(query.get("scope") or "current") != "current":
-                query = bounded_range(query, use_current_when_off=True)
+            # Cursor state must never restore dates from a broader prior grant.
+            query = bounded_range(query, use_current_when_off=True)
         elif route == "/v1/agent-execution-traces":
             query = bounded_range(query, use_current_when_off=True)
         elif route.startswith("/v1/workflow-evidence"):

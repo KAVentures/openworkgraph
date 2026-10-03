@@ -252,3 +252,10 @@ The Gateway uses explicit device credentials, scoped service credentials, and pr
 - **Human access API:** see [HUMAN_ACCESS.md](HUMAN_ACCESS.md).
 
 Setup is in [ORGANIZATION_ROLLOUT.md](ORGANIZATION_ROLLOUT.md). SCIM provisioning is not included.
+
+## Conversational remote MCP
+
+See [Conversational clients](CONVERSATIONAL_CLIENTS.md) for the optional delegated
+OAuth `/mcp` endpoint, identity mapping, personal knowledge scope and client setup.
+Set both `OWG_GATEWAY_MCP_RESOURCE_URL` and `OWG_GATEWAY_MCP_OAUTH_SCOPE` alongside
+the existing complete OIDC configuration. Leaving the URL empty keeps remote MCP off.

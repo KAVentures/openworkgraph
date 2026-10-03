@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS events (
   metadata_json TEXT NOT NULL DEFAULT '{{}}'
 );
 CREATE INDEX IF NOT EXISTS idx_events_time ON events(observed_at);
+CREATE INDEX IF NOT EXISTS idx_events_instant ON events(julianday(observed_at), event_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_events_app ON events(app);
 

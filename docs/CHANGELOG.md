@@ -1,5 +1,15 @@
 # OpenWorkGraph changelog
 
+## Unreleased — conversational background context
+
+- Historical evidence applies both dates before the source limit and reports bounded coverage.
+- Repeated-workflow discovery honors current/selected history access; lexical search accepts dates and explains its limits.
+- Privacy and History expose optional standing grants with explicit revocation.
+- Compact MCP adds reviewed portable workflow knowledge with revision checks and deletion; all dedicated evidence/knowledge calls now enforce master access and audit responses.
+- Human Gateway adds optional delegated OAuth Streamable HTTP MCP with personal actor isolation, protected resource metadata, reviewed knowledge and evidence bundles.
+- Adds Microsoft 365 Copilot setup templates and documented ChatGPT connection/restart behavior. Actual account/tenant provisioning remains external setup.
+
+
 Historical release notes consolidated from the former per-version files. New release notes should be added here rather than creating another changelog file.
 
 <!-- Source: docs/CHANGELOG_V035.md -->

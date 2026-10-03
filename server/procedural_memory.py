@@ -719,14 +719,18 @@ def approval_patterns(
     }
 
 
-def load_recent_evidence(*, limit: int = _DEFAULT_EVENTS, since: str | None = None) -> list[dict[str, Any]]:
+def load_recent_evidence(*, limit: int = _DEFAULT_EVENTS, since: str | None = None, until: str | None = None) -> list[dict[str, Any]]:
+    from shared.time_utils import normalize_optional_timestamp
+    since, until = normalize_optional_timestamp(since), normalize_optional_timestamp(until)
     page_limit = max(1, min(int(limit), _MAX_EVENTS))
+    clauses, params = [], []
     if since:
-        raw = rows(
-            "SELECT * FROM events WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?",
-            (since, page_limit),
-        )
-    else:
-        raw = rows("SELECT * FROM events ORDER BY observed_at DESC LIMIT ?", (page_limit,))
+        clauses.append("julianday(observed_at) >= julianday(?)")
+        params.append(since)
+    if until:
+        clauses.append("julianday(observed_at) < julianday(?)")
+        params.append(until)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    raw = rows("SELECT * FROM events" + where + " ORDER BY julianday(observed_at) DESC, event_id DESC LIMIT ?", tuple(params + [page_limit]))
     raw.reverse()
     return raw
