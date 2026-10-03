@@ -736,3 +736,568 @@ Merge #106 → #107 → #108 → #109 → #110 → #111 → #112 in order. After
 
 ---
 
+<!-- Source: docs/CHANGELOG_V0109.md -->
+# OpenWorkGraph v0.109 — grounded agent session continuity
+
+v0.109 adds a native agent-session sensor and cross-agent handoff without changing the canonical-evidence model or silently expanding capture.
+
+## Native session observation
+
+- Claude Code and Codex local session files can be tailed directly, without modifying the agent's configuration.
+- The native sensor is **off by default** and must be enabled locally.
+- On first enable, and on every re-enable after observation/source capture was turned off, existing files are primed to their current end. OpenWorkGraph does not silently backfill old sessions or replay work from a disabled interval.
+- New native records are projected into the existing provider-neutral structural agent schema. Raw provider records are never persisted.
+- If a hook, SDK or OpenTelemetry adapter already reported the same structural step, that richer evidence wins and the native-file fallback is suppressed.
+- Claude Code gets a start boundary only for a newly observed session file; OpenWorkGraph does not invent a finish boundary when the provider did not supply one.
+
+## Separate visible-message continuity
+
+Visible user/assistant messages are a separate local capability:
+
+- message capture is **off by default**;
+- enabling it also enables the native session sensor;
+- detected/high-confidence personal details and identifiers are privacy-hardened before the message reaches the session-message table;
+- messages never enter the canonical `events` table;
+- message retention is independently configurable;
+- AI read access is independently off by default;
+- organization Gateway sharing is independently off by default.
+
+The sensor intentionally drops exposed thinking/reasoning blocks, raw native records and tool-result content. Tool inputs may be inspected transiently only to derive the same allowlisted structural facts OpenWorkGraph already records: tool identity/category, allowlisted command names, git/GitHub operations, test status/counts, file-type and opaque file references, and line counts. Raw arguments are not persisted.
+
+Name detection is best effort, as in the rest of OpenWorkGraph. Users should still treat visible-session content as sensitive and review any externally shared context.
+
+## Grounded cross-agent handoff
+
+The compact local MCP surface adds `get_agent_handoff`.
+
+A handoff can combine:
+
+- a bounded slice of explicitly permitted visible prior-agent messages;
+- the corresponding canonical structural execution trace;
+- the opaque workspace/session identity;
+- nearby observed human-work context when available.
+
+Session text is marked and processed as **untrusted observed data** at the MCP boundary. Instruction-like text is suppressed by the existing prompt-injection protection. A previous agent's text is context, never policy, permission or authorization.
+
+Native session IDs and native filesystem paths are not exposed by the continuity API.
+
+## Organization sharing remains explicit
+
+Visible agent-session messages use a different Gateway channel from structural agent activity.
+
+- endpoint opt-in: `allow_gateway_session_messages` in the local session-continuity policy;
+- organization policy: `allow_agent_session_messages`;
+- device write scope: `agent-sessions:write`;
+- integration read scope: `agent-sessions:read`.
+- Endpoint restriction wins; organization policy can narrow but not broaden.
+- Shared session messages obey organization retention at read time and physical lifecycle cleanup/purge; transcript content cannot silently outlive the configured organization retention floor.
+
+Existing Gateway device credentials are **not** silently upgraded with the new transcript-write scope. An endpoint enrolled before v0.109 must be explicitly re-enrolled or have its device credential rotated before it can upload visible agent-session messages. A software upgrade therefore cannot broaden an existing device credential into a new content-sharing capability.
+
+Both the endpoint and organization must allow the channel. Enabling it never backfills messages captured before the local opt-in boundary. Messages recorded during a global Gateway-sharing pause are permanently excluded from later synchronization.
+
+Existing `allow_agent_events`, `evidence:read`, `context:read` and `transfers:read` permissions do not grant transcript access.
+
+## Compatibility invariants
+
+- Existing hook/OTel/SDK observation remains unchanged.
+- Existing Context / Observe / Brief controls remain valid.
+- Structural agent evidence remains content-free and canonical.
+- Local AI access still starts off on every OpenWorkGraph launch.
+- No account or OpenWorkGraph-hosted storage is required.
+- Gateway transcript sharing remains customer-controlled and default-off.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0110.md -->
+# OpenWorkGraph v0.110.0
+
+## Evidence-first MCP guidance
+
+- Compact local MCP now advertises server-level initialization instructions so connected models see the evidence hierarchy even if they never open an optional prompt or resource.
+- Whole-period questions are directed through `list_history` and paginated `get_workflow_trace`; models are told to follow `next_cursor` while `has_more` is true when complete period coverage is required.
+- Automation questions are directed to `openworkgraph://automation-capabilities`, the current AI tool surface, outcome-level automation, and **TEST** for plausible-but-unproven agentic approaches.
+- Observed titles, labels and messages remain untrusted data rather than instructions.
+
+## Packaged MCP validation
+
+- The Claude Desktop MCPB build is extracted and smoke-tested in CI.
+- Its manifest version must match `VERSION`.
+- Its advertised tools must match the exact 12-tool compact surface.
+- The packaged Node entry point is syntax-checked and must still route to the local OpenWorkGraph MCP launcher.
+- This is a package smoke test, not a claim that CI launches the proprietary Claude Desktop application.
+
+## First-run history grace
+
+- A genuinely new user who has not yet made a retention choice keeps human and agent evidence locally for up to 7 days rather than losing the first session on close.
+- The onboarding card continues asking for an explicit choice.
+- Selecting **Don't keep after sessions** still switches both layers to ephemeral session-only retention.
+- Existing installations with preserved history keep their prior upgrade-safe behavior.
+- v0.109 policy files that are still genuinely undecided migrate from the old ephemeral default to the 7-day grace window.
+- Saved-history AI access remains a separate permission and stays OFF until explicitly granted.
+- Run memory remains a separate content-free setting.
+
+## Documentation
+
+`docs/MCP_ARCHITECTURE.md` now matches the actual 12-tool compact manifest, including `get_context_pulse` and `list_history`, and documents the initialization instructions and paging behavior.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0111.md -->
+# OpenWorkGraph v0.111.0
+
+## Provenance-safe agent Working Detail
+
+OpenWorkGraph can now keep a small, factual continuity layer for supported local agent sessions so a later agent can understand the practical state of work without turning provider transcripts or tool output into canonical workflow evidence.
+
+Working Detail is separate from the canonical `events` stream. It is OFF by default, has its own retention policy, and connected-AI read access is a separate OFF-by-default permission. Disabling it leaves the existing structural observer and session-continuity behavior unchanged.
+
+### What can be retained
+
+When explicitly enabled, Working Detail can retain bounded, privacy-hardened facts such as workspace-relative files, allowlisted command/program names, test outcomes and counts, failing test identifiers, short redacted error excerpts, and repository state such as dirty state, short commit identity, branch name, and bounded changed-file paths. Each record carries provenance and is marked non-authoritative observed context.
+
+Test outcomes are tri-state: passing, failing, or unknown. Missing result evidence stays unknown. A zero observed-failure count is not treated as proof that a test run passed.
+
+### What is not retained
+
+Raw tool output is not stored. Arbitrary shell arguments, absolute workspace paths, prompts, visible conversation, provider-native records, secrets, and hidden reasoning are not Working Detail. Visible user/assistant messages remain governed by the existing separate session-message controls.
+
+File paths must resolve inside the observed workspace and are stored workspace-relative. Traversal and outside-workspace paths are rejected. Working Detail does not broaden organization Gateway sharing in v0.111.
+
+### Capture and import behavior
+
+Normal enablement starts at the current end of supported local Claude Code and Codex session history, so an upgrade or first enable does not silently backfill prior sessions. An explicit historical import can be requested for a bounded recent window. Historical tool-result text is parsed in memory to derive structured facts and then discarded; raw tool output and hidden reasoning are not imported.
+
+Working Detail scanning has an independent cursor and runtime. A Working Detail parse or storage failure is fail-open with respect to the canonical structural observer and must not block normal OpenWorkGraph capture.
+
+### Handoff and compatibility
+
+The existing agent handoff can include bounded Working Detail when the relevant local capture and connected-AI read permissions allow it. The compact MCP tool surface does not gain a new tool. Existing grounding keys and legacy agent-run summary shapes remain compatible.
+
+The canonical event schema is unchanged in this release.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0112.md -->
+# OpenWorkGraph v0.112.0
+
+## Trustworthy AI answers and agent-run accounting
+
+v0.112.0 hardens the accuracy of the evidence OpenWorkGraph returns to connected AI while keeping the existing local-first, evidence-first privacy model intact.
+
+### One physical Claude Code session stays one execution
+
+Claude Code hook/OTel observations and native-session fallback now use the same **opaque** cross-sensor session identity. Top-level prompt turns remain observations inside the physical session instead of becoming separate executions, while genuine subagents retain separate opaque child execution identities.
+
+Tool calls observed by both hooks and transcript fallback share an opaque tool identity as well. This lets OpenWorkGraph prefer the richer hook/OTel observation even when the transcript timestamp differs, without collapsing legitimate adjacent calls merely because they used the same tool.
+
+Raw native session, prompt-turn, tool-use, trace and span identifiers are not exposed. Existing retained rows created before v0.112 are not silently rewritten; newly observed evidence uses the corrected identity scheme.
+
+### Test outcomes stay passing, failing or unknown
+
+Agent-run summaries distinguish known passing test runs, known failing test runs and runs whose result is **unknown**. Missing result evidence is never represented as zero failures.
+
+When an otherwise-unknown run has observed test evidence, the latest observed test result can resolve the run outcome: a final passing run may resolve to success and a final failing run may resolve to error, while earlier observed failures remain counted in the run summary.
+
+### Token usage is observed evidence, never an estimate
+
+**Token usage** is reported only when provider, SDK or compatible telemetry exposes exact usage counters. Runs with such evidence report token usage as `observed` with the recorded counts.
+
+When the observation surface does not expose token usage, OpenWorkGraph reports `not_observed` with a basis and empty counts. It does not estimate tokens from visible text, elapsed time, screen activity or model identity, and it never treats an unobserved token signal as zero.
+
+### Smaller default MCP evidence pages
+
+`get_workflow_trace` now returns compact rows by default with a smaller default page size while preserving stable pagination and canonical chronology. Connected AI can explicitly request `detail="rich"` for the full authorized row.
+
+For questions covering a whole period, models should continue following `next_cursor` until `has_more` is false. Compact mode changes payload size, not the underlying evidence or retention/access boundary.
+
+### Better default scope after restart
+
+`get_work_profile(scope="current")` and the compact current-work overview can fall back to authorized evidence from **local today** when the current launcher session is empty after a restart. Responses disclose the requested and actually used scope and include a hint explaining the fallback.
+
+Saved-history access remains a separate permission. If the connected AI lacks the required access, OpenWorkGraph explains that instead of silently broadening the scope.
+
+### More readable repeated workflows
+
+Repeated-workflow candidates now expose readable typical steps and use those steps for the display label rather than relying only on a guessed task label.
+
+Engaged-time and foreground-time evidence remain distinct. When engaged time is zero or unobserved but foreground duration exists, the response may expose an explicit foreground-time fallback while preserving the original engaged and foreground metrics and identifying the duration basis.
+
+### Clearer saved-history remediation
+
+Aggregate MCP tools that require all saved history now name the exact remedy: grant **All saved history** in History, or use `get_workflow_trace` with `since`/`until` inside the already granted date range when that satisfies the question.
+
+### Native session sensor health
+
+Clean bootstrap and cleanup paths no longer increment the native-session sensor error counter. Real failures increment the counter and expose only a bounded `last_error` stage plus exception type; local paths, provider payloads and content are not included.
+
+### Privacy and compatibility boundaries remain intact
+
+- The compact MCP surface remains 12 tools.
+- Canonical workflow evidence remains the source of truth; derived summaries remain non-authoritative.
+- Hidden reasoning is not captured or exposed.
+- Ordinary **raw tool output** is not persisted by this accuracy work.
+- Arbitrary shell arguments, typed text and clipboard contents are not added to canonical evidence.
+- Existing Redacted/Full disclosure controls and saved-history authorization remain in force.
+- Token values are never inferred when the runtime does not expose them.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0113.md -->
+# OpenWorkGraph v0.113.0
+
+## Frontier-aware automation interpretation without overreach
+
+v0.113 improves how connected AI interprets OpenWorkGraph evidence while keeping the existing evidence-first architecture. OpenWorkGraph still does not decide what should be automated; it gives the consuming AI better factual context and a tighter reasoning contract.
+
+### Compact evidence keeps work-surface identity
+
+The compact MCP compatibility layer now keeps a bounded protected `work_surface` and `window_title` when available. Browser-heavy traces therefore retain distinctions such as Gmail, Salesforce and Google Sheets instead of collapsing to repeated `Google Chrome` rows.
+
+Rich metadata remains omitted from compact rows. Surface/title strings are taken only after the secure runtime has applied the configured detail/redaction policy, and are bounded to keep the compact response small.
+
+### Missing historical payload is not future infeasibility
+
+Automation guidance now explicitly separates historical replayability from future automation feasibility. OpenWorkGraph may deliberately omit email bodies, typed text, clipboard contents and spreadsheet cells, but an authorized future agent may still retrieve the real inputs from Gmail, a CRM, files, databases, APIs or another live source system.
+
+The consuming AI is told to check that execution-time route before treating absent historical content as an automation blocker.
+
+### Outcome redesign and downstream dependency checks
+
+For each material workflow, connected AI is asked to consider five design moves: eliminate a step, deterministic automation, agent delegation, agent plus approval, or keep the step human-only.
+
+A possibly redundant step is treated as a hypothesis rather than a conclusion. Before recommending removal of a spreadsheet, report, handoff or other output, the AI should identify managers, controls, downstream teams or processes that may depend on it.
+
+### Next autonomy boundary around existing agents
+
+When Claude Code, Codex, ChatGPT, Cursor or another agent is already doing part of the work, the AI is asked to inspect what the human still does before, between and after agent runs. Typical candidates include routine prompting, copying outputs, checking tests/CI, creating a PR, monitoring completion and moving results between systems.
+
+The guidance explicitly warns against recommending automation of a step the observed agent already performs.
+
+### Capability mapping before rejection
+
+Material opportunities should map required operations to the current AI environment as:
+
+- **CONFIRMED** — available now;
+- **PLAUSIBLE / TESTABLE** — a current route may work but is not yet verified;
+- **BLOCKED** — a concrete access, policy, reliability, unsupported-system or input blocker exists.
+
+Missing observation is not treated as proof of unavailability.
+
+### Consequence-aware autonomy
+
+v0.113 separates cautious trials from permanent per-action human approval. Low-impact reversible production actions may later use explicit scoped standing authorization where policy permits. Financial, regulated, clinical, safety-critical, irreversible or otherwise high-impact decisions/actions keep the appropriate human or organizational control. Repetition alone is never treated as permission.
+
+### Fixed interpretation evaluation set
+
+A six-case evaluation corpus now covers both major failure directions:
+
+- **underestimation**, such as macro-only suggestions, treating missing content as a blocker, or missing the next autonomy boundary around an agent; and
+- **overreach**, such as autonomous financial/clinical decisions, deleting a workflow step without checking consumers, or inventing automation for a one-off high-judgment task.
+
+The repository includes a 0/1/2 criterion score format and a scorer that reports normalized underestimation, overreach and total scores plus critical `must_not` failures. The runbook specifies use of the real MCP entrypoint and exact model/client identifiers. Paid external model calls are intentionally not part of ordinary deterministic CI.
+
+## Compatibility and privacy
+
+- No canonical evidence schema change.
+- No internal LLM or automation inference engine is added.
+- No new MCP tool is added or renamed.
+- The compact 12-tool surface and legacy compatibility entrypoint remain intact.
+- Rich metadata, typed text, clipboard contents and hidden reasoning are not added to compact evidence.
+- Automation judgments remain derived and disposable.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0114.md -->
+# OpenWorkGraph v0.114.0
+
+## Configurable browser context without weakening the privacy-first path
+
+v0.114 adds an explicit privacy model for linking observed browser work to the business objects it operates on. The feature is additive: business-object reference capture remains off by default, existing browser/desktop evidence continues to work, and no content connector or duplicate company-data store is introduced.
+
+### Three browser-context privacy profiles
+
+- **Privacy-first** keeps business-object references off. It also masks known object-ID positions in stored Google Docs/Drive, GitHub, Salesforce, Jira and Linear paths before persistence. This is intentionally stricter than the pre-v0.114 URL-path behavior.
+- **Context** recognizes allowlisted objects and keeps only an installation-keyed local correlation token. Provider record/thread/document identifiers are not retained.
+- **Rich enterprise** is an explicit opt-in that may retain the minimal validated provider-specific locator needed for an authorized connector or AI to resolve the object. It does not enable unrelated optional sensors.
+
+The same underlying switches remain individually configurable, so organizations and local users can choose a custom combination instead of a preset.
+
+### Allowlisted business-object recognition
+
+The first reference parsers cover:
+
+- Google Docs, Sheets, Slides and Drive files;
+- Gmail web conversation locators on known conversation routes;
+- GitHub pull requests and issues;
+- Salesforce records;
+- Jira issues; and
+- Linear issues.
+
+Unknown sites and sensitive-looking arbitrary routes are not guessed. They fall back to the existing sanitized browser evidence.
+
+### Two keyed persistence boundaries
+
+Context correlation tokens are no longer plain hashes of provider IDs.
+
+1. Before a resource-reference event can enter the browser extension's durable retry queue, the extension HMACs the canonical allowlisted reference with the installation browser-pairing secret. The queue therefore contains an opaque `owg:e:…` sensor fingerprint rather than a dictionary-attackable hash of a short Jira key or PR number.
+2. Before local event persistence, the server replaces that sensor fingerprint with a different `owg:r:…` HMAC keyed by the installation API secret. The raw browser fingerprint is not stored in the canonical event row.
+
+Rich enterprise mode additionally validates that a supplied locator and browser fingerprint agree. Re-hardening an already persisted local token is idempotent.
+
+These local capability secrets remain subject to the existing same-operating-system-user threat-model limitation described in `PRIVACY_AND_DATA.md`.
+
+### Existing URL privacy remains in force
+
+This release does **not** add storage of:
+
+- full browser URLs;
+- URL query values or fragments;
+- typed text;
+- clipboard contents;
+- page contents;
+- password-field values; or
+- arbitrary filenames/file contents.
+
+Known resource references are extracted only through the allowlist before generic URL sanitization removes their identifier. Host/title exclusion policy is checked before a Rich enterprise locator can enter the extension retry queue, and the server independently applies the policy again at ingest.
+
+### Browser sensor update notice
+
+The browser extension is v1.14.0 for this release. The local server already reports the expected and observed sensor versions; the dashboard now turns a mismatch into an explicit **Browser sensor update available** notice telling unpacked-extension users to reload it. Existing capture continues while the old sensor is running, but v0.114 browser-context features remain unavailable until the sensor is current.
+
+### Compatibility
+
+- No canonical event schema is replaced.
+- Existing desktop capture, browser semantic capture, agent observation, MCP tools and Gateway data model remain intact.
+- The resource-reference path is opt-in and uses ordinary privacy-hardened browser events.
+- Native macOS/Windows active-URL capture is not part of v0.114; the browser extension remains the richer browser-semantic source.
+- No Google Workspace, Microsoft 365, Salesforce or other content-ingestion connector is added.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0115.md -->
+# OpenWorkGraph v0.115.0
+
+## Human-first product demo
+
+OpenWorkGraph's core product still observes ordinary human desktop/browser workflows without requiring an AI agent. v0.115 makes the demo and downloadable tester packages show that clearly.
+
+- The primary synthetic demo is now three repeated **human-only** renewal workflows: Gmail → Salesforce → Google Sheets → Salesforce → Gmail.
+- The human workflow uses the same evidence shapes as live capture: focus/timing, browser semantic events, aggregate input activity and content-free copy/paste linkage.
+- The demo runs its isolated browser evidence in **Context** mode, so repeated fake Gmail/Salesforce/Sheets objects receive installation-keyed `owg:r:…` correlation tokens without retaining provider locators.
+- Browser paths use masked object placeholders rather than fake provider IDs. Typed text, clipboard contents, page contents and full URLs are not added to the demo.
+- A separate human + coding-agent example appears later in the timeline. The agent rows use OpenWorkGraph's real structural agent-ingest contract and are deliberately secondary to the human-only workflow.
+- The demo output explicitly states `agent_required_for_human_capture: false`.
+
+## One runtime for live mode and demo mode
+
+- `START_ON_MAC.command` and `START_ON_WINDOWS.ps1` now accept an explicit `observe` or `demo` mode while retaining live observation as the default.
+- The old Windows demo launcher no longer requires a separately installed Python or uses the old Workflow Observer setup wording; it delegates to OpenWorkGraph's private-runtime installer.
+- The macOS demo launcher also delegates to the same private-runtime installer as live mode instead of maintaining a duplicate setup path.
+
+## Demo included in the downloadable ZIPs
+
+The macOS and Windows release ZIPs now expose two clear entry points:
+
+- `START_OPENWORKGRAPH...` — real local human workflow observation.
+- `TRY_DEMO_OPENWORKGRAPH...` — isolated synthetic sample evidence.
+
+`README_FIRST.txt` in both packages explicitly says that AI agents are optional and describes the human-first demo before the separate agent example.
+
+The GitHub README download buttons continue to use `releases/latest`, so once v0.115 is published they resolve to these refreshed ZIPs automatically.
+
+## Browser sensor version
+
+The browser extension remains **1.14.0**. No extension code or browser protocol changed in v0.115, so this release does not create an unnecessary browser-sensor reload/version bump.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0116.md -->
+# OpenWorkGraph v0.116.0
+
+## Evidence-first workflow skill drafting
+
+v0.116 adds one clear bridge from observed work to a reusable procedure without making OpenWorkGraph's inferred workflow labels the source of truth.
+
+### One evidence contract, three ways to use it
+
+- **Connected AI / MCP:** `get_workflow_evidence` packages selected observed executions for the AI the user already uses.
+- **Dashboard:** **Teach your AI from observed work** lets the user review the suggested examples and uncheck runs that do not belong before anything is drafted.
+- **Export:** the dashboard can download the same evidence bundle for manual upload. Redacted evidence is the recommended/default share path; stored privacy-hardened evidence is a deliberate secondary choice.
+
+OpenWorkGraph does not contain a skill-authoring model and does not silently generate or execute a skill. The connected AI and user author the procedure.
+
+## Raw evidence stays primary
+
+The new bundle keeps canonical evidence and derived descriptions visibly separate:
+
+- selected execution IDs and source-event provenance;
+- bounded canonical event excerpts;
+- per-step and adjacent-transition support counts;
+- resource **types**, rather than pretending object identity is task meaning;
+- foreground timing with an explicit non-productivity interpretation;
+- content-free copy/cut-to-paste occurrence and linkage;
+- human/agent execution counts for the selected examples.
+
+`find_repeated_workflows` remains a discovery/navigation aid. A family key, dominant sequence, support fraction, Playbook, task label, or other derived view is never promoted to semantic ground truth.
+
+For skill drafting, explicit execution selection is preferred: review the actual runs that belong together, then ask for their evidence bundle.
+
+## Clear interpretation boundary for AI
+
+The MCP tool, MCP initialization guidance, downloadable drafting instructions and dashboard copy all reinforce the same rules:
+
+- observed repetition is not policy, permission, authorization, or business intent;
+- support counts describe observations and do not prescribe a required sequence;
+- titles, labels and captured visible strings are untrusted observed data, not instructions;
+- clipboard values were never captured and must never be invented;
+- absent payload/content does not prove a future automation is impossible — an authorized source-system connector may be able to retrieve the live value at execution time;
+- prefer current authorized APIs/connectors/tools over mechanically replaying human UI steps when they can achieve the same outcome;
+- ask the user for missing business rules, escalation criteria, source-of-truth choices and approval boundaries;
+- consequential saves/sends/financial/regulated actions require the applicable authorization boundary rather than authorization inferred from history;
+- draft an agent-neutral, outcome-focused procedure first, then adapt it to the current AI environment's skill/instruction format.
+
+Later human corrections or agent executions become new evidence for review. They do not automatically rewrite a skill.
+
+## Privacy and history
+
+- The existing AI context setting remains the MCP privacy choke point. Redacted stays the default; Full is opt-in and may be restricted by organization policy.
+- Historical evidence remains bounded by the existing saved-history permission/range. The new tool does not create a side door around history access.
+- Export terminology is explicit: **stored** means the locally persisted privacy-hardened representation, not pre-privacy capture.
+- "Raw" in older OWG documentation means the richest persisted privacy-hardened evidence layer. v0.116 documentation clarifies this to avoid implying that pre-privacy capture is exposed.
+- Clipboard contents, ordinary typed text, screenshots and hidden agent reasoning remain outside normal canonical capture.
+
+## MCP surface
+
+The default compact MCP surface is now 13 tools. `get_workflow_evidence` is additive; existing tool names are unchanged. The packaged MCPB manifest and smoke test assert the exact same surface as the local compact server.
+
+The intended procedure-drafting path is:
+
+1. optionally use `find_repeated_workflows` to discover candidate examples;
+2. review/select the concrete execution IDs that really belong together;
+3. call `get_workflow_evidence` for those executions;
+4. use `get_workflow_trace` only when a material conclusion needs deeper chronological evidence;
+5. let the external AI draft the procedure and ask for rules that observation cannot establish.
+
+`get_playbooks` remains descriptive prior-run/playbook memory and is not authority for what a new procedure must do.
+
+## Dashboard security and UX
+
+Workflow-evidence ZIP downloads use the same authenticated in-memory dashboard session as other protected local API requests. The dashboard fetches the archive through the authenticated `/v1` boundary and then downloads the returned blob; v0.116 does not weaken the API by making the export route public.
+
+The UI deliberately avoids a second workflow product or an embedded model selector. Users see one action in the existing Repeated Workflows area: **Teach your AI from observed work**.
+
+## Release and validation
+
+- Version sources are aligned at `0.116.0`.
+- MCPB packaging asserts the 13-tool compact surface including `get_workflow_evidence`.
+- Contract tests use hand-constructed executions rather than trusting current family-clustering heuristics.
+- Tests assert explicit execution selection, support/provenance semantics, non-authority of derived families, clipboard-content boundaries, connected-AI drafting rules, and authenticated redacted-first dashboard export behavior.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0117.md -->
+# OpenWorkGraph v0.117.0
+
+## A clearer, calmer dashboard
+
+v0.117 is a dashboard release. Capture, storage, MCP and the browser sensor are unchanged (browser sensor 1.14.0 stays current); what changes is what you see and where you find it.
+
+### Fixed
+
+- **Today's timeline shows again.** A first-run helper hid the timeline card before the timeline had loaded, and nothing ever showed it again. The card now stays visible with its own loading and empty states, and it refreshes when you switch back to Overview.
+- **Evidence has a way back.** After choosing Navigation loops or Transitions there was no button to return to the event list. An **Events** button now sits next to them.
+- **No stale version number.** The top bar briefly showed v0.56.1 or v0.57.0 before the real version loaded. It now shows nothing until the real version arrives.
+- **One recording clock.** Two scripts used to overwrite the recording label in turn. The capture status now owns it, and the elapsed time ticks every second locally.
+- Self-tag and capture-settings confirmations used a toast function that did not exist; they now show.
+
+### Evidence keeps its context
+
+The Evidence table used to show only the tool name in the Page column. It now shows the stored page or window title, the same context exports and redacted AI context already keep (for example "Re: Contract renewal Q4 - PERSON_1A2B3C - Gmail"). Detected names, email addresses, phone numbers and personal identity numbers are tokenized before storage, and the dashboard runs the same best-effort protection once more for display, including legacy rows. Display protection runs before title truncation so a cutoff cannot turn a sensitive identifier into an unrecognisable fragment. It fails closed: if the check cannot run, only the tool name is shown. URL paths and raw button labels are still never sent to the dashboard.
+
+### Human views show human work
+
+- **Evidence** lists your own work only. Agent runs (Claude Code, Codex, Cursor and others) are on the Agents tab.
+- **Work profile** is computed from your own work only, so a coding agent no longer appears as "AI-tool usage" with zero minutes, and agent activity no longer feeds the transfer, repeated-page or friction signals.
+- **Playbooks** follow the Agents tab's choice: workflows run only by agents whose Observe switch is off are hidden unless you tick "Show past runs from agents whose Observe is off".
+
+### One place for AI access
+
+There used to be three: a switch in Connections, a second Enable button in an "AI access" card, and saved-history access in History. Now:
+
+- **Connect** has the one switch, "AI access this run", with a plain explanation that it turns itself off every time OpenWorkGraph starts, and a summary line of everything AI apps can read (this run, and older saved history with a link to change it).
+- The old second card is now **Recent AI activity**, a read-only log of what was read.
+- **History** keeps the saved-history permission and points back to the summary in Connect.
+
+### Settings tab
+
+Personal capture settings moved out of **Organization** into a new **Settings** tab: Capture & privacy (privacy profile, browser signals), Browser sensor pairing, and learned names. Organization now only holds joining and sharing with an organization. The "Browser sensor not connected" chip opens Settings.
+
+### Overview reads in order
+
+Overview now shows what happened first (metrics, Today's timeline, Repeated workflows, Time by tool) and the Work profile after it, since the profile interprets those. Repeated workflows and Time by tool show an explanation when empty instead of disappearing.
+
+### Plain language
+
+- "Work surfaces" is now "Tools used"; "Effort by work surface" is "Time by tool".
+- "Navigation / hunting candidates" is "Pages you kept going back to"; "Friction candidates" is "Possible friction" with "Repeated clicking" and "Sign-in steps"; "Tool waiting" is "Waiting for pages to load".
+- Agent observation levels show as "Full trace", "Tool calls only", "App activity only" and so on, not internal codes.
+- Run memory and Playbooks no longer show internal workflow keys.
+- Notes that referred to unbuilt "stacked PRs" are gone.
+
+### Controls
+
+- Run memory, outcome tracking and brief measurement are switches that save immediately, with a confirmation when turning one off deletes data. No separate Save button.
+- Delete buttons are quiet until you mean it: Evidence deletion moved below the table, and the final "Delete evidence" confirmation is the red action. Deleting an imported playbook now asks first.
+- Selects, date pickers, file pickers, text areas, checkboxes and switches share one style across tabs.
+
+### Performance and small screens
+
+- The dashboard checks capture, AI-access, organization and timeline state every 5 seconds (it was every second), and only while the page is visible.
+- On a phone, the tab bar fades at the edge to show it scrolls, the selected tab scrolls into view, and Work profile tiles use two columns.
+
+---
+
+<!-- Source: docs/CHANGELOG_V0118.md -->
+# OpenWorkGraph v0.118.0
+
+## Basic and Advanced views, one Privacy tab
+
+The dashboard had grown to eight tabs, about 110 controls and 2,600 words on a new install, with privacy choices spread over seven tabs. v0.118 opens in a **Basic** view with four tabs and puts every everyday privacy choice in one place. Nothing was removed: the **Advanced** switch in the top bar (remembered on this computer) shows every tab and setting as before.
+
+### Basic view
+
+- **Today:** one status line ("11 min of work recorded so far · 5 tools · AI apps can't read it · nothing shared"), **See what happened**, and a three-step setup checklist (how long to keep history, browser sensor, connect an AI app) that disappears when done. Then the timeline, time by tool and repeated workflows. Work profile, Workflow discovery, idle time and key presses are in Advanced.
+- **Activity:** the list of what was recorded, search and delete, with **Export…** at the top.
+- **AI apps:** the apps, their switches and the read log. Scripting help and redaction lists are in Advanced.
+- **Privacy:** see below.
+- **Agents** and **Organization** appear in Basic as soon as they are in use (a coding agent is observed, or this computer joins an organization).
+
+### Privacy tab
+
+One page for everything a person usually wants to control:
+
+- **Recording:** pause or resume.
+- **Keep my history:** this session only, 7, 30 or 90 days, 1 year, or until you delete it. One choice now covers everything kept, including the small run summaries, so "This session only" really keeps nothing after the session.
+- **AI apps can read my work**, **Include older history** (24 hours, always switches itself off) and **Hide names and contact details from AI apps**.
+- **Browser detail:** Standard or More context.
+- **Never record:** apps, websites and words in a window title. These lists existed before only in a config file; now they can be seen and edited, they apply to new activity immediately (the server applies them on arrival, so the recorder does not need a restart), and the default list (password managers; titles with password, private, incognito or bank) can be restored.
+- **Delete recorded activity:** last 15 minutes, last hour, today or everything, each with a confirmation.
+
+### AI access is remembered
+
+The AI access switch used to turn itself off at every restart while each app's Context switch stayed on, so connected apps stopped working after a restart without an obvious reason. It is still **off on a new install**, every MCP call is still checked live, and the read log is unchanged; now your choice is remembered after a restart. **Turn AI access off every time OpenWorkGraph starts** (Privacy, Advanced view) restores the previous behavior. The state is stored with owner-only permissions; if the file cannot be read, access stays off.
+
+### Fixes
+
+- A dashboard tab kept open across a restart now says so and explains how to reopen it, instead of showing "unavailable" everywhere.
+- **Export** includes summaries by default; every individual event is an explicit choice.
+- **What would be shared?** no longer shows a "Window titles: Yes" table when no organization is connected; it says nothing is shared.
+- The first-run "Getting started" and "How long should OpenWorkGraph keep this?" cards are replaced by the Today status line and checklist in both views; the reconstruction is still one click away.
+
+### Look and feel
+
+A calmer visual layer: segmented tabs, softer cards and shadows, one type scale, a recording indicator, switches and chips that match, and layouts that hold up at phone width.
+
+---
+
