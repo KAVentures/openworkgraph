@@ -9,114 +9,174 @@ permissions:
   contents: read
 
 jobs:
-  windows-zip-launch-twice:
+  windows-easy-install-launch-twice:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Parse easy installer
+      - name: Parse install and uninstall scripts
         shell: powershell
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "install.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            throw "install.ps1 has PowerShell syntax errors"
+          foreach ($path in @("install.ps1", "uninstall.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path: $($_.Message)" }
+              throw "$path has PowerShell syntax errors"
+            }
           }
       - name: Build tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
-      - name: Extract into a clean folder
+      - name: Prepare isolated easy-install environment
         shell: powershell
         run: |
-          $extract = Join-Path $env:RUNNER_TEMP "owg-package-smoke"
-          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
-          Expand-Archive -Path "dist\OpenWorkGraph-Windows.zip" -DestinationPath $extract
-          "OWG_SMOKE_PACKAGE=$((Get-ChildItem $extract -Directory | Select-Object -First 1).FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $local = Join-Path $env:RUNNER_TEMP "owg-localapp"
-          Remove-Item $local -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $local | Out-Null
+          $startMenu = Join-Path $env:RUNNER_TEMP "owg-start-menu"
+          Remove-Item $local, $startMenu -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $local, $startMenu | Out-Null
           "LOCALAPPDATA=$local" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Launch demo ZIP twice and reach health
+          "OWG_START_MENU_DIR=$startMenu" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "OWG_INSTALL_ZIP_PATH=$((Resolve-Path 'dist\OpenWorkGraph-Windows.zip').Path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "OWG_INSTALL_MODE=demo" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install, reach health, relaunch through Start shortcut, uninstall
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          function Invoke-Launch([string]$label) {
-            Write-Host "Starting $label launch..."
-            $launcher = Join-Path $env:OWG_SMOKE_PACKAGE "TRY_DEMO_OPENWORKGRAPH.cmd"
-            $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/d", "/c", ('"' + $launcher + '"') -PassThru -WindowStyle Hidden
-            try {
-              $ok = $false
-              for ($i = 0; $i -lt 120; $i++) {
-                if ($proc.HasExited) { throw "$label launcher exited early with code $($proc.ExitCode)" }
-                try {
-                  $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/health" -TimeoutSec 2
-                  if ($health.status -eq "ok") { $ok = $true; break }
-                } catch {}
-                Start-Sleep -Seconds 2
-              }
-              if (-not $ok) { throw "$label launch never reached /health" }
-            } finally {
-              & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+
+          function Wait-Healthy([System.Diagnostics.Process]$proc, [string]$label) {
+            $ok = $false
+            for ($i = 0; $i -lt 120; $i++) {
+              if ($proc.HasExited) { throw "$label exited early with code $($proc.ExitCode)" }
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:8787/health" -TimeoutSec 2
+                if ($health.status -eq "ok") { $ok = $true; break }
+              } catch {}
               Start-Sleep -Seconds 2
             }
+            if (-not $ok) { throw "$label never reached /health" }
           }
-          Invoke-Launch "first"
-          Invoke-Launch "second"
+
+          function Stop-Tree([System.Diagnostics.Process]$proc) {
+            if (-not $proc.HasExited) {
+              & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+            }
+            Start-Sleep -Seconds 2
+          }
+
+          $installer = (Resolve-Path "install.ps1").Path
+          $first = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer -PassThru -WindowStyle Hidden
+          try {
+            Wait-Healthy $first "easy installer"
+          } finally {
+            Stop-Tree $first
+          }
+
+          $installDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
+          $stableLauncher = Join-Path $installDir "START_ON_WINDOWS.bat"
+          $shortcut = Join-Path $env:OWG_START_MENU_DIR "OpenWorkGraph.lnk"
+          if (-not (Test-Path $stableLauncher)) { throw "Stable Windows launcher was not installed" }
+          if (-not (Test-Path $shortcut)) { throw "Start-menu shortcut was not created" }
+
+          $shell = New-Object -ComObject WScript.Shell
+          $link = $shell.CreateShortcut($shortcut)
+          if ([IO.Path]::GetFullPath($link.TargetPath) -ne [IO.Path]::GetFullPath($stableLauncher)) {
+            throw "Shortcut target is not the stable OpenWorkGraph launcher"
+          }
+
+          $second = Start-Process -FilePath $shortcut -PassThru
+          try {
+            Wait-Healthy $second "Start-menu shortcut"
+          } finally {
+            Stop-Tree $second
+          }
+
           if (-not (Test-Path (Join-Path $env:LOCALAPPDATA "OpenWorkGraph-logs\setup.log"))) {
             throw "Expected external setup log was not created"
           }
 
-  macos-zip-launch-twice:
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Resolve-Path "uninstall.ps1").Path -Yes
+          if ($LASTEXITCODE -ne 0) { throw "Windows uninstall helper failed" }
+          if (Test-Path $shortcut) { throw "Shortcut remained after uninstall" }
+          if (Test-Path $installDir) { throw "Install directory remained after uninstall" }
+
+  macos-easy-install-launch-twice:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Parse easy installer
-        run: bash -n install.sh
+      - name: Parse install and uninstall scripts
+        run: |
+          bash -n install.sh
+          bash -n uninstall.sh
       - name: Build tester ZIP
         run: bash scripts/build_macos_release.sh
-      - name: Extract into a clean folder
+      - name: Prepare isolated easy-install environment
         run: |
           set -euo pipefail
-          EXTRACT="$RUNNER_TEMP/owg-package-smoke"
-          rm -rf "$EXTRACT"
-          mkdir -p "$EXTRACT"
-          /usr/bin/ditto -x -k dist/OpenWorkGraph-macOS.zip "$EXTRACT"
-          PACKAGE="$(find "$EXTRACT" -maxdepth 1 -type d -name 'OpenWorkGraph-macOS-v*' | head -1)"
-          test -n "$PACKAGE"
-          echo "OWG_SMOKE_PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
           HOME_DIR="$RUNNER_TEMP/owg-home"
+          APPLICATIONS_DIR="$HOME_DIR/Applications"
           rm -rf "$HOME_DIR"
-          mkdir -p "$HOME_DIR"
+          mkdir -p "$APPLICATIONS_DIR"
           echo "HOME=$HOME_DIR" >> "$GITHUB_ENV"
-      - name: Launch demo ZIP twice and reach health
+          echo "OWG_APPLICATIONS_DIR=$APPLICATIONS_DIR" >> "$GITHUB_ENV"
+          echo "OWG_INSTALL_ZIP_PATH=$PWD/dist/OpenWorkGraph-macOS.zip" >> "$GITHUB_ENV"
+          echo "OWG_INSTALL_MODE=demo" >> "$GITHUB_ENV"
+          echo "OWG_SHORTCUT_TEST_DIRECT=1" >> "$GITHUB_ENV"
+      - name: Install, reach health, relaunch through Applications app, uninstall
         run: |
           set -euo pipefail
+
           terminate_tree() {
             local parent="$1"
             for child in $(pgrep -P "$parent" 2>/dev/null || true); do terminate_tree "$child"; done
             kill -TERM "$parent" 2>/dev/null || true
           }
-          launch_once() {
-            local label="$1"
-            echo "Starting $label launch..."
-            "$OWG_SMOKE_PACKAGE/TRY_DEMO_OPENWORKGRAPH.command" >"$RUNNER_TEMP/owg-$label.log" 2>&1 &
-            local pid=$!
+
+          wait_healthy() {
+            local pid="$1"
+            local label="$2"
+            local log="$3"
             local ok=0
             for _ in $(seq 1 120); do
               if ! kill -0 "$pid" 2>/dev/null; then
-                cat "$RUNNER_TEMP/owg-$label.log"
-                echo "$label launcher exited early" >&2
+                cat "$log"
+                echo "$label exited early" >&2
                 return 1
               fi
-              if curl --fail --silent --max-time 2 http://127.0.0.1:8787/health >/dev/null; then ok=1; break; fi
+              if curl --fail --silent --max-time 2 http://127.0.0.1:8787/health >/dev/null; then
+                ok=1
+                break
+              fi
               sleep 2
             done
-            if [ "$ok" -ne 1 ]; then cat "$RUNNER_TEMP/owg-$label.log"; return 1; fi
-            terminate_tree "$pid"
-            sleep 2
+            if [ "$ok" -ne 1 ]; then
+              cat "$log"
+              echo "$label never reached /health" >&2
+              return 1
+            fi
           }
-          launch_once first
-          launch_once second
+
+          bash install.sh >"$RUNNER_TEMP/owg-install.log" 2>&1 &
+          first=$!
+          wait_healthy "$first" "easy installer" "$RUNNER_TEMP/owg-install.log"
+          terminate_tree "$first"
+          sleep 2
+
+          APP="$OWG_APPLICATIONS_DIR/OpenWorkGraph.app"
+          APP_EXE="$APP/Contents/MacOS/OpenWorkGraph"
+          STABLE="$HOME/Library/Application Support/WorkflowObserver/START_ON_MAC.command"
+          test -x "$APP_EXE"
+          test -f "$STABLE"
+          plutil -lint "$APP/Contents/Info.plist"
+
+          "$APP_EXE" >"$RUNNER_TEMP/owg-shortcut.log" 2>&1 &
+          second=$!
+          wait_healthy "$second" "Applications launcher" "$RUNNER_TEMP/owg-shortcut.log"
+          terminate_tree "$second"
+          sleep 2
+
+          bash uninstall.sh --yes
+          test ! -e "$APP"
+          test ! -e "$HOME/Library/Application Support/WorkflowObserver"
