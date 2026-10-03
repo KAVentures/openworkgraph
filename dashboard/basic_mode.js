@@ -152,7 +152,7 @@
     panel.innerHTML = `
       <div class="card pv-intro">
         <div class="pv-shield" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2.5 4.5 5.5v5.7c0 4.6 3.1 8.7 7.5 10.3 4.4-1.6 7.5-5.7 7.5-10.3V5.5L12 2.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.6 12.1 2.3 2.3 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div><h2>Your privacy</h2><div class="muted">Everything stays on this computer. Names, email addresses, phone numbers and personal numbers are replaced with tokens before anything is saved. Typed text, passwords and clipboard contents are never captured.</div></div>
+        <div><h2>Your privacy</h2><div class="muted">Your evidence is stored locally by default and is never sent to OpenWorkGraph. If you connect an organization, only evidence allowed by your sharing settings can be sent to that organization's Gateway. Names, email addresses, phone numbers and personal numbers are replaced with tokens before anything is saved. Typed text, passwords and clipboard contents are never captured.</div></div>
       </div>
 
       <div class="card">
