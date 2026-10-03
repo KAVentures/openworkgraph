@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import count
 import sqlite3
 from types import SimpleNamespace
 
@@ -103,11 +104,15 @@ def remote_app(tmp_path):
     return create_human_enterprise_app(settings=settings, hardening=HardeningSettings(), human_access=human, verifier=Verifier())
 
 
-def rpc(client, token, name, arguments=None, request_id=1):
+_RPC_IDS = count(1)
+
+
+def rpc(client, token, name, arguments=None, request_id=None):
     headers = {"Host": "owg.example", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": request_id, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}})
+    message_id = next(_RPC_IDS) if request_id is None else request_id
+    return client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": message_id, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}})
 
 
 def payload(response):
