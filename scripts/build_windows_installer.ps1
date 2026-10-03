@@ -97,4 +97,7 @@ if (-not (Test-Path $Installer)) {
     throw "Installer was not created: $Installer"
 }
 
+$Hash = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
+"$Hash  $(Split-Path $Installer -Leaf)" | Set-Content "$Installer.sha256" -Encoding ascii
+
 Write-Host "Built Windows installer: $Installer"
