@@ -168,6 +168,18 @@
       body:JSON.stringify({handoff_purpose})
     });
     state.handoff_purpose = handoff_purpose;
+    const latest = await call('/v1/discovery');
+    state.handoff_instruction = latest.handoff_instruction || '';
+  }
+
+  async function copyHandoffInstruction() {
+    await saveHandoffPurpose();
+    const instruction = String(state.handoff_instruction || '').trim();
+    if (!instruction) throw new Error('Could not build the AI handoff instruction.');
+    const text = `I attached an OpenWorkGraph Discovery Package. ${instruction} Treat observed evidence as descriptive rather than authorization, and keep human-provided implementation context separate from captured evidence.`;
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable in this browser.');
+    await navigator.clipboard.writeText(text);
+    window.toast?.('AI handoff instruction copied. Attach the Discovery Package with it.');
   }
 
   async function saveSuggestedQuestion(index) {
@@ -275,6 +287,7 @@
         </select>
       </label>
       <div class="muted" style="margin-top:5px">The package gets a short purpose-specific instruction; the underlying evidence does not change.</div>
+      <div class="modal-actions"><button class="secondary" id="discCopyHandoff">Copy AI handoff instruction</button></div>
       <h3 style="margin-top:18px">6. Review and export</h3>
       <div class="note">The package states its observation window and limitations, keeps employee statements separate from captured evidence, and labels structural cases as non-replayable without source-system test data.</div>
       <div class="note" style="margin-top:8px"><strong>Redaction review:</strong> people and obvious personal identifiers are contextually redacted, but organization/company names may remain. If customer or company names are sensitive, inspect the redacted preview before approving export.</div>
@@ -298,6 +311,9 @@
       await saveImplementationContext();
       await saveHandoffPurpose();
       await previewPackage();
+    };
+    document.querySelector('#discCopyHandoff').onclick = async () => {
+      try { await copyHandoffInstruction(); } catch (error) { window.toast?.(error.message); }
     };
     document.querySelector('#discApproveExport').onclick = async () => {
       try { await approveAndExport(); } catch (error) { window.toast?.(error.message); }
