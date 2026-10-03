@@ -133,6 +133,9 @@ def test_remote_person_scope_and_conversation_continuity(tmp_path):
             db.insert_events(p, [{"event_id": f"{actor}-{i}", "observed_at": f"2026-10-01T09:0{i}:00Z", "app": "Excel", "event_type": "focus_span", "session_id": actor, "window_title": actor, "duration_seconds": 60, "metadata": {}} for i in range(2)])
         first = payload(rpc(client, "alice", "get_workflow_trace", {"limit": 1}))
         assert first["rows"][0]["actor_id"] == "alice"
+        # An explicit narrower end bound must override the broader snapshot in an older cursor.
+        narrowed = payload(rpc(client, "alice", "get_workflow_trace", {"cursor": first["next_cursor"], "until": "2026-10-01T09:00:30Z"}))
+        assert narrowed["rows"] == []
         # A cursor from another person cannot change the authenticated actor filter.
         second = payload(rpc(client, "bob", "get_workflow_trace", {"cursor": first["next_cursor"]}))
         assert all(row["actor_id"] == "bob" for row in second["rows"])
