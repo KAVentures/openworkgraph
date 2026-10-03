@@ -38,6 +38,7 @@ from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
 from .db import connect
 from .main import CONFIG_PATH, COLLECTOR_STATUS
+from .local_reference_lookup import expand_resource_references
 from .procedural_feedback import (
     _discovery_handoff_bundle,
     _review_candidates_with_readable_steps,
@@ -541,6 +542,10 @@ def export_discovery_package(representation: str = "redacted") -> Response:
         raise HTTPException(status_code=422, detail="representation must be redacted or stored")
     package = _package(state)
     payload = redact_contextually(package) if mode == "redacted" else package
+    # Approval is the boundary for exposing real provider locators from the
+    # installation-local lookup. Pre-approval previews remain opaque.
+    payload = expand_resource_references(payload)
+    payload["approved_local_object_locators_included"] = True
     payload["export_representation"] = "contextually_redacted" if mode == "redacted" else "stored_privacy_hardened"
     body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     study = payload.get("study") if isinstance(payload.get("study"), dict) else {}
