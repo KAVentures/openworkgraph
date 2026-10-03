@@ -43,7 +43,11 @@ try {
     Pop-Location
 }
 
-$RelativePythonw = [IO.Path]::GetRelativePath($Payload, $Pythonw)
+$PayloadPrefix = $Payload.TrimEnd("\\", "/") + [IO.Path]::DirectorySeparatorChar
+if (-not $Pythonw.StartsWith($PayloadPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Embedded pythonw.exe is unexpectedly outside the packaged payload: $Pythonw"
+}
+$RelativePythonw = $Pythonw.Substring($PayloadPrefix.Length)
 Set-Content -Path (Join-Path $Payload "EMBEDDED_PYTHONW.txt") -Value $RelativePythonw -Encoding ascii
 Set-Content -Path (Join-Path $Payload "OFFLINE_RUNTIME") -Value "OpenWorkGraph $Version embedded Windows CPython runtime" -Encoding ascii
 Write-Host "Embedded Windows runtime: $RuntimeRoot"
