@@ -34,17 +34,25 @@ if [[ -n "$BUILD_SHA" ]]; then
 ' "$BUILD_SHA" > "$PAYLOAD/BUILD_COMMIT"
 fi
 
+RUNTIME_ROOT="$PAYLOAD/.runtime/python"
+mkdir -p "$RUNTIME_ROOT"
+uv python install 3.12 --install-dir "$RUNTIME_ROOT"
+PYTHON="$(find "$RUNTIME_ROOT" -type f -path '*/bin/python3.12' -print -quit)"
+if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
+  echo "Embedded CPython executable was not found under $RUNTIME_ROOT" >&2
+  exit 2
+fi
+
 pushd "$PAYLOAD" >/dev/null
-uv venv --python 3.12 --managed-python .venv
-uv pip install --python .venv/bin/python .
-.venv/bin/python - <<'PY'
+uv pip install --python "$PYTHON" --system --link-mode copy .
+"$PYTHON" - <<'PY'
 import fastapi, mcp
 import server.secure_app, collector.main
 print("embedded macOS runtime imports OK")
 PY
 popd >/dev/null
-printf 'OpenWorkGraph %s embedded macOS runtime
-' "$VERSION" > "$PAYLOAD/OFFLINE_RUNTIME"
+ln -s "${PYTHON#"$PAYLOAD/.runtime/"}" "$PAYLOAD/.runtime/python3"
+printf 'OpenWorkGraph %s embedded macOS CPython runtime\n' "$VERSION" > "$PAYLOAD/OFFLINE_RUNTIME"
 
 cat > "$CONTENTS/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -81,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var python: URL {
-        appRoot.appendingPathComponent(".venv/bin/python")
+        appRoot.appendingPathComponent(".runtime/python3")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
