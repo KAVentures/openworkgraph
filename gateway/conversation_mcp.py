@@ -15,7 +15,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 
-from mcp_server.security import protect_observed_payload
+from mcp_server.security import protect_observed_payload, protect_reviewed_knowledge_payload
 from shared.workflow_knowledge import KnowledgeStore, KnowledgeWrite
 from .human_access import HumanAccessSettings, principal_from_claims
 from .query import workflow_trace
@@ -143,7 +143,7 @@ file reads, unshared chat transcripts, or organization-wide reads are provided."
         p = person()
         result = store.list(owner(p), workflow_id, limit)
         db.audit(organization_id=p.organization_id, principal_id=p.audit_id, action="mcp.knowledge.read", details={"returned": result["returned"]})
-        return protect_observed_payload(result)
+        return protect_reviewed_knowledge_payload(result)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def save_workflow_knowledge(record: KnowledgeWrite) -> dict[str, Any]:
@@ -158,7 +158,7 @@ file reads, unshared chat transcripts, or organization-wide reads are provided."
             raise ToolError("An administrator must enable personal knowledge writes for your identity")
         result = store.save(owner(p), record)
         db.audit(organization_id=p.organization_id, principal_id=p.audit_id, action="mcp.knowledge.saved", details={"workflow_id": record.workflow_id, "revision": result["revision"]})
-        return protect_observed_payload(result)
+        return protect_reviewed_knowledge_payload(result)
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False))
     def forget_workflow_knowledge(workflow_id: str) -> dict[str, Any]:
