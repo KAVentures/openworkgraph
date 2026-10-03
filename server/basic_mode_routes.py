@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from . import capture_exclusions
 from .main import ROOT
+from .update_check import update_status
 from .secure_app import app
 
 
@@ -60,8 +61,9 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-exclusions", get_capture_exclusions, methods=["GET"])
     app.add_api_route("/v1/capture-exclusions", put_capture_exclusions, methods=["PUT"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
+    app.add_api_route("/v1/update-status", update_status, methods=["GET"])
     app.middleware("http")(_inject_basic_mode_script)
     app.state.owg_basic_mode_installed = True
 
 
-__all__ = ["basic_mode_script", "get_capture_exclusions", "put_capture_exclusions"]
+__all__ = ["basic_mode_script", "get_capture_exclusions", "put_capture_exclusions", "update_status"]
