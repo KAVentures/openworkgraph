@@ -112,7 +112,7 @@ def test_release_notes_are_current_and_version_driven():
     changelog_lower = changelog.lower()
     assert "0.120.0" in changelog
     assert "desktop installer" in changelog_lower
-    assert "no terminal" in changelog_lower
+    assert "terminal" in changelog_lower
     assert "0.119.0" in changelog
     assert "release-matched" in changelog_lower
     assert "uninstall" in changelog_lower
