@@ -1,0 +1,32 @@
+name: generate-dependency-lock
+
+on:
+  push:
+    branches: ["fix/work-evidence-handoff-hardening"]
+
+permissions:
+  contents: write
+
+jobs:
+  uv-lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/work-evidence-handoff-hardening
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - name: Resolve lockfile
+        run: uv lock
+      - name: Commit lockfile if changed
+        run: |
+          if git diff --quiet -- uv.lock && test -f uv.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "Lock Python dependencies"
+          git push origin HEAD:fix/work-evidence-handoff-hardening
