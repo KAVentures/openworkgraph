@@ -29,5 +29,5 @@ validation in your tenant. This repository does not create those registrations.
 References (reviewed 2026-10-03):
 - [Microsoft's MCP plugin walkthrough](https://learn.microsoft.com/microsoft-365-copilot/extensibility/build-mcp-plugins)
 - [Plugin manifest v2.4](https://learn.microsoft.com/microsoft-365-copilot/extensibility/plugin-manifest-2.4)
-- [Declarative agent manifest v1.6](https://learn.microsoft.com/microsoft-365-copilot/extensibility/declarative-agent-manifest-1.6)
+- [Declarative agent manifest v1.8](https://learn.microsoft.com/microsoft-365-copilot/extensibility/declarative-agent-manifest-1.8)
 - [Dynamic tool discovery](https://learn.microsoft.com/microsoft-365-copilot/extensibility/plugin-dynamic-tool-discovery)
