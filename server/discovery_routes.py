@@ -21,6 +21,9 @@ from shared.discovery_scope import (
     read_state,
     save_question,
     set_excluded_execution_ids,
+    set_excluded_event_ids,
+    set_implementation_context,
+    set_handoff_purpose,
     start_session,
 )
 from connector.control import (
@@ -33,12 +36,14 @@ from connector.control import (
 from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
 from .db import connect
-from .main import CONFIG_PATH
+from .main import CONFIG_PATH, COLLECTOR_STATUS
 from .procedural_feedback import (
     _discovery_handoff_bundle,
     _review_candidates_with_readable_steps,
     _scope_gap_question,
     _suggested_questions,
+    _safe_event_action,
+    _safe_event_surface,
 )
 from .secure_app import app
 from .workflow_evidence import build_workflow_evidence, list_workflow_evidence_candidates
@@ -54,6 +59,97 @@ def _parse_time(value: Any) -> datetime | None:
         return parsed.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _capture_running() -> bool:
+    """Discovery should never start while the desktop collector is absent/stale."""
+    received = _parse_time(COLLECTOR_STATUS.get("received_at"))
+    if received is None:
+        return False
+    return (datetime.now(timezone.utc) - received).total_seconds() <= 20
+
+
+def _filter_excluded_events(bundle: dict[str, Any], excluded: set[str]) -> dict[str, Any]:
+    if not excluded:
+        return bundle
+    for group in bundle.get("canonical_evidence") or []:
+        if not isinstance(group, dict):
+            continue
+        group["events"] = [
+            event for event in (group.get("events") or [])
+            if str((event or {}).get("event_id") or "") not in excluded
+        ]
+    return bundle
+
+
+def _review_steps(bundles: list[dict[str, Any]], excluded: set[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    last_browser_surface = ""
+    for bundle in bundles:
+        for group in bundle.get("canonical_evidence") or []:
+            execution_id = str(group.get("execution_id") or "")
+            for event in group.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                event_id = str(event.get("event_id") or "")
+                event_type = str(event.get("event_type") or "")
+                if not event_id or not event_type.startswith(("browser_", "screen_")):
+                    continue
+                surface = _safe_event_surface(event, last_browser_surface=last_browser_surface)
+                if event_type.startswith("browser_") and surface and surface != "Browser":
+                    last_browser_surface = surface
+                action = _safe_event_action(event)
+                if not action:
+                    continue
+                rows.append({
+                    "event_id": event_id,
+                    "execution_id": execution_id,
+                    "step": f"{surface} · {action}",
+                    "observed_at": event.get("observed_at"),
+                    "included": event_id not in excluded,
+                })
+                if len(rows) >= 500:
+                    return rows
+    return rows
+
+
+def _observed_tools_inventory(bundles: list[dict[str, Any]]) -> dict[str, Any]:
+    apps: dict[str, int] = {}
+    sites: dict[str, int] = {}
+    for bundle in bundles:
+        for group in bundle.get("canonical_evidence") or []:
+            for event in group.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                app = str(event.get("app") or "").strip()
+                if app and app != "Excluded":
+                    apps[app] = apps.get(app, 0) + 1
+                meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+                page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+                host = str(page.get("hostname") or "").strip().lower()
+                if host:
+                    sites[host] = sites.get(host, 0) + 1
+    return {
+        "apps": [{"name": key, "observations": apps[key]} for key in sorted(apps)],
+        "sites": [{"hostname": key, "observations": sites[key]} for key in sorted(sites)],
+        "caveat": "Observed use does not mean the user or organization has an API, connector, license, or permission for that tool.",
+        "deterministic": True,
+    }
+
+
+_HANDOFF_INSTRUCTIONS = {
+    "understand": "Use the package to understand how the work actually happens. Separate observed evidence from employee-provided explanations and identify material unknowns.",
+    "improve": "Use the package to identify friction, redundant handoffs, and process improvements. Verify downstream dependencies before proposing that an observed step be removed.",
+    "automate": "Use the package to design automation against the current capability frontier. Check live tools/connectors, treat missing historical payload as potentially fetchable at execution time, and use TEST where feasibility is uncertain.",
+    "build_tool": "Use the package as implementation evidence for a tool that supports this workflow. Preserve human-provided goals separately from observations, define interfaces around the real tools/files/records observed, and validate with live source-system test data.",
+}
+
+
+def _handoff_instruction(state: dict[str, Any]) -> str:
+    return _HANDOFF_INSTRUCTIONS.get(
+        str(state.get("handoff_purpose") or "automate"),
+        _HANDOFF_INSTRUCTIONS["automate"],
+    )
 
 
 def _pause_gateway_if_connected() -> tuple[bool | None, bool]:
@@ -178,6 +274,10 @@ def _selected_family_runs(state: dict[str, Any]) -> tuple[dict[str, Any], list[d
             )
         except Exception:
             continue
+        bundle = _filter_excluded_events(
+            bundle,
+            {str(x) for x in state.get("excluded_event_ids") or []},
+        )
         bundles.append(bundle)
     return families, bundles
 
@@ -189,6 +289,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
     unanswered = [x for x in saved if not str(x.get("answer") or "").strip()]
     suggested = _suggested_questions(bundles)
     handoff_bundles = [_discovery_handoff_bundle(bundle) for bundle in bundles]
+    observed_tools = _observed_tools_inventory(bundles)
     selected_runs = sum(len((b.get("selector") or {}).get("execution_ids") or (b.get("executions") or [])) for b in bundles)
     return {
         "format": "openworkgraph.discovery-package.v1",
@@ -196,6 +297,11 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             "session_id": state.get("session_id"),
             "name": state.get("name"),
             "purpose": state.get("purpose"),
+            "implementation_context": {
+                **(state.get("implementation_context") or {}),
+                "source": "human_provided",
+            },
+            "handoff_purpose": state.get("handoff_purpose") or "automate",
             "starts_at": state.get("starts_at"),
             "ends_at": state.get("ends_at"),
             "status": public_state().get("status"),
@@ -220,6 +326,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             ],
         },
         "workflow_evidence": handoff_bundles,
+        "observed_tools": observed_tools,
         "human_statements": answered,
         "saved_unanswered_questions": unanswered,
         "suggested_targeted_questions": suggested,
@@ -228,17 +335,15 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
             "share_approved_at": state.get("share_approved_at"),
             "automatic_sharing": False,
             "excluded_execution_ids": state.get("excluded_execution_ids") or [],
+            "excluded_event_ids": state.get("excluded_event_ids") or [],
             "redaction_notice": (
                 "People and obvious personal identifiers are contextually redacted, but organization/company names may remain. "
                 "Review the redacted preview before approval when company/customer names are sensitive."
             ),
         },
         "handoff": {
-            "recommended_next_step": (
-                "Give this package to the authorized AI/implementation team. Reconstruct outcomes from canonical evidence, "
-                "use human statements as attributed business context, resolve remaining questions, then draft an agent-neutral "
-                "workflow specification. Do not infer authorization from observed actions."
-            ),
+            "purpose": state.get("handoff_purpose") or "automate",
+            "recommended_next_step": _handoff_instruction(state),
             "structural_cases_are_replayable_business_inputs": False,
             "source_system_test_data_required_for_execution_evals": True,
         },
@@ -267,6 +372,10 @@ def get_discovery() -> dict[str, Any]:
             if reviewing:
                 _families, bundles = _selected_family_runs(state)
                 state["review_candidates"] = _review_candidates_with_readable_steps(families, bundles)
+                state["review_steps"] = _review_steps(
+                    bundles,
+                    {str(x) for x in state.get("excluded_event_ids") or []},
+                )
                 saved_questions = {str(x.get("question") or "") for x in state.get("questions") or []}
                 state["suggested_targeted_questions"] = [
                     item for item in _suggested_questions(bundles)
@@ -285,6 +394,11 @@ async def start_discovery(request: Request) -> dict[str, Any]:
     body = await _payload(request)
     if read_state().get("enabled"):
         raise HTTPException(status_code=409, detail="an existing Discovery Mode session must be reviewed/exited before starting another")
+    if not _capture_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Discovery capture is not running yet. Start/keep OpenWorkGraph live observation running, then try again.",
+        )
 
     data_dir, _auth_dir = gateway_paths(CONFIG_PATH)
     event_boundary_id = _max_local_event_id(data_dir)
@@ -299,6 +413,9 @@ async def start_discovery(request: Request) -> dict[str, Any]:
         return start_session(
             name=str(body.get("name") or "Workflow discovery"),
             purpose=str(body.get("purpose") or ""),
+            implementation_goal=str(body.get("implementation_goal") or ""),
+            implementation_description=str(body.get("implementation_description") or ""),
+            handoff_purpose=str(body.get("handoff_purpose") or "automate"),
             allowed_apps=list(body.get("allowed_apps") or []),
             allowed_browser_hosts=list(body.get("allowed_browser_hosts") or []),
             duration_days=float(body.get("duration_days") or 5),
@@ -346,9 +463,32 @@ def deactivate_discovery() -> dict[str, Any]:
 async def update_discovery_selection(request: Request) -> dict[str, Any]:
     body = await _payload(request)
     values = body.get("excluded_execution_ids")
+    event_values = body.get("excluded_event_ids", [])
     if not isinstance(values, list):
         raise HTTPException(status_code=422, detail="excluded_execution_ids must be a list")
-    return set_excluded_execution_ids([str(x) for x in values])
+    if not isinstance(event_values, list):
+        raise HTTPException(status_code=422, detail="excluded_event_ids must be a list")
+    state = set_excluded_execution_ids([str(x) for x in values])
+    state = set_excluded_event_ids([str(x) for x in event_values])
+    return state
+
+
+@app.post("/v1/discovery/implementation-context")
+async def update_discovery_implementation_context(request: Request) -> dict[str, Any]:
+    body = await _payload(request)
+    return set_implementation_context(
+        goal=str(body.get("goal") or ""),
+        description=str(body.get("description") or ""),
+    )
+
+
+@app.post("/v1/discovery/handoff-purpose")
+async def update_discovery_handoff_purpose(request: Request) -> dict[str, Any]:
+    body = await _payload(request)
+    try:
+        return set_handoff_purpose(str(body.get("handoff_purpose") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/discovery/questions")
