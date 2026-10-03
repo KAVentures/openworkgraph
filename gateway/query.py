@@ -88,10 +88,12 @@ def workflow_trace(
     # preserves the v0.53.1 query contract exactly.
     since = effective_since(db, organization_id, since)
 
+    trace_until = min(snapshot_until, until) if until else snapshot_until
+
     rows = db.trace_rows(
         organization_id=organization_id,
         since=since,
-        until=snapshot_until,
+        until=trace_until,
         after_at=after_at,
         after_event_id=after_event_id,
         query=query,
