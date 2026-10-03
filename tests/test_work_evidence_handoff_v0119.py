@@ -126,3 +126,82 @@ def test_update_version_comparison_is_numeric_not_lexicographic():
     assert is_newer_version("0.118.0", "0.118.0") is False
     assert is_newer_version("0.117.9", "0.118.0") is False
     assert is_newer_version("garbage", "0.118.0") is False
+
+
+def test_discovery_build_brief_is_deterministic_and_implementation_ready():
+    from shared.discovery_package import build_brief_markdown
+
+    package = {
+        "study": {
+            "name": "Pricing discovery",
+            "starts_at": "2026-10-01T08:00:00+00:00",
+            "ends_at": "2026-10-03T08:00:00+00:00",
+            "implementation_context": {
+                "goal": "Build a pricing helper",
+                "description": "Keep final send with the worker.",
+                "source": "human_provided",
+            },
+            "handoff_purpose": "build_tool",
+        },
+        "coverage": {
+            "selected_execution_count": 3,
+            "workflow_bundles_included": 1,
+        },
+        "observed_tools": {
+            "apps": [{"name": "Microsoft Excel", "observations": 3}],
+            "sites": [{"hostname": "mail.google.com", "observations": 2}],
+            "caveat": "Observed use does not prove API access.",
+        },
+        "workflow_evidence": [{
+            "selector": {"selected_execution_count": 3},
+            "structural_alignment": {
+                "high_support_steps": [{
+                    "step": "Gmail · Open message",
+                    "support_runs": 3,
+                    "runs_total": 3,
+                    "median_zero_based_position": 0,
+                }],
+                "less_common_observed_steps": [{
+                    "step": "Excel · Edit cell",
+                    "support_runs": 1,
+                    "runs_total": 3,
+                    "median_zero_based_position": 1,
+                }],
+            },
+            "timing": {
+                "execution_duration_seconds": {"median": 125.0},
+                "observed_surface_foreground_time": [
+                    {"surface": "Gmail"},
+                    {"surface": "Microsoft Excel"},
+                ],
+            },
+            "resource_types": [{"resource_kind": "spreadsheet"}],
+            "data_movement": {"clipboard_transfers": [{"support_runs": 2}]},
+        }],
+        "human_statements": [{
+            "question": "Who approves exceptions?",
+            "answer": "Pricing manager.",
+        }],
+        "saved_unanswered_questions": [],
+        "suggested_targeted_questions": [{
+            "question": "What happens during the out-of-scope gap?",
+        }],
+        "handoff": {
+            "purpose": "build_tool",
+            "recommended_next_step": "Use the package as implementation evidence.",
+        },
+    }
+
+    brief = build_brief_markdown(package)
+    for marker in (
+        "## Workflow reconstruction",
+        "Observed runs in study: 3",
+        "Gmail · Open message",
+        "## Open implementation questions",
+        "## Implementation decision table",
+        "## Permissions, dependencies, and risks",
+        "Observed use never proves API access",
+        "human-provided context",
+    ):
+        assert marker in brief
+    assert "what should be automated" in brief
