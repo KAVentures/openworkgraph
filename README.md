@@ -39,54 +39,85 @@ An AI can reconstruct the workflow from the evidence rather than depending on Op
 
 # Try the local product
 
-The ZIPs contain two entry points: **START_OPENWORKGRAPH** starts real local observation; **TRY_DEMO_OPENWORKGRAPH** opens isolated synthetic sample evidence. The demo starts with repeated human-only workflows and shows an optional human+agent example separately.
+## Recommended: one-command install
 
-## macOS
+The bootstrap installer and the application ZIP are published together in the same GitHub Release. The installer is version-pinned to its matching package, so new users never run installer code from `main` against an older release.
 
-**[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
+### macOS
 
-1. Download and unzip the ZIP.
-2. Double-click **`START_OPENWORKGRAPH.command`**. This tester build is not yet signed by Apple, so macOS blocks it the first time:
-   - **macOS 15 (Sequoia) and later:** click **Done**, open **System Settings → Privacy & Security**, scroll down to the message about `START_OPENWORKGRAPH.command`, click **Open Anyway**, then confirm with **Open Anyway** and your password or Touch ID.
-   - **macOS 14 and earlier:** right-click the file → **Open**, then **Open** again.
-3. You only need to do this once.
-4. OpenWorkGraph installs its own private runtime; no system Python is required.
-5. Approve Accessibility/Input Monitoring if requested.
-6. The authenticated local dashboard opens at `http://127.0.0.1:8787`.
+Open Terminal and paste:
 
-To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.command`**. It uses the same private runtime but a separate demo database.
+```bash
+curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
+```
 
-For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and load the opened extension folder.
+The installer runs the established release launcher and adds **OpenWorkGraph** to `~/Applications` for later launches. That Applications item is only a convenience launcher: it opens the same stable installation under `~/Library/Application Support/WorkflowObserver`, so upgrades keep the existing private runtime, configuration and recorded data.
 
-## Windows
+Approve Accessibility/Input Monitoring if macOS asks. No system Python installation is required.
 
-**[⬇ Download the latest Windows tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip)**
+### Windows
 
-1. Download and unzip the ZIP.
-2. Double-click **`START_OPENWORKGRAPH.cmd`**.
-3. This tester build is not yet signed, so Windows SmartScreen may say "Windows protected your PC". Click **More info → Run anyway** (only if you downloaded it from this repository's Releases page).
-4. OpenWorkGraph installs its own private runtime; no system Python is required.
-5. The local dashboard opens at `http://127.0.0.1:8787`.
+Open PowerShell and paste:
 
-To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.cmd`**. No separate Python installation is required.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
+```
 
-For richer Chrome/Edge context, run **`ADD_BROWSER_SENSOR.cmd`** once.
+The installer runs the established release launcher and adds **OpenWorkGraph** to the current user's Start menu. The shortcut points at the same stable installation under `%LOCALAPPDATA%\OpenWorkGraph`; it does not create a second runtime or data directory.
 
-## One command
+No system Python installation is required.
+
+> These bootstrap commands are an easier distribution path, not a substitute for platform signing. If your organization blocks downloaded scripts or unsigned software, use the signed installer when available or ask IT to deploy OpenWorkGraph.
+
+Inspect remote scripts before executing them if that is your security policy.
+
+## Uninstall
+
+Uninstalling removes the convenience launcher, OpenWorkGraph's private runtime and configuration, **and the locally recorded evidence for this user**. The uninstall helper asks you to type `DELETE` before doing this and refuses to run while port 8787 is in use. Quit OpenWorkGraph first.
 
 macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
+tmp="$(mktemp)" && curl -fL https://github.com/KAVentures/openworkgraph/releases/latest/download/uninstall.sh -o "$tmp" && bash "$tmp"; rm -f "$tmp"
 ```
 
 Windows PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
+$p = Join-Path $env:TEMP "openworkgraph-uninstall.ps1"
+Invoke-WebRequest https://github.com/KAVentures/openworkgraph/releases/latest/download/uninstall.ps1 -OutFile $p
+powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
-Inspect remote scripts before executing them if that is your security policy.
+The optional browser extension is managed by Chrome/Edge/Safari separately; remove it from the browser's Extensions page if you installed it.
+
+## Manual tester ZIPs
+
+The ZIPs remain available as a fallback and for testing. They contain two entry points: **START_OPENWORKGRAPH** starts real local observation; **TRY_DEMO_OPENWORKGRAPH** opens isolated synthetic sample evidence.
+
+### macOS ZIP
+
+**[⬇ Download the latest macOS tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
+
+1. Download and unzip the ZIP.
+2. Double-click **`START_OPENWORKGRAPH.command`**. This tester build is not yet signed by Apple, so macOS may block it the first time.
+3. OpenWorkGraph installs its own private runtime; no system Python is required.
+4. Approve Accessibility/Input Monitoring if requested.
+5. The authenticated local dashboard opens at `http://127.0.0.1:8787`.
+
+To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.command`**. For richer browser-native context, run **`ADD_BROWSER_SENSOR.command`** once and load the opened extension folder.
+
+### Windows ZIP
+
+**[⬇ Download the latest Windows tester ZIP](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip)**
+
+1. Download and unzip the ZIP.
+2. Double-click **`START_OPENWORKGRAPH.cmd`**.
+3. This tester build is not yet signed, so Windows SmartScreen may show a warning.
+4. OpenWorkGraph installs its own private runtime; no system Python is required.
+5. The local dashboard opens at `http://127.0.0.1:8787`.
+
+To see synthetic sample evidence instead, double-click **`TRY_DEMO_OPENWORKGRAPH.cmd`**. For richer Chrome/Edge context, run **`ADD_BROWSER_SENSOR.cmd`** once.
 
 ---
 

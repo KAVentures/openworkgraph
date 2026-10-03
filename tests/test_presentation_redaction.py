@@ -219,6 +219,19 @@ def test_redaction_is_pure_and_preserves_event_structure(monkeypatch, tmp_path):
     assert safe["events"][0]["metadata"]["activity"] == raw["events"][0]["metadata"]["activity"]
 
 
+def test_existing_privacy_token_after_person_cue_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    import server.presentation as presentation
+    importlib.reload(presentation)
+
+    assert not presentation._looks_like_person_name("PERSON_ABCDEF", allow_single=True)
+    safe = presentation.redact_for_display({
+        "surface": "Gmail",
+        "label": "Reply to PERSON_ABCDEF",
+    })
+    assert safe["label"] == "Reply to PERSON_ABCDEF"
+
+
 def test_titles_keep_context_with_sensitive_details_tokenized_at_rest(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
     import server.db as db

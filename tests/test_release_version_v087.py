@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.118.0"
+EXPECTED_VERSION = "0.119.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.119: easier local installation without a second runtime" in workflow
+    v119_section = workflow.split("### v0.119: easier local installation without a second runtime", 1)[1].split("### v0.118:", 1)[0]
+    assert "release-matched bootstrap installers" in v119_section.lower()
+    assert "installer smoke coverage" in v119_section.lower()
+    assert "explicit uninstall" in v119_section.lower()
+    assert "no capture semantics change" in v119_section.lower()
     assert "### v0.118: Basic and Advanced views, one Privacy tab" in workflow
     v118_section = workflow.split("### v0.118: Basic and Advanced views, one Privacy tab", 1)[1].split("### v0.117:", 1)[0]
     assert "`" not in v118_section and "<" not in v118_section
@@ -98,6 +104,9 @@ def test_release_notes_are_current_and_version_driven():
 
     changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert "0.119.0" in changelog
+    assert "release-matched" in changelog_lower
+    assert "uninstall" in changelog_lower
     assert "0.118.0" in changelog and "Privacy tab" in changelog and "Never record" in changelog
     assert "off on a new install" in changelog
     assert "0.117.0" in changelog

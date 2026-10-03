@@ -6,25 +6,36 @@ Plan on about 30 minutes for the first pass (steps 1–6) and a normal working d
 
 ## 1. Install and start
 
+The recommended tester path is now the one-command bootstrap because it uses the existing release launcher but leaves a normal place to reopen OpenWorkGraph afterward.
+
 ### macOS
 
-1. Download **OpenWorkGraph-macOS.zip** from the [latest release](https://github.com/KAVentures/openworkgraph/releases/latest) and unzip it.
-2. Double-click **`START_OPENWORKGRAPH.command`**. This tester build is not yet signed by Apple, so macOS blocks it the first time:
-   - **macOS 15 (Sequoia) and later:**
-     1. Click **Done**.
-     2. Open **System Settings → Privacy & Security** and scroll down to the message about `START_OPENWORKGRAPH.command`.
-     3. Click **Open Anyway**, then confirm with **Open Anyway** and your password or Touch ID.
-   - **macOS 14 and earlier:** right-click the file → **Open**, then **Open** again.
-3. You only do this once. A Terminal window shows the first-time setup: OpenWorkGraph downloads its own private runtime, so you don't need Python.
-4. Approve **Accessibility** and **Input Monitoring** when asked (System Settings → Privacy & Security). If a permission is missing, the recording pill in the dashboard says so.
-5. The dashboard opens in your browser at `http://127.0.0.1:8787`.
+1. Open Terminal and paste:
+   ```bash
+   curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
+   ```
+2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
+3. Approve **Accessibility** and **Input Monitoring** when asked.
+4. The dashboard opens at `http://127.0.0.1:8787`.
+5. Quit and reopen **OpenWorkGraph** from your user **Applications** folder. It must reopen the same local installation and existing data.
+
+If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-macOS.zip** release remains available and uses the same underlying launcher.
 
 ### Windows
 
-1. Download **OpenWorkGraph-Windows.zip** from the [latest release](https://github.com/KAVentures/openworkgraph/releases/latest) and unzip it.
-2. Double-click **`START_OPENWORKGRAPH.cmd`**.
-3. This tester build is not yet signed, so SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**, but only for a file you downloaded from the OpenWorkGraph Releases page.
-4. The first start downloads a private runtime (no Python needed). The dashboard then opens at `http://127.0.0.1:8787`.
+1. Open PowerShell and paste:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
+   ```
+2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
+3. The dashboard opens at `http://127.0.0.1:8787`.
+4. Quit and reopen **OpenWorkGraph** from the Start menu. It must reopen the same `%LOCALAPPDATA%\OpenWorkGraph` installation and existing data.
+
+If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-Windows.zip** release remains available and uses the same underlying launcher.
+
+### Uninstall check
+
+After the rest of your test, quit OpenWorkGraph and use the release's uninstall helper. It must ask you to type **DELETE** before removing anything, remove the Applications/Start-menu launcher and local OpenWorkGraph installation/data, and leave browser-extension removal to the browser. If port 8787 is still in use, it should refuse instead of deleting files.
 
 **Expected:** the dashboard opens in the **Basic** view with four tabs: **Today, Activity, AI apps, Privacy**. Nothing needs an account. **Agents** appears once a coding agent is observed, and **Organization** once this computer joins one. The **Basic / Advanced** switch in the top bar shows every tab (History, Export, Settings and the rest); try it, then switch back. Your choice is remembered on this computer.
 
