@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response
 
+from shared.discovery_package import observed_tools_inventory
 from shared.discovery_scope import (
     answer_question,
     approve_share,
@@ -111,30 +112,6 @@ def _review_steps(bundles: list[dict[str, Any]], excluded: set[str]) -> list[dic
                 if len(rows) >= 500:
                     return rows
     return rows
-
-
-def _observed_tools_inventory(bundles: list[dict[str, Any]]) -> dict[str, Any]:
-    apps: dict[str, int] = {}
-    sites: dict[str, int] = {}
-    for bundle in bundles:
-        for group in bundle.get("canonical_evidence") or []:
-            for event in group.get("events") or []:
-                if not isinstance(event, dict):
-                    continue
-                app = str(event.get("app") or "").strip()
-                if app and app != "Excluded":
-                    apps[app] = apps.get(app, 0) + 1
-                meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-                page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
-                host = str(page.get("hostname") or "").strip().lower()
-                if host:
-                    sites[host] = sites.get(host, 0) + 1
-    return {
-        "apps": [{"name": key, "observations": apps[key]} for key in sorted(apps)],
-        "sites": [{"hostname": key, "observations": sites[key]} for key in sorted(sites)],
-        "caveat": "Observed use does not mean the user or organization has an API, connector, license, or permission for that tool.",
-        "deterministic": True,
-    }
 
 
 _HANDOFF_INSTRUCTIONS = {
@@ -289,7 +266,7 @@ def _package(state: dict[str, Any]) -> dict[str, Any]:
     unanswered = [x for x in saved if not str(x.get("answer") or "").strip()]
     suggested = _suggested_questions(bundles)
     handoff_bundles = [_discovery_handoff_bundle(bundle) for bundle in bundles]
-    observed_tools = _observed_tools_inventory(bundles)
+    observed_tools = observed_tools_inventory(bundles)
     selected_runs = sum(len((b.get("selector") or {}).get("execution_ids") or (b.get("executions") or [])) for b in bundles)
     return {
         "format": "openworkgraph.discovery-package.v1",
