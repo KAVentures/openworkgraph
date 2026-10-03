@@ -11,11 +11,17 @@ if (-not (Test-Path $Package)) {
     throw "Expected $Package. Run scripts/build_windows_release.ps1 first."
 }
 $Payload = Join-Path $Package ".openworkgraph-src"
-$EmbeddedPythonw = Join-Path $Payload ".venv\Scripts\pythonw.exe"
+$PythonwMarker = Join-Path $Payload "EMBEDDED_PYTHONW.txt"
 $TrayHost = Join-Path $Payload "windows_tray.py"
-if (-not (Test-Path $EmbeddedPythonw) -or -not (Test-Path $TrayHost)) {
+if (-not (Test-Path $PythonwMarker) -or -not (Test-Path $TrayHost)) {
     throw "Signed installer requires the embedded offline runtime. Run scripts/embed_windows_runtime.ps1 before this script."
 }
+$PythonwRelative = (Get-Content $PythonwMarker -Raw).Trim()
+$EmbeddedPythonw = Join-Path $Payload $PythonwRelative
+if (-not (Test-Path $EmbeddedPythonw)) {
+    throw "Embedded pythonw.exe not found at $EmbeddedPythonw"
+}
+$PythonwInApp = "{app}\.openworkgraph-src\" + $PythonwRelative.Replace("/", "\")
 
 $Iscc = $env:ISCC_PATH
 if (-not $Iscc) {
@@ -72,13 +78,13 @@ Source: "$PackageEscaped\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 Name: "startup"; Description: "Start OpenWorkGraph when I sign in"; GroupDescription: "Startup"; Flags: checkedonce
 
 [Icons]
-Name: "{autoprograms}\OpenWorkGraph"; Filename: "{app}\.openworkgraph-src\.venv\Scripts\pythonw.exe"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"
+Name: "{autoprograms}\OpenWorkGraph"; Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OpenWorkGraph"; ValueData: """{app}\.openworkgraph-src\.venv\Scripts\pythonw.exe"" ""{app}\.openworkgraph-src\windows_tray.py"""; Flags: uninsdeletevalue; Tasks: startup
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OpenWorkGraph"; ValueData: """$PythonwInApp"" ""{app}\.openworkgraph-src\windows_tray.py"""; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
-Filename: "{app}\.openworkgraph-src\.venv\Scripts\pythonw.exe"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"; Description: "Start OpenWorkGraph"; Flags: postinstall nowait skipifsilent
+Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"; Description: "Start OpenWorkGraph"; Flags: postinstall nowait skipifsilent
 "@ | Set-Content -Path $Iss -Encoding utf8
 
 & $Iscc $Iss
