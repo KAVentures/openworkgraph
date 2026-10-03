@@ -12,7 +12,7 @@ The recommended tester path is now the one-command bootstrap because it uses the
 
 1. Open Terminal and paste:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.sh | bash
+   curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
    ```
 2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
 3. Approve **Accessibility** and **Input Monitoring** when asked.
@@ -25,13 +25,17 @@ If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-
 
 1. Open PowerShell and paste:
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/KAVentures/openworkgraph/main/install.ps1 | iex"
+   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
    ```
 2. First setup downloads OpenWorkGraph's private runtime. No system Python is required.
 3. The dashboard opens at `http://127.0.0.1:8787`.
 4. Quit and reopen **OpenWorkGraph** from the Start menu. It must reopen the same `%LOCALAPPDATA%\OpenWorkGraph` installation and existing data.
 
 If the bootstrap command is blocked by local policy, the manual **OpenWorkGraph-Windows.zip** release remains available and uses the same underlying launcher.
+
+### Uninstall check
+
+After the rest of your test, quit OpenWorkGraph and use the release's uninstall helper. It must ask you to type **DELETE** before removing anything, remove the Applications/Start-menu launcher and local OpenWorkGraph installation/data, and leave browser-extension removal to the browser. If port 8787 is still in use, it should refuse instead of deleting files.
 
 **Expected:** the dashboard opens in the **Basic** view with four tabs: **Today, Activity, AI apps, Privacy**. Nothing needs an account. **Agents** appears once a coding agent is observed, and **Organization** once this computer joins one. The **Basic / Advanced** switch in the top bar shows every tab (History, Export, Settings and the rest); try it, then switch back. Your choice is remembered on this computer.
 
