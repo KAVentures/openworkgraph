@@ -12,10 +12,67 @@ permissions:
 jobs:
   macos-package:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
       - name: Build standalone macOS tester ZIP
         run: bash scripts/build_macos_release.sh
+      - name: Build offline macOS menu-bar app
+        run: bash scripts/build_macos_app_bundle.sh
+      - name: Ad-hoc sign and verify app bundle shape
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - dist/OpenWorkGraph.app
+          codesign --verify --deep --strict --verbose=2 dist/OpenWorkGraph.app
+          test -x dist/OpenWorkGraph.app/Contents/MacOS/OpenWorkGraph
+          test -x dist/OpenWorkGraph.app/Contents/Resources/openworkgraph/.runtime/python3
+          test -f dist/OpenWorkGraph.app/Contents/Resources/openworkgraph/OFFLINE_RUNTIME
+          plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist dist/com.kinvectum.openworkgraph.plist
+      - name: Smoke-test embedded macOS runtime twice
+        run: |
+          set -euo pipefail
+          PAYLOAD="$PWD/dist/OpenWorkGraph.app/Contents/Resources/openworkgraph"
+          PYTHON="$PAYLOAD/.runtime/python3"
+          "$PYTHON" -c "import fastapi, mcp; import server.secure_app, collector.main"
+          export HOME="$RUNNER_TEMP/owg-macos-app-home"
+          mkdir -p "$HOME"
+
+          launch_demo() {
+            label="$1"
+            (
+              cd "$PAYLOAD"
+              "$PYTHON" start.py --mode demo
+            ) >"$RUNNER_TEMP/owg-$label.log" 2>&1 &
+            pid=$!
+            ok=0
+            for _ in $(seq 1 90); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                cat "$RUNNER_TEMP/owg-$label.log"
+                echo "$label embedded app launch exited early" >&2
+                exit 1
+              fi
+              if /usr/bin/curl --silent --fail http://127.0.0.1:8787/health | /usr/bin/grep -q '"status":"ok"'; then
+                ok=1
+                break
+              fi
+              sleep 1
+            done
+            if [[ "$ok" != "1" ]]; then
+              cat "$RUNNER_TEMP/owg-$label.log"
+              echo "$label embedded app launch never reached health" >&2
+              exit 1
+            fi
+            /usr/bin/pkill -TERM -P "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 2
+            /usr/bin/pkill -KILL -P "$pid" 2>/dev/null || true
+            kill -KILL "$pid" 2>/dev/null || true
+          }
+          launch_demo first
+          launch_demo second
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
