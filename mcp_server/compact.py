@@ -174,6 +174,8 @@ def _slim_trace_row(item: dict[str, Any]) -> dict[str, Any]:
             "keypress_count",
             "click_count",
             "scroll_count",
+            "page_host",
+            "browser_hostname",
         )
         if item.get(key) not in (None, "", [], {})
     }
@@ -542,6 +544,11 @@ def get_workflow_trace(
         ),
     )
     output = result if selected == "rich" else _slim_trace(result)
+    if selected == "rich" and secure_runtime.detail_level() == "full":
+        # Exact provider IDs are joined from the local-only resolver dictionary
+        # only after the local server confirms Full AI context for this call.
+        from server.local_reference_lookup import expand_resource_references
+        output = expand_resource_references(output)
     output["detail"] = selected
     return core._finish(name, output)
 

@@ -73,6 +73,7 @@ def rich_evidence_row(row: dict[str, Any], *, include_identity: bool = False) ->
         "target_role": target_role,
         "page_host": page.get("hostname", ""),
         "page_path": page.get("pathname", ""),
+        "browser_hostname": page.get("hostname", ""),
         "tab_id": meta.get("tab_id"),
         "tab_context_id": meta.get("tab_context_id"),
         "browser_session_id": meta.get("browser_session_id"),
@@ -101,7 +102,7 @@ def rich_evidence_row(row: dict[str, Any], *, include_identity: bool = False) ->
 
     # Avoid noisy null convenience keys while keeping canonical metadata intact.
     for key in (
-        "tab_id", "tab_context_id", "browser_session_id", "semantic_action",
+        "browser_hostname", "tab_id", "tab_context_id", "browser_session_id", "semantic_action",
         "semantic_action_confidence", "clipboard_transfer_id", "linked_copy_event_id",
         "clipboard_source_tab_context_id", "clipboard_link_age_seconds",
     ):

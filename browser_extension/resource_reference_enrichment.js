@@ -143,7 +143,11 @@
     if (policy.excluded_title_patterns.length && !title) return;
     if (matchesPattern(title, policy.excluded_title_patterns)) return;
 
-    const reference = await normalizeCandidate(candidate, !!settings.resource_reference_locators);
+    // Always send the validated provider locator over authenticated loopback so
+    // the local server can maintain its local-only resolver dictionary. Whether
+    // that locator enters canonical evidence remains controlled server-side by
+    // resource_reference_locators.
+    const reference = await normalizeCandidate(candidate, true);
     if (!reference || recentlySent(reference)) return;
 
     await sendBrowserEvent({

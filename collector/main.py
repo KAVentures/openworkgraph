@@ -27,6 +27,7 @@ from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
 from .outbox import EventOutbox
 from .boundaries import document_key, is_material_change
+from .business_context import capture_business_context
 from .instance_lock import EXIT_ALREADY_RUNNING, CollectorLock
 from .permissions import missing as missing_permissions, sensor_permissions
 from browser_utils import is_browser_app, normalized_browser_title
@@ -287,6 +288,9 @@ def _public_window(w, cfg: dict) -> dict:
         # this): a noise-normalized document identity for same-app boundaries.
         # Empty when titles are excluded or the user chose not to record them.
         "document_key": "" if excluded or mode == "none" else document_key(w.title),
+        # Additive local business context. Excluded windows never invoke native
+        # app/browser automation, and no email/file/page contents are read.
+        "business_context": {} if excluded else capture_business_context(w.app or "", w.title or ""),
     }
 
 
@@ -338,6 +342,7 @@ def _focus_span_event(
             "focus_boundary": boundary_reason,
             "activity": activity,
             "privacy": {"key_identities": False, "typed_values": False},
+            **(state.get("business_context") or {}),
         },
     }
 
@@ -906,6 +911,15 @@ def _run_locked(config_path: Path) -> None:
                     pending_doc, pending_count = candidate, 1
                     pending_wall, pending_mono, pending_state = now_wall, now_mono, state
                 needed = max(1, int(cfg.get("document_debounce_polls", 2)))
+                # Discovery studies intentionally retain brief document glances:
+                # with the normal 2 s poll, one confirmed poll is ~2 s instead of
+                # the ordinary ~4 s two-poll debounce.
+                try:
+                    from shared.discovery_scope import read_state as _read_discovery_state
+                    if _read_discovery_state().get("status") == "active":
+                        needed = 1
+                except Exception:
+                    pass
                 if pending_count >= needed and pending_state is not None:
                     # The new document began when it first appeared, not when confirmed.
                     boundary_mono = max(pending_mono, current_started_mono)
