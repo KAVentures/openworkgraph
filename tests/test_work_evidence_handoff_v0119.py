@@ -116,3 +116,13 @@ def test_claude_plugin_marketplace_files_are_self_contained():
     assert any("CLAUDE_PLUGIN_ROOT" in value for value in args)
     assert (plugin / "skills" / "owg" / "SKILL.md").exists()
     assert (plugin / "hooks" / "hooks.json").exists()
+
+
+def test_update_version_comparison_is_numeric_not_lexicographic():
+    from server.update_check import is_newer_version
+
+    assert is_newer_version("v0.119.0", "0.118.0") is True
+    assert is_newer_version("0.118.1", "0.118.0") is True
+    assert is_newer_version("0.118.0", "0.118.0") is False
+    assert is_newer_version("0.117.9", "0.118.0") is False
+    assert is_newer_version("garbage", "0.118.0") is False
