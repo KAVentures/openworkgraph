@@ -34,7 +34,7 @@ if (-not $Python -or -not $Pythonw) {
 
 Push-Location $Payload
 try {
-    & $Uv pip install --python $Python --system --link-mode copy "."
+    & $Uv pip install --python $Python --system --break-system-packages --link-mode copy "."
     if ($LASTEXITCODE -ne 0) { throw "uv pip install failed with exit code $LASTEXITCODE" }
 
     & $Python -c "import fastapi, mcp, pystray, win32com.client, uiautomation; import server.secure_app, collector.main"
