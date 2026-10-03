@@ -390,32 +390,6 @@ def _readable_feedback(
 
 
 @mcp.tool()
-def get_context_pulse(
-    cursor: str | None = None,
-    recent_limit: int = 12,
-    finding_limit: int = 6,
-    lookback_days: int = 30,
-) -> dict[str, Any]:
-    """Call at the start of a conversation to learn what changed in observed work.
-
-    This is an incremental factual pulse over canonical recent evidence plus
-    derived long-horizon findings. Follow the returned cursor on later calls.
-    If continuing prior AI-agent work, also call get_agent_handoff.
-    """
-    name = "get_context_pulse"
-    core._begin(name)
-    params: dict[str, Any] = {
-        "recent_limit": _bounded(recent_limit, maximum=100),
-        "finding_limit": _bounded(finding_limit, maximum=50),
-        "lookback_days": min(max(1, int(lookback_days)), 365),
-        "recent_detail": "compact",
-    }
-    if str(cursor or "").strip():
-        params["cursor"] = str(cursor).strip()
-    return core._finish(name, secure_runtime.secure_get("/v1/context-pulse", params))
-
-
-@mcp.tool()
 def get_current_work_context(
     limit: int = 6,
     cursor: str | None = None,
