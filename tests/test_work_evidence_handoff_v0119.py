@@ -44,7 +44,7 @@ def test_discovery_implementation_and_step_edits_clear_approval(tmp_path, monkey
 
 
 def test_observed_tools_inventory_is_deterministic_and_has_api_caveat():
-    from server.discovery_routes import _observed_tools_inventory
+    from shared.discovery_package import observed_tools_inventory
 
     bundles = [{
         "canonical_evidence": [{
@@ -64,7 +64,7 @@ def test_observed_tools_inventory_is_deterministic_and_has_api_caveat():
             ],
         }],
     }]
-    result = _observed_tools_inventory(bundles)
+    result = observed_tools_inventory(bundles)
     assert result["apps"] == [
         {"name": "Google Chrome", "observations": 2},
         {"name": "Microsoft Excel", "observations": 1},
@@ -74,7 +74,7 @@ def test_observed_tools_inventory_is_deterministic_and_has_api_caveat():
 
 
 def test_xlsx_on_demand_extraction_reads_cells_without_copying_file(tmp_path):
-    from server.evidence_paging import _extract
+    from server.evidence_file_reader import extract_file_text
 
     path = tmp_path / "Rates.xlsx"
     with zipfile.ZipFile(path, "w") as archive:
@@ -97,7 +97,7 @@ def test_xlsx_on_demand_extraction_reads_cells_without_copying_file(tmp_path):
                 <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Rate</t></is></c>
                 <c r="B1"><v>4.25</v></c></row></sheetData></worksheet>""",
         )
-    text, representation = _extract(path)
+    text, representation = extract_file_text(path)
     assert representation == "xlsx_cells"
     assert "[Sheet: Rates]" in text
     assert "A1\tRate" in text
