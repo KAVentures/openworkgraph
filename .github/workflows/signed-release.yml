@@ -11,45 +11,57 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
 
       - name: Require Apple signing credentials
         env:
-          CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APP_CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APP_CERT_PASSWORD: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_PASSWORD }}
+          APP_IDENTITY: ${{ secrets.APPLE_APPLICATION_IDENTITY }}
+          INSTALLER_CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
           INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          for value in CERT_B64 CERT_PASSWORD INSTALLER_IDENTITY APPLE_ID APP_PASSWORD TEAM_ID; do
+          for value in APP_CERT_B64 APP_CERT_PASSWORD APP_IDENTITY INSTALLER_CERT_B64 INSTALLER_CERT_PASSWORD INSTALLER_IDENTITY APPLE_ID APP_PASSWORD TEAM_ID; do
             test -n "${!value:-}" || { echo "Missing required Apple signing secret: $value" >&2; exit 2; }
           done
 
-      - name: Build existing macOS payload
-        run: bash scripts/build_macos_release.sh
+      - name: Build offline macOS app bundle
+        run: bash scripts/build_macos_app_bundle.sh
 
-      - name: Import Developer ID Installer certificate
+      - name: Import Developer ID Application and Installer certificates
         env:
-          CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APP_CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APP_CERT_PASSWORD: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_PASSWORD }}
+          INSTALLER_CERT_B64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/openworkgraph-installer.p12"
+          APP_CERT_PATH="$RUNNER_TEMP/openworkgraph-application.p12"
+          INSTALLER_CERT_PATH="$RUNNER_TEMP/openworkgraph-installer.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/openworkgraph-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
-          printf '%s' "$CERT_B64" | base64 --decode > "$CERT_PATH"
+          printf '%s' "$APP_CERT_B64" | base64 --decode > "$APP_CERT_PATH"
+          printf '%s' "$INSTALLER_CERT_B64" | base64 --decode > "$INSTALLER_CERT_PATH"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CERT_PASSWORD" -T /usr/bin/productsign -T /usr/bin/codesign
+          security import "$APP_CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APP_CERT_PASSWORD" -T /usr/bin/codesign
+          security import "$INSTALLER_CERT_PATH" -k "$KEYCHAIN_PATH" -P "$INSTALLER_CERT_PASSWORD" -T /usr/bin/productsign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
-          rm -f "$CERT_PATH"
+          rm -f "$APP_CERT_PATH" "$INSTALLER_CERT_PATH"
           echo "OWG_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Sign, notarize and staple macOS installer
+      - name: Sign, notarize and staple macOS app and installer
         env:
+          APPLE_APPLICATION_IDENTITY: ${{ secrets.APPLE_APPLICATION_IDENTITY }}
           APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
