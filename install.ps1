@@ -1,21 +1,35 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$Url = if ($env:OWG_INSTALL_URL) { $env:OWG_INSTALL_URL } else { "https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip" }
+$ReleaseVersion = "0.119.0"
+$Url = if ($env:OWG_INSTALL_URL) { $env:OWG_INSTALL_URL } else { "https://github.com/KAVentures/openworkgraph/releases/download/v$ReleaseVersion/OpenWorkGraph-Windows.zip" }
+$Mode = if ($env:OWG_INSTALL_MODE) { $env:OWG_INSTALL_MODE } else { "observe" }
+if ($Mode -notin @("observe", "demo")) {
+    throw "OWG_INSTALL_MODE must be observe or demo."
+}
+
 $Temp = Join-Path ([System.IO.Path]::GetTempPath()) ("openworkgraph-" + [guid]::NewGuid().ToString("N"))
 $Zip = Join-Path $Temp "OpenWorkGraph-Windows.zip"
 $Unpacked = Join-Path $Temp "unpacked"
 $InstallDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
 $StableLauncher = Join-Path $InstallDir "START_ON_WINDOWS.bat"
 $ShortcutPath = $null
+$ShortcutExisted = $false
 
 function Install-StartMenuShortcut {
     if ($env:OWG_INSTALL_NO_SHORTCUT -eq "1") { return }
 
-    $Programs = [Environment]::GetFolderPath("Programs")
+    $Programs = if ($env:OWG_START_MENU_DIR) {
+        $env:OWG_START_MENU_DIR
+    } else {
+        [Environment]::GetFolderPath("Programs")
+    }
     if ([string]::IsNullOrWhiteSpace($Programs)) { return }
 
+    New-Item -ItemType Directory -Force -Path $Programs | Out-Null
     $script:ShortcutPath = Join-Path $Programs "OpenWorkGraph.lnk"
+    $script:ShortcutExisted = Test-Path $script:ShortcutPath
+
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut($script:ShortcutPath)
     $Shortcut.TargetPath = $StableLauncher
@@ -27,7 +41,7 @@ function Install-StartMenuShortcut {
 
 New-Item -ItemType Directory -Force -Path $Temp, $Unpacked | Out-Null
 try {
-    Write-Host "Downloading the latest OpenWorkGraph Windows build..."
+    Write-Host "Downloading OpenWorkGraph v$ReleaseVersion for Windows..."
     if ($env:OWG_INSTALL_ZIP_PATH) {
         Copy-Item -LiteralPath $env:OWG_INSTALL_ZIP_PATH -Destination $Zip
     } else {
@@ -35,9 +49,10 @@ try {
     }
     Expand-Archive -Path $Zip -DestinationPath $Unpacked -Force
 
-    $Start = Get-ChildItem -Path $Unpacked -Filter "START_OPENWORKGRAPH.cmd" -File -Recurse | Select-Object -First 1
+    $LauncherName = if ($Mode -eq "demo") { "TRY_DEMO_OPENWORKGRAPH.cmd" } else { "START_OPENWORKGRAPH.cmd" }
+    $Start = Get-ChildItem -Path $Unpacked -Filter $LauncherName -File -Recurse | Select-Object -First 1
     if (-not $Start) {
-        throw "Could not find START_OPENWORKGRAPH.cmd in the release package."
+        throw "Could not find $LauncherName in the release package."
     }
 
     # The shortcut points at the stable per-user installation created by the
@@ -50,7 +65,7 @@ try {
     & cmd.exe /d /c ('"' + $Start.FullName + '"')
     $ExitCode = $LASTEXITCODE
 
-    if ($ExitCode -ne 0 -and $ShortcutPath -and -not (Test-Path $StableLauncher)) {
+    if ($ExitCode -ne 0 -and $ShortcutPath -and -not $ShortcutExisted) {
         Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction SilentlyContinue
     }
     exit $ExitCode
