@@ -56,8 +56,9 @@ jobs:
           $proc = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=$InstallDir", "/MERGETASKS=!startup" -PassThru -Wait
           if ($proc.ExitCode -ne 0) { throw "Installer exited with $($proc.ExitCode)" }
           $Payload = Join-Path $InstallDir ".openworkgraph-src"
-          $Python = Join-Path $Payload ".venv\Scripts\python.exe"
-          $Pythonw = Join-Path $Payload ".venv\Scripts\pythonw.exe"
+          $PythonwRelative = (Get-Content (Join-Path $Payload "EMBEDDED_PYTHONW.txt") -Raw).Trim()
+          $Pythonw = Join-Path $Payload $PythonwRelative
+          $Python = Join-Path (Split-Path $Pythonw -Parent) "python.exe"
           if (-not (Test-Path $Python) -or -not (Test-Path $Pythonw) -or -not (Test-Path (Join-Path $Payload "OFFLINE_RUNTIME"))) {
             throw "Offline runtime is missing from installed payload"
           }
