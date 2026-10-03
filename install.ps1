@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$ReleaseVersion = "0.119.0"
+$ReleaseVersion = "0.120.0"
 $Url = if ($env:OWG_INSTALL_URL) { $env:OWG_INSTALL_URL } else { "https://github.com/KAVentures/openworkgraph/releases/download/v$ReleaseVersion/OpenWorkGraph-Windows.zip" }
 $Mode = if ($env:OWG_INSTALL_MODE) { $env:OWG_INSTALL_MODE } else { "observe" }
 if ($Mode -notin @("observe", "demo")) {

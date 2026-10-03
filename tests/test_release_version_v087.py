@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.119.0"
+EXPECTED_VERSION = "0.120.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.120: real desktop installers" in workflow
+    v120_section = workflow.split("### v0.120: real desktop installers", 1)[1].split("### v0.119:", 1)[0]
+    assert "no zip or terminal for normal users" in v120_section.lower()
+    assert "openworkgraph-macos.pkg" in v120_section.lower()
+    assert "openworkgraph-windows-setup.exe" in v120_section.lower()
+    assert "same local state" in v120_section.lower()
     assert "### v0.119: easier local installation without a second runtime" in workflow
     v119_section = workflow.split("### v0.119: easier local installation without a second runtime", 1)[1].split("### v0.118:", 1)[0]
     assert "release-matched bootstrap installers" in v119_section.lower()
@@ -104,6 +110,9 @@ def test_release_notes_are_current_and_version_driven():
 
     changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert "0.120.0" in changelog
+    assert "desktop installer" in changelog_lower
+    assert "terminal" in changelog_lower
     assert "0.119.0" in changelog
     assert "release-matched" in changelog_lower
     assert "uninstall" in changelog_lower

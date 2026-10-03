@@ -1,5 +1,18 @@
 # OpenWorkGraph changelog
 
+# OpenWorkGraph v0.120.0
+
+This release adds real desktop installers so normal users no longer need a ZIP, Terminal, PowerShell, or a separate Python installation.
+
+- **macOS desktop installer:** `OpenWorkGraph-macOS.pkg` installs the offline menu-bar app into Applications. The signed runtime stays sealed inside the app bundle while mutable source/state use the established `~/Library/Application Support/WorkflowObserver` location; existing `data/` and `config.json` are preserved.
+- **Windows desktop installer:** `OpenWorkGraph-Windows-Setup.exe` installs the offline tray app per-user under LocalAppData and creates the normal Start-menu entry. The Inno Setup uninstaller remains available.
+- **Stable website downloads:** GitHub Releases publish unversioned installer aliases plus versioned installer artifacts and SHA-256 files.
+- **Advanced fallbacks remain:** release-matched shell installers and tester ZIPs stay available for technical users and troubleshooting.
+- **Signing-ready:** the signed-installer workflow can replace the stable aliases with notarized macOS and signed Windows builds when signing credentials are configured.
+- **No capture behavior change:** collectors, evidence schema, privacy controls, MCP, Gateway, exports and agent integrations are unchanged.
+
+---
+
 # OpenWorkGraph v0.119.0
 
 This release adds conversational background context and makes the existing local-first tester path easier to install and remove without introducing a second runtime or data architecture.

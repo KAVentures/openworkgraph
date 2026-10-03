@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 APP="$ROOT/dist/OpenWorkGraph.app"
-LAUNCH_AGENT="$ROOT/dist/com.kinvectum.openworkgraph.plist"
 PKG_ROOT="$ROOT/dist/.signed-pkg-root"
 UNSIGNED="$ROOT/dist/OpenWorkGraph-macOS-v$VERSION-unsigned.pkg"
 SIGNED="$ROOT/dist/OpenWorkGraph-macOS-v$VERSION.pkg"
@@ -16,8 +15,8 @@ APP_ZIP="$ROOT/dist/OpenWorkGraph-macOS-v$VERSION-app-notary.zip"
 : "${APPLE_APP_PASSWORD:?APPLE_APP_PASSWORD is required for notarization}"
 : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required for notarization}"
 
-if [[ ! -d "$APP" || ! -f "$LAUNCH_AGENT" ]]; then
-  echo "Expected offline app bundle and LaunchAgent. Run scripts/build_macos_app_bundle.sh first." >&2
+if [[ ! -d "$APP" ]]; then
+  echo "Expected offline app bundle. Run scripts/build_macos_app_bundle.sh first." >&2
   exit 2
 fi
 
@@ -45,9 +44,8 @@ xcrun stapler validate "$APP"
 spctl --assess --type execute --verbose=4 "$APP"
 rm -f "$APP_ZIP"
 
-mkdir -p "$PKG_ROOT/Applications" "$PKG_ROOT/Library/LaunchAgents"
+mkdir -p "$PKG_ROOT/Applications"
 /usr/bin/ditto "$APP" "$PKG_ROOT/Applications/OpenWorkGraph.app"
-cp "$LAUNCH_AGENT" "$PKG_ROOT/Library/LaunchAgents/com.kinvectum.openworkgraph.plist"
 
 pkgbuild   --root "$PKG_ROOT"   --ownership recommended   --identifier "com.kinvectum.openworkgraph.pkg"   --version "$VERSION"   "$UNSIGNED"
 
