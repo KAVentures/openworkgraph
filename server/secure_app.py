@@ -575,7 +575,6 @@ app.include_router(_agent_router)
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
 from . import discovery_routes as _discovery_routes  # noqa: E402,F401
-from . import evidence_file_routes as _evidence_file_routes  # noqa: E402,F401
 from . import ai_context_routes as _ai_context_routes  # noqa: E402,F401
 
 __all__ = ["app"]
