@@ -19,11 +19,18 @@ if (-not (Test-Path $EmbeddedPythonw) -or -not (Test-Path $TrayHost)) {
 
 $Iscc = $env:ISCC_PATH
 if (-not $Iscc) {
+    $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    $ProgramFiles64 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
     $Candidates = @(
-        "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-    )
+        (Join-Path $ProgramFilesX86 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $ProgramFiles64 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ChocolateyInstall "bin\ISCC.exe")
+    ) | Where-Object { $_ }
     $Iscc = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $Iscc) {
+        $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($Command) { $Iscc = $Command.Source }
+    }
 }
 if (-not $Iscc -or -not (Test-Path $Iscc)) {
     throw "Inno Setup 6 (ISCC.exe) is required. Set ISCC_PATH if it is installed elsewhere."
