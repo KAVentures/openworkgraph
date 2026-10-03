@@ -566,16 +566,49 @@ def export_discovery_package(representation: str = "redacted") -> Response:
     payload = redact_contextually(package) if mode == "redacted" else package
     payload["export_representation"] = "contextually_redacted" if mode == "redacted" else "stored_privacy_hardened"
     body = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    study = payload.get("study") if isinstance(payload.get("study"), dict) else {}
+    implementation = study.get("implementation_context") if isinstance(study.get("implementation_context"), dict) else {}
+    inventory = payload.get("observed_tools") if isinstance(payload.get("observed_tools"), dict) else {}
+    app_lines = "\n".join(
+        f"- {item.get('name')}: {int(item.get('observations') or 0)} observations"
+        for item in inventory.get("apps") or []
+        if isinstance(item, dict)
+    ) or "- No native app count available"
+    site_lines = "\n".join(
+        f"- {item.get('hostname')}: {int(item.get('observations') or 0)} observations"
+        for item in inventory.get("sites") or []
+        if isinstance(item, dict)
+    ) or "- No browser host count available"
+    build_brief = (
+        "# Build brief\n\n"
+        "## Human-provided implementation context\n\n"
+        f"**Goal:** {implementation.get('goal') or '(not provided)'}\n\n"
+        f"**Worker description:** {implementation.get('description') or '(not provided)'}\n\n"
+        "These statements are human-provided context, not facts inferred from the observed trace.\n\n"
+        "## Observed tools\n\n"
+        "### Apps\n" + app_lines + "\n\n"
+        "### Sites\n" + site_lines + "\n\n"
+        f"> {inventory.get('caveat') or 'Observed use does not prove API access, licensing, or permission.'}\n\n"
+        "## Handoff purpose\n\n"
+        f"{payload.get('handoff', {}).get('purpose') or 'automate'}\n\n"
+        f"{payload.get('handoff', {}).get('recommended_next_step') or ''}\n"
+    ).encode("utf-8")
     guide = (
-        "# OpenWorkGraph Discovery Package\n\n"
-        "This package contains purpose-scoped observed workflow evidence plus separately attributed employee answers. "
-        "It is not an authorization record and does not claim unobserved exceptions are absent.\n\n"
-        "Use the evidence to draft an agent-neutral workflow specification, resolve unanswered business rules, and obtain "
-        "live test inputs from the source systems before treating structural cases as executable evaluations.\n"
+        "# Start here\n\n"
+        "This package is evidence for an authorized AI or implementation team. Start with BUILD_BRIEF.md, "
+        "then inspect DISCOVERY_PACKAGE.json for the observed runs and canonical event evidence.\n\n"
+        f"**Purpose-specific instruction:** {payload.get('handoff', {}).get('recommended_next_step') or ''}\n\n"
+        "Important boundaries:\n"
+        "- Observed work is descriptive evidence, not permission or policy.\n"
+        "- Human statements are explicitly attributed and separate from captured evidence.\n"
+        "- Unobserved exceptions may exist.\n"
+        "- Missing historical content may be available from the live source system at implementation time.\n"
+        "- Obtain live source-system test data before treating structural cases as executable evaluations.\n"
     ).encode("utf-8")
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("DISCOVERY_PACKAGE.json", body)
+        archive.writestr("BUILD_BRIEF.md", build_brief)
         archive.writestr("START_HERE.md", guide)
     return Response(
         buffer.getvalue(),
