@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Fail CI if OpenWorkGraph's known layering debt grows.
 
-This is a stop-loss, not the refactor. The baselines are the 2026-10-03 audit
-counts. The later app-factory/router migration should reduce these numbers and
+This is a stop-loss, not the refactor. The baselines are the deterministic counts produced by this detector on
+2026-10-03 main. They differ from earlier rough/manual counts because this guard
+counts matching files, not individual registration calls. The later app-factory/router migration should reduce these numbers and
 then lower the budgets.
 """
 
@@ -14,9 +15,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 BUDGETS = {
-    "import_registrars": 28,
-    "dashboard_html_rewriters": 32,
-    "runtime_route_replacements": 21,
+    "import_registrars": 31,
+    "dashboard_html_rewriters": 18,
+    "runtime_route_replacements": 5,
 }
 
 REGISTRAR = re.compile(
