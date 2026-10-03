@@ -45,6 +45,11 @@ EMAIL_SELECT_RE = re.compile(
 )
 WORD_RE = re.compile(r"[^\W\d_][\w'’.-]*", re.UNICODE)
 
+PRIVACY_TOKEN_RE = re.compile(
+    r"^(?:OWNER(?:_EMAIL|_PHONE)?|PERSON|(?:[A-Z][A-Z0-9]*_)+[0-9A-F]{6})$",
+    re.IGNORECASE,
+)
+
 GENERIC_LOCALPARTS = {
     "admin", "billing", "careers", "contact", "hello", "help", "hr", "info",
     "mail", "marketing", "no-reply", "noreply", "notifications", "office",
@@ -169,7 +174,13 @@ def _name_words(value: str) -> list[str]:
 
 
 def _looks_like_person_name(value: str, *, allow_single: bool = False) -> bool:
-    words = _name_words(value)
+    cleaned = _clean_name_candidate(value)
+    # Privacy tokens are terminal pseudonyms, not fresh name candidates. A cue
+    # such as "Reply to PERSON_ABCDEF" must stay idempotent instead of being
+    # reclassified as a one-word person and collapsed to generic PERSON.
+    if PRIVACY_TOKEN_RE.fullmatch(cleaned):
+        return False
+    words = _name_words(cleaned)
     if not words or len(words) > 4 or (len(words) == 1 and not allow_single):
         return False
     for word in words:
