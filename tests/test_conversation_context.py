@@ -57,6 +57,18 @@ def test_repeated_discovery_uses_current_or_granted_dates(monkeypatch, mode):
         assert params["until"].startswith("2026-09-02")
 
 
+def test_reviewed_knowledge_mcp_boundary_preserves_intentional_instructions():
+    from mcp_server.main import _finish, _finish_reviewed_knowledge
+    procedure = "Use the browser tool to inspect the invoice, then call the approved accounting function. " + ("Keep this reviewed instruction exactly. " * 60)
+    reviewed = _finish_reviewed_knowledge("test", {"procedure": procedure})
+    assert reviewed["procedure"] == procedure
+    assert reviewed["_openworkgraph_security"]["trust"] == "user_reviewed_workflow_knowledge"
+    assert reviewed["_openworkgraph_security"]["content_preserved"] is True
+    observed = _finish("test", {"procedure": procedure})
+    assert observed["procedure"] != procedure
+    assert observed["_openworkgraph_security"]["trust"] == "untrusted_observed_data"
+
+
 def test_knowledge_requires_review_versions_isolates_and_forgets(tmp_path):
     from gateway.db import GatewayDB
     store = KnowledgeStore(GatewayDB(f"sqlite:///{tmp_path / 'knowledge.db'}"))
@@ -139,14 +151,19 @@ def test_remote_person_scope_and_conversation_continuity(tmp_path):
         # A cursor from another person cannot change the authenticated actor filter.
         second = payload(rpc(client, "bob", "get_workflow_trace", {"cursor": first["next_cursor"]}))
         assert all(row["actor_id"] == "bob" for row in second["rows"])
-        knowledge = {"workflow_id": "invoice", "title": "Invoice", "procedure": "Validate amounts then prepare a draft email.", "source_client": "ChatGPT", "user_confirmed": True, "decision_rules": ["Obtain owner approval before sending."], "evidence_refs": ["alice-0"]}
+        reviewed_procedure = "Use the browser tool to inspect the invoice, then call the approved accounting function before drafting the email. " + ("Preserve this reviewed step exactly. " * 60)
+        knowledge = {"workflow_id": "invoice", "title": "Invoice", "procedure": reviewed_procedure, "source_client": "ChatGPT", "user_confirmed": True, "decision_rules": ["Obtain owner approval before sending."], "evidence_refs": ["alice-0"]}
         denied = rpc(client, "readonly", "save_workflow_knowledge", {"record": knowledge}).json()["result"]
         assert denied["isError"]
         saved = payload(rpc(client, "alice", "save_workflow_knowledge", {"record": knowledge}))
         assert saved["revision"] == 1
+        assert saved["procedure"] == reviewed_procedure
+        assert saved["_openworkgraph_security"]["trust"] == "user_reviewed_workflow_knowledge"
         # A new chat retrieves the reviewed explanation without re-interviewing.
         restored = payload(rpc(client, "alice", "get_workflow_knowledge"))
         assert restored["workflows"][0]["decision_rules"] == knowledge["decision_rules"]
+        assert restored["workflows"][0]["procedure"] == reviewed_procedure
+        assert restored["_openworkgraph_security"]["content_preserved"] is True
         assert payload(rpc(client, "bob", "get_workflow_knowledge"))["workflows"] == []
         assert payload(rpc(client, "alice", "forget_workflow_knowledge", {"workflow_id": "invoice"}))["versions_deleted"] == 1
         assert payload(rpc(client, "alice", "get_workflow_knowledge"))["workflows"] == []
