@@ -199,9 +199,42 @@ def _mac_browser_url(app: str, title: str) -> str:
         return ""
     low = app.casefold()
     if "safari" in low:
-        return _osascript(
-            'tell application "Safari" to if (count of windows) > 0 then return URL of current tab of front window'
+        # Safari's AppleScript dictionary does not expose a private-browsing
+        # property. Inspect the front Window menu instead and fail closed unless
+        # we can positively identify a normal window. On localized/future Safari
+        # versions where neither known menu item is present, native URL capture
+        # is disabled rather than risking private-window capture.
+        raw = _osascript(
+            """
+tell application "Safari"
+  try
+    if (count of windows) is 0 then return ""
+    set frontURL to URL of current tab of front window as text
+  on error
+    return ""
+  end try
+end tell
+tell application "System Events"
+  try
+    tell application process "Safari"
+      set windowMenu to menu "Window" of menu bar 1
+      if exists menu item "Move Tab to New Private Window" of windowMenu then
+        return "__PRIVATE__"
+      end if
+      if exists menu item "Move Tab to New Window" of windowMenu then
+        return "__NORMAL__" & linefeed & frontURL
+      end if
+      return "__UNKNOWN__"
+    end tell
+  on error
+    return "__UNKNOWN__"
+  end try
+end tell
+"""
         )
+        if raw.startswith("__NORMAL__\n"):
+            return raw.partition("\n")[2].strip()
+        return ""
     names = {
         "chrome": "Google Chrome",
         "edge": "Microsoft Edge",
@@ -244,6 +277,14 @@ def _windows_browser_url(title: str) -> str:
         with auto.UIAutomationInitializerInThread():
             root = auto.ControlFromHandle(hwnd)
             if root is None:
+                return ""
+            # Check the UIAutomation window/control names as well as the collector
+            # title so Chromium's Incognito/InPrivate indicator cannot be missed
+            # merely because a title normalization layer changed the window title.
+            try:
+                if _PRIVATE.search(str(root.Name or "")):
+                    return ""
+            except Exception:
                 return ""
             root_rect = root.BoundingRectangle
             candidates: list[tuple[float, str]] = []
