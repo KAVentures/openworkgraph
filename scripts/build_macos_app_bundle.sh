@@ -44,7 +44,7 @@ if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
 fi
 
 pushd "$PAYLOAD" >/dev/null
-uv pip install --python "$PYTHON" --system --link-mode copy .
+uv pip install --python "$PYTHON" --system --break-system-packages --link-mode copy .
 "$PYTHON" - <<'PY'
 import fastapi, mcp
 import server.secure_app, collector.main
