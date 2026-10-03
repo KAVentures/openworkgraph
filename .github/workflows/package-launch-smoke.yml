@@ -14,6 +14,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Parse easy installer
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "install.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "install.ps1 has PowerShell syntax errors"
+          }
       - name: Build tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
@@ -63,6 +73,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Parse easy installer
+        run: bash -n install.sh
       - name: Build tester ZIP
         run: bash scripts/build_macos_release.sh
       - name: Extract into a clean folder
