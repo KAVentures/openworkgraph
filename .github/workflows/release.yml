@@ -140,8 +140,25 @@ jobs:
               }
               if (-not $ok) { throw "$label offline launch never reached health" }
             } finally {
-              & taskkill.exe /PID $app.Id /T /F 2>$null | Out-Null
-              Start-Sleep -Seconds 2
+              $rootProcessId = $app.Id
+              # Windows may report that a child vanished mid-taskkill even
+              # though cleanup succeeded. Suppress that race, then verify the
+              # service itself is no longer reachable before the next launch.
+              & cmd.exe /d /c "taskkill.exe /PID $rootProcessId /T /F >nul 2>&1" | Out-Null
+              for ($j=0; $j -lt 20; $j++) {
+                try {
+                  $health = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 1
+                  Start-Sleep -Milliseconds 500
+                } catch {
+                  break
+                }
+              }
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 1
+                throw "$label offline launch remained reachable after cleanup"
+              } catch [System.Net.WebException] {
+                # Expected: the listener is gone.
+              }
             }
           }
           Launch-Demo "first"
