@@ -102,8 +102,13 @@ Keep every automation judgment clearly derived and disposable; never present it 
 """
 
 
-def register_automation_guidance(mcp: Any, *, instructions: str = MCP_SERVER_INSTRUCTIONS) -> None:
-    """Register server instructions, capability guidance, and an analysis prompt without adding tools."""
+def register_automation_guidance(
+    mcp: Any,
+    *,
+    instructions: str = MCP_SERVER_INSTRUCTIONS,
+    expose_capability_tool: bool = True,
+) -> None:
+    """Register guidance surfaces; compact MCP may also expose the capability tool."""
     server_id = id(mcp)
     if server_id in _REGISTERED_SERVER_IDS:
         return
@@ -118,28 +123,29 @@ def register_automation_guidance(mcp: Any, *, instructions: str = MCP_SERVER_INS
         raise RuntimeError("OpenWorkGraph could not configure MCP server instructions")
     lowlevel.instructions = instructions
 
-    @mcp.tool()
-    def get_automation_capabilities() -> dict[str, Any]:
-        """Return the automation-frontier rules before deciding a workflow cannot be automated.
+    if expose_capability_tool:
+        @mcp.tool()
+        def get_automation_capabilities() -> dict[str, Any]:
+            """Return the automation-frontier rules before deciding a workflow cannot be automated.
 
-        Missing historical content is not itself a blocker: check whether an
-        authorized agent can fetch live inputs. Consider eliminating unnecessary
-        steps only after checking downstream consumers. Check current capabilities
-        before saying no, use TEST when a plausible route is uncertain, and when
-        agents appear in the trace inspect what the human still does around them.
-        """
-        return {
-            "capability_brief_date": "2026-10-01",
-            "brief": AUTOMATION_CAPABILITIES_MD,
-            "core_rules": [
-                "Missing historical content is not by itself a blocker to future automation.",
-                "Check the current tool/connector/browser/computer/code/file/scheduling surface before saying an operation is unavailable.",
-                "Consider removing steps, but verify downstream consumers and controls first.",
-                "Use TEST when a current implementation route is plausible but uncertain.",
-                "When agents are observed, inspect human work before, between, and after agent runs for the next autonomy boundary.",
-            ],
-            "evidence_status": "guidance_only_not_canonical_work_evidence",
-        }
+            Missing historical content is not itself a blocker: check whether an
+            authorized agent can fetch live inputs. Consider eliminating unnecessary
+            steps only after checking downstream consumers. Check current capabilities
+            before saying no, use TEST when a plausible route is uncertain, and when
+            agents appear in the trace inspect what the human still does around them.
+            """
+            return {
+                "capability_brief_date": "2026-10-01",
+                "brief": AUTOMATION_CAPABILITIES_MD,
+                "core_rules": [
+                    "Missing historical content is not by itself a blocker to future automation.",
+                    "Check the current tool/connector/browser/computer/code/file/scheduling surface before saying an operation is unavailable.",
+                    "Consider removing steps, but verify downstream consumers and controls first.",
+                    "Use TEST when a current implementation route is plausible but uncertain.",
+                    "When agents are observed, inspect human work before, between, and after agent runs for the next autonomy boundary.",
+                ],
+                "evidence_status": "guidance_only_not_canonical_work_evidence",
+            }
 
     @mcp.resource("openworkgraph://automation-capabilities")
     def automation_capabilities() -> str:
