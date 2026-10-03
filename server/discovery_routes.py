@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import zipfile
 from typing import Any
 
@@ -38,7 +39,7 @@ from shared.lifespan import extend_lifespan
 from .ai_context import redact_contextually
 from .db import connect
 from .main import CONFIG_PATH, COLLECTOR_STATUS
-from .local_reference_lookup import expand_resource_references
+from .local_reference_lookup import expand_resource_references, forget_references
 from .procedural_feedback import (
     _discovery_handoff_bundle,
     _review_candidates_with_readable_steps,
@@ -51,6 +52,7 @@ from .secure_app import app
 from .workflow_evidence import build_workflow_evidence, list_workflow_evidence_candidates
 
 ROOT = Path(__file__).resolve().parents[1]
+_LOCAL_REFERENCE_RE = re.compile(r"owg:(?:r:[0-9a-f]{32}|f:[0-9a-f]{24})")
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -173,23 +175,40 @@ def _purge_discovery_evidence(*, force: bool = False) -> dict[str, Any]:
     if str(state.get("status") or "") == "active" and datetime.now(timezone.utc) < end:
         return {"purged": False, "reason": "discovery_still_active"}
 
+    removable_references: set[str] = set()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT event_id FROM events WHERE observed_at >= ? AND observed_at < ?",
+            "SELECT event_id, metadata_json FROM events WHERE observed_at >= ? AND observed_at < ?",
             (start.isoformat(), end.isoformat()),
         ).fetchall()
         event_ids = [str(row["event_id"]) for row in rows]
+        candidate_references: set[str] = set()
+        for row in rows:
+            candidate_references.update(
+                _LOCAL_REFERENCE_RE.findall(str(row["metadata_json"] or ""))
+            )
         for offset in range(0, len(event_ids), 500):
             chunk = event_ids[offset:offset + 500]
             placeholders = ",".join("?" for _ in chunk)
             conn.execute(f"DELETE FROM context_events WHERE event_id IN ({placeholders})", tuple(chunk))
             conn.execute(f"DELETE FROM normalized_events WHERE event_id IN ({placeholders})", tuple(chunk))
             conn.execute(f"DELETE FROM events WHERE event_id IN ({placeholders})", tuple(chunk))
+        # Keep a resolver entry if the same file/resource reference is still
+        # present in retained canonical evidence outside this Discovery window.
+        for reference in candidate_references:
+            retained = conn.execute(
+                "SELECT 1 FROM events WHERE metadata_json LIKE ? LIMIT 1",
+                (f"%{reference}%",),
+            ).fetchone()
+            if retained is None:
+                removable_references.add(reference)
+    deleted_reference_entries = forget_references(removable_references)
     marked = mark_purged(len(event_ids))
     return {
         "purged": True,
         "purged_at": marked.get("purged_at"),
         "deleted_event_rows": len(event_ids),
+        "deleted_local_reference_entries": deleted_reference_entries,
         "scope": "canonical events observed inside the Discovery Mode window",
         "agent_session_message_retention": "separate existing opt-in policy",
     }
