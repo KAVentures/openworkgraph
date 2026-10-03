@@ -6,7 +6,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -132,3 +134,63 @@ def test_first_run_privacy_fixes():
     assert "Nothing is shared: this computer is not connected to an organization" in polish
     secure = _read("server/secure_app.py")
     assert "response.status === 401 && !dashboardSession" in secure  # stale tab gets an explanation
+
+
+def test_live_never_record_reloads_before_collector_local_persistence(tmp_path, monkeypatch):
+    """A dashboard exclusion must take effect before JSONL/outbox/screenshots, not only at /v1/events."""
+    from collector import main as collector
+    from collector.interactions import RawInteraction
+    from collector.outbox import EventOutbox
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "excluded_apps": [],
+        "excluded_title_patterns": [],
+        "interaction_screenshots_enabled": True,
+    }), encoding="utf-8")
+    cfg = collector.load_config(config)
+    cache: dict = {}
+
+    visible = collector._live_public_window(config, cfg, cache, SimpleNamespace(app="Signal", title="Secret medical chat"))
+    assert visible["excluded"] is False
+
+    # This is what PUT /v1/capture-exclusions changes while the collector keeps
+    # running. The next foreground/interaction snapshot must see it immediately.
+    config.write_text(json.dumps({
+        "excluded_apps": ["Signal"],
+        "excluded_title_patterns": [],
+        "interaction_screenshots_enabled": True,
+    }), encoding="utf-8")
+    excluded = collector._live_public_window(config, cfg, cache, SimpleNamespace(app="Signal", title="Secret medical chat"))
+    assert excluded["excluded"] is True
+    assert excluded["app"] == "Excluded" and excluded["window_title"] == ""
+
+    screenshot_calls: list[str] = []
+    monkeypatch.setattr(collector, "screenshot", lambda event_id: screenshot_calls.append(event_id) or "should-not-exist.jpg")
+    event = collector._interaction_event(
+        raw=RawInteraction(kind="click", x=1, y=2, occurred_mono=time.monotonic(), context=excluded),
+        cfg=cfg,
+        session_id="s-live-exclusion",
+    )
+    assert event["app"] == "Excluded" and event["window_title"] == ""
+    assert event["screenshot_path"] is None
+    assert screenshot_calls == []
+
+    local_dir = tmp_path / "collector-local"
+    local_dir.mkdir()
+    monkeypatch.setattr(collector, "LOCAL_DIR", local_dir)
+    outbox = EventOutbox(local_dir / "collector_outbox.db")
+    collector.persist_event(event, outbox)
+
+    jsonl = (local_dir / "events.jsonl").read_text(encoding="utf-8")
+    queued = json.dumps(outbox.pending(10), ensure_ascii=False)
+    assert "Secret medical chat" not in jsonl
+    assert "Secret medical chat" not in queued
+    assert '"app": "Excluded"' in jsonl
+    assert outbox.pending(10)[0]["app"] == "Excluded"
+
+    # Lock the actual runtime wiring too: foreground polling and interaction
+    # snapshots both refresh exclusions before deriving public window state.
+    source = _read("collector/main.py")
+    assert "refresh_live_exclusions(config_path, cfg, live_exclusion_state)" in source
+    assert "_live_public_window(config_path, cfg, live_exclusion_state)" in source
