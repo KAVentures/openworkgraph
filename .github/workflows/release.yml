@@ -28,14 +28,18 @@ jobs:
           codesign --force --deep --sign - dist/OpenWorkGraph.app
           codesign --verify --deep --strict --verbose=2 dist/OpenWorkGraph.app
           test -x dist/OpenWorkGraph.app/Contents/MacOS/OpenWorkGraph
-          test -x dist/OpenWorkGraph.app/Contents/Resources/openworkgraph/.runtime/python3
-          test -f dist/OpenWorkGraph.app/Contents/Resources/openworkgraph/OFFLINE_RUNTIME
+          PAYLOAD="$PWD/dist/OpenWorkGraph.app/Contents/Resources/openworkgraph"
+          PYTHON_RELATIVE="$(tr -d '\r\n' < "$PAYLOAD/EMBEDDED_PYTHON.txt")"
+          test -n "$PYTHON_RELATIVE"
+          test -x "$PAYLOAD/$PYTHON_RELATIVE"
+          test -f "$PAYLOAD/OFFLINE_RUNTIME"
           plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist dist/com.kinvectum.openworkgraph.plist
       - name: Smoke-test embedded macOS runtime twice
         run: |
           set -euo pipefail
           PAYLOAD="$PWD/dist/OpenWorkGraph.app/Contents/Resources/openworkgraph"
-          PYTHON="$PAYLOAD/.runtime/python3"
+          PYTHON_RELATIVE="$(tr -d '\r\n' < "$PAYLOAD/EMBEDDED_PYTHON.txt")"
+          PYTHON="$PAYLOAD/$PYTHON_RELATIVE"
           "$PYTHON" -c "import fastapi, mcp; import server.secure_app, collector.main"
           export HOME="$RUNNER_TEMP/owg-macos-app-home"
           mkdir -p "$HOME"
