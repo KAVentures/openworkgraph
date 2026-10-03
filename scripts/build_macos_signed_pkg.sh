@@ -31,7 +31,7 @@ while IFS= read -r -d '' file_path; do
   if /usr/bin/file -b "$file_path" | grep -q 'Mach-O'; then
     codesign --force --options runtime --timestamp       --sign "$APPLE_APPLICATION_IDENTITY" "$file_path"
   fi
-done < <(find "$APP/Contents/Resources/openworkgraph/.venv" -type f -print0)
+done < <(find "$APP/Contents/Resources/openworkgraph/.runtime" -type f -print0)
 
 codesign --force --options runtime --timestamp --deep   --sign "$APPLE_APPLICATION_IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
