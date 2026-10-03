@@ -1,13 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-URL="${OWG_INSTALL_URL:-https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip}"
+RELEASE_VERSION="0.119.0"
+URL="${OWG_INSTALL_URL:-https://github.com/KAVentures/openworkgraph/releases/download/v${RELEASE_VERSION}/OpenWorkGraph-macOS.zip}"
+MODE="${OWG_INSTALL_MODE:-observe}"
+if [ "$MODE" != "observe" ] && [ "$MODE" != "demo" ]; then
+  echo "OWG_INSTALL_MODE must be observe or demo." >&2
+  exit 2
+fi
+
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 ZIP="$TMP/OpenWorkGraph-macOS.zip"
-echo "Downloading the latest OpenWorkGraph macOS build..."
+echo "Downloading OpenWorkGraph v$RELEASE_VERSION for macOS..."
 if [ -n "${OWG_INSTALL_ZIP_PATH:-}" ]; then
   cp "$OWG_INSTALL_ZIP_PATH" "$ZIP"
 else
@@ -15,12 +22,19 @@ else
 fi
 unzip -q "$ZIP" -d "$TMP/unpacked"
 
-START="$(find "$TMP/unpacked" -maxdepth 2 -name START_OPENWORKGRAPH.command -type f | head -n 1)"
+if [ "$MODE" = "demo" ]; then
+  START="$(find "$TMP/unpacked" -maxdepth 2 -name TRY_DEMO_OPENWORKGRAPH.command -type f | head -n 1)"
+else
+  START="$(find "$TMP/unpacked" -maxdepth 2 -name START_OPENWORKGRAPH.command -type f | head -n 1)"
+fi
 if [ -z "$START" ]; then
-  echo "Could not find START_OPENWORKGRAPH.command in the release package." >&2
+  echo "Could not find the OpenWorkGraph launcher in the release package." >&2
   exit 1
 fi
 chmod +x "$START"
+
+APP_CREATED=0
+APP_EXISTED=0
 
 # The one-command installer is only a bootstrap. The release launcher remains
 # the source of truth for installation, upgrades, runtime setup, data
@@ -30,6 +44,10 @@ install_finder_launcher() {
   local app="$applications_dir/OpenWorkGraph.app"
   local tmp_app="$applications_dir/.OpenWorkGraph.app.tmp.$$"
   local executable="$tmp_app/Contents/MacOS/OpenWorkGraph"
+
+  if [ -d "$app" ]; then
+    APP_EXISTED=1
+  fi
 
   rm -rf "$tmp_app"
   mkdir -p "$tmp_app/Contents/MacOS"
@@ -55,16 +73,27 @@ PLIST
 set -euo pipefail
 LAUNCHER="$HOME/Library/Application Support/WorkflowObserver/START_ON_MAC.command"
 if [ ! -f "$LAUNCHER" ]; then
-  /usr/bin/osascript -e 'display alert "OpenWorkGraph is not installed yet" message "Run the OpenWorkGraph installer command once, then open OpenWorkGraph again." as critical'
+  /usr/bin/osascript -e 'display alert "OpenWorkGraph is not installed yet" message "Run the OpenWorkGraph installer once, then open OpenWorkGraph again." as critical'
   exit 1
 fi
 chmod +x "$LAUNCHER" 2>/dev/null || true
+
+# CI-only path: exercise this exact application launcher without requiring a
+# graphical Terminal window on the GitHub-hosted macOS runner.
+if [ "${OWG_SHORTCUT_TEST_DIRECT:-0}" = "1" ]; then
+  if [ "${OWG_INSTALL_MODE:-observe}" = "demo" ]; then
+    exec /bin/bash "$LAUNCHER" --mode demo
+  fi
+  exec /bin/bash "$LAUNCHER"
+fi
+
 exec /usr/bin/open -a Terminal "$LAUNCHER"
 LAUNCHER
   chmod +x "$executable"
 
   rm -rf "$app"
   mv "$tmp_app" "$app"
+  APP_CREATED=1
   echo "OpenWorkGraph launcher installed in $applications_dir."
 }
 
@@ -74,4 +103,14 @@ fi
 
 echo "Starting OpenWorkGraph..."
 echo "After this first setup, you can reopen it from Applications as OpenWorkGraph."
+set +e
 /bin/bash "$START"
+STATUS=$?
+set -e
+
+# Do not leave a brand-new convenience launcher behind after a failed first
+# install. Existing launchers from an earlier working install are preserved.
+if [ "$STATUS" -ne 0 ] && [ "$APP_CREATED" -eq 1 ] && [ "$APP_EXISTED" -eq 0 ]; then
+  rm -rf "${OWG_APPLICATIONS_DIR:-$HOME/Applications}/OpenWorkGraph.app"
+fi
+exit "$STATUS"
