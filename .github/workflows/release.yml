@@ -212,7 +212,7 @@ jobs:
           $env:OWG_ENTERPRISE_PAYLOAD = $Payload
           & $Python -c "import os,sys,pathlib; p=pathlib.Path(os.environ['OWG_ENTERPRISE_PAYLOAD']); sys.path.insert(0,str(p)); import windows_tray; windows_tray.PAYLOAD_ROOT=p; t=windows_tray._prepare_machine_runtime(); assert (t/'start.py').is_file(); assert not (t/'.runtime').exists(); print(t)"
           if ($LASTEXITCODE -ne 0) { throw "Enterprise per-user mirror smoke failed" }
-          test-path (Join-Path $UserRoot "OpenWorkGraph\Runtime\start.py") | Should -BeTrue
+          if (-not (Test-Path (Join-Path $UserRoot "OpenWorkGraph\Runtime\start.py"))) { throw "Per-user enterprise runtime was not created" }
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
