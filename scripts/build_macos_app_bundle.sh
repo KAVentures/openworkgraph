@@ -9,7 +9,6 @@ CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 PAYLOAD="$RESOURCES/openworkgraph"
-LAUNCH_AGENT="$DIST/com.kinvectum.openworkgraph.plist"
 
 command -v uv >/dev/null 2>&1 || {
   echo "uv is required at build time. Use astral-sh/setup-uv in CI." >&2
@@ -85,10 +84,19 @@ cat > "$SWIFT_SOURCE" <<'SWIFT'
 import Cocoa
 import Foundation
 import Darwin
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
+    private var startAtLoginItem: NSMenuItem!
     private var child: Process?
+    private var pendingRestart: DispatchWorkItem?
+    private var crashTimes: [Date] = []
+    private var isQuitting = false
+
+    private let crashWindow: TimeInterval = 5 * 60
+    private let maxCrashRestarts = 5
+    private let loginPreferenceKey = "openworkgraph.startAtLoginConfigured"
 
     private var bundlePayload: URL {
         Bundle.main.resourceURL!.appendingPathComponent("openworkgraph", isDirectory: true)
@@ -145,20 +153,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.toolTip = "OpenWorkGraph"
 
         let menu = NSMenu()
-        let restart = NSMenuItem(title: "Restart and open dashboard", action: #selector(restartApp), keyEquivalent: "r")
+
+        let openDashboard = NSMenuItem(title: "Open dashboard", action: #selector(openDashboard), keyEquivalent: "o")
+        openDashboard.target = self
+        menu.addItem(openDashboard)
+
+        let restart = NSMenuItem(title: "Restart OpenWorkGraph", action: #selector(restartApp), keyEquivalent: "r")
         restart.target = self
         menu.addItem(restart)
+
         menu.addItem(.separator())
+
+        startAtLoginItem = NSMenuItem(
+            title: "Start OpenWorkGraph at Login",
+            action: #selector(toggleStartAtLogin),
+            keyEquivalent: ""
+        )
+        startAtLoginItem.target = self
+        menu.addItem(startAtLoginItem)
+
+        menu.addItem(.separator())
+
         let quit = NSMenuItem(title: "Quit OpenWorkGraph", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
         statusItem.menu = menu
 
-        startChild()
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAsLoginItem =
+            event?.eventID == kAEOpenApplication &&
+            event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+
+        configureStartAtLogin()
+        startChild(openDashboard: !launchedAsLoginItem)
+    }
+
+    private func configureStartAtLogin() {
+        let defaults = UserDefaults.standard
+        let service = SMAppService.mainApp
+
+        // Existing users get the reliable behavior on their first v0.121+
+        // launch. After that, never silently reverse the user's explicit choice.
+        if defaults.object(forKey: loginPreferenceKey) == nil {
+            do {
+                if service.status == .notRegistered {
+                    try service.register()
+                }
+                defaults.set(true, forKey: loginPreferenceKey)
+            } catch {
+                // Registration can require user approval. Keep the app usable
+                // and expose the current state in the menu instead of failing launch.
+                defaults.set(true, forKey: loginPreferenceKey)
+            }
+        }
+
+        refreshStartAtLoginMenu()
+    }
+
+    private func refreshStartAtLoginMenu() {
+        guard startAtLoginItem != nil else { return }
+        let status = SMAppService.mainApp.status
+        startAtLoginItem.state = (status == .enabled || status == .requiresApproval) ? .on : .off
+        if status == .requiresApproval {
+            startAtLoginItem.title = "Start OpenWorkGraph at Login (approval required)"
+        } else {
+            startAtLoginItem.title = "Start OpenWorkGraph at Login"
+        }
+    }
+
+    @objc private func toggleStartAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled || service.status == .requiresApproval {
+                try service.unregister()
+                UserDefaults.standard.set(false, forKey: loginPreferenceKey)
+            } else {
+                try service.register()
+                UserDefaults.standard.set(true, forKey: loginPreferenceKey)
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not change Start at Login"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+        refreshStartAtLoginMenu()
+    }
+
+    @objc private func openDashboard() {
+        guard let url = URL(string: "http://127.0.0.1:8787") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func terminateTree() {
+        pendingRestart?.cancel()
+        pendingRestart = nil
+
         guard let process = child else { return }
+        // Clear ownership before terminating so the process termination callback
+        // knows this was intentional and must not resurrect the child.
+        child = nil
+
         if process.isRunning {
             let pid = process.processIdentifier
             let pkill = Process()
@@ -175,24 +270,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 kill(pid, SIGKILL)
             }
         }
-        child = nil
     }
 
-    private func startChild() {
-        if child?.isRunning == true { return }
+    private func startChild(openDashboard: Bool) {
+        if child?.isRunning == true || isQuitting { return }
+
         let process = Process()
-        process.terminationHandler = { _ in
+        process.terminationHandler = { [weak self, weak process] _ in
+            guard let self, let process else { return }
             DispatchQueue.main.async {
-                NSApp.terminate(nil)
+                self.handleUnexpectedExit(process)
             }
         }
+
         do {
             try prepareStablePayload()
             process.executableURL = python
             process.arguments = [
                 installRoot.appendingPathComponent("start.py").path,
                 "--mode", "observe",
-            ]
+            ] + (openDashboard ? [] : ["--no-open-dashboard"])
             process.currentDirectoryURL = installRoot
             try process.run()
             child = process
@@ -201,22 +298,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = "OpenWorkGraph could not start"
             alert.informativeText = error.localizedDescription
             alert.runModal()
-            NSApp.terminate(nil)
         }
     }
 
+    private func handleUnexpectedExit(_ process: Process) {
+        guard !isQuitting, child === process else { return }
+        child = nil
+
+        let now = Date()
+        crashTimes = crashTimes.filter { now.timeIntervalSince($0) < crashWindow }
+        crashTimes.append(now)
+
+        guard crashTimes.count <= maxCrashRestarts else {
+            let alert = NSAlert()
+            alert.messageText = "OpenWorkGraph stopped repeatedly"
+            alert.informativeText = "Automatic restart was paused after repeated failures. Choose Restart OpenWorkGraph from the menu after checking the installation."
+            alert.runModal()
+            return
+        }
+
+        let delays: [TimeInterval] = [1, 2, 4, 8, 15]
+        let delay = delays[min(crashTimes.count - 1, delays.count - 1)]
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isQuitting else { return }
+            self.pendingRestart = nil
+            self.startChild(openDashboard: false)
+        }
+        pendingRestart?.cancel()
+        pendingRestart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     @objc private func restartApp() {
+        crashTimes.removeAll()
         terminateTree()
-        usleep(300_000)
-        startChild()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isQuitting else { return }
+            self.pendingRestart = nil
+            self.startChild(openDashboard: true)
+        }
+        pendingRestart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     @objc private func quitApp() {
+        isQuitting = true
         terminateTree()
         NSApp.terminate(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isQuitting = true
         terminateTree()
     }
 }
@@ -228,24 +360,9 @@ app.setActivationPolicy(.accessory)
 app.run()
 SWIFT
 
-swiftc -O -framework Cocoa "$SWIFT_SOURCE" -o "$MACOS/OpenWorkGraph"
+swiftc -O -framework Cocoa -framework ServiceManagement "$SWIFT_SOURCE" -o "$MACOS/OpenWorkGraph"
 chmod +x "$MACOS/OpenWorkGraph"
 rm -f "$SWIFT_SOURCE"
 
-cat > "$LAUNCH_AGENT" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.kinvectum.openworkgraph</string>
-  <key>ProgramArguments</key>
-  <array><string>/Applications/OpenWorkGraph.app/Contents/MacOS/OpenWorkGraph</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>LimitLoadToSessionType</key><string>Aqua</string>
-  <key>ProcessType</key><string>Interactive</string>
-</dict>
-</plist>
-EOF
-
-plutil -lint "$CONTENTS/Info.plist" "$LAUNCH_AGENT"
+plutil -lint "$CONTENTS/Info.plist"
 echo "Built offline macOS app bundle: $APP"

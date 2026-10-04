@@ -1,5 +1,17 @@
 # OpenWorkGraph changelog
 
+# OpenWorkGraph v0.121.0
+
+This release makes continuous desktop observation survive ordinary shutdown/restart cycles and recover from transient observer failures.
+
+- **macOS Start at Login:** on the first v0.121+ launch, the menu-bar app registers through Apple's supported Service Management API. The OWG menu exposes **Start OpenWorkGraph at Login** so the user remains in control.
+- **Windows continuity preserved:** the installer continues to enable **Start OpenWorkGraph when I sign in** by default.
+- **Bounded crash recovery:** macOS and Windows restart an unexpectedly exited observer with short exponential backoff, but pause recovery after five crashes in five minutes.
+- **Intentional Quit is authoritative:** Quit and manual Restart clear process ownership before termination so the supervisor never mistakes a deliberate stop for a crash.
+- **No capture-model change:** evidence, privacy controls, retention, local data paths, MCP and Gateway behavior are unchanged.
+
+---
+
 # OpenWorkGraph v0.120.0
 
 This release adds real desktop installers so normal users no longer need a ZIP, Terminal, PowerShell, or a separate Python installation.

@@ -51,6 +51,7 @@ Normal users do **not** need a ZIP, Terminal, PowerShell, or a system Python ins
 2. Double-click it and follow the macOS Installer.
 3. Open **OpenWorkGraph** from Applications.
 4. Approve Accessibility/Input Monitoring if macOS asks.
+5. OpenWorkGraph enables **Start at Login** on first launch so observation resumes after normal shutdown/restart cycles. You can turn it off from the OWG menu at any time.
 
 The desktop app includes its own private Python runtime. Its signed/packaged runtime stays inside the application bundle while OpenWorkGraph keeps mutable source, configuration and recorded evidence in the established per-user location under `~/Library/Application Support/WorkflowObserver`. Existing `data/` and `config.json` are preserved across upgrades.
 
@@ -63,6 +64,7 @@ The early-prototype installer produced by the normal open-source release workflo
 1. Download **OpenWorkGraph-Windows-Setup.exe**.
 2. Double-click it and follow Setup.
 3. Open **OpenWorkGraph** from the Start menu.
+4. The installer enables **Start OpenWorkGraph when I sign in** by default, so observation resumes after normal shutdown/restart cycles unless you opt out during Setup.
 
 The installer includes the private Python runtime and installs per-user under `%LOCALAPPDATA%\OpenWorkGraph`. No system Python installation is required.
 

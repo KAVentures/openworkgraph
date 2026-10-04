@@ -1675,7 +1675,7 @@ wheels = [
 
 [[package]]
 name = "workflow-observer"
-version = "0.120.0"
+version = "0.121.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

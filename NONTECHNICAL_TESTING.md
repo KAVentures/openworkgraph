@@ -15,7 +15,9 @@ The recommended tester path is now the desktop installer. A nontechnical tester 
 3. Open **OpenWorkGraph** from Applications.
 4. Approve **Accessibility** and **Input Monitoring** when asked.
 5. The dashboard opens at `http://127.0.0.1:8787`.
-6. Quit OpenWorkGraph, reopen it from Applications, and verify the same local data is still there.
+6. Verify the OWG menu shows **Start OpenWorkGraph at Login** enabled.
+7. Quit OpenWorkGraph, reopen it from Applications, and verify the same local data is still there.
+8. For a full continuity test, sign out/restart the Mac and sign back in. OpenWorkGraph should start again without the tester remembering to relaunch it.
 
 The current open-source package may show an unverified-developer warning until Developer ID signing/notarization is configured. Record the exact warning and whether the documented macOS override path is understandable; do not fall back to Terminal unless you are specifically testing the advanced installer.
 
@@ -25,7 +27,9 @@ The current open-source package may show an unverified-developer warning until D
 2. Double-click it and complete Setup.
 3. Open **OpenWorkGraph** from the Start menu.
 4. The dashboard opens at `http://127.0.0.1:8787`.
-5. Quit OpenWorkGraph, reopen it from the Start menu, and verify the same local data is still there.
+5. Verify Setup left **Start OpenWorkGraph when I sign in** enabled (the default).
+6. Quit OpenWorkGraph, reopen it from the Start menu, and verify the same local data is still there.
+7. For a full continuity test, sign out/restart Windows and sign back in. OpenWorkGraph should start again automatically.
 
 The current open-source installer may show Windows SmartScreen until code signing is configured. Record the exact warning and whether the override path is understandable.
 
@@ -37,7 +41,7 @@ Only after the normal installer path has been tested, optionally verify the rele
 
 After the rest of your test, quit OpenWorkGraph. Remove the installed desktop app through the normal OS path, then use the release uninstall helper if you also want to verify full local-data removal. The helper must ask you to type **DELETE** before deleting the local installation/data and must refuse while port 8787 is still in use. Browser-extension removal remains browser-managed.
 
-**Expected:** the dashboard opens in the **Basic** view with four tabs: **Today, Activity, AI apps, Privacy**. Nothing needs an account. **Agents** appears once a coding agent is observed, and **Organization** once this computer joins one. The **Basic / Advanced** switch in the top bar shows every tab (History, Export, Settings and the rest); try it, then switch back. Your choice is remembered on this computer.
+**Expected:** normal shutdown/restart does not create a forgotten-off day: the installed app comes back at the next login. Closing only the browser dashboard never stops capture. An unexpected observer-process exit is retried with bounded backoff; repeated failures stop retrying rather than looping forever. The dashboard opens in the **Basic** view with four tabs: **Today, Activity, AI apps, Privacy**. Nothing needs an account. **Agents** appears once a coding agent is observed, and **Organization** once this computer joins one. The **Basic / Advanced** switch in the top bar shows every tab (History, Export, Settings and the rest); try it, then switch back. Your choice is remembered on this computer.
 
 ## 2. Add or update the browser sensor (recommended)
 

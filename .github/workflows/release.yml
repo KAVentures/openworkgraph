@@ -33,7 +33,7 @@ jobs:
           test -n "$PYTHON_RELATIVE"
           test -x "$PAYLOAD/$PYTHON_RELATIVE"
           test -f "$PAYLOAD/OFFLINE_RUNTIME"
-          plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist dist/com.kinvectum.openworkgraph.plist
+          plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist
       - name: Build clickable macOS installer
         run: bash scripts/build_macos_installer_pkg.sh
       - name: Smoke-test embedded macOS runtime with stable user state
@@ -313,6 +313,15 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.121: reliable desktop continuity
+
+          - **macOS starts again after login:** the menu-bar app registers itself with Apple's Service Management login-item API on first v0.121+ launch. Users can turn **Start OpenWorkGraph at Login** off or back on from the OWG menu; external System Settings choices are not silently reversed.
+          - **Windows keeps its existing start-at-sign-in default:** the native installer still creates the current-user startup entry unless the installer option is explicitly disabled.
+          - **Unexpected child-process exits recover:** the macOS menu app and Windows tray host restart the observer with bounded exponential backoff instead of silently disappearing after one crash.
+          - **Intentional Quit stays quit:** manual Quit/Restart clears ownership before terminating the child, so crash supervision cannot resurrect a process the user deliberately stopped.
+          - **Crash-loop protection:** automatic recovery pauses after five unexpected exits in five minutes and surfaces a visible diagnostic instead of spinning forever.
+          - **No evidence or privacy-model change:** local data paths, capture semantics, retention, MCP, Gateway and browser evidence remain unchanged.
 
           ### v0.120: real desktop installers
 

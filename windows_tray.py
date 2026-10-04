@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Any
 
+from collections import deque
+
 from PIL import Image, ImageDraw
 import pystray
 
@@ -23,6 +25,11 @@ ROOT = Path(__file__).resolve().parent
 _CHILD: subprocess.Popen[Any] | None = None
 _ICON: pystray.Icon | None = None
 _LOCK = threading.RLock()
+_SHUTTING_DOWN = threading.Event()
+_RESTART_TIMES: deque[float] = deque()
+_RESTART_WINDOW_SECONDS = 5 * 60
+_MAX_CRASH_RESTARTS = 5
+_RESTART_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
 
 
 def _image() -> Image.Image:
@@ -56,40 +63,85 @@ def _stop_child() -> None:
             pass
 
 
-def _start_child() -> None:
+def _restart_delay_after_crash(now: float | None = None) -> float | None:
+    current = time.monotonic() if now is None else now
+    cutoff = current - _RESTART_WINDOW_SECONDS
+    with _LOCK:
+        while _RESTART_TIMES and _RESTART_TIMES[0] < cutoff:
+            _RESTART_TIMES.popleft()
+        _RESTART_TIMES.append(current)
+        if len(_RESTART_TIMES) > _MAX_CRASH_RESTARTS:
+            return None
+        return _RESTART_DELAYS[min(len(_RESTART_TIMES) - 1, len(_RESTART_DELAYS) - 1)]
+
+
+def _start_child(*, open_dashboard: bool) -> None:
     global _CHILD
+    if _SHUTTING_DOWN.is_set():
+        return
+
     with _LOCK:
         if _CHILD is not None and _CHILD.poll() is None:
             return
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        command = [sys.executable, str(ROOT / "start.py"), "--mode", "observe"]
+        if not open_dashboard:
+            command.append("--no-open-dashboard")
         _CHILD = subprocess.Popen(
-            [sys.executable, str(ROOT / "start.py"), "--mode", "observe"],
+            command,
             cwd=str(ROOT),
             creationflags=flags,
         )
         child = _CHILD
 
     def watch() -> None:
-        try:
-            child.wait()
-        finally:
+        global _CHILD
+        child.wait()
+
+        # _stop_child clears _CHILD before terminating. If this process is no
+        # longer the current child, its exit was intentional (Quit/Restart) or
+        # it has already been superseded and must never resurrect itself.
+        with _LOCK:
+            if _SHUTTING_DOWN.is_set() or _CHILD is not child:
+                return
+
+        delay = _restart_delay_after_crash()
+        if delay is None:
+            with _LOCK:
+                if _CHILD is child:
+                    _CHILD = None
             icon = _ICON
             if icon is not None:
                 try:
-                    icon.stop()
+                    icon.notify(
+                        "OpenWorkGraph stopped repeatedly. Automatic restart is paused; use Restart from the tray menu.",
+                        "OpenWorkGraph",
+                    )
                 except Exception:
                     pass
+            return
+
+        with _LOCK:
+            if _CHILD is child:
+                _CHILD = None
+
+        if _SHUTTING_DOWN.wait(delay):
+            return
+        _start_child(open_dashboard=False)
 
     threading.Thread(target=watch, name="owg-tray-watch", daemon=True).start()
 
 
 def _restart(_icon=None, _item=None) -> None:
+    with _LOCK:
+        _RESTART_TIMES.clear()
     _stop_child()
     time.sleep(0.4)
-    _start_child()
+    _start_child(open_dashboard=True)
 
 
 def _quit(icon=None, _item=None) -> None:
+    _SHUTTING_DOWN.set()
     _stop_child()
     target = icon or _ICON
     if target is not None:
@@ -100,7 +152,9 @@ def main() -> int:
     global _ICON
     if os.name != "nt":
         raise SystemExit("windows_tray.py is Windows-only")
-    _start_child()
+    _SHUTTING_DOWN.clear()
+    launched_in_background = "--background" in sys.argv[1:]
+    _start_child(open_dashboard=not launched_in_background)
     menu = pystray.Menu(
         pystray.MenuItem(
             "Restart and open dashboard",
