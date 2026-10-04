@@ -118,6 +118,26 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.10.0"
+      - name: Parse enterprise PowerShell deployment scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($Path in @(
+            "enterprise\windows\install-managed.ps1",
+            "enterprise\windows\detect.ps1",
+            "scripts\build_windows_enterprise_installer.ps1"
+          )) {
+            $Errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $Path),
+              [ref]$null,
+              [ref]$Errors
+            )
+            if ($Errors.Count -gt 0) {
+              $Errors | ForEach-Object { Write-Error "$Path: $($_.Message)" }
+              throw "PowerShell parse failed: $Path"
+            }
+          }
       - name: Build standalone Windows tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
@@ -233,6 +253,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Parse enterprise deployment tooling
+        run: |
+          python -m py_compile scripts/build_enterprise_release.py enterprise/health/fleet_health.py
+          bash -n enterprise/macos/install-managed.sh
       - name: Build browser sensor and enterprise deployment kit
         run: python scripts/build_enterprise_release.py
       - name: Verify enterprise release contents
