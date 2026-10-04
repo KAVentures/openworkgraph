@@ -5,6 +5,8 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from shared.lifespan import extend_lifespan
+
 from .app import create_app as create_core_app
 from .auth import env_token_matches
 from .declared_policy_distribution import install_declared_policy_distribution
@@ -232,9 +234,10 @@ def create_enterprise_app(
             "evidence_deleted": False,
         }
 
-    @app.on_event("shutdown")
     def close_pool() -> None:
         db.close()
+
+    extend_lifespan(app, shutdown=close_pool)
 
     return app
 
