@@ -41,3 +41,12 @@ test('stale dashboard tabs explain how to recover', () => {
   assert.match(source, /owgAuthBanner/);
   assert.match(source, /earlier start of OpenWorkGraph/);
 });
+
+
+test('update UX sends unmanaged users to direct installer and defers managed endpoints to IT', () => {
+  assert.match(source, /\/v1\/update-status/);
+  assert.match(source, /\/v1\/managed-status/);
+  assert.match(source, /managed by IT/);
+  assert.match(source, /status\.installer_url \|\| status\.release_url/);
+  assert.match(source, /chip\.disabled = true/);
+});
