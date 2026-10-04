@@ -15,6 +15,7 @@ _DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
 _EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
+_BROWSER_PAIR_REQUESTS: dict[str, tuple[float, str, bool]] = {}
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
 
 
@@ -247,6 +248,73 @@ def consume_pairing_code(candidate: str, *, max_attempts: int = 5) -> bool:
             return False
         _PAIRING_CODE = None
         return True
+
+
+def new_browser_pair_request(origin: str, ttl_seconds: int = 120) -> dict[str, int | str]:
+    """Create an explicit one-click browser pairing request.
+
+    The extension must still be approved by a person on a localhost page before
+    it can receive the installation pairing secret. Requests are bound to the
+    extension Origin so another extension cannot consume an approved request.
+    """
+    cleaned = str(origin or "").strip()
+    if not cleaned.startswith(("chrome-extension://", "moz-extension://", "safari-web-extension://")):
+        raise ValueError("browser extension origin required")
+    token = secrets.token_urlsafe(32)
+    expires = time.time() + ttl_seconds
+    with _LOCK:
+        now = time.time()
+        for key, value in list(_BROWSER_PAIR_REQUESTS.items()):
+            if value[0] < now:
+                _BROWSER_PAIR_REQUESTS.pop(key, None)
+        _BROWSER_PAIR_REQUESTS[token] = (expires, cleaned, False)
+    return {"request_id": token, "expires_in_seconds": ttl_seconds}
+
+
+def browser_pair_request_status(request_id: str, origin: str) -> dict[str, bool | str]:
+    token = str(request_id or "").strip()
+    cleaned = str(origin or "").strip()
+    with _LOCK:
+        current = _BROWSER_PAIR_REQUESTS.get(token)
+        if not current:
+            return {"found": False, "approved": False}
+        expiry, expected_origin, approved = current
+        if expiry < time.time():
+            _BROWSER_PAIR_REQUESTS.pop(token, None)
+            return {"found": False, "approved": False}
+        if not hmac.compare_digest(cleaned, expected_origin):
+            return {"found": False, "approved": False}
+        return {"found": True, "approved": bool(approved), "origin": expected_origin}
+
+
+def approve_browser_pair_request(request_id: str) -> bool:
+    token = str(request_id or "").strip()
+    with _LOCK:
+        current = _BROWSER_PAIR_REQUESTS.get(token)
+        if not current:
+            return False
+        expiry, origin, _approved = current
+        if expiry < time.time():
+            _BROWSER_PAIR_REQUESTS.pop(token, None)
+            return False
+        _BROWSER_PAIR_REQUESTS[token] = (expiry, origin, True)
+        return True
+
+
+def consume_browser_pair_request(request_id: str, origin: str) -> str:
+    token = str(request_id or "").strip()
+    cleaned = str(origin or "").strip()
+    with _LOCK:
+        current = _BROWSER_PAIR_REQUESTS.get(token)
+        if not current:
+            return ""
+        expiry, expected_origin, approved = current
+        if expiry < time.time() or not approved or not hmac.compare_digest(cleaned, expected_origin):
+            if expiry < time.time():
+                _BROWSER_PAIR_REQUESTS.pop(token, None)
+            return ""
+        _BROWSER_PAIR_REQUESTS.pop(token, None)
+    return ensure_browser_secret()
 
 
 def browser_server_proof(nonce: str) -> str:
