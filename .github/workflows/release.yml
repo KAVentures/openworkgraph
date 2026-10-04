@@ -190,6 +190,29 @@ jobs:
           }
           Launch-Demo "first"
           Launch-Demo "second"
+
+      - name: Smoke-test machine-wide enterprise installer and per-user mirror
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $Installer = (Resolve-Path "dist\OpenWorkGraph-Windows-Enterprise-Setup-v$Version.exe").Path
+          $InstallDir = Join-Path $env:RUNNER_TEMP "owg-enterprise-installed"
+          $UserRoot = Join-Path $env:RUNNER_TEMP "owg-enterprise-user"
+          Remove-Item $InstallDir,$UserRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$InstallDir","/MERGETASKS=!startup" -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Enterprise installer exited with $($proc.ExitCode)" }
+
+          $Payload = Join-Path $InstallDir ".openworkgraph-src"
+          $PythonwRelative = (Get-Content (Join-Path $Payload "EMBEDDED_PYTHONW.txt") -Raw).Trim()
+          $Python = Join-Path (Split-Path (Join-Path $Payload $PythonwRelative) -Parent) "python.exe"
+          if (-not (Test-Path $Python)) { throw "Enterprise embedded Python missing" }
+
+          $env:LOCALAPPDATA = $UserRoot
+          $env:OWG_ENTERPRISE_PAYLOAD = $Payload
+          & $Python -c "import os,sys,pathlib; p=pathlib.Path(os.environ['OWG_ENTERPRISE_PAYLOAD']); sys.path.insert(0,str(p)); import windows_tray; windows_tray.PAYLOAD_ROOT=p; t=windows_tray._prepare_machine_runtime(); assert (t/'start.py').is_file(); assert not (t/'.runtime').exists(); print(t)"
+          if ($LASTEXITCODE -ne 0) { throw "Enterprise per-user mirror smoke failed" }
+          test-path (Join-Path $UserRoot "OpenWorkGraph\Runtime\start.py") | Should -BeTrue
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
