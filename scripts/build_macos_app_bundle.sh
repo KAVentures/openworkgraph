@@ -335,8 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isQuitting else { return }
             self.pendingRestart = nil
-            self.startChild()
-            self.openDashboard()
+            self.startChild(openDashboard: true)
         }
         pendingRestart = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
