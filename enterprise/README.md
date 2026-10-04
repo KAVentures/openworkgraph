@@ -5,7 +5,7 @@ This directory turns the existing customer-hosted Gateway and managed endpoint s
 ## Supported deployment shape
 
 - macOS: deploy the normal OpenWorkGraph `.pkg` to `/Applications` with Jamf or another MDM, then deploy a per-device managed enrollment file.
-- Windows: deploy the normal OpenWorkGraph Setup EXE in **user context** with Intune or another endpoint manager. The current public installer is intentionally per-user and stores the application under `%LOCALAPPDATA%\OpenWorkGraph`.
+- Windows: deploy **OpenWorkGraph-Windows-Enterprise-Setup.exe** machine-wide with Intune/SYSTEM or another endpoint manager. Immutable runtime code lives under Program Files; each employee's mutable OpenWorkGraph state stays in LocalAppData. The ordinary per-user Setup EXE remains available for no-admin pilots.
 - Gateway: self-host `deploy/docker-compose.yml` + PostgreSQL behind customer-controlled HTTPS.
 - Browser sensor: publish the release-built browser ZIP to the Chrome/Edge store your organization uses, then substitute its real store extension ID into the included policy templates.
 
@@ -26,11 +26,13 @@ The managed file has to be readable by the OpenWorkGraph process running as the 
 
 ## Intune
 
-Use the Win32 app **Install behavior: User** for the current installer. Example install command:
+Preferred production pilot: package this deployment kit as a Win32 app with **Install behavior: System**. The script detects SYSTEM and uses the machine-wide enterprise installer automatically:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File install-managed.ps1 -JoinCode "<per-device-code>"
+powershell.exe -ExecutionPolicy Bypass -File install-managed.ps1 -JoinCode "<per-device-code>" -MachineWide
 ```
+
+For a small no-admin pilot, run the same script in **User** context without `-MachineWide`; it uses the normal per-user installer and the per-user managed-config fallback.
 
 Detection script:
 
@@ -38,7 +40,7 @@ Detection script:
 powershell.exe -ExecutionPolicy Bypass -File detect.ps1
 ```
 
-A future machine-wide Windows package can be added without changing endpoint data or Gateway semantics. This kit intentionally fails when run as SYSTEM so an apparently successful deployment cannot land in the wrong profile.
+Machine-wide runtime code is read-only under Program Files. At sign-in, the enterprise launcher mirrors only the mutable source layer into that employee's LocalAppData and keeps `data/` and `config.json` there.
 
 ## Jamf
 
