@@ -95,6 +95,7 @@ def _start_child(*, open_dashboard: bool) -> None:
         child = _CHILD
 
     def watch() -> None:
+        global _CHILD
         child.wait()
 
         # _stop_child clears _CHILD before terminating. If this process is no
@@ -108,7 +109,7 @@ def _start_child(*, open_dashboard: bool) -> None:
         if delay is None:
             with _LOCK:
                 if _CHILD is child:
-                    globals()["_CHILD"] = None
+                    _CHILD = None
             icon = _ICON
             if icon is not None:
                 try:
@@ -122,7 +123,7 @@ def _start_child(*, open_dashboard: bool) -> None:
 
         with _LOCK:
             if _CHILD is child:
-                globals()["_CHILD"] = None
+                _CHILD = None
 
         if _SHUTTING_DOWN.wait(delay):
             return
@@ -152,7 +153,8 @@ def main() -> int:
     if os.name != "nt":
         raise SystemExit("windows_tray.py is Windows-only")
     _SHUTTING_DOWN.clear()
-    _start_child()
+    launched_in_background = "--background" in sys.argv[1:]
+    _start_child(open_dashboard=not launched_in_background)
     menu = pystray.Menu(
         pystray.MenuItem(
             "Restart and open dashboard",
