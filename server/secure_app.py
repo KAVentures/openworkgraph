@@ -34,7 +34,7 @@ BROWSER_ROUTES = {
     ("POST", "/v1/browser-heartbeat"),
 }
 BROWSER_PATHS = {path for _, path in BROWSER_ROUTES}
-PUBLIC_PATHS = {"/health", "/browser-pair/approve"}
+PUBLIC_PATHS = {"/health"}
 EXTENSION_PREFIXES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 BLOCKED_DEV_PATHS = {"/openapi.json", "/redoc"}
 ALLOWED_LOCAL_HOSTS = {"127.0.0.1", "localhost", "testserver", "::1"}
