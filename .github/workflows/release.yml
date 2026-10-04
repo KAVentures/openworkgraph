@@ -134,7 +134,7 @@ jobs:
               [ref]$Errors
             )
             if ($Errors.Count -gt 0) {
-              $Errors | ForEach-Object { Write-Error "$Path: $($_.Message)" }
+              $Errors | ForEach-Object { Write-Error "${Path}: $($_.Message)" }
               throw "PowerShell parse failed: $Path"
             }
           }
