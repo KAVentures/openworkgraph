@@ -117,3 +117,39 @@ def test_start_py_supports_silent_supervisor_launches():
 
     assert 'parser.add_argument("--no-open-dashboard", action="store_true")' in text
     assert text.count("if not args.no_open_dashboard:") == 2
+
+
+def test_enterprise_windows_installer_is_machine_wide_but_keeps_user_state_writable():
+    installer = (ROOT / "scripts" / "build_windows_enterprise_installer.ps1").read_text(encoding="utf-8")
+    tray = (ROOT / "windows_tray.py").read_text(encoding="utf-8")
+
+    assert "PrivilegesRequired=admin" in installer
+    assert "DefaultDirName={autopf}\\OpenWorkGraph" in installer
+    assert "Root: HKLM" in installer
+    assert "--machine --background" in installer
+    assert "OpenWorkGraph-Windows-Enterprise-Setup-v$Version" in installer
+    assert "_machine_runtime_root" in tray
+    assert 'base / "OpenWorkGraph" / "Runtime"' in tray
+    assert 'if "--machine" in sys.argv[1:]' in tray
+    assert 'preserve = {"data", "config.json"}' in tray
+
+
+def test_enterprise_release_contains_browser_and_mdm_assets():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    builder = (ROOT / "scripts" / "build_enterprise_release.py").read_text(encoding="utf-8")
+
+    assert "enterprise-package:" in workflow
+    assert "OpenWorkGraph-Browser-Sensor.zip" in workflow
+    assert "OpenWorkGraph-Enterprise-Deployment-Kit.zip" in workflow
+    assert "OpenWorkGraph-Windows-Enterprise-Setup.exe" in workflow
+    assert "pairing.json" in builder
+    assert "OpenWorkGraph-Browser-Sensor-v" in builder
+    assert "OpenWorkGraph-Enterprise-Deployment-Kit-v" in builder
+
+
+def test_signed_release_covers_consumer_and_enterprise_windows_installers():
+    workflow = (ROOT / ".github" / "workflows" / "signed-release.yml").read_text(encoding="utf-8")
+
+    assert "build_windows_enterprise_installer.ps1" in workflow
+    assert "OpenWorkGraph-Windows-Enterprise-Setup-v$Version.exe" in workflow
+    assert "OpenWorkGraph-Windows-Enterprise-Setup.exe" in workflow
