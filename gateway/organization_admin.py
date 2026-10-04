@@ -14,6 +14,8 @@ from typing import Any, Callable
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
 
+from shared.lifespan import extend_lifespan
+
 from .app import EnrollmentRequest
 from .auth import env_token_matches
 from .db import GatewayDB
@@ -70,9 +72,10 @@ def install_organization_admin(
         if not env_token_matches(_bearer(authorization), settings.admin_token):
             raise HTTPException(status_code=401, detail="Gateway admin token required")
 
-    @app.on_event("startup")
     def init_links() -> None:
         init_enrollment_links_schema(db)
+
+    extend_lifespan(app, startup=init_links)
 
     @app.post("/v1/admin/enrollment-links")
     def create_link(
