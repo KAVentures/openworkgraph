@@ -179,8 +179,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quit)
         statusItem.menu = menu
 
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAsLoginItem =
+            event?.eventID == kAEOpenApplication &&
+            event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+
         configureStartAtLogin()
-        startChild()
+        startChild(openDashboard: !launchedAsLoginItem)
     }
 
     private func configureStartAtLogin() {
@@ -267,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startChild() {
+    private func startChild(openDashboard: Bool) {
         if child?.isRunning == true || isQuitting { return }
 
         let process = Process()
@@ -284,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             process.arguments = [
                 installRoot.appendingPathComponent("start.py").path,
                 "--mode", "observe",
-            ]
+            ] + (openDashboard ? [] : ["--no-open-dashboard"])
             process.currentDirectoryURL = installRoot
             try process.run()
             child = process
@@ -317,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isQuitting else { return }
             self.pendingRestart = nil
-            self.startChild()
+            self.startChild(openDashboard: false)
         }
         pendingRestart?.cancel()
         pendingRestart = work
