@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-RELEASE_VERSION="0.121.0"
+RELEASE_VERSION="0.122.0"
 URL="${OWG_INSTALL_URL:-https://github.com/KAVentures/openworkgraph/releases/download/v${RELEASE_VERSION}/OpenWorkGraph-macOS.zip}"
 MODE="${OWG_INSTALL_MODE:-observe}"
 if [ "$MODE" != "observe" ] && [ "$MODE" != "demo" ]; then
