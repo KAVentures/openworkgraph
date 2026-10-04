@@ -64,3 +64,43 @@ def test_signed_workflow_can_replace_stable_aliases():
     assert "OpenWorkGraph-Windows-Setup.exe" in workflow
     assert 'gh release upload "$TAG"' in workflow
     assert "--clobber" in workflow
+
+
+def test_macos_app_registers_login_start_and_bounds_crash_recovery():
+    text = (ROOT / "scripts" / "build_macos_app_bundle.sh").read_text(encoding="utf-8")
+
+    assert "import ServiceManagement" in text
+    assert "SMAppService.mainApp" in text
+    assert "try service.register()" in text
+    assert "try service.unregister()" in text
+    assert "Start OpenWorkGraph at Login" in text
+    assert "maxCrashRestarts = 5" in text
+    assert "crashWindow: TimeInterval = 5 * 60" in text
+    assert "handleUnexpectedExit" in text
+    assert "child = nil" in text
+    assert "-framework ServiceManagement" in text
+
+    # v0.121 uses the supported in-app Service Management registration path,
+    # not a loose LaunchAgent installed beside the application.
+    assert 'LAUNCH_AGENT="$DIST/com.kinvectum.openworkgraph.plist"' not in text
+
+
+def test_windows_tray_recovers_only_unexpected_child_exits():
+    text = (ROOT / "windows_tray.py").read_text(encoding="utf-8")
+
+    assert "_MAX_CRASH_RESTARTS = 5" in text
+    assert "_RESTART_WINDOW_SECONDS = 5 * 60" in text
+    assert "_restart_delay_after_crash" in text
+    assert "_CHILD is not child" in text
+    assert "_SHUTTING_DOWN.set()" in text
+    assert "_RESTART_TIMES.clear()" in text
+    assert "Automatic restart is paused" in text
+
+
+def test_windows_installer_still_defaults_to_start_at_sign_in():
+    text = (ROOT / "scripts" / "build_windows_installer.ps1").read_text(encoding="utf-8")
+
+    assert 'Name: "startup"' in text
+    assert 'Description: "Start OpenWorkGraph when I sign in"' in text
+    assert 'Flags: checkedonce' in text
+    assert 'Software\\Microsoft\\Windows\\CurrentVersion\\Run' in text
