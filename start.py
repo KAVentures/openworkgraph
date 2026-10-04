@@ -175,7 +175,7 @@ def main() -> None:
         if args.mode == "demo":
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
             if not args.no_open_dashboard:
-            webbrowser.open(opened_dashboard)
+                webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
             print("Start with the repeated Gmail → Salesforce → Sheets → Salesforce → Gmail human workflow.")
             print("It demonstrates ordinary human capture, timing, browser object correlation and copy/paste linkage without an AI agent.")
@@ -187,7 +187,7 @@ def main() -> None:
                 time.sleep(1)
         else:
             if not args.no_open_dashboard:
-            webbrowser.open(opened_dashboard)
+                webbrowser.open(opened_dashboard)
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
