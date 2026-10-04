@@ -75,7 +75,7 @@ def _restart_delay_after_crash(now: float | None = None) -> float | None:
         return _RESTART_DELAYS[min(len(_RESTART_TIMES) - 1, len(_RESTART_DELAYS) - 1)]
 
 
-def _start_child() -> None:
+def _start_child(*, open_dashboard: bool) -> None:
     global _CHILD
     if _SHUTTING_DOWN.is_set():
         return
@@ -84,8 +84,11 @@ def _start_child() -> None:
         if _CHILD is not None and _CHILD.poll() is None:
             return
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        command = [sys.executable, str(ROOT / "start.py"), "--mode", "observe"]
+        if not open_dashboard:
+            command.append("--no-open-dashboard")
         _CHILD = subprocess.Popen(
-            [sys.executable, str(ROOT / "start.py"), "--mode", "observe"],
+            command,
             cwd=str(ROOT),
             creationflags=flags,
         )
@@ -123,7 +126,7 @@ def _start_child() -> None:
 
         if _SHUTTING_DOWN.wait(delay):
             return
-        _start_child()
+        _start_child(open_dashboard=False)
 
     threading.Thread(target=watch, name="owg-tray-watch", daemon=True).start()
 
@@ -133,7 +136,7 @@ def _restart(_icon=None, _item=None) -> None:
         _RESTART_TIMES.clear()
     _stop_child()
     time.sleep(0.4)
-    _start_child()
+    _start_child(open_dashboard=True)
 
 
 def _quit(icon=None, _item=None) -> None:
