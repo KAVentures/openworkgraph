@@ -14,17 +14,22 @@ $PythonwInApp = "{app}\.openworkgraph-src\" + $PythonwRelative.Replace("/", "\")
 
 $Iscc = $env:ISCC_PATH
 if (-not $Iscc) {
-  $Candidates = @(
-    (Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) "Inno Setup 6\ISCC.exe"),
-    (Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles) "Inno Setup 6\ISCC.exe")
-  )
-  $Iscc = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    $ProgramFiles64 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    $Candidates = @(
+        (Join-Path $ProgramFilesX86 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $ProgramFiles64 "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ChocolateyInstall "bin\ISCC.exe")
+    ) | Where-Object { $_ }
+    $Iscc = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $Iscc) {
+        $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($Command) { $Iscc = $Command.Source }
+    }
 }
-if (-not $Iscc) {
-  $Command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-  if ($Command) { $Iscc = $Command.Source }
+if (-not $Iscc -or -not (Test-Path $Iscc)) {
+    throw "Inno Setup 6 (ISCC.exe) is required. Set ISCC_PATH if it is installed elsewhere."
 }
-if (-not $Iscc -or -not (Test-Path $Iscc)) { throw "Inno Setup 6 is required." }
 
 $Iss = Join-Path $Dist "openworkgraph-enterprise-installer.iss"
 $PackageEscaped = $Package.Replace("\", "\\")
