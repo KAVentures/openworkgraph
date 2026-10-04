@@ -81,7 +81,7 @@ Name: "startup"; Description: "Start OpenWorkGraph when I sign in"; GroupDescrip
 Name: "{autoprograms}\OpenWorkGraph"; Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OpenWorkGraph"; ValueData: """$PythonwInApp"" ""{app}\.openworkgraph-src\windows_tray.py""" --background; Flags: uninsdeletevalue; Tasks: startup
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OpenWorkGraph"; ValueData: """$PythonwInApp"" ""{app}\.openworkgraph-src\windows_tray.py"" --background"; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
 Filename: "$PythonwInApp"; Parameters: """{app}\.openworkgraph-src\windows_tray.py"""; WorkingDir: "{app}\.openworkgraph-src"; Description: "Start OpenWorkGraph"; Flags: postinstall nowait skipifsilent
