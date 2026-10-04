@@ -125,6 +125,7 @@ def reset_demo_data(env: dict[str, str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["demo", "observe"], default="observe")
+    parser.add_argument("--no-open-dashboard", action="store_true")
     args = parser.parse_args()
     ensure_config()
     env = mode_environment(args.mode)
@@ -173,6 +174,7 @@ def main() -> None:
         opened_dashboard = dashboard_url(env)
         if args.mode == "demo":
             subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
+            if not args.no_open_dashboard:
             webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")
             print("Start with the repeated Gmail → Salesforce → Sheets → Salesforce → Gmail human workflow.")
@@ -184,6 +186,7 @@ def main() -> None:
             while True:
                 time.sleep(1)
         else:
+            if not args.no_open_dashboard:
             webbrowser.open(opened_dashboard)
             print("\nLIVE observation has started.")
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
