@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.120.0"
+EXPECTED_VERSION = "0.121.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,12 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.121: reliable desktop continuity" in workflow
+    v121_section = workflow.split("### v0.121: reliable desktop continuity", 1)[1].split("### v0.120:", 1)[0]
+    assert "start openworkgraph at login" in v121_section.lower()
+    assert "bounded exponential backoff" in v121_section.lower()
+    assert "intentional quit stays quit" in v121_section.lower()
+    assert "five unexpected exits in five minutes" in v121_section.lower()
     assert "### v0.120: real desktop installers" in workflow
     v120_section = workflow.split("### v0.120: real desktop installers", 1)[1].split("### v0.119:", 1)[0]
     assert "no zip or terminal for normal users" in v120_section.lower()
@@ -110,6 +116,9 @@ def test_release_notes_are_current_and_version_driven():
 
     changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert "0.121.0" in changelog
+    assert "Start OpenWorkGraph at Login" in changelog
+    assert "crash" in changelog_lower
     assert "0.120.0" in changelog
     assert "desktop installer" in changelog_lower
     assert "terminal" in changelog_lower
