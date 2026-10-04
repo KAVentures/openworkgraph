@@ -23,6 +23,43 @@ async function refreshStatus() {
   }
 }
 
+async function oneClickPair() {
+  const status = document.querySelector('#status');
+  status.textContent = 'Opening OpenWorkGraph approval…';
+  try {
+    const started = await fetch(`${API}/v1/browser-pair/start`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+      cache: 'no-store'
+    });
+    if (!started.ok) throw new Error('OpenWorkGraph is not reachable on this computer.');
+    const request = await started.json();
+    const requestId = String(request?.request_id || '');
+    const approveUrl = String(request?.approve_url || '');
+    if (!requestId || !approveUrl) throw new Error('OpenWorkGraph did not create a pairing request.');
+    await ext.tabs.create({url: approveUrl});
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 900));
+      const response = await fetch(`${API}/v1/browser-pair/status?request=${encodeURIComponent(requestId)}`, {cache: 'no-store'});
+      if (response.status === 404) throw new Error('The pairing request expired. Try again.');
+      if (!response.ok) continue;
+      const payload = await response.json();
+      if (!payload?.approved) continue;
+      const secret = String(payload?.secret || '');
+      if (!secret) throw new Error('OpenWorkGraph approved the request but returned no credential.');
+      await ext.storage.local.set({[SECRET_KEY]: secret});
+      status.textContent = 'Connected. Browser context can now flow to this local OpenWorkGraph.';
+      await refreshStatus();
+      return;
+    }
+    throw new Error('Approval timed out. Try Connect again.');
+  } catch (error) {
+    status.textContent = String(error?.message || 'Could not connect to OpenWorkGraph.');
+  }
+}
+
 async function pair() {
   const code = String(document.querySelector('#code').value || '').replace(/\D/g, '');
   const status = document.querySelector('#status');
@@ -50,5 +87,6 @@ async function pair() {
   }
 }
 
+document.querySelector('#connect').addEventListener('click', oneClickPair);
 document.querySelector('#pair').addEventListener('click', pair);
 refreshStatus();
