@@ -194,3 +194,19 @@ def test_live_never_record_reloads_before_collector_local_persistence(tmp_path, 
     source = _read("collector/main.py")
     assert "refresh_live_exclusions(config_path, cfg, live_exclusion_state)" in source
     assert "_live_public_window(config_path, cfg, live_exclusion_state)" in source
+
+
+def test_managed_config_prefers_machine_policy_with_per_user_fallback():
+    source = _read("server/org_join_routes.py")
+    assert 'OWG_MANAGED_CONFIG' in source
+    assert 'machine if machine.is_file() else user' in source
+    assert 'Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "OpenWorkGraph" / "managed.json"' in source
+    assert 'Path.home() / "Library" / "Application Support" / "OpenWorkGraph" / "managed.json"' in source
+
+
+def test_update_check_exposes_direct_platform_installer_without_work_data():
+    source = _read("server/update_check.py")
+    assert "OpenWorkGraph-macOS.pkg" in source
+    assert "OpenWorkGraph-Windows-Setup.exe" in source
+    assert '"request_contains_work_evidence": False' in source
+    assert '"installer_url": installer_url()' in source
