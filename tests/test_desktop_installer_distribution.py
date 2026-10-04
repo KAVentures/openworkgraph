@@ -77,6 +77,9 @@ def test_macos_app_registers_login_start_and_bounds_crash_recovery():
     assert "maxCrashRestarts = 5" in text
     assert "crashWindow: TimeInterval = 5 * 60" in text
     assert "handleUnexpectedExit" in text
+    assert "keyAELaunchedAsLogInItem" in text
+    assert 'startChild(openDashboard: !launchedAsLoginItem)' in text
+    assert '"--no-open-dashboard"' in text
     assert "child = nil" in text
     assert "-framework ServiceManagement" in text
 
@@ -91,6 +94,8 @@ def test_windows_tray_recovers_only_unexpected_child_exits():
     assert "_MAX_CRASH_RESTARTS = 5" in text
     assert "_RESTART_WINDOW_SECONDS = 5 * 60" in text
     assert "_restart_delay_after_crash" in text
+    assert 'launched_in_background = "--background" in sys.argv[1:]' in text
+    assert 'command.append("--no-open-dashboard")' in text
     assert "_CHILD is not child" in text
     assert "_SHUTTING_DOWN.set()" in text
     assert "_RESTART_TIMES.clear()" in text
@@ -103,4 +108,12 @@ def test_windows_installer_still_defaults_to_start_at_sign_in():
     assert 'Name: "startup"' in text
     assert 'Description: "Start OpenWorkGraph when I sign in"' in text
     assert 'Flags: checkedonce' in text
-    assert 'Software\\Microsoft\\Windows\\CurrentVersion\\Run' in text
+    assert r"Software\Microsoft\Windows\CurrentVersion\Run" in text
+    assert '--background' in text
+
+
+def test_start_py_supports_silent_supervisor_launches():
+    text = (ROOT / "start.py").read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--no-open-dashboard", action="store_true")' in text
+    assert text.count("if not args.no_open_dashboard:") == 2
