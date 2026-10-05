@@ -398,9 +398,13 @@ async def local_capability_guard(request: Request, call_next):
             return _json_error("browser extension origin required", 403)
         created = new_browser_pair_request(origin)
         request_id = str(created["request_id"])
+        # Use the actual validated localhost origin rather than assuming
+        # the default port. This keeps pairing correct for tests, advanced local
+        # launches and any future configurable loopback port.
+        local_base = str(request.base_url).rstrip("/")
         return _extension_cors(JSONResponse({
             **created,
-            "approve_url": f"http://127.0.0.1:8787/browser-pair/approve?request={request_id}&origin={origin}",
+            "approve_url": f"{local_base}/browser-pair/approve?request={request_id}&origin={origin}",
         }), origin)
 
     if path == "/v1/browser-pair/status" and method == "GET":
