@@ -246,8 +246,8 @@ def setup_connection(client_id: str, *, allow_source: bool = False) -> dict[str,
             "writes_performed": False,
             "client": client_id,
             "installed_root": str(installed_root),
-            "command": [str(python), str(installed_root / "owg_connect.py"), "setup", "--client", client_id],
-            "instruction": "Execute this command exactly, then use its JSON result.",
+            "command": [str(python), str(installed_root / "owg_connect.py"), "on", client_id, "--mcp"],
+            "instruction": "Execute this command exactly. It uses the installed runtime's backward-compatible MCP-only connection command.",
             "ai_access": {"changed": False},
         }
 
