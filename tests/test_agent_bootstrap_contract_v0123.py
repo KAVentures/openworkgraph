@@ -117,11 +117,14 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
 def test_connected_ai_guidance_is_continuity_first_not_always_on():
     compact = (ROOT / "mcp_server" / "compact.py").read_text(encoding="utf-8")
     skill = (ROOT / "plugins" / "openworkgraph" / "skills" / "owg" / "SKILL.md").read_text(encoding="utf-8")
+    server_instructions = (ROOT / "mcp_server" / "workflow_evidence_tools.py").read_text(encoding="utf-8")
 
     assert "start with get_current_work_context" in compact
     assert "Skip OpenWorkGraph for ordinary coding" in compact
     assert "get_current_work_context" in skill
     assert "Skip it for ordinary coding" in skill
+    assert "start with get_current_work_context" in server_instructions
+    assert "Skip OpenWorkGraph for ordinary coding" in server_instructions
 
 
 def test_connection_note_matches_persistent_ai_access_behavior():
