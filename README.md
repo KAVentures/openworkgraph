@@ -14,15 +14,17 @@ The local product requires **no account and no cloud storage**. Organizations ca
 
 **AI agents are optional.** OpenWorkGraph's core product records ordinary human desktop/browser workflows on its own. Agent telemetry is an additional evidence source for teams that also want to observe agent execution and human↔agent handoffs.
 
-## Let your local AI set it up
+## Point your AI at the repo
 
-For a local coding/desktop agent that can clone repositories and run commands, the repository itself is the bootstrap contract. Tell the agent:
+Tell a capable agent:
 
 > Clone https://github.com/KAVentures/openworkgraph and follow AGENTS.md.
 
-The agent can install OpenWorkGraph if needed, connect its own **MCP context** access without hand-editing JSON/TOML, and then use OpenWorkGraph automatically when a request depends on your previous or observed work. The public GitHub repository is source code; your work history remains in the local OpenWorkGraph store.
+The repository is the bootstrap contract, not the work history. A supported **local** agent can install OpenWorkGraph if needed and connect its own MCP context without hand-editing JSON/TOML. An unknown local MCP-capable agent can request a generic stdio descriptor instead of pretending to be Codex, Claude or Cursor.
 
-Setup never grants itself AI access and never turns on agent observation. Those remain explicit user-controlled choices. Cloud-only clients that cannot run on this computer still need the supported remote/Gateway path.
+A **remote/cloud** agent must not install the desktop observer in its provider sandbox: that would observe the wrong machine. It is routed to the customer-controlled Gateway's per-person HTTPS `/mcp` endpoint when the organization has configured Gateway sync and delegated OIDC. The public GitHub repository is not a public relay into a local-only OWG store.
+
+Setup never grants itself AI access and never turns on agent observation. Those remain explicit user-controlled choices.
 
 ## Why OpenWorkGraph
 
