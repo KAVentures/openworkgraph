@@ -63,26 +63,38 @@ def _json_command(command: list[str], *, cwd: Path | None = None, env: dict[str,
     return {"ok": True, "payload": payload}
 
 
-def _health() -> dict[str, Any]:
+def _installed_version(root: Path) -> str:
+    try:
+        return (root / "VERSION").read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _health(expected_version: str = "") -> dict[str, Any]:
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=1.5) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        version_ok = not expected_version or str(payload.get("version") or "") == expected_version
+        mode_ok = str(payload.get("mode") or "") in {"observe", "demo"}
         return {
-            "ok": response.status == 200 and payload.get("status") == "ok",
+            "ok": response.status == 200 and payload.get("status") == "ok" and version_ok and mode_ok,
             "payload": payload,
+            "expected_version": expected_version or None,
+            "version_ok": version_ok,
+            "mode_ok": mode_ok,
         }
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "expected_version": expected_version or None}
 
 
-def _wait_for_health(timeout: float = 75.0) -> dict[str, Any]:
+def _wait_for_health(timeout: float = 75.0, *, expected_version: str = "") -> dict[str, Any]:
     deadline = time.monotonic() + timeout
-    latest = _health()
+    latest = _health(expected_version)
     while time.monotonic() < deadline:
         if latest.get("ok"):
             return latest
         time.sleep(0.75)
-        latest = _health()
+        latest = _health(expected_version)
     return latest
 
 
@@ -175,13 +187,14 @@ def _install_if_needed() -> dict[str, Any]:
 
 
 def _start_if_needed(root: Path, python: Path) -> dict[str, Any]:
-    health = _health()
+    expected_version = _installed_version(root)
+    health = _health(expected_version)
     if health.get("ok"):
         return {"ok": True, "performed": False, "health": health}
 
     command = [str(python), str(root / "start.py"), "--mode", "observe"]
     launched = _launch_background(command, cwd=root)
-    health = _wait_for_health()
+    health = _wait_for_health(expected_version=expected_version)
     return {
         "ok": bool(health.get("ok")),
         "performed": True,
@@ -268,15 +281,29 @@ def _connect_known(root: Path, python: Path, client_id: str) -> dict[str, Any]:
 
 
 def _restart_action(connection: dict[str, Any]) -> dict[str, Any] | None:
-    mcp = ((connection.get("result") or {}).get("mcp") or {}) if connection.get("ok") else {}
-    restart = mcp.get("restart_needed")
-    if not restart:
+    if not connection.get("ok"):
         return None
-    return {
-        "kind": "restart_ai_client",
-        "app": restart.get("app") or "AI client",
-        "instruction": "Quit and reopen this AI client so it loads the new OpenWorkGraph MCP connection.",
-    }
+    result = connection.get("result") or {}
+    mcp = result.get("mcp") or {}
+    restart = mcp.get("restart_needed")
+    if restart:
+        return {
+            "kind": "restart_ai_client",
+            "app": restart.get("app") or result.get("label") or "AI client",
+            "instruction": "Quit and reopen this AI client so it loads the new OpenWorkGraph MCP connection, then rerun bootstrap.",
+        }
+    takes_effect = ((result.get("changes") or {}).get("mcp") or {}).get("takes_effect")
+    if takes_effect and "immediately" not in str(takes_effect).lower():
+        return {
+            "kind": "reload_ai_client",
+            "app": result.get("label") or result.get("id") or "AI client",
+            "takes_effect": takes_effect,
+            "instruction": (
+                f"The MCP configuration is installed and takes effect {takes_effect}. "
+                "Reload/start the required client session, then rerun bootstrap so the connection can be verified."
+            ),
+        }
+    return None
 
 
 def _mac_permission_action(missing: list[str]) -> dict[str, Any] | None:
@@ -364,7 +391,7 @@ def run(
     if installed.get("performed"):
         # The official installer owns the first launch. Wait for that exact
         # bootstrap instead of racing it with a second start.py process.
-        health = _wait_for_health(180)
+        health = _wait_for_health(180, expected_version=_installed_version(root))
         installer_process = installed.pop("_process", None)
         if not health.get("ok"):
             code = installer_process.poll() if installer_process is not None else None
