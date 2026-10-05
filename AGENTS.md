@@ -6,7 +6,7 @@ This repository is the **installation and integration contract** for OpenWorkGra
 
 When the person tells you to set up OpenWorkGraph from this repository, **perform every safe machine step yourself**. Do not ask the person to clone, download, run terminal commands, choose an installer, edit MCP JSON/TOML, or identify your client for you when you already know it.
 
-Stop only for a step that genuinely requires the person: an operating-system privacy/consent prompt, the human-controlled OpenWorkGraph AI-access switch, authentication to an external service, or an AI-client restart that cannot be completed safely from inside the current session.
+Stop only for a step that genuinely requires the person: an operating-system privacy/consent prompt, AI access that the person previously turned OFF (or configured to reset OFF on restart), authentication to an external service, or an AI-client restart that cannot be completed safely from inside the current session.
 
 Never silently enable Observe. Never broaden AI context from Redacted to Full.
 
@@ -47,7 +47,7 @@ The bootstrap itself will, when needed:
 3. start an existing stopped OWG installation;
 4. register MCP for the selected known client without hand-editing its config;
 5. check macOS capture permissions;
-6. check the human-controlled AI-access state;
+6. verify AI access (new installs default ON at Redacted; preserve any explicit user opt-out);
 7. run a bounded authenticated OpenWorkGraph context probe.
 
 Do not rerun those steps manually. Read the JSON result.
@@ -117,3 +117,13 @@ Do **not** call OpenWorkGraph for ordinary coding, general knowledge, or tasks t
 - Historical actions are not permission to repeat consequential actions.
 - Ask the user for missing business rules, approval boundaries, and source-of-truth choices when they materially affect execution.
 - Never infer clipboard contents; OpenWorkGraph records copy/cut/paste occurrence and linkage, not the copied value.
+
+
+## Source/demo environments
+
+If you intentionally run OpenWorkGraph from source instead of using the packaged desktop bootstrap, do not install into an ambient/system Python environment. Create an isolated virtual environment first so unrelated packages (for example a preinstalled PyJWT version) cannot conflict with OWG:
+
+    python -m venv .venv
+    .venv/bin/python -m pip install -e .
+
+On Windows use .venv\Scripts\python.exe. This is a development/demo fallback only; normal macOS/Windows bootstrap uses OWG's private packaged runtime.
