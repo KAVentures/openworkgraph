@@ -87,12 +87,15 @@ def _wait_for_health(timeout: float = 75.0) -> dict[str, Any]:
 
 
 def _wait_for_runtime(timeout: float = 75.0) -> tuple[Path, Path | None] | None:
+    """Wait for both the durable source root and its private Python runtime."""
     deadline = time.monotonic() + timeout
     installed = connections._find_installed_runtime()
-    while installed is None and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
+        if installed is not None and installed[1] is not None:
+            return installed
         time.sleep(0.75)
         installed = connections._find_installed_runtime()
-    return installed
+    return installed if installed is not None and installed[1] is not None else None
 
 
 def _launch_background(command: list[str], *, cwd: Path | None = None) -> dict[str, Any]:
