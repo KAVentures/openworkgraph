@@ -18,6 +18,7 @@ configuration entirely.
 The same functions back the dashboard (``/v1/connections``) and the CLI::
 
     <python> <root>/owg_connect.py list
+    <python> <root>/owg_connect.py setup --client claude_code # safe MCP-only bootstrap for agents
     <python> <root>/owg_connect.py on claude_code            # mcp + observe
     <python> <root>/owg_connect.py off cursor --mcp
     <python> <root>/owg_connect.py remove codex --observe
@@ -66,6 +67,199 @@ def _codex_home() -> Path:
 
 def _data_dir() -> Path:
     return Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
+
+
+# --- agent bootstrap / stable installed runtime --------------------------------
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except Exception:
+        return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+
+
+def _installed_root_candidates() -> list[Path]:
+    """Stable per-user OpenWorkGraph source roots, never arbitrary checkouts."""
+    candidates: list[Path] = []
+    override = str(os.getenv("OWG_INSTALLED_ROOT") or "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    home = _home()
+    if sys.platform == "darwin":
+        candidates.append(home / "Library" / "Application Support" / "WorkflowObserver")
+    elif sys.platform == "win32":
+        local = Path(os.getenv("LOCALAPPDATA", str(home / "AppData" / "Local"))) / "OpenWorkGraph"
+        # The offline/clickable installer keeps mutable source in this payload
+        # subdirectory. The older ZIP bootstrap installs source at the root.
+        candidates.extend([local / ".openworkgraph-src", local])
+
+    unique: list[Path] = []
+    for candidate in candidates:
+        if not any(_same_path(candidate, seen) for seen in unique):
+            unique.append(candidate)
+    return unique
+
+
+def _installed_python(root: Path) -> Path | None:
+    """Return a durable interpreter shipped/created by an installed OWG runtime."""
+    override = str(os.getenv("OWG_INSTALLED_PYTHON") or "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_file():
+            return candidate
+
+    for candidate in (
+        root / ".venv" / "bin" / "python",
+        root / ".venv" / "Scripts" / "python.exe",
+    ):
+        if candidate.is_file():
+            return candidate
+
+    marker = root / "EMBEDDED_PYTHONW.txt"
+    if marker.is_file():
+        try:
+            pythonw = root / marker.read_text(encoding="utf-8").strip()
+            python = pythonw.with_name("python.exe")
+            if python.is_file():
+                return python
+        except Exception:
+            pass
+
+    if sys.platform == "darwin":
+        for app in (
+            Path("/Applications/OpenWorkGraph.app"),
+            _home() / "Applications" / "OpenWorkGraph.app",
+        ):
+            payload = app / "Contents" / "Resources" / "openworkgraph"
+            embedded = payload / "EMBEDDED_PYTHON.txt"
+            if not embedded.is_file():
+                continue
+            try:
+                candidate = payload / embedded.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _find_installed_runtime() -> tuple[Path, Path | None] | None:
+    for root in _installed_root_candidates():
+        if (root / "owg_connect.py").is_file() and (root / "mcp_server" / "launcher.py").is_file():
+            return root, _installed_python(root)
+    return None
+
+
+def _install_instruction() -> dict[str, Any]:
+    if sys.platform == "darwin":
+        return {
+            "platform": "macos",
+            "command": [
+                "/bin/bash",
+                "-lc",
+                "curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash",
+            ],
+            "human_action": "Approve macOS Accessibility/Input Monitoring when OpenWorkGraph asks.",
+        }
+    if sys.platform == "win32":
+        return {
+            "platform": "windows",
+            "command": [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex",
+            ],
+            "human_action": "Approve any Windows security/permission prompts shown by the installer.",
+        }
+    return {
+        "platform": sys.platform,
+        "command": [],
+        "human_action": "Install OpenWorkGraph using the repository's supported local-install instructions, then rerun setup.",
+    }
+
+
+def _setup_access_status() -> dict[str, Any]:
+    try:
+        from .ai_access import ai_access_enabled
+        enabled: bool | None = ai_access_enabled()
+    except Exception:
+        enabled = None
+    return {
+        "changed": False,
+        "currently_enabled": enabled,
+        "required": True,
+        "instruction": "OpenWorkGraph AI access remains a human-controlled setting. If access is off, ask the person to enable it in the local dashboard.",
+    }
+
+
+def setup_connection(client_id: str, *, allow_source: bool = False) -> dict[str, Any]:
+    """Safely bootstrap one local AI's MCP context connection.
+
+    A GitHub checkout is an installation contract, not the durable runtime.
+    By default this refuses to save an MCP command pointing into an arbitrary
+    clone. allow_source is an explicit developer escape hatch.
+    """
+    if client_id not in CLIENTS:
+        raise KeyError(client_id)
+
+    if allow_source:
+        connected = change(client_id, "on", ("mcp",))
+        return {
+            "status": "configured",
+            "runtime": "source_override",
+            "source_root": str(ROOT),
+            "connection": connected,
+            "observe_changed": False,
+            "ai_access": _setup_access_status(),
+            "warning": "Development override: MCP points at this source checkout.",
+        }
+
+    installed = _find_installed_runtime()
+    if installed is None:
+        return {
+            "status": "needs_install",
+            "writes_performed": False,
+            "client": client_id,
+            "install": _install_instruction(),
+            "then": f"Rerun owg_connect.py setup --client {client_id}.",
+            "ai_access": {"changed": False},
+        }
+
+    installed_root, python = installed
+    if python is None:
+        return {
+            "status": "needs_runtime",
+            "writes_performed": False,
+            "client": client_id,
+            "installed_root": str(installed_root),
+            "instruction": "Open OpenWorkGraph once so its private runtime is available, then rerun setup.",
+            "ai_access": {"changed": False},
+        }
+
+    if not _same_path(ROOT, installed_root) or not _same_path(Path(sys.executable), python):
+        return {
+            "status": "delegate",
+            "writes_performed": False,
+            "client": client_id,
+            "installed_root": str(installed_root),
+            "command": [str(python), str(installed_root / "owg_connect.py"), "setup", "--client", client_id],
+            "instruction": "Execute this command exactly, then use its JSON result.",
+            "ai_access": {"changed": False},
+        }
+
+    connected = change(client_id, "on", ("mcp",))
+    return {
+        "status": "configured",
+        "runtime": "installed",
+        "installed_root": str(installed_root),
+        "connection": connected,
+        "observe_changed": False,
+        "ai_access": _setup_access_status(),
+    }
 
 
 # --- MCP launch entry ---------------------------------------------------------
@@ -575,7 +769,7 @@ def list_connections() -> dict[str, Any]:
         "cli": cli_command(),
         "notes": {
             "on_off": "On/off takes effect immediately; no restart needed once a client is set up.",
-            "mcp_master_switch": "MCP reads also require the dashboard AI-access switch, which resets to OFF on restart.",
+            "mcp_master_switch": "MCP reads also require the dashboard AI-access switch. A new install starts OFF; afterward the person's choice is remembered unless Privacy is set to reset it on restart.",
         },
     }
 
@@ -629,21 +823,49 @@ def main(argv: list[str] | None = None) -> int:
         prog="owg_connect.py",
         description="Connect AI clients to OpenWorkGraph and switch them on/off. Prints JSON.",
     )
-    parser.add_argument("action", choices=["list", "on", "off", "remove"])
-    parser.add_argument("client", nargs="?", choices=sorted(CLIENTS))
+    parser.add_argument("action", choices=["list", "setup", "on", "off", "remove"])
+    parser.add_argument("client_pos", nargs="?", choices=sorted(CLIENTS))
+    parser.add_argument("--client", dest="client_opt", choices=sorted(CLIENTS),
+                        help="client id; primarily for agent-driven setup")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--mcp", action="store_true", help="only the MCP context connection")
     group.add_argument("--observe", action="store_true", help="only agent observation")
+    parser.add_argument("--allow-source", action="store_true",
+                        help="development only: allow setup to point MCP at this checkout")
     args = parser.parse_args(argv)
 
     if args.action == "list":
+        if args.client_pos or args.client_opt or args.allow_source:
+            parser.error("list does not take a client or --allow-source")
         print(json.dumps(list_connections(), indent=2))
         return 0
-    if not args.client:
-        parser.error("a client is required for on/off/remove")
+
+    if args.client_pos and args.client_opt and args.client_pos != args.client_opt:
+        parser.error("client was supplied twice with different values")
+    client_id = args.client_opt or args.client_pos
+    if not client_id:
+        parser.error("a client is required for setup/on/off/remove")
+
+    if args.action == "setup":
+        if args.observe:
+            print(json.dumps({
+                "error": "setup configures MCP context only; enable Observe separately and only when the person asks for it",
+                "observe_changed": False,
+            }, indent=2))
+            return 2
+        try:
+            result = setup_connection(client_id, allow_source=args.allow_source)
+        except writer.ConfigConflict as exc:
+            print(json.dumps({"error": str(exc), "manual_setup_required": True}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.allow_source:
+        parser.error("--allow-source is valid only with setup")
     kinds = ("mcp",) if args.mcp else ("observe",) if args.observe else KINDS
     try:
-        result = change(args.client, args.action, kinds)
+        result = change(client_id, args.action, kinds)
     except writer.ConfigConflict as exc:
         print(json.dumps({"error": str(exc), "manual_setup_required": True}, indent=2))
         return 2
