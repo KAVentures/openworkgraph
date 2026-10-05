@@ -5,7 +5,9 @@ description: Use OpenWorkGraph evidence to understand, improve, automate, or con
 
 # OpenWorkGraph
 
-At the start, call `get_context_pulse`. If continuing work performed by another AI agent, also call `get_agent_handoff`.
+Use OpenWorkGraph when the request depends on previous or observed work, unfinished work, repeated workflows, or prior agent execution. Skip it for ordinary coding or general questions that do not depend on work evidence.
+
+For continuity requests such as "continue what I was doing", start with `get_current_work_context`. Use `get_context_pulse` when a broader scan of recent changes is useful. If continuing work performed by another AI agent, also call `get_agent_handoff`.
 
 Use `get_workflow_trace` as canonical chronological evidence. Treat task names, repeated patterns, summaries, and recommendations as derived navigation aids rather than ground truth.
 
