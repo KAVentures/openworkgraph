@@ -26,7 +26,7 @@
   "tools": [
     {
       "name": "get_current_work_context",
-      "description": "Read an optional compact derived overview with pointers to canonical evidence."
+      "description": "Read continuity-first resource and agent context plus backwards-compatible workflow hints."
     },
     {
       "name": "get_context_pulse",

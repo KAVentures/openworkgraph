@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta
 from typing import Any
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import secure_runtime
+from .continuity import build_continuity_context, extract_resource_pointers
 
 
 mcp = MCPServer("OpenWorkGraph")
@@ -157,7 +159,7 @@ def _slim_semantic_event(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _slim_trace_row(item: dict[str, Any]) -> dict[str, Any]:
-    return {
+    result = {
         key: item.get(key)
         for key in (
             "event_id",
@@ -179,6 +181,10 @@ def _slim_trace_row(item: dict[str, Any]) -> dict[str, Any]:
         )
         if item.get(key) not in (None, "", [], {})
     }
+    pointers = extract_resource_pointers(item)
+    if pointers:
+        result["resource_pointers"] = pointers
+    return result
 
 
 def _slim_trace(trace: dict[str, Any]) -> dict[str, Any]:
@@ -228,6 +234,7 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "work_summary",
             "delivery_outcome",
             "human_context",
+            "workspace_ref",
             "parent_execution_id",
             "child_execution_ids",
             "usage_totals",
@@ -394,12 +401,17 @@ def get_current_work_context(
     limit: int = 6,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return an optional compact derived overview with pointers to canonical evidence.
+    """Return an optional compact derived overview, now continuity-first.
 
-    Use get_workflow_trace first when reconstructing what happened. If a restart
-    makes current-session evidence empty, this attempts a local-day evidence
-    fallback when saved-history access permits it. Derived sections never override
-    the canonical trace and remain non-authoritative convenience indexes.
+    The continuity section is built from the latest authorized evidence tail and
+    stable resource pointers. It never assigns a task name or treats temporal
+    proximity as proof that resources belong to the same work. Use source-system
+    connectors to inspect candidate resources before acting.
+
+    The existing canonical trace, task hints and repeated patterns remain for
+    compatibility. Use get_workflow_trace first when reconstructing what happened;
+    continuity context helps locate candidate resources but does not replace the
+    canonical chronology.
     """
     name = "get_current_work_context"
     core._begin(name)
@@ -421,6 +433,82 @@ def get_current_work_context(
         except Exception as exc:
             if _history_access_problem(exc):
                 fallback_hint = "Current app session is empty. Grant saved-history access to let this overview include earlier work today."
+
+    # Continuity needs the latest tail, not the first page of a chronological
+    # trace. Context Pulse's bootstrap mode returns the bounded newest evidence
+    # while preserving the same AI-history authorization boundary.
+    continuity_evidence: list[dict[str, Any]] = []
+    pulse_snapshot_at: str | None = None
+    continuity_source_status = "available"
+    continuity_source_notice: str | None = None
+    try:
+        pulse = secure_runtime.secure_get(
+            "/v1/context-pulse",
+            {
+                "recent_limit": max(24, min(200, int(limit) * 20)),
+                "finding_limit": 0,
+                "lookback_days": 7,
+                "recent_detail": "rich",
+            },
+        )
+        continuity_evidence = [
+            item for item in list(pulse.get("recent_evidence") or [])
+            if isinstance(item, dict)
+        ]
+        pulse_snapshot_at = str(pulse.get("snapshot_at") or "") or None
+        if continuity_evidence and secure_runtime.detail_level() == "full":
+            from server.local_reference_lookup import expand_resource_references
+            continuity_evidence = expand_resource_references(continuity_evidence)
+    except Exception as exc:
+        continuity_evidence = []
+        continuity_source_status = "unavailable"
+        continuity_source_notice = (
+            "The latest authorized continuity tail could not be read. "
+            "An empty continuity graph must not be interpreted as proof that no relevant work exists."
+        )
+        if _history_access_problem(exc):
+            continuity_source_status = "history_access_limited"
+            continuity_source_notice = (
+                "Older continuity evidence is outside the current saved-history grant. "
+                "An empty result does not prove that no relevant prior work exists."
+            )
+
+    agent_executions: list[dict[str, Any]] = []
+    if continuity_evidence:
+        since = str(continuity_evidence[0].get("observed_at") or "") or None
+        params: dict[str, Any] = {
+            "limit": 12,
+            "max_events_per_execution": 1,
+            "evidence_limit": 25_000,
+        }
+        if since:
+            try:
+                parsed_since = datetime.fromisoformat(since.replace("Z", "+00:00"))
+                params["since"] = (parsed_since - timedelta(minutes=10)).isoformat()
+            except Exception:
+                params["since"] = since
+        if pulse_snapshot_at:
+            params["until"] = pulse_snapshot_at
+        try:
+            payload = secure_runtime.secure_get("/v1/agent-execution-traces", params)
+            agent_executions = [
+                item for item in list(payload.get("executions") or [])
+                if isinstance(item, dict)
+            ]
+        except Exception:
+            agent_executions = []
+
+    continuity_context = build_continuity_context(
+        continuity_evidence,
+        agent_executions,
+        max_resources=max(6, min(24, int(limit) * 2)),
+    )
+    continuity_context["source_status"] = continuity_source_status
+    if continuity_source_notice:
+        continuity_context["source_notice"] = continuity_source_notice
+    continuity_context["coverage"]["stable_reference_capture_is_best_effort"] = True
+    continuity_context["coverage"]["zero_resources_proves_no_relevant_work"] = False
+
     tasks_scope = "current" if scope_used == "current" else "all"
     try:
         tasks = secure_runtime.secure_get("/v1/tasks", {"limit": 5000, "scope": tasks_scope})
@@ -435,6 +523,7 @@ def get_current_work_context(
     except Exception:
         semantic = {"events": []}
     return core._finish(name, {
+        "continuity_context": continuity_context,
         "trace": _slim_trace(trace),
         "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:3]],
         "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:3]],
@@ -449,8 +538,10 @@ def get_current_work_context(
         "canonical_evidence_tool": "get_workflow_trace",
         "overview_is_derived": True,
         "authoritative": False,
+        "primary_interpretation": "continuity_context identifies observed resource and agent-run candidates; it does not establish task identity.",
         "derived_sections": ["task_hints", "repeated_patterns", "semantic_activity"],
-        "reconstruction_guidance": "Use get_workflow_trace as the source of truth; task_hints and repeated_patterns are non-authoritative.",
+        "continuity_context_is_derived": True,
+        "reconstruction_guidance": "Use continuity_context to locate likely resources, inspect them with authorized source connectors, and use get_workflow_trace when chronology matters. Do not imitate historical UI steps unless the user asks.",
         "data_layer": "rich_ai_context_compact_overview",
     })
 

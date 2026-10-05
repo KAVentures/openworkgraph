@@ -1,6 +1,23 @@
 # OpenWorkGraph AI guide
 
-OpenWorkGraph is a workflow-evidence layer. Its job is to capture and preserve factual evidence about how work happened so that the AI the user already uses can understand, analyze, improve, and potentially automate that work.
+OpenWorkGraph is a workflow-evidence layer, with continuity-first connected-AI use. Its job is to preserve factual, privacy-hardened evidence about the resources and agent executions involved in real work so that the AI the user already uses can recover context, reason from current source systems, and — when useful — analyze or improve how work happened.
+
+## Continuity first
+
+For ordinary connected-AI use, prefer **resource and execution continuity** over historical click imitation.
+
+When the user refers ambiguously to prior work ("continue that customer thing", "pick up where Claude stopped", "open what I was using before lunch"):
+
+1. use OpenWorkGraph to identify candidate stable resource references and prior agent executions;
+2. treat a stable resource pointer as observed identity, but treat any grouping of multiple resources into one task as **derived and uncertain**;
+3. never treat temporal proximity alone as proof that two resources belong to the same task;
+4. inspect candidate objects with the current authorized source-system connector/API whenever available;
+5. ask the user when the candidates remain materially ambiguous, especially before consequential actions;
+6. do not replay historical UI steps merely because they were observed — pursue the user's present goal with the best currently authorized tools.
+
+OpenWorkGraph may expose opaque resource references such as `owg:r:…` or `owg:f:…`. These are pointers/provenance, not copies of the business object. File paths, contents, email bodies and full URLs are not implied by the pointer. Exact provider resolution remains subject to the existing AI-detail and source-system authorization boundaries.
+
+A `continuity_candidate` is deliberately not a task label. It is a bounded set of observed resources and nearby agent runs with explicit association evidence. If the association evidence is weak, the correct behavior is to verify or ask — not to manufacture a task name.
 
 ## Core interpretation rule
 

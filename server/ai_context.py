@@ -65,7 +65,7 @@ _SKIP_FIELDS = {
     "run_started_at", "started_at", "ended_at", "created_at", "updated_at", "range_start",
     "range_end", "hostname", "host", "page_host", "event_type", "source", "data_layer",
     "detail_level", "family_key", "execution_id", "run_id", "trace_id", "span_id",
-    "evidence_event_id", "fingerprint", "sha256",
+    "evidence_event_id", "fingerprint", "sha256", "resource_ref", "file_ref",
 }
 _LOCATOR_FIELDS = {
     "url", "href", "uri", "frame_url", "resource_locator", "origin", "pathname", "page_path",
