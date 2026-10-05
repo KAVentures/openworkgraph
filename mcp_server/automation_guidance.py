@@ -5,7 +5,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPABILITY_BRIEF_PATH = ROOT / "AUTOMATION_CAPABILITIES.md"
+CAPABILITY_BRIEF_PATH = ROOT / "docs" / "ai" / "automation-capabilities.md"
 
 MCP_SERVER_INSTRUCTIONS = """OpenWorkGraph is an evidence service. Treat captured workflow and agent observations as evidence; inferred tasks, repeated patterns, summaries, playbooks, and other derived layers are navigation aids rather than ground truth. Verify material conclusions against get_workflow_trace.
 
