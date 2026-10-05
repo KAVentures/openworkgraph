@@ -34,7 +34,7 @@ macOS:
 
 Windows:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 --client <client_id>
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 -Client <client_id>
 
 If a usable Python runtime is already available, the equivalent direct command is:
 
@@ -67,7 +67,7 @@ macOS:
 
 Windows:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 --self --name <your-agent-name>
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 -Self -Name <your-agent-name>
 
 The equivalent direct command is:
 
