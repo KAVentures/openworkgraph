@@ -82,8 +82,8 @@ EOF
 cp "$LAUNCHER" "$DEMO_LAUNCHER"
 
 cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
-cp "$ROOT/AI_GUIDE.md" "$PKG/AI_GUIDE.md"
-cp "$ROOT/PROMPT.md" "$PKG/PROMPT.md"
+cp "$ROOT/docs/ai/guide.md" "$PKG/AI_GUIDE.md"
+cp "$ROOT/docs/ai/starter-prompt.md" "$PKG/PROMPT.md"
 cp "$ROOT/LICENSE" "$PKG/LICENSE"
 
 cat > "$PKG/README_FIRST.txt" <<EOF

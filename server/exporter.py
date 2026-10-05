@@ -17,8 +17,8 @@ from .db import normalized_rows, rows
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "unknown"
-AI_GUIDE_PATH = ROOT / "AI_GUIDE.md"
-PROMPT_PATH = ROOT / "PROMPT.md"
+AI_GUIDE_PATH = ROOT / "docs" / "ai" / "guide.md"
+PROMPT_PATH = ROOT / "docs" / "ai" / "starter-prompt.md"
 EXCEL_DATA_ROWS_PER_SHEET = 1_048_575
 
 
