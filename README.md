@@ -65,7 +65,17 @@ Install it and open **OpenWorkGraph** from the Start menu. Start at sign-in is e
 
 Both desktop installers include a private Python runtime. Normal users do not need system Python, Terminal, PowerShell, or a ZIP.
 
-For advanced bootstrap, uninstall, tester ZIPs, and release-specific notes, see **[Installation and testing](docs/testing/nontechnical.md)**.
+Advanced release-matched bootstrap remains available for troubleshooting:
+
+```bash
+curl -fsSL https://github.com/KAVentures/openworkgraph/releases/latest/download/install.sh | bash
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
+```
+
+Full local-data removal uses the matching release uninstall helpers documented in **[Installation and testing](docs/testing/nontechnical.md)**.
 
 ## Architecture
 
