@@ -75,6 +75,39 @@ def test_autonomous_known_client_reaches_ready_without_manual_machine_steps(home
     assert result["user_actions"] == []
 
 
+def test_new_known_client_config_requires_reload_before_ready(home, tmp_path, monkeypatch):
+    _stub_bootstrap_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_connect_known",
+        lambda *_: {
+            "ok": True,
+            "result": {
+                "id": "codex",
+                "label": "Codex",
+                "changes": {"mcp": {"takes_effect": "in new Codex chats"}},
+                "mcp": {"installed": True, "enabled": True, "on": True},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_permission_state",
+        lambda *_: {"ok": True, "permissions": {"accessibility": True, "input_monitoring": True}, "missing": []},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_access_and_context_probe",
+        lambda *_: {"enabled": True, "resets_on_restart": False, "probe": {"ok": True, "returned": 0}},
+    )
+
+    result = agent_bootstrap.run(local=True, client_id="codex")
+
+    assert result["status"] == "needs_user_action"
+    assert result["user_actions"][0]["kind"] == "reload_ai_client"
+    assert "new Codex chats" in result["user_actions"][0]["takes_effect"]
+
+
 def test_autonomous_bootstrap_stops_only_for_real_human_consent(home, tmp_path, monkeypatch):
     _stub_bootstrap_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(
@@ -147,6 +180,35 @@ def test_unknown_local_agent_gets_agent_action_not_user_config_work(home, tmp_pa
     assert result["agent_actions"][0]["descriptor"]["transport"] == "stdio"
     assert result["agent_actions"][0]["instruction"].startswith("Register")
     assert result["installed_root"] == str(root)
+
+
+def test_incomplete_runtime_reenters_official_installer(tmp_path, monkeypatch):
+    root = tmp_path / "installed"
+    root.mkdir()
+    calls = iter([(root, None), (root, root / "python")])
+    monkeypatch.setattr(connections, "_find_installed_runtime", lambda: next(calls))
+    monkeypatch.setattr(
+        connections,
+        "_install_instruction",
+        lambda: {"platform": "macos", "command": ["/bin/echo", "official-installer"], "human_action": ""},
+    )
+
+    class FakeProcess:
+        pid = 4567
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_launch_background",
+        lambda command, cwd=None: {"pid": 4567, "log": "/tmp/owg.log", "_process": FakeProcess()},
+    )
+
+    result = agent_bootstrap._install_if_needed()
+
+    assert result["ok"] is True
+    assert result["performed"] is True
+    assert result["runtime"][0] == root
 
 
 def test_install_helper_launches_official_installer_automatically(tmp_path, monkeypatch):
@@ -405,6 +467,8 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     gemini = (ROOT / "GEMINI.md").read_text(encoding="utf-8")
 
     assert "owg_connect.py bootstrap --local --client <client_id>" in agents
+    assert "/bin/bash owg_bootstrap.sh --client <client_id>" in agents
+    assert "owg_bootstrap.ps1 --client <client_id>" in agents
     assert "owg_connect.py bootstrap --self --local --name <your-agent-name>" in agents
     assert "owg_connect.py bootstrap --self --remote --name <your-agent-name>" in agents
     assert "perform every safe machine step yourself" in agents
@@ -416,6 +480,37 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     assert "get_current_work_context" in agents
     assert "Do **not** call OpenWorkGraph for ordinary coding" in agents
     assert "AGENTS.md" in claude and "AGENTS.md" in gemini
+
+
+def test_native_bootstrap_wrappers_are_present_and_parseable():
+    mac = ROOT / "owg_bootstrap.sh"
+    win = ROOT / "owg_bootstrap.ps1"
+    assert mac.exists() and win.exists()
+
+    mac_text = mac.read_text(encoding="utf-8")
+    win_text = win.read_text(encoding="utf-8")
+    assert "install.sh" in mac_text
+    assert 'bootstrap --local "$@"' in mac_text
+    assert "install.ps1" in win_text
+    assert "bootstrap --local @BootstrapArgs" in win_text
+
+    if os.name != "nt":
+        checked = subprocess.run(
+            ["/bin/bash", "-n", str(mac)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert checked.returncode == 0, checked.stderr
+    else:
+        command = (
+            "$tokens=$null;$errors=$null;"
+            f"[System.Management.Automation.Language.Parser]::ParseFile('{str(win).replace(\"'\", \"''\")}',[ref]$tokens,[ref]$errors)|Out-Null;"
+            "if($errors.Count){$errors|ForEach-Object{$_.ToString()};exit 1}"
+        )
+        checked = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert checked.returncode == 0, checked.stderr + checked.stdout
 
 
 def test_connected_ai_guidance_is_continuity_first_not_always_on():
