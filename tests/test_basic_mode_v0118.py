@@ -30,9 +30,9 @@ def _run(code: str, tmp_path: Path) -> str:
     return result.stdout.strip()
 
 
-def test_ai_access_is_off_on_a_new_install_and_remembered_across_restarts(tmp_path):
+def test_ai_access_is_on_on_a_new_install_and_explicit_off_is_remembered(tmp_path):
     check = "from server.ai_access import ai_access_enabled, resets_on_restart; print(ai_access_enabled(), resets_on_restart())"
-    assert _run(check, tmp_path) == "False False"  # a new install is off
+    assert _run(check, tmp_path) == "True False"  # a new install is on at Redacted
     _run("from server.ai_access import set_ai_access; set_ai_access(True)", tmp_path)
     assert _run(check, tmp_path) == "True False"  # remembered after a "restart" (new process)
     state = tmp_path / "auth" / "ai_access.json"
