@@ -169,6 +169,8 @@ The Gateway is open source and self-hostable from this same repository. OpenWork
 
 See **[Self-hosting](docs/SELF_HOSTING.md)**.
 
+For managed pilots and fleet rollout, use the **[Enterprise Deployment Kit](enterprise/README.md)**. Releases include a machine-wide Windows enterprise installer, MDM scripts, browser policy templates and fleet acceptance checks. Apple/Windows signing credentials and Chrome/Edge store publisher accounts remain external production trust gates; the repository does not pretend to manufacture them.
+
 ---
 
 # Rich persisted evidence is canonical

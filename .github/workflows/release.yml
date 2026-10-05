@@ -118,6 +118,26 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.10.0"
+      - name: Parse enterprise PowerShell deployment scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($Path in @(
+            "enterprise\windows\install-managed.ps1",
+            "enterprise\windows\detect.ps1",
+            "scripts\build_windows_enterprise_installer.ps1"
+          )) {
+            $Errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $Path),
+              [ref]$null,
+              [ref]$Errors
+            )
+            if ($Errors.Count -gt 0) {
+              $Errors | ForEach-Object { Write-Error "${Path}: $($_.Message)" }
+              throw "PowerShell parse failed: $Path"
+            }
+          }
       - name: Build standalone Windows tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
@@ -130,6 +150,9 @@ jobs:
       - name: Build unsigned offline installer
         shell: powershell
         run: ./scripts/build_windows_installer.ps1
+      - name: Build machine-wide enterprise installer
+        shell: powershell
+        run: ./scripts/build_windows_enterprise_installer.ps1
       - name: Smoke-test installed offline runtime twice
         shell: powershell
         run: |
@@ -187,6 +210,29 @@ jobs:
           }
           Launch-Demo "first"
           Launch-Demo "second"
+
+      - name: Smoke-test machine-wide enterprise installer and per-user mirror
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $Installer = (Resolve-Path "dist\OpenWorkGraph-Windows-Enterprise-Setup-v$Version.exe").Path
+          $InstallDir = Join-Path $env:RUNNER_TEMP "owg-enterprise-installed"
+          $UserRoot = Join-Path $env:RUNNER_TEMP "owg-enterprise-user"
+          Remove-Item $InstallDir,$UserRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $Installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$InstallDir","/MERGETASKS=!startup" -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Enterprise installer exited with $($proc.ExitCode)" }
+
+          $Payload = Join-Path $InstallDir ".openworkgraph-src"
+          $PythonwRelative = (Get-Content (Join-Path $Payload "EMBEDDED_PYTHONW.txt") -Raw).Trim()
+          $Python = Join-Path (Split-Path (Join-Path $Payload $PythonwRelative) -Parent) "python.exe"
+          if (-not (Test-Path $Python)) { throw "Enterprise embedded Python missing" }
+
+          $env:LOCALAPPDATA = $UserRoot
+          $env:OWG_ENTERPRISE_PAYLOAD = $Payload
+          & $Python -c "import os,sys,pathlib; p=pathlib.Path(os.environ['OWG_ENTERPRISE_PAYLOAD']); sys.path.insert(0,str(p)); import windows_tray; windows_tray.PAYLOAD_ROOT=p; t=windows_tray._prepare_machine_runtime(); assert (t/'start.py').is_file(); assert not (t/'.runtime').exists(); print(t)"
+          if ($LASTEXITCODE -ne 0) { throw "Enterprise per-user mirror smoke failed" }
+          if (-not (Test-Path (Join-Path $UserRoot "OpenWorkGraph\Runtime\start.py"))) { throw "Per-user enterprise runtime was not created" }
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -196,6 +242,51 @@ jobs:
             dist/OpenWorkGraph-Windows.zip.sha256
             dist/OpenWorkGraph-Windows-Setup-v*.exe
             dist/OpenWorkGraph-Windows-Setup-v*.exe.sha256
+            dist/OpenWorkGraph-Windows-Enterprise-Setup-v*.exe
+            dist/OpenWorkGraph-Windows-Enterprise-Setup-v*.exe.sha256
+          if-no-files-found: error
+
+  enterprise-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Parse enterprise deployment tooling
+        run: |
+          python -m py_compile scripts/build_enterprise_release.py enterprise/health/fleet_health.py
+          bash -n enterprise/macos/install-managed.sh
+      - name: Build browser sensor and enterprise deployment kit
+        run: python scripts/build_enterprise_release.py
+      - name: Verify enterprise release contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          version = Path("VERSION").read_text().strip()
+          browser = Path(f"dist/OpenWorkGraph-Browser-Sensor-v{version}.zip")
+          kit = Path(f"dist/OpenWorkGraph-Enterprise-Deployment-Kit-v{version}.zip")
+          with zipfile.ZipFile(browser) as z:
+              names = set(z.namelist())
+              assert {"manifest.json", "popup.html", "popup.js", "secure_background.js"} <= names
+              assert "pairing.json" not in names
+          with zipfile.ZipFile(kit) as z:
+              names = set(z.namelist())
+              assert "enterprise/README.md" in names
+              assert "enterprise/windows/install-managed.ps1" in names
+              assert "enterprise/macos/install-managed.sh" in names
+              assert "enterprise/FLEET_ACCEPTANCE.md" in names
+          PY
+      - name: Upload enterprise assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorkGraph-Enterprise
+          path: |
+            dist/OpenWorkGraph-Browser-Sensor-v*.zip
+            dist/OpenWorkGraph-Browser-Sensor-v*.zip.sha256
+            dist/OpenWorkGraph-Enterprise-Deployment-Kit-v*.zip
+            dist/OpenWorkGraph-Enterprise-Deployment-Kit-v*.zip.sha256
           if-no-files-found: error
 
   mcpb-package:
@@ -260,7 +351,7 @@ jobs:
 
   publish-release:
     if: github.ref == 'refs/heads/main'
-    needs: [macos-package, windows-package, mcpb-package, sdk-package]
+    needs: [macos-package, windows-package, enterprise-package, mcpb-package, sdk-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -284,6 +375,11 @@ jobs:
         with:
           name: pkg-agent-sdk
           path: release-assets
+      - name: Download enterprise assets
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenWorkGraph-Enterprise
+          path: release-assets
       - name: Publish GitHub Release when VERSION is new
         env:
           GH_TOKEN: ${{ github.token }}
@@ -296,12 +392,24 @@ jobs:
 
           MAC_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-macOS-v*.pkg' ! -name '*.sha256' | head -n 1)"
           WIN_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Setup-v*.exe' | head -n 1)"
+          WIN_ENTERPRISE_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Enterprise-Setup-v*.exe' | head -n 1)"
+          BROWSER_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Browser-Sensor-v*.zip' | head -n 1)"
+          ENTERPRISE_KIT_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Enterprise-Deployment-Kit-v*.zip' | head -n 1)"
           test -n "$MAC_VERSIONED" && test -f "$MAC_VERSIONED"
           test -n "$WIN_VERSIONED" && test -f "$WIN_VERSIONED"
+          test -n "$WIN_ENTERPRISE_VERSIONED" && test -f "$WIN_ENTERPRISE_VERSIONED"
+          test -n "$BROWSER_VERSIONED" && test -f "$BROWSER_VERSIONED"
+          test -n "$ENTERPRISE_KIT_VERSIONED" && test -f "$ENTERPRISE_KIT_VERSIONED"
           cp "$MAC_VERSIONED" release-assets/OpenWorkGraph-macOS.pkg
           cp "$WIN_VERSIONED" release-assets/OpenWorkGraph-Windows-Setup.exe
+          cp "$WIN_ENTERPRISE_VERSIONED" release-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe
+          cp "$BROWSER_VERSIONED" release-assets/OpenWorkGraph-Browser-Sensor.zip
+          cp "$ENTERPRISE_KIT_VERSIONED" release-assets/OpenWorkGraph-Enterprise-Deployment-Kit.zip
           sha256sum release-assets/OpenWorkGraph-macOS.pkg > release-assets/OpenWorkGraph-macOS.pkg.sha256
           sha256sum release-assets/OpenWorkGraph-Windows-Setup.exe > release-assets/OpenWorkGraph-Windows-Setup.exe.sha256
+          sha256sum release-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe > release-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe.sha256
+          sha256sum release-assets/OpenWorkGraph-Browser-Sensor.zip > release-assets/OpenWorkGraph-Browser-Sensor.zip.sha256
+          sha256sum release-assets/OpenWorkGraph-Enterprise-Deployment-Kit.zip > release-assets/OpenWorkGraph-Enterprise-Deployment-Kit.zip.sha256
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; leaving it immutable."
@@ -313,6 +421,16 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.122: enterprise productization and simpler browser setup
+
+          - **Enterprise Deployment Kit:** release assets now include repeatable Jamf/Intune scripts, managed enrollment templates, browser policy templates, fleet acceptance checks and Gateway health tooling.
+          - **Machine-wide Windows enterprise package:** a separate admin installer places immutable runtime code under Program Files, starts from HKLM at sign-in and mirrors mutable OpenWorkGraph source/state into each user's LocalAppData.
+          - **Browser sensor distribution:** releases publish a store-ready browser sensor ZIP, while enterprise policy templates are ready for the real Chrome/Edge store extension ID after publisher review.
+          - **One-click browser pairing:** the extension can open an explicit localhost approval page and receive a one-time approved local credential; the 8-digit code remains fallback only.
+          - **Managed config fallback:** system-managed configuration wins, with a per-user fallback for Intune/User-context and no-admin pilots.
+          - **MDM owns enterprise upgrades:** endpoint release checks never silently replace IT-managed binaries.
+          - **No silent trust claims:** Apple/Windows signing and browser-store publication remain credential-bound production gates and are documented as such.
 
           ### v0.121: reliable desktop continuity
 
@@ -497,6 +615,18 @@ jobs:
             release-assets/OpenWorkGraph-Windows-Setup.exe.sha256 \
             "$WIN_VERSIONED" \
             "$WIN_VERSIONED.sha256" \
+            release-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe \
+            release-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe.sha256 \
+            "$WIN_ENTERPRISE_VERSIONED" \
+            "$WIN_ENTERPRISE_VERSIONED.sha256" \
+            release-assets/OpenWorkGraph-Browser-Sensor.zip \
+            release-assets/OpenWorkGraph-Browser-Sensor.zip.sha256 \
+            "$BROWSER_VERSIONED" \
+            "$BROWSER_VERSIONED.sha256" \
+            release-assets/OpenWorkGraph-Enterprise-Deployment-Kit.zip \
+            release-assets/OpenWorkGraph-Enterprise-Deployment-Kit.zip.sha256 \
+            "$ENTERPRISE_KIT_VERSIONED" \
+            "$ENTERPRISE_KIT_VERSIONED.sha256" \
             release-assets/OpenWorkGraph-Windows.zip \
             release-assets/OpenWorkGraph-Windows.zip.sha256 \
             release-assets/OpenWorkGraph-Claude.mcpb \

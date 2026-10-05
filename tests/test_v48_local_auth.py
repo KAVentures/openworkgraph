@@ -176,6 +176,70 @@ def test_browser_requires_server_proof_and_signed_request(secured_api):
     assert replay.status_code == 401
 
 
+
+def test_one_click_browser_pairing_requires_local_approval_and_origin_binding(secured_api):
+    base = secured_api["base"]
+    origin = "chrome-extension://openworkgraph-test"
+    other_origin = "chrome-extension://different-extension"
+
+    started = httpx.post(
+        f"{base}/v1/browser-pair/start",
+        json={},
+        headers={"Origin": origin},
+    )
+    assert started.status_code == 200
+    assert started.headers.get("access-control-allow-origin") == origin
+    payload = started.json()
+    request_id = payload["request_id"]
+    assert request_id
+    assert "/browser-pair/approve?request=" in payload["approve_url"]
+
+    pending = httpx.get(
+        f"{base}/v1/browser-pair/status",
+        params={"request": request_id},
+        headers={"Origin": origin},
+    )
+    assert pending.status_code == 200
+    assert pending.json() == {"approved": False}
+
+    # Another extension cannot observe or consume the request.
+    foreign = httpx.get(
+        f"{base}/v1/browser-pair/status",
+        params={"request": request_id},
+        headers={"Origin": other_origin},
+    )
+    assert foreign.status_code == 404
+
+    approval_page = httpx.get(payload["approve_url"])
+    assert approval_page.status_code == 200
+    assert "Connect this browser to OpenWorkGraph?" in approval_page.text
+    assert origin in approval_page.text
+
+    approved = httpx.post(
+        f"{base}/browser-pair/approve",
+        params={"request": request_id},
+    )
+    assert approved.status_code == 200
+    assert "Browser connected" in approved.text
+
+    consumed = httpx.get(
+        f"{base}/v1/browser-pair/status",
+        params={"request": request_id},
+        headers={"Origin": origin},
+    )
+    assert consumed.status_code == 200
+    assert consumed.json()["approved"] is True
+    assert consumed.json()["secret"] == secured_api["browser_secret"]
+
+    # Pairing requests are one-time capabilities.
+    replay = httpx.get(
+        f"{base}/v1/browser-pair/status",
+        params={"request": request_id},
+        headers={"Origin": origin},
+    )
+    assert replay.status_code == 404
+
+
 def test_mcp_http_endpoint_rejects_unauthenticated_clients(secured_api):
     mcp_port = _free_port(); env = dict(secured_api["env"]); env["WORKFLOW_OBSERVER_API"] = secured_api["base"]
     process = subprocess.Popen([sys.executable, "-m", "uvicorn", "mcp_server.compact_http_app:app", "--host", "127.0.0.1", "--port", str(mcp_port)], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

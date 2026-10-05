@@ -10,6 +10,7 @@ runtime download.
 import atexit
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -21,7 +22,8 @@ from collections import deque
 from PIL import Image, ImageDraw
 import pystray
 
-ROOT = Path(__file__).resolve().parent
+PAYLOAD_ROOT = Path(__file__).resolve().parent
+ROOT = PAYLOAD_ROOT
 _CHILD: subprocess.Popen[Any] | None = None
 _ICON: pystray.Icon | None = None
 _LOCK = threading.RLock()
@@ -30,6 +32,52 @@ _RESTART_TIMES: deque[float] = deque()
 _RESTART_WINDOW_SECONDS = 5 * 60
 _MAX_CRASH_RESTARTS = 5
 _RESTART_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0)
+
+
+def _machine_runtime_root() -> Path:
+    base = Path(os.getenv("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    return base / "OpenWorkGraph" / "Runtime"
+
+
+def _prepare_machine_runtime() -> Path:
+    """Mirror immutable enterprise payload into a user-writable runtime.
+
+    Machine-wide installs live under Program Files, but OpenWorkGraph's config,
+    browser pairing bundle and evidence are per user. Keep the embedded Python
+    sealed in the machine installation while running source from LocalAppData,
+    matching the existing macOS sealed-runtime/user-state design.
+    """
+    target = _machine_runtime_root()
+    target.mkdir(parents=True, exist_ok=True)
+    preserve = {"data", "config.json"}
+    for entry in list(target.iterdir()):
+        if entry.name in preserve:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+    for source in PAYLOAD_ROOT.iterdir():
+        if source.name in {".runtime", "data", "config.json", ".venv", ".pytest_cache", "__pycache__"}:
+            continue
+        destination = target / source.name
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, destination)
+    return target
+
+
+def _configure_runtime_root() -> Path:
+    global ROOT
+    if "--machine" in sys.argv[1:]:
+        ROOT = _prepare_machine_runtime()
+    else:
+        ROOT = PAYLOAD_ROOT
+    return ROOT
 
 
 def _image() -> Image.Image:
@@ -153,6 +201,7 @@ def main() -> int:
     if os.name != "nt":
         raise SystemExit("windows_tray.py is Windows-only")
     _SHUTTING_DOWN.clear()
+    _configure_runtime_root()
     launched_in_background = "--background" in sys.argv[1:]
     _start_child(open_dashboard=not launched_in_background)
     menu = pystray.Menu(

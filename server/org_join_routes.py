@@ -179,12 +179,22 @@ def managed_config_path() -> Path:
     explicit = os.getenv("OWG_MANAGED_CONFIG", "").strip()
     if explicit:
         return Path(explicit)
+
     system = platform.system()
     if system == "Darwin":
-        return Path("/Library/Application Support/OpenWorkGraph/managed.json")
-    if system == "Windows":
-        return Path(os.getenv("PROGRAMDATA", r"C:\ProgramData")) / "OpenWorkGraph" / "managed.json"
-    return Path("/etc/openworkgraph/managed.json")
+        machine = Path("/Library/Application Support/OpenWorkGraph/managed.json")
+        user = Path.home() / "Library" / "Application Support" / "OpenWorkGraph" / "managed.json"
+    elif system == "Windows":
+        machine = Path(os.getenv("PROGRAMDATA", r"C:\ProgramData")) / "OpenWorkGraph" / "managed.json"
+        user = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "OpenWorkGraph" / "managed.json"
+    else:
+        machine = Path("/etc/openworkgraph/managed.json")
+        user = Path.home() / ".config" / "openworkgraph" / "managed.json"
+
+    # Machine policy wins when IT deployed it. The per-user fallback makes
+    # Intune/User-context and other no-admin pilots zero-touch without weakening
+    # a system-managed configuration that is already present.
+    return machine if machine.is_file() else user
 
 
 def _managed_actor(config: dict[str, Any]) -> str:

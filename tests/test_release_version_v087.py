@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.121.0"
+EXPECTED_VERSION = "0.122.0"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,13 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.122: enterprise productization and simpler browser setup" in workflow
+    v122_section = workflow.split("### v0.122: enterprise productization and simpler browser setup", 1)[1].split("### v0.121:", 1)[0]
+    assert "enterprise deployment kit" in v122_section.lower()
+    assert "machine-wide windows enterprise package" in v122_section.lower()
+    assert "one-click browser pairing" in v122_section.lower()
+    assert "managed config fallback" in v122_section.lower()
+    assert "no silent trust claims" in v122_section.lower()
     assert "### v0.121: reliable desktop continuity" in workflow
     v121_section = workflow.split("### v0.121: reliable desktop continuity", 1)[1].split("### v0.120:", 1)[0]
     assert "start openworkgraph at login" in v121_section.lower()
@@ -116,6 +123,10 @@ def test_release_notes_are_current_and_version_driven():
 
     changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert "0.122.0" in changelog
+    assert "Enterprise Deployment Kit" in changelog
+    assert "Browser sensor v1.15.0" in changelog
+    assert "managed endpoints" in changelog_lower
     assert "0.121.0" in changelog
     assert "Start OpenWorkGraph at Login" in changelog
     assert "crash" in changelog_lower

@@ -11,6 +11,9 @@ from shared.lifespan import extend_lifespan
 from .local_auth import (
     bearer_matches,
     browser_server_proof,
+    approve_browser_pair_request,
+    browser_pair_request_status,
+    consume_browser_pair_request,
     consume_export_ticket,
     consume_pairing_code,
     dashboard_session_valid,
@@ -18,6 +21,7 @@ from .local_auth import (
     exchange_dashboard_bootstrap,
     issue_export_ticket,
     local_security_note,
+    new_browser_pair_request,
     new_pairing_code,
     verify_browser_authorization,
 )
@@ -359,8 +363,63 @@ async def local_capability_guard(request: Request, call_next):
         return await call_next(request)
     if method == "OPTIONS" and path in BROWSER_PATHS:
         return await call_next(request)
-    if path in {"/v1/browser-challenge", "/v1/browser-pair"} and method == "OPTIONS":
+    if path in {"/v1/browser-challenge", "/v1/browser-pair", "/v1/browser-pair/start", "/v1/browser-pair/status"} and method == "OPTIONS":
         return _extension_cors(Response(status_code=204), origin)
+
+    if path == "/browser-pair/approve" and method == "GET":
+        request_id = str(request.query_params.get("request") or "").strip()
+        status = browser_pair_request_status(request_id, str(request.query_params.get("origin") or ""))
+        # The extension includes its own origin only as human-readable context.
+        # Approval itself is keyed by an unguessable request ID and the extension
+        # still has to prove the matching Origin when consuming the result.
+        if not request_id or not status.get("found"):
+            return HTMLResponse("<!doctype html><title>OpenWorkGraph browser pairing</title><h2>This pairing request expired.</h2><p>Return to the OpenWorkGraph browser extension and try again.</p>", status_code=400)
+        safe_origin = str(status.get("origin") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect browser to OpenWorkGraph</title>
+<style>body{{font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;max-width:620px;margin:8vh auto;padding:0 22px;color:#20231f}}button{{font:inherit;font-weight:700;padding:11px 16px;border:0;border-radius:10px;background:#20231f;color:white;cursor:pointer}}code{{font-size:13px;background:#f2f3ef;padding:3px 6px;border-radius:6px}}</style></head>
+<body><h1>Connect this browser to OpenWorkGraph?</h1>
+<p>This lets the OpenWorkGraph browser sensor send structural browser context to the OpenWorkGraph process running on this computer. It does not grant the extension access to your OpenWorkGraph data.</p>
+<p>Extension origin: <code>{safe_origin}</code></p>
+<form method="post" action="/browser-pair/approve?request={request_id}"><button type="submit">Connect browser</button></form>
+<p><small>If you did not just ask the OpenWorkGraph extension to connect, close this tab.</small></p>
+</body></html>"""
+        return HTMLResponse(html)
+
+    if path == "/browser-pair/approve" and method == "POST":
+        request_id = str(request.query_params.get("request") or "").strip()
+        if not approve_browser_pair_request(request_id):
+            return HTMLResponse("<!doctype html><title>OpenWorkGraph browser pairing</title><h2>This pairing request expired.</h2><p>Return to the extension and try again.</p>", status_code=400)
+        return HTMLResponse("<!doctype html><title>OpenWorkGraph browser pairing</title><h2>Browser connected.</h2><p>You can close this tab and return to your work.</p>")
+
+    if path == "/v1/browser-pair/start" and method == "POST":
+        if not origin.startswith(EXTENSION_PREFIXES):
+            return _json_error("browser extension origin required", 403)
+        created = new_browser_pair_request(origin)
+        request_id = str(created["request_id"])
+        # Use the actual validated localhost origin rather than assuming
+        # the default port. This keeps pairing correct for tests, advanced local
+        # launches and any future configurable loopback port.
+        local_base = str(request.base_url).rstrip("/")
+        return _extension_cors(JSONResponse({
+            **created,
+            "approve_url": f"{local_base}/browser-pair/approve?request={request_id}&origin={origin}",
+        }), origin)
+
+    if path == "/v1/browser-pair/status" and method == "GET":
+        if not origin.startswith(EXTENSION_PREFIXES):
+            return _json_error("browser extension origin required", 403)
+        request_id = str(request.query_params.get("request") or "")
+        status = browser_pair_request_status(request_id, origin)
+        if not status.get("found"):
+            return _extension_cors(_json_error("pairing request expired", 404), origin)
+        if not status.get("approved"):
+            return _extension_cors(JSONResponse({"approved": False}), origin)
+        secret = consume_browser_pair_request(request_id, origin)
+        if not secret:
+            return _extension_cors(_json_error("pairing request could not be consumed", 409), origin)
+        return _extension_cors(JSONResponse({"approved": True, "secret": secret}), origin)
 
     if path == "/v1/dashboard-session" and method == "POST":
         try:

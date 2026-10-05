@@ -537,7 +537,10 @@
 
   async function checkForUpdate() {
     try {
-      const status = await api('/v1/update-status');
+      const [status, managed] = await Promise.all([
+        api('/v1/update-status'),
+        api('/v1/managed-status').catch(() => null),
+      ]);
       let chip = $('#updateStatusChip');
       if (!status?.update_available || !status?.release_url) {
         chip?.remove();
@@ -552,9 +555,17 @@
         const spacer = row?.querySelector('.status-spacer');
         if (row) row.insertBefore(chip, spacer || null);
       }
-      chip.textContent = `Update v${status.latest_version} available`;
-      chip.title = 'Open the official OpenWorkGraph GitHub release. The version check sends no work evidence.';
-      chip.onclick = () => window.open(status.release_url, '_blank', 'noopener,noreferrer');
+      if (managed?.managed) {
+        chip.textContent = `Update v${status.latest_version} · managed by IT`;
+        chip.title = 'This installation is organization-managed. IT should deploy the approved update through endpoint management.';
+        chip.onclick = null;
+        chip.disabled = true;
+      } else {
+        chip.disabled = false;
+        chip.textContent = `Download update v${status.latest_version}`;
+        chip.title = 'Download the current platform installer directly. The version check sends no work evidence.';
+        chip.onclick = () => window.open(status.installer_url || status.release_url, '_blank', 'noopener,noreferrer');
+      }
     } catch (_) {}
   }
 

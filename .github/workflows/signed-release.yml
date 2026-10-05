@@ -113,9 +113,11 @@ jobs:
         shell: powershell
         run: choco install innosetup --no-progress -y
 
-      - name: Build Windows installer
+      - name: Build Windows installers
         shell: powershell
-        run: ./scripts/build_windows_installer.ps1
+        run: |
+          ./scripts/build_windows_installer.ps1
+          ./scripts/build_windows_enterprise_installer.ps1
 
       - name: Sign and verify Windows installer
         shell: powershell
@@ -124,7 +126,10 @@ jobs:
           CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           $Version = (Get-Content VERSION -Raw).Trim()
-          $Installer = "dist\OpenWorkGraph-Windows-Setup-v$Version.exe"
+          $Installers = @(
+            "dist\OpenWorkGraph-Windows-Setup-v$Version.exe",
+            "dist\OpenWorkGraph-Windows-Enterprise-Setup-v$Version.exe"
+          )
           $Pfx = Join-Path $env:RUNNER_TEMP "openworkgraph-signing.pfx"
           [IO.File]::WriteAllBytes($Pfx, [Convert]::FromBase64String($env:CERT_B64))
 
@@ -133,14 +138,17 @@ jobs:
             Select-Object -Last 1 -ExpandProperty FullName
           if (-not $Signtool) { throw "signtool.exe not found" }
 
-          & $Signtool sign /f $Pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $Installer
-          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
-          & $Signtool verify /pa /all /v $Installer
-          if ($LASTEXITCODE -ne 0) { throw "signtool verify failed" }
+          foreach ($Installer in $Installers) {
+            if (-not (Test-Path $Installer)) { throw "Installer missing: $Installer" }
+            & $Signtool sign /f $Pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $Installer
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $Installer" }
+            & $Signtool verify /pa /all /v $Installer
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $Installer" }
+            $Hash = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
+            "$Hash  $(Split-Path $Installer -Leaf)" | Set-Content "$Installer.sha256" -Encoding ascii
+          }
 
           Remove-Item $Pfx -Force
-          $Hash = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
-          "$Hash  $(Split-Path $Installer -Leaf)" | Set-Content "$Installer.sha256" -Encoding ascii
 
       - name: Upload signed Windows installer
         uses: actions/upload-artifact@v4
@@ -149,6 +157,8 @@ jobs:
           path: |
             dist/OpenWorkGraph-Windows-Setup-v*.exe
             dist/OpenWorkGraph-Windows-Setup-v*.exe.sha256
+            dist/OpenWorkGraph-Windows-Enterprise-Setup-v*.exe
+            dist/OpenWorkGraph-Windows-Enterprise-Setup-v*.exe.sha256
           if-no-files-found: error
 
   publish-signed-installers:
@@ -178,21 +188,29 @@ jobs:
 
           MAC_VERSIONED="$(find signed-assets -maxdepth 1 -type f -name 'OpenWorkGraph-macOS-v*.pkg' ! -name '*.sha256' | head -n 1)"
           WIN_VERSIONED="$(find signed-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Setup-v*.exe' | head -n 1)"
+          WIN_ENTERPRISE_VERSIONED="$(find signed-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Enterprise-Setup-v*.exe' | head -n 1)"
           test -n "$MAC_VERSIONED" && test -f "$MAC_VERSIONED"
           test -n "$WIN_VERSIONED" && test -f "$WIN_VERSIONED"
+          test -n "$WIN_ENTERPRISE_VERSIONED" && test -f "$WIN_ENTERPRISE_VERSIONED"
 
           cp "$MAC_VERSIONED" signed-assets/OpenWorkGraph-macOS.pkg
           cp "$WIN_VERSIONED" signed-assets/OpenWorkGraph-Windows-Setup.exe
+          cp "$WIN_ENTERPRISE_VERSIONED" signed-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe
           sha256sum signed-assets/OpenWorkGraph-macOS.pkg > signed-assets/OpenWorkGraph-macOS.pkg.sha256
           sha256sum signed-assets/OpenWorkGraph-Windows-Setup.exe > signed-assets/OpenWorkGraph-Windows-Setup.exe.sha256
+          sha256sum signed-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe > signed-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe.sha256
 
           gh release upload "$TAG" \
             "$MAC_VERSIONED" \
             "$MAC_VERSIONED.sha256" \
             "$WIN_VERSIONED" \
             "$WIN_VERSIONED.sha256" \
+            "$WIN_ENTERPRISE_VERSIONED" \
+            "$WIN_ENTERPRISE_VERSIONED.sha256" \
             signed-assets/OpenWorkGraph-macOS.pkg \
             signed-assets/OpenWorkGraph-macOS.pkg.sha256 \
             signed-assets/OpenWorkGraph-Windows-Setup.exe \
             signed-assets/OpenWorkGraph-Windows-Setup.exe.sha256 \
+            signed-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe \
+            signed-assets/OpenWorkGraph-Windows-Enterprise-Setup.exe.sha256 \
             --clobber

@@ -1,5 +1,20 @@
 # OpenWorkGraph changelog
 
+# OpenWorkGraph v0.122.0
+
+This release focuses on making OpenWorkGraph deployable and supportable rather than adding new workflow analytics.
+
+- **Enterprise Deployment Kit:** Jamf/Intune scripts, managed-enrollment templates, Chrome/Edge policy templates, fleet acceptance checks and Gateway health tooling ship with the release.
+- **Machine-wide Windows enterprise installer:** IT can install immutable runtime code under Program Files with HKLM startup while each employee keeps mutable source/config/evidence in LocalAppData.
+- **Managed config flexibility:** machine policy wins, with a per-user fallback for Intune/User-context and no-admin pilots.
+- **Browser sensor v1.15.0:** the normal pairing path is now **Connect to OpenWorkGraph → approve on localhost**, with the 8-digit code retained only as fallback.
+- **Store-ready browser asset:** releases build the exact tested extension sources into a browser-store ZIP plus enterprise force-install policy templates.
+- **Update UX:** unmanaged users go straight to the current platform installer; managed endpoints show that IT owns the update instead of encouraging users to bypass endpoint management.
+- **Signing remains explicit:** the signed-release workflow covers the normal and enterprise Windows installers and the notarized macOS package once publisher credentials are supplied.
+- **No evidence-model rewrite:** existing capture, privacy, MCP, Gateway, export, Discovery and agent functionality remain intact.
+
+---
+
 # OpenWorkGraph v0.121.0
 
 This release makes continuous desktop observation survive ordinary shutdown/restart cycles and recover from transient observer failures.

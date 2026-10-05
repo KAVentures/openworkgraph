@@ -9,6 +9,7 @@ plain GET to the public OpenWorkGraph releases API and failures are non-fatal.
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import platform
 import re
 import threading
 import time
@@ -44,6 +45,15 @@ def current_version() -> str:
         return ""
 
 
+def installer_url() -> str:
+    system = platform.system()
+    if system == "Darwin":
+        return "https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.pkg"
+    if system == "Windows":
+        return "https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows-Setup.exe"
+    return "https://github.com/KAVentures/openworkgraph/releases/latest"
+
+
 def _fetch() -> dict[str, Any]:
     current = current_version()
     request = Request(
@@ -67,6 +77,7 @@ def _fetch() -> dict[str, Any]:
             "latest_version": tag.lstrip("vV"),
             "update_available": is_newer_version(tag, current),
             "release_url": url,
+            "installer_url": installer_url(),
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "source": "public_github_release",
             "request_contains_work_evidence": False,
@@ -78,6 +89,7 @@ def _fetch() -> dict[str, Any]:
             "latest_version": "",
             "update_available": False,
             "release_url": "",
+            "installer_url": installer_url(),
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "source": "public_github_release",
             "request_contains_work_evidence": False,
@@ -96,4 +108,4 @@ def update_status(*, force: bool = False) -> dict[str, Any]:
     return dict(value)
 
 
-__all__ = ["current_version", "is_newer_version", "update_status"]
+__all__ = ["current_version", "installer_url", "is_newer_version", "update_status"]

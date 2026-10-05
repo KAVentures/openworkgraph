@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,9 +66,10 @@ def test_existing_mcp_and_browser_permissions_are_untouched_by_activation_layer(
     # These files are read, not modified, by this feature. The assertions make
     # the intended v0.96 boundary explicit so a future activation edit cannot
     # quietly grow browser privileges or replace MCP with an onboarding API.
-    manifest = (ROOT / "browser_extension" / "manifest.json").read_text(encoding="utf-8")
-    assert '"permissions": ["tabs", "webNavigation", "storage", "alarms"]' in manifest
-    assert "first_value_activation" not in manifest
+    manifest_text = (ROOT / "browser_extension" / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    assert manifest["permissions"] == ["tabs", "webNavigation", "storage", "alarms"]
+    assert "first_value_activation" not in manifest_text
     compact = (ROOT / "mcp_server" / "compact_stdio.py").read_text(encoding="utf-8")
     legacy = (ROOT / "mcp_server" / "secure_stdio.py").read_text(encoding="utf-8")
     assert "first_value_activation" not in compact

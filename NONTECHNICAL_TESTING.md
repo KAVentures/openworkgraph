@@ -47,13 +47,19 @@ After the rest of your test, quit OpenWorkGraph. Remove the installed desktop ap
 
 Without it, OpenWorkGraph sees "Google Chrome". With it, it can tell Gmail from Google Sheets from Salesforce and can provide richer browser-semantic evidence.
 
+Until the store listing is published, the open-source tester path still loads the extension locally:
+
 1. Run **`ADD_BROWSER_SENSOR.command`** on macOS or **`ADD_BROWSER_SENSOR.cmd`** on Windows. It opens a folder and your browser's extensions page.
 2. Turn on **Developer mode**, click **Load unpacked**, and choose the folder that opened.
-3. In the dashboard, the "Browser sensor not connected" chip should disappear and step 2 of the setup checklist on **Today** ticks itself off. If it doesn't, use **How → Pair / repair sensor** in that checklist (or **Advanced → Settings**).
+3. Open the **OpenWorkGraph Browser Sensor** extension and choose **Connect to OpenWorkGraph**.
+4. A localhost approval page opens. Choose **Connect browser**. No pairing code is needed in the normal path.
+5. In the dashboard, the "Browser sensor not connected" chip should disappear and step 2 of the setup checklist on **Today** ticks itself off. The 8-digit pairing code remains a fallback under **Pair / repair sensor**.
 
-**After upgrading OpenWorkGraph:** the unpacked browser extension may still be running the previous files. If the server observes an older sensor, **Advanced → Settings → Capture & privacy** shows **Browser sensor update available** with the running and expected versions. Open the browser's extensions page and click **Reload** for the OpenWorkGraph extension. Ordinary capture can continue while it is stale, but new browser-context features should not be considered active until the version warning disappears.
+For managed fleets, the release includes a store-ready browser ZIP and Chrome/Edge force-install policy templates. The policy becomes usable after the extension receives a real store ID from the organization's publisher account.
 
-v0.114 uses browser sensor **1.14.0** for the new business-object reference feature.
+**After upgrading an unpacked extension:** the browser may still be running the previous files. If the server observes an older sensor, **Advanced → Settings → Capture & privacy** shows **Browser sensor update available**. Open the browser's extensions page and click **Reload**. Store-managed deployments update through the browser store instead.
+
+v0.122 uses browser sensor **1.15.0** with explicit one-click localhost approval.
 
 ## 3. Work normally, then look at Today
 
