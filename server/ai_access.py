@@ -31,7 +31,15 @@ def _load_unlocked() -> None:
     _LOADED = True
     try:
         value = json.loads(_state_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # No state file means a genuinely new install: AI access defaults ON
+        # at the separate Redacted context level.
+        return
     except Exception:
+        # A state file exists but cannot be trusted. Fail closed rather than
+        # reinterpreting corruption as a fresh install.
+        _ENABLED = False
+        _RESET_ON_RESTART = False
         return
     if not isinstance(value, dict):
         return
