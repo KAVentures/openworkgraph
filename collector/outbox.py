@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from sensitive_identifiers import sanitize_event_identifiers
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
 from shared.evidence_deletion import event_overlaps_range
 from shared.history_policy import event_kind
 
