@@ -4,7 +4,7 @@ import hashlib
 import re
 from typing import Any
 
-from normalizer import safe_action_label
+from shared.core.normalizer import safe_action_label
 
 
 _STRUCTURAL_ACTIONS = {
