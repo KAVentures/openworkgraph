@@ -1,6 +1,7 @@
 param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$BootstrapArgs
+    [string]$Client = "",
+    [switch]$Self,
+    [string]$Name = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,7 +88,24 @@ if ($Launched) {
     }
 }
 
+if ($Self -and $Client) {
+    throw "Use either -Client or -Self, not both."
+}
+if (-not $Self -and [string]::IsNullOrWhiteSpace($Client)) {
+    throw "Specify -Client <known-id> or -Self -Name <agent-name>."
+}
+if ($Self -and [string]::IsNullOrWhiteSpace($Name)) {
+    throw "-Self requires -Name <agent-name>."
+}
+
+$ArgsForBootstrap = @("--local")
+if ($Self) {
+    $ArgsForBootstrap += @("--self", "--name", $Name)
+} else {
+    $ArgsForBootstrap += @("--client", $Client)
+}
+
 $env:OWG_INSTALLED_ROOT = $InstallRoot
 $env:OWG_INSTALLED_PYTHON = $Python
-& $Python (Join-Path $Root "owg_connect.py") bootstrap --local @BootstrapArgs
+& $Python (Join-Path $Root "owg_connect.py") bootstrap @ArgsForBootstrap
 exit $LASTEXITCODE
