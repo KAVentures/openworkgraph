@@ -27,13 +27,17 @@ def test_public_documentation_is_organized_without_changing_export_sources():
     assert "Treat raw observations as evidence" in exporter.AI_STARTER_PROMPT_MD
 
 
-def test_windows_tester_package_preserves_public_ai_filenames_after_source_move():
-    script = (ROOT / "scripts" / "build_windows_release.ps1").read_text(encoding="utf-8")
+def test_tester_packages_preserve_public_ai_filenames_after_source_move():
+    windows = (ROOT / "scripts" / "build_windows_release.ps1").read_text(encoding="utf-8")
+    macos = (ROOT / "scripts" / "build_macos_release.sh").read_text(encoding="utf-8")
 
-    assert 'docs\\ai\\guide.md' in script
-    assert 'docs\\ai\\starter-prompt.md' in script
-    assert '(Join-Path $Package "AI_GUIDE.md")' in script
-    assert '(Join-Path $Package "PROMPT.md")' in script
+    assert 'docs\\ai\\guide.md' in windows
+    assert 'docs\\ai\\starter-prompt.md' in windows
+    assert '(Join-Path $Package "AI_GUIDE.md")' in windows
+    assert '(Join-Path $Package "PROMPT.md")' in windows
+
+    assert 'docs/ai/guide.md" "$PKG/AI_GUIDE.md' in macos
+    assert 'docs/ai/starter-prompt.md" "$PKG/PROMPT.md' in macos
 
 
 def test_root_public_contract_is_small_and_navigable():
