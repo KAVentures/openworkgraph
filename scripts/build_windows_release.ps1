@@ -53,8 +53,8 @@ exit /b %ERRORLEVEL%
 '@ | Set-Content -Path (Join-Path $Package "TRY_DEMO_OPENWORKGRAPH.cmd") -Encoding ascii
 
 Copy-Item (Join-Path $Root "ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
-Copy-Item (Join-Path $Root "AI_GUIDE.md") (Join-Path $Package "AI_GUIDE.md")
-Copy-Item (Join-Path $Root "PROMPT.md") (Join-Path $Package "PROMPT.md")
+Copy-Item (Join-Path $Root "docs\ai\guide.md") (Join-Path $Package "AI_GUIDE.md")
+Copy-Item (Join-Path $Root "docs\ai\starter-prompt.md") (Join-Path $Package "PROMPT.md")
 Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Package "LICENSE")
 
 @"
