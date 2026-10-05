@@ -293,7 +293,7 @@ local SQLite
 
 No separate MCP network port is kept open for normal local use.
 
-AI access starts OFF on every OpenWorkGraph launch. By default AI apps get **Redacted** context: titles and labels keep their meaning, but people, emails, phone numbers, personnummer and long IDs become stable tokens (`Re: Contract for PERSON_1A2B3C - Gmail`). You can switch to **Full** under Connect → Connections → *AI context detail*; an organization can lock it to Redacted. Every MCP response states its `detail_level`. See [Privacy and data](docs/PRIVACY_AND_DATA.md#three-layers-raw-redacted-safe-allowlist).
+AI access starts OFF on a new installation. After the person changes it, that choice is remembered across restarts unless they explicitly enable the Privacy setting that resets AI access on restart. By default AI apps get **Redacted** context: titles and labels keep their meaning, but people, emails, phone numbers, personnummer and long IDs become stable tokens (`Re: Contract for PERSON_1A2B3C - Gmail`). You can switch to **Full** under Connect → Connections → *AI context detail*; an organization can lock it to Redacted. Every MCP response states its `detail_level`. See [Privacy and data](docs/PRIVACY_AND_DATA.md#three-layers-raw-redacted-safe-allowlist).
 
 The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
