@@ -74,6 +74,23 @@ def test_source_override_is_explicit_and_configures_mcp_only(home, monkeypatch):
     assert result["ai_access"]["changed"] is False
 
 
+def test_fresh_checkout_setup_needs_no_site_packages(home, tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "OWG_CONNECTIONS_HOME": str(home),
+        "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+        "LOCALAPPDATA": str(tmp_path / "localappdata"),
+    })
+    run = subprocess.run(
+        [sys.executable, "-S", str(ROOT / "owg_connect.py"), "setup", "--client", "cursor"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    payload = json.loads(run.stdout)
+    assert payload["status"] == "needs_install"
+    assert payload["writes_performed"] is False
+
+
 def test_setup_cli_accepts_flagged_client_and_refuses_observe(home, tmp_path):
     env = os.environ.copy()
     env.update({
