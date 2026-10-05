@@ -468,7 +468,7 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
 
     assert "owg_connect.py bootstrap --local --client <client_id>" in agents
     assert "/bin/bash owg_bootstrap.sh --client <client_id>" in agents
-    assert "owg_bootstrap.ps1 --client <client_id>" in agents
+    assert "owg_bootstrap.ps1 -Client <client_id>" in agents
     assert "owg_connect.py bootstrap --self --local --name <your-agent-name>" in agents
     assert "owg_connect.py bootstrap --self --remote --name <your-agent-name>" in agents
     assert "perform every safe machine step yourself" in agents
@@ -492,7 +492,10 @@ def test_native_bootstrap_wrappers_are_present_and_parseable():
     assert "install.sh" in mac_text
     assert 'bootstrap --local "$@"' in mac_text
     assert "install.ps1" in win_text
-    assert "bootstrap --local @BootstrapArgs" in win_text
+    assert 'ArgsForBootstrap = @("--local")' in win_text
+    assert "bootstrap @ArgsForBootstrap" in win_text
+    assert "[string]$Client" in win_text
+    assert "[switch]$Self" in win_text
 
     if os.name != "nt":
         checked = subprocess.run(
