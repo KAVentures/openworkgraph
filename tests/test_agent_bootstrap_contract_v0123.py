@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from server import connections
+from server import agent_bootstrap, connections
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +24,162 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("OWG_INSTALLED_PYTHON", raising=False)
     connections._CACHE.update(mtime=None, data={})
     return home
+
+
+def _stub_bootstrap_runtime(tmp_path, monkeypatch):
+    root = tmp_path / "installed"
+    root.mkdir()
+    python = root / ("python.exe" if os.name == "nt" else "python")
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(agent_bootstrap.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_install_if_needed",
+        lambda: {"ok": True, "performed": False, "runtime": (root, python)},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_start_if_needed",
+        lambda *_: {"ok": True, "performed": False, "health": {"ok": True, "payload": {"status": "ok"}}},
+    )
+    return root, python
+
+
+def test_autonomous_known_client_reaches_ready_without_manual_machine_steps(home, tmp_path, monkeypatch):
+    root, python = _stub_bootstrap_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_connect_known",
+        lambda *_: {"ok": True, "result": {"mcp": {"installed": True, "enabled": True, "on": True}}},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_permission_state",
+        lambda *_: {"ok": True, "permissions": {"accessibility": True, "input_monitoring": True}, "missing": []},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_access_and_context_probe",
+        lambda *_: {"enabled": True, "resets_on_restart": False, "probe": {"ok": True, "returned": 0, "detail_level": "redacted"}},
+    )
+
+    result = agent_bootstrap.run(local=True, client_id="codex")
+
+    assert result["status"] == "ready"
+    assert result["installed_root"] == str(root)
+    assert result["install_performed"] is False
+    assert result["health"]["ok"] is True
+    assert result["connection"]["ok"] is True
+    assert result["context_probe"]["ok"] is True
+    assert result["agent_actions"] == []
+    assert result["user_actions"] == []
+
+
+def test_autonomous_bootstrap_stops_only_for_real_human_consent(home, tmp_path, monkeypatch):
+    _stub_bootstrap_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_connect_known",
+        lambda *_: {"ok": True, "result": {"mcp": {"installed": True, "enabled": True, "on": True}}},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_permission_state",
+        lambda *_: {"ok": True, "permissions": {"accessibility": False, "input_monitoring": False}, "missing": ["accessibility", "input_monitoring"]},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_access_and_context_probe",
+        lambda *_: {"enabled": False, "resets_on_restart": False, "probe": {"ok": False, "reason": "ai_access_off"}},
+    )
+
+    result = agent_bootstrap.run(local=True, client_id="codex")
+
+    assert result["status"] == "needs_user_action"
+    kinds = {item["kind"] for item in result["user_actions"]}
+    assert kinds == {"macos_privacy_permissions", "ai_access"}
+    assert result["agent_actions"] == []
+
+
+def test_remote_autonomous_bootstrap_never_calls_local_installer(home, monkeypatch):
+    def fail_install():
+        raise AssertionError("remote bootstrap must never install locally")
+
+    monkeypatch.setattr(agent_bootstrap, "_install_if_needed", fail_install)
+
+    result = agent_bootstrap.run(remote=True, self_route=True, name="grok")
+
+    assert result["status"] == "needs_gateway"
+    assert result["do_not_install_here"] is True
+    assert result["writes_performed"] is False
+
+
+def test_unknown_local_agent_gets_agent_action_not_user_config_work(home, tmp_path, monkeypatch):
+    root, python = _stub_bootstrap_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        connections,
+        "_generic_local_descriptor",
+        lambda name, installed_root, runtime_python: {
+            "connection": {
+                "name": "openworkgraph",
+                "transport": "stdio",
+                "command": str(runtime_python),
+                "args": [str(installed_root / "mcp_server" / "launcher.py"), "--client", "external_grok"],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_permission_state",
+        lambda *_: {"ok": True, "permissions": {}, "missing": []},
+    )
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_access_and_context_probe",
+        lambda *_: {"enabled": True, "resets_on_restart": False, "probe": {"ok": True, "returned": 0}},
+    )
+
+    result = agent_bootstrap.run(local=True, self_route=True, name="grok")
+
+    assert result["status"] == "needs_agent_action"
+    assert result["user_actions"] == []
+    assert result["agent_actions"][0]["kind"] == "register_mcp_descriptor"
+    assert result["agent_actions"][0]["descriptor"]["transport"] == "stdio"
+    assert result["agent_actions"][0]["instruction"].startswith("Register")
+    assert result["installed_root"] == str(root)
+
+
+def test_install_helper_launches_official_installer_automatically(tmp_path, monkeypatch):
+    root = tmp_path / "installed"
+    python = root / "python"
+    root.mkdir()
+    python.write_text("", encoding="utf-8")
+    calls = iter([None, (root, python)])
+
+    monkeypatch.setattr(connections, "_find_installed_runtime", lambda: next(calls))
+    monkeypatch.setattr(
+        connections,
+        "_install_instruction",
+        lambda: {"platform": "macos", "command": ["/bin/echo", "official-installer"], "human_action": ""},
+    )
+
+    class FakeProcess:
+        pid = 1234
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        agent_bootstrap,
+        "_launch_background",
+        lambda command, cwd=None: {"pid": 1234, "log": "/tmp/owg.log", "_process": FakeProcess()},
+    )
+
+    result = agent_bootstrap._install_if_needed()
+
+    assert result["ok"] is True
+    assert result["performed"] is True
+    assert result["runtime"] == (root, python)
+    assert result["installer_pid"] == 1234
 
 
 def test_self_diagnostic_is_read_only_and_refuses_to_guess_environment(home, monkeypatch):
@@ -191,6 +347,32 @@ def test_fresh_checkout_remote_self_route_needs_no_site_packages(home, tmp_path)
     assert payload["writes_performed"] is False
 
 
+def test_fresh_checkout_autonomous_remote_bootstrap_needs_no_site_packages(home, tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "OWG_CONNECTIONS_HOME": str(home),
+        "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+    })
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(ROOT / "owg_connect.py"),
+            "bootstrap",
+            "--self",
+            "--remote",
+            "--name",
+            "grok",
+        ],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    payload = json.loads(run.stdout)
+    assert payload["status"] == "needs_gateway"
+    assert payload["do_not_install_here"] is True
+    assert payload["writes_performed"] is False
+
+
 def test_setup_cli_accepts_flagged_client_and_refuses_observe(home, tmp_path):
     env = os.environ.copy()
     env.update({
@@ -222,15 +404,15 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     gemini = (ROOT / "GEMINI.md").read_text(encoding="utf-8")
 
-    assert "owg_connect.py setup --client <client_id>" in agents
-    assert "owg_connect.py setup --self --local --name <your-agent-name>" in agents
-    assert "owg_connect.py setup --self --remote --name <your-agent-name>" in agents
+    assert "owg_connect.py bootstrap --local --client <client_id>" in agents
+    assert "owg_connect.py bootstrap --self --local --name <your-agent-name>" in agents
+    assert "owg_connect.py bootstrap --self --remote --name <your-agent-name>" in agents
+    assert "perform every safe machine step yourself" in agents
+    assert "Do not ask the person to clone, download, run terminal commands" in agents
     assert "would observe the wrong machine" in agents
-    assert "must **not** ask the user to choose a fake local client id" in agents
-    assert "customer-controlled-openworkgraph-gateway>/mcp" in agents
-    assert "do **not** launch mcp_server.compact_stdio directly" in agents
+    assert "must **not** ask the person to choose a fake local client id" in agents
+    assert "https://owg.your-company.example/mcp" in agents
     assert "Never silently enable Observe" in agents
-    assert "Setup never enables" in agents
     assert "get_current_work_context" in agents
     assert "Do **not** call OpenWorkGraph for ordinary coding" in agents
     assert "AGENTS.md" in claude and "AGENTS.md" in gemini
