@@ -38,7 +38,7 @@ if [ -z "$PYTHON" ]; then
   INSTALL_PID=$!
   LAUNCHED=1
 
-  for _ in $(seq 1 240); do
+  for ((i=0; i<240; i++)); do
     PYTHON="$(find_python || true)"
     [ -n "$PYTHON" ] && break
     if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
@@ -57,7 +57,7 @@ if [ -z "$PYTHON" ]; then
 fi
 
 if [ "$LAUNCHED" = "1" ]; then
-  for _ in $(seq 1 240); do
+  for ((i=0; i<240; i++)); do
     health_ok && break
     if ! kill -0 "$INSTALL_PID" 2>/dev/null; then
       echo "OpenWorkGraph installer exited before the local service became healthy." >&2
