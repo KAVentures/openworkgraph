@@ -18,7 +18,8 @@ configuration entirely.
 The same functions back the dashboard (``/v1/connections``) and the CLI::
 
     <python> <root>/owg_connect.py list
-    <python> <root>/owg_connect.py setup --client claude_code # safe MCP-only bootstrap for agents
+    <python> <root>/owg_connect.py setup --self              # safe environment routing for any agent
+    <python> <root>/owg_connect.py setup --client claude_code # native setup for a known local client
     <python> <root>/owg_connect.py on claude_code            # mcp + observe
     <python> <root>/owg_connect.py off cursor --mcp
     <python> <root>/owg_connect.py remove codex --observe
@@ -29,6 +30,7 @@ The CLI prints JSON so agents can drive it as easily as people.
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass
@@ -194,6 +196,129 @@ def _setup_access_status() -> dict[str, Any]:
         "required": True,
         "instruction": "OpenWorkGraph AI access remains a human-controlled setting. If access is off, ask the person to enable it in the local dashboard.",
     }
+
+
+def _external_client_id(name: str) -> str:
+    clean = re.sub(r"[^a-z0-9]+", "_", str(name or "").strip().lower()).strip("_")
+    clean = clean[:48] or "agent"
+    return f"external_{clean}"
+
+
+def _remote_gateway_result(name: str = "") -> dict[str, Any]:
+    """Describe the only supported remote path without pretending this checkout is the user's machine."""
+    return {
+        "status": "needs_gateway",
+        "environment": "remote",
+        "agent_name": str(name or "").strip(),
+        "writes_performed": False,
+        "do_not_install_here": True,
+        "reason": (
+            "This agent runs outside the user's OpenWorkGraph computer. Installing the desktop companion "
+            "in this environment would observe the wrong machine."
+        ),
+        "remote_mcp": {
+            "transport": "streamable_http",
+            "endpoint": "https://<customer-controlled-openworkgraph-gateway>/mcp",
+            "authentication": "delegated OIDC",
+            "prerequisites": [
+                "the user's computer is enrolled in a customer-controlled OpenWorkGraph Gateway",
+                "the Gateway has per-person remote MCP and delegated OIDC configured",
+                "the user's permitted evidence has synchronized to that Gateway",
+            ],
+        },
+        "repo_alone_is_enough": False,
+        "instruction": (
+            "Do not ask for a local client id and do not install OpenWorkGraph in this sandbox. "
+            "If the user has a configured organization Gateway, ask for or use its public HTTPS /mcp "
+            "resource through this AI's normal remote-MCP connection flow. Otherwise remote access is "
+            "not available from the GitHub repository alone."
+        ),
+    }
+
+
+def _generic_local_descriptor(name: str, installed_root: Path, python: Path) -> dict[str, Any]:
+    client_id = _external_client_id(name)
+    return {
+        "status": "descriptor",
+        "environment": "local",
+        "integration": "generic_local_mcp",
+        "client_name": str(name or "").strip() or "Unknown local MCP client",
+        "client_id": client_id,
+        "writes_performed": False,
+        "installed_root": str(installed_root),
+        "connection": {
+            "name": SERVER_NAME,
+            "transport": "stdio",
+            "command": str(python),
+            "args": [str(installed_root / "mcp_server" / "launcher.py"), "--client", client_id],
+        },
+        "observe_changed": False,
+        "ai_access": _setup_access_status(),
+        "instruction": (
+            "Register this stdio MCP descriptor using your own native MCP registration mechanism. "
+            "OpenWorkGraph does not know this client's config format and therefore will not guess or "
+            "edit another product's files. Do not enable Observe unless the person separately asks."
+        ),
+    }
+
+
+def setup_self(*, local: bool = False, remote: bool = False, name: str = "") -> dict[str, Any]:
+    """Route an arbitrary agent without guessing whether its shell is the user's computer."""
+    if local and remote:
+        raise ValueError("--local and --remote are mutually exclusive")
+    if remote:
+        return _remote_gateway_result(name)
+    if not local:
+        installed = _find_installed_runtime()
+        detected = [cid for cid, client in CLIENTS.items() if client.detect().exists()]
+        return {
+            "status": "environment_required",
+            "writes_performed": False,
+            "installed_runtime_found": installed is not None,
+            "detected_known_clients": detected,
+            "instruction": (
+                "Decide whether this shell is running on the user's actual OpenWorkGraph computer. "
+                "If yes, rerun setup --self --local --name <your-agent-name> (or use --client <id> "
+                "for a supported client). If this is a cloud/remote/sandbox environment, rerun "
+                "setup --self --remote --name <your-agent-name>. Do not infer local merely from OS."
+            ),
+        }
+
+    installed = _find_installed_runtime()
+    if installed is None:
+        install = _install_instruction()
+        if not install["command"]:
+            return {
+                "status": "unsupported_local_platform",
+                "environment": "local",
+                "writes_performed": False,
+                "platform": install["platform"],
+                "reason": "The OpenWorkGraph desktop companion currently has official installers only for macOS and Windows.",
+                "instruction": (
+                    "Do not install the companion into a different remote machine. If this is truly the user's "
+                    "Linux workstation, local desktop capture is not supported yet."
+                ),
+            }
+        return {
+            "status": "needs_install",
+            "environment": "local",
+            "writes_performed": False,
+            "install": install,
+            "then": "Rerun setup --self --local --name <your-agent-name> after installation.",
+            "ai_access": {"changed": False},
+        }
+
+    installed_root, python = installed
+    if python is None:
+        return {
+            "status": "needs_runtime",
+            "environment": "local",
+            "writes_performed": False,
+            "installed_root": str(installed_root),
+            "instruction": "Open OpenWorkGraph once so its private runtime is available, then rerun setup.",
+            "ai_access": {"changed": False},
+        }
+    return _generic_local_descriptor(name, installed_root, python)
 
 
 def setup_connection(client_id: str, *, allow_source: bool = False) -> dict[str, Any]:
@@ -826,7 +951,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=["list", "setup", "on", "off", "remove"])
     parser.add_argument("client_pos", nargs="?", choices=sorted(CLIENTS))
     parser.add_argument("--client", dest="client_opt", choices=sorted(CLIENTS),
-                        help="client id; primarily for agent-driven setup")
+                        help="known local client id")
+    parser.add_argument("--self", dest="self_route", action="store_true",
+                        help="route an arbitrary agent without guessing another product's config")
+    environment = parser.add_mutually_exclusive_group()
+    environment.add_argument("--local", action="store_true",
+                             help="this shell is the user's actual OpenWorkGraph computer")
+    environment.add_argument("--remote", action="store_true",
+                             help="this shell is a cloud/remote/sandbox agent environment")
+    parser.add_argument("--name", default="", help="agent/product name for generic self-routing and audit identity")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--mcp", action="store_true", help="only the MCP context connection")
     group.add_argument("--observe", action="store_true", help="only agent observation")
@@ -835,16 +968,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.action == "list":
-        if args.client_pos or args.client_opt or args.allow_source:
-            parser.error("list does not take a client or --allow-source")
+        if any((args.client_pos, args.client_opt, args.self_route, args.local, args.remote, args.name, args.allow_source)):
+            parser.error("list does not take setup-routing arguments")
         print(json.dumps(list_connections(), indent=2))
         return 0
 
     if args.client_pos and args.client_opt and args.client_pos != args.client_opt:
         parser.error("client was supplied twice with different values")
     client_id = args.client_opt or args.client_pos
-    if not client_id:
-        parser.error("a client is required for setup/on/off/remove")
 
     if args.action == "setup":
         if args.observe:
@@ -853,6 +984,22 @@ def main(argv: list[str] | None = None) -> int:
                 "observe_changed": False,
             }, indent=2))
             return 2
+        if args.self_route:
+            if client_id:
+                parser.error("use either --self or --client, not both")
+            if args.allow_source:
+                parser.error("--allow-source is only for setup --client")
+            try:
+                result = setup_self(local=args.local, remote=args.remote, name=args.name)
+            except ValueError as exc:
+                print(json.dumps({"error": str(exc)}, indent=2))
+                return 2
+            print(json.dumps(result, indent=2))
+            return 0
+        if args.local or args.remote or args.name:
+            parser.error("--local/--remote/--name require setup --self")
+        if not client_id:
+            parser.error("setup requires --self or a client id")
         try:
             result = setup_connection(client_id, allow_source=args.allow_source)
         except writer.ConfigConflict as exc:
@@ -861,6 +1008,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return 0
 
+    if not client_id:
+        parser.error("a client is required for on/off/remove")
+    if any((args.self_route, args.local, args.remote, args.name)):
+        parser.error("--self/--local/--remote/--name are valid only with setup")
     if args.allow_source:
         parser.error("--allow-source is valid only with setup")
     kinds = ("mcp",) if args.mcp else ("observe",) if args.observe else KINDS
