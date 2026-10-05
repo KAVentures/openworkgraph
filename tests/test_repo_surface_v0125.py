@@ -40,6 +40,14 @@ def test_tester_packages_preserve_public_ai_filenames_after_source_move():
     assert 'docs/ai/starter-prompt.md" "$PKG/PROMPT.md' in macos
 
 
+
+def test_runtime_guidance_reads_moved_capability_brief():
+    from mcp_server import automation_guidance
+
+    assert automation_guidance.CAPABILITY_BRIEF_PATH == ROOT / "docs" / "ai" / "automation-capabilities.md"
+    assert "historical replayability" in automation_guidance.AUTOMATION_CAPABILITIES_MD
+
+
 def test_root_public_contract_is_small_and_navigable():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     docs_index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
