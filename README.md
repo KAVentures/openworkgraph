@@ -20,7 +20,7 @@ Tell a capable agent:
 
 > Set up https://github.com/KAVentures/openworkgraph and follow AGENTS.md.
 
-For an AI that actually has shell/filesystem access on your **Mac or Windows PC**, the intended experience is autonomous: the agent clones the repo, runs the one bootstrap command, lets OWG download/install/start itself, registers MCP, health-checks the local runtime, and verifies an OWG context read. You should not need to download files, run terminal commands, edit JSON/TOML, or choose an installer yourself.
+For an AI that actually has shell/filesystem access on your **Mac or Windows PC**, the intended experience is autonomous: the agent clones the repo, runs the OS-native bootstrap wrapper (`owg_bootstrap.sh` on macOS or `owg_bootstrap.ps1` on Windows), lets OWG download/provision its own private runtime, installs/starts itself, registers MCP, health-checks the local service, and verifies an OWG context read. No preinstalled system Python is required. You should not need to download files, run terminal commands, edit JSON/TOML, or choose an installer yourself.
 
 The bootstrap stops only at real consent boundaries it cannot safely cross for you, such as macOS Accessibility/Input Monitoring, the global OpenWorkGraph AI-access switch, or an AI-app restart that cannot be performed from inside the current session. It never silently enables agent observation or switches AI context to Full.
 
