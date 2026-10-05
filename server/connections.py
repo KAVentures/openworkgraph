@@ -218,7 +218,7 @@ def _remote_gateway_result(name: str = "") -> dict[str, Any]:
         ),
         "remote_mcp": {
             "transport": "streamable_http",
-            "endpoint": "https://<customer-controlled-openworkgraph-gateway>/mcp",
+            "endpoint": "https://owg.your-company.example/mcp",
             "authentication": "delegated OIDC",
             "prerequisites": [
                 "the user's computer is enrolled in a customer-controlled OpenWorkGraph Gateway",
@@ -948,7 +948,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="owg_connect.py",
         description="Connect AI clients to OpenWorkGraph and switch them on/off. Prints JSON.",
     )
-    parser.add_argument("action", choices=["list", "setup", "on", "off", "remove"])
+    parser.add_argument("action", choices=["list", "setup", "bootstrap", "on", "off", "remove"])
     parser.add_argument("client_pos", nargs="?", choices=sorted(CLIENTS))
     parser.add_argument("--client", dest="client_opt", choices=sorted(CLIENTS),
                         help="known local client id")
@@ -976,6 +976,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.client_pos and args.client_opt and args.client_pos != args.client_opt:
         parser.error("client was supplied twice with different values")
     client_id = args.client_opt or args.client_pos
+
+    if args.action == "bootstrap":
+        if args.observe or args.mcp:
+            parser.error("bootstrap configures MCP context automatically; do not pass --mcp or --observe")
+        if args.allow_source:
+            parser.error("--allow-source is development-only for setup --client, not autonomous bootstrap")
+        if args.self_route and client_id:
+            parser.error("use either --self or --client, not both")
+        if args.self_route and not args.name and not args.remote:
+            parser.error("bootstrap --self requires --name for a local/diagnostic external agent")
+        if not args.self_route and not client_id and args.local:
+            parser.error("local bootstrap requires --client <id> or --self --name <agent>")
+        from .agent_bootstrap import run as run_agent_bootstrap
+        result = run_agent_bootstrap(
+            local=args.local,
+            remote=args.remote,
+            client_id=client_id or "",
+            self_route=bool(args.self_route),
+            name=args.name,
+        )
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("status") not in {"error", "install_failed", "install_not_detected", "connection_failed", "start_failed"} else 2
 
     if args.action == "setup":
         if args.observe:
@@ -1011,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
     if not client_id:
         parser.error("a client is required for on/off/remove")
     if any((args.self_route, args.local, args.remote, args.name)):
-        parser.error("--self/--local/--remote/--name are valid only with setup")
+        parser.error("--self/--local/--remote/--name are valid only with setup/bootstrap")
     if args.allow_source:
         parser.error("--allow-source is valid only with setup")
     kinds = ("mcp",) if args.mcp else ("observe",) if args.observe else KINDS

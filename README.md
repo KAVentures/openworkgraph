@@ -18,13 +18,15 @@ The local product requires **no account and no cloud storage**. Organizations ca
 
 Tell a capable agent:
 
-> Clone https://github.com/KAVentures/openworkgraph and follow AGENTS.md.
+> Set up https://github.com/KAVentures/openworkgraph and follow AGENTS.md.
 
-The repository is the bootstrap contract, not the work history. A supported **local** agent can install OpenWorkGraph if needed and connect its own MCP context without hand-editing JSON/TOML. An unknown local MCP-capable agent can request a generic stdio descriptor instead of pretending to be Codex, Claude or Cursor.
+For an AI that actually has shell/filesystem access on your **Mac or Windows PC**, the intended experience is autonomous: the agent clones the repo, runs the OS-native bootstrap wrapper (`owg_bootstrap.sh` on macOS or `owg_bootstrap.ps1` on Windows), lets OWG download/provision its own private runtime, installs/starts itself, registers MCP, health-checks the local service, and verifies an OWG context read. No preinstalled system Python is required. You should not need to download files, run terminal commands, edit JSON/TOML, or choose an installer yourself.
 
-A **remote/cloud** agent must not install the desktop observer in its provider sandbox: that would observe the wrong machine. It is routed to the customer-controlled Gateway's per-person HTTPS `/mcp` endpoint when the organization has configured Gateway sync and delegated OIDC. The public GitHub repository is not a public relay into a local-only OWG store.
+The bootstrap stops only at real consent boundaries it cannot safely cross for you, such as macOS Accessibility/Input Monitoring, the global OpenWorkGraph AI-access switch, or an AI-app restart that cannot be performed from inside the current session. It never silently enables agent observation or switches AI context to Full.
 
-Setup never grants itself AI access and never turns on agent observation. Those remain explicit user-controlled choices.
+An unknown local MCP-capable agent receives a generic stdio descriptor and is instructed to register it through its own native MCP mechanism rather than impersonating a known client.
+
+A **remote/cloud** agent must not install the desktop observer in its provider sandbox: that would observe the wrong machine. It is routed to the customer-controlled Gateway's per-person HTTPS /mcp endpoint when the organization has configured Gateway sync and delegated OIDC. The public GitHub repository is not a public relay into a local-only OWG store.
 
 ## Why OpenWorkGraph
 

@@ -181,7 +181,7 @@ def main() -> None:
             print("It demonstrates ordinary human capture, timing, browser object correlation and copy/paste linkage without an AI agent.")
             print("A separate synthetic coding-agent handoff later in the timeline demonstrates optional agent telemetry.")
             print("Demo data is isolated from your real observations and is never Gateway-synchronized.")
-            print("AI access starts OFF. Enable it in the dashboard only if you want an MCP client to read this run.")
+            print("AI access follows your saved local setting. A new install starts OFF; Privacy can optionally reset it on restart.")
             print("Close this window or press Ctrl+C when finished.\n")
             while True:
                 time.sleep(1)
@@ -192,7 +192,7 @@ def main() -> None:
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
             print("The durable local outbox retries capture events if the local API is temporarily unavailable.")
-            print("AI access starts OFF on every launch and can be enabled from the dashboard.")
+            print("AI access starts OFF on a new install; your choice is remembered unless Privacy is set to reset it on restart.")
             print("Organization Gateway sharing is OFF unless explicitly enrolled; connect/pause/resume/disconnect from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")

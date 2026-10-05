@@ -70,6 +70,27 @@ def test_title_case_organizations_and_products_survive(monkeypatch, tmp_path):
         assert safe["window_title"] == title
 
 
+def test_internal_opaque_refs_are_never_reinterpreted_as_personnummer(monkeypatch, tmp_path):
+    presentation = _presentation(monkeypatch, tmp_path)
+    # This exact workspace ref triggered a Windows CI failure because its random
+    # hex body contains a digit run that the generic identifier detector could
+    # otherwise mistake for a Swedish personnummer.
+    workspace = "w:25a264106692140d"
+    file_ref = "f:25a264106692140d"
+    safe = presentation.redact_for_display({
+        "workspace_ref": workspace,
+        "workspace_refs": [workspace],
+        "file_ref": file_ref,
+        "file_refs": [file_ref],
+    })
+
+    assert safe["workspace_ref"] == workspace
+    assert safe["workspace_refs"] == [workspace]
+    assert safe["file_ref"] == file_ref
+    assert safe["file_refs"] == [file_ref]
+    assert "PERSONNUMMER_" not in json.dumps(safe)
+
+
 def test_structured_url_is_sanitized_before_name_redaction(monkeypatch, tmp_path):
     presentation = _presentation(monkeypatch, tmp_path)
     safe = presentation.redact_for_display({

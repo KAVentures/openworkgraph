@@ -26,7 +26,8 @@ HOST_FIELDS = {"hostname", "host"}
 PROTECTED_FIELDS = {
     "event_id", "session_id", "device_id", "sensor_id", "organization_id",
     "actor_id", "schema_version", "browser_session_id", "work_session_id",
-    "observed_at", "generated_at", "run_started_at", "resource_ref", "file_ref",
+    "observed_at", "generated_at", "run_started_at", "resource_ref", "file_ref", "file_refs",
+    "workspace_ref", "workspace_refs",
 }
 PATIENT_NAME_FIELDS = {
     "patient", "patient_name", "patientname", "patientnamn", "patient_display_name",
