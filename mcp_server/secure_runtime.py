@@ -142,7 +142,11 @@ def authorize_tool(tool_name: str) -> None:
     try:
         state = secure_get("/v1/ai-access", {"client": client} if client else None)
     except Exception as exc:
-        raise ToolError("OpenWorkGraph could not verify AI access. Keep OpenWorkGraph running and reopen its local dashboard.") from exc
+        raise ToolError(
+            "OpenWorkGraph could not reach or authenticate its local AI-access check. "
+            "This is different from AI access being switched OFF. Make sure the local "
+            "OpenWorkGraph service is running and healthy, then retry."
+        ) from exc
     if state.get("enabled"):
         return
     try:
