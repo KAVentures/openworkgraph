@@ -11,8 +11,8 @@ import re
 from typing import Any
 
 from .db import rows, normalized_rows, table_revision
-from normalizer import normalize_event
-from browser_utils import is_browser_app
+from shared.core.normalizer import normalize_event
+from shared.core.browser_utils import is_browser_app
 
 
 def _workflow_label(e: dict[str, Any]) -> str:
