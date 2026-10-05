@@ -118,13 +118,16 @@ def _launch_background(command: list[str], *, cwd: Path | None = None) -> dict[s
 
 def _install_if_needed() -> dict[str, Any]:
     installed = connections._find_installed_runtime()
-    if installed is not None:
+    if installed is not None and installed[1] is not None:
         return {
             "ok": True,
             "performed": False,
             "runtime": installed,
         }
 
+    # A source root without its private Python is an incomplete/provisioning
+    # install. Re-enter the official idempotent installer instead of asking the
+    # person to repair it manually.
     instruction = connections._install_instruction()
     command = list(instruction.get("command") or [])
     if not command:
@@ -347,7 +350,7 @@ def run(
         return installed
     root, python = installed["runtime"]
     if python is None:
-        runtime = _wait_for_runtime(30)
+        runtime = _wait_for_runtime(180)
         if runtime is not None:
             root, python = runtime
     if python is None:
