@@ -1,26 +1,50 @@
 # OpenWorkGraph agent bootstrap
 
-This repository is the **installation and integration contract** for OpenWorkGraph. It is not the user's work history. Work evidence stays in the user's local OpenWorkGraph store unless the user explicitly exports or syncs it.
+This repository is the **installation and integration contract** for OpenWorkGraph. It is not the user's work history. Work evidence stays in the user's local OpenWorkGraph store unless the user explicitly exports or synchronizes it.
 
-## Set up this local agent
+## First: identify where you are running
 
-1. Do **not** hand-edit MCP JSON/TOML and do **not** launch mcp_server.compact_stdio directly.
-2. Identify this client id. Supported ids include claude_code, codex, cursor, vscode, gemini_cli, copilot_cli, windsurf, kiro, amazon_q, and claude_desktop. python owg_connect.py list is read-only and can help.
-3. Run:
+Do not guess another AI product's client id.
 
-       python owg_connect.py setup --client <client_id>
+- If your shell/process is running on the **user's actual Mac or Windows computer**, you are local.
+- If you are running in a **cloud VM, hosted coding sandbox, remote container, browser service, or provider infrastructure**, you are remote. Do **not** install the OpenWorkGraph desktop companion there; it would observe the wrong machine.
+- If you cannot tell, run the read-only diagnostic:
 
-   Any Python capable of reading this checkout is sufficient for the first call; the command will refuse to persist an MCP path into an arbitrary clone.
-4. Interpret the JSON result:
-   - configured: MCP context is configured.
-   - delegate: execute the returned command array **exactly**. It points at the durable installed OpenWorkGraph runtime.
-   - needs_install: execute the returned official release installer command, let the person handle OS permission prompts, then rerun setup.
-   - needs_runtime: ask the person to open OpenWorkGraph once, then rerun setup.
-5. If the result says the AI client must restart/reload before a new MCP configuration takes effect, tell the person that clearly.
-6. Setup configures **MCP context only**. Never silently enable Observe. If the person wants OpenWorkGraph to record this agent's structural execution, that is a separate explicit choice.
-7. Setup never enables the person's OpenWorkGraph AI-access switch or changes AI-detail/history permissions. If a tool says access is off, ask the person to approve it in the local OpenWorkGraph dashboard. Do not bypass the gate.
+      python owg_connect.py setup --self --name <your-agent-name>
 
---allow-source is a development-only escape hatch for intentionally binding MCP to the current checkout. Do not use it for normal users.
+  It writes nothing. Then explicitly rerun with --local or --remote once you know.
+
+## Local agent
+
+If you are one of the supported clients (claude_code, codex, cursor, vscode, gemini_cli, copilot_cli, windsurf, kiro, amazon_q, claude_desktop), run:
+
+    python owg_connect.py setup --client <client_id>
+
+Do **not** hand-edit MCP JSON/TOML and do **not** launch mcp_server.compact_stdio directly. Follow the returned JSON exactly. \`delegate\` points at the durable installed OpenWorkGraph runtime; \`needs_install\` gives the official installer; \`needs_runtime\` means the person must open OpenWorkGraph once.
+
+If you are a **different local MCP-capable agent**, run:
+
+    python owg_connect.py setup --self --local --name <your-agent-name>
+
+When it returns \`descriptor\`, register the returned stdio MCP descriptor using your own native MCP-registration mechanism. OpenWorkGraph deliberately does not guess your config format or edit another product's files.
+
+Setup configures **MCP context only**. Never silently enable Observe. Setup never enables the person's OpenWorkGraph AI-access switch or changes AI-detail/history permissions. If access is off, ask the person to approve it in the local OpenWorkGraph dashboard. Do not bypass the gate.
+
+\`--allow-source\` is a development-only escape hatch for a known client intentionally bound to the current checkout. Do not use it for normal users.
+
+## Remote / cloud agent
+
+Run:
+
+    python owg_connect.py setup --self --remote --name <your-agent-name>
+
+A remote agent must **not** install the desktop observer in its own sandbox and must **not** ask the user to choose a fake local client id.
+
+The supported remote path is the customer's OpenWorkGraph Gateway per-person MCP endpoint:
+
+    https://<customer-controlled-openworkgraph-gateway>/mcp
+
+It uses delegated OIDC and only exposes evidence the signed-in person is allowed to read. The GitHub repo by itself is not a public relay from a user's local-only OWG store. If the user has no configured Gateway, say that remote access is not available yet rather than pretending localhost is reachable.
 
 ## When to use OpenWorkGraph
 
