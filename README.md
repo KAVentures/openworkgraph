@@ -22,7 +22,7 @@ Tell a capable agent:
 
 For an AI that actually has shell/filesystem access on your **Mac or Windows PC**, the intended experience is autonomous: the agent clones the repo, runs the OS-native bootstrap wrapper (`owg_bootstrap.sh` on macOS or `owg_bootstrap.ps1` on Windows), lets OWG download/provision its own private runtime, installs/starts itself, registers MCP, health-checks the local service, and verifies an OWG context read. No preinstalled system Python is required. You should not need to download files, run terminal commands, edit JSON/TOML, or choose an installer yourself.
 
-The bootstrap stops only at real consent boundaries it cannot safely cross for you, such as macOS Accessibility/Input Monitoring, the global OpenWorkGraph AI-access switch, or an AI-app restart that cannot be performed from inside the current session. It never silently enables agent observation or switches AI context to Full.
+The bootstrap stops only at real consent boundaries it cannot safely cross for you, such as macOS Accessibility/Input Monitoring, an AI-access setting you previously turned OFF, or an AI-app restart that cannot be performed from inside the current session. New installs start with AI access ON at Redacted. It never silently enables agent observation or switches AI context to Full.
 
 An unknown local MCP-capable agent receives a generic stdio descriptor and is instructed to register it through its own native MCP mechanism rather than impersonating a known client.
 
@@ -99,6 +99,16 @@ Windows PowerShell:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/KAVentures/openworkgraph/releases/latest/download/install.ps1 | iex"
 ```
+
+
+If you deliberately run the repository from source (for development or demo work), use a virtual environment rather than installing into system Python:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e .
+```
+
+On Windows use `.venv\Scripts\python.exe`. This avoids conflicts with unrelated packages already installed in the host environment. The packaged desktop installers and autonomous agent bootstrap already use OWG's private runtime and do not need this step.
 
 ## Uninstall / full local-data removal
 
@@ -295,7 +305,7 @@ local SQLite
 
 No separate MCP network port is kept open for normal local use.
 
-AI access starts OFF on a new installation. After the person changes it, that choice is remembered across restarts unless they explicitly enable the Privacy setting that resets AI access on restart. By default AI apps get **Redacted** context: titles and labels keep their meaning, but people, emails, phone numbers, personnummer and long IDs become stable tokens (`Re: Contract for PERSON_1A2B3C - Gmail`). You can switch to **Full** under Connect → Connections → *AI context detail*; an organization can lock it to Redacted. Every MCP response states its `detail_level`. See [Privacy and data](docs/PRIVACY_AND_DATA.md#three-layers-raw-redacted-safe-allowlist).
+AI access starts **ON** on a new installation, with **Redacted** context. If the person turns AI access OFF, that choice is remembered across restarts unless they later change it; the optional Privacy setting can also reset AI access OFF on every restart. By default AI apps get **Redacted** context: titles and labels keep their meaning, but people, emails, phone numbers, personnummer and long IDs become stable tokens (`Re: Contract for PERSON_1A2B3C - Gmail`). You can switch to **Full** under Connect → Connections → *AI context detail*; an organization can lock it to Redacted. Every MCP response states its `detail_level`. See [Privacy and data](docs/PRIVACY_AND_DATA.md#three-layers-raw-redacted-safe-allowlist).
 
 The local MCP boundary also treats observed page/window/UI text as untrusted data and suppresses instruction-like prompt-injection content in the copy returned to the model.
 
