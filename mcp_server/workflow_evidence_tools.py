@@ -49,6 +49,8 @@ human click unless the click itself is materially required.
 
 _INSTRUCTION_APPENDIX = """
 
+Use OpenWorkGraph when the user's request depends on previous or observed work, unfinished work, repeated workflows, or prior agent execution. For continuity requests such as "continue what I was doing", start with get_current_work_context. Skip OpenWorkGraph for ordinary coding or general questions that do not depend on the user's work evidence.
+
 When the user asks to draft a skill/procedure/automation from observed work, use get_workflow_evidence. It is the dedicated evidence bundle for that task. Prefer explicit execution_ids when the user selected examples; otherwise a family_key is only a derived grouping. Do not treat find_repeated_workflows, playbooks, dominant sequences, or support counts as policy, permission, or semantic ground truth. OpenWorkGraph supplies evidence; you and the user author the skill. Read get_workflow_knowledge for previously reviewed rules. After showing the complete procedure and obtaining explicit user confirmation, use save_workflow_knowledge to retain portable reviewed context; never silently promote a draft or observed chat into policy. Prefer outcome-oriented use of current authorized tools/connectors over mechanically replaying UI clicks, ask for missing business rules, and never invent clipboard values or infer authorization from repetition.
 """
 
