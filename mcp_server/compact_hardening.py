@@ -10,6 +10,8 @@ import re
 from types import ModuleType
 from typing import Any
 
+from .continuity import extract_resource_pointers
+
 
 _LEGACY_STEP_RE = re.compile(
     r"^\s*[a-z0-9._-]+:[a-z0-9._-]+(?:\s*,\s*[a-z0-9._-]+:[a-z0-9._-]+)*\s*$",
@@ -70,6 +72,10 @@ def _compact_trace_row(item: dict[str, Any]) -> dict[str, Any]:
     title = _bounded_text(item.get("window_title"), 240)
     if title:
         result["window_title"] = title
+
+    pointers = extract_resource_pointers(item)
+    if pointers:
+        result["resource_pointers"] = pointers
     return result
 
 

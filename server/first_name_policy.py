@@ -33,7 +33,7 @@ PERSON_FIELDS = {
 PROTECTED_FIELDS = {
     "event_id", "session_id", "device_id", "sensor_id", "organization_id",
     "actor_id", "schema_version", "browser_session_id", "work_session_id",
-    "observed_at", "generated_at", "run_started_at",
+    "observed_at", "generated_at", "run_started_at", "resource_ref", "file_ref",
 }
 
 

@@ -1,0 +1,2 @@
+{"episode_id":"synthetic-1","prompt":"Continue the account renewal from yesterday.","correct_resources":["r:gmail-a","r:crm-a","r:sheet-a"],"correct_agent_runs":["execution:agent-a"],"distractor_resources":["r:crm-old"],"unfinished_state":"draft not sent"}
+{"episode_id":"synthetic-2","prompt":"Pick up where the coding agent stopped.","correct_resources":["r:github-pr"],"correct_agent_runs":["execution:agent-b"],"distractor_resources":["r:github-issue"],"unfinished_state":"tests failing"}

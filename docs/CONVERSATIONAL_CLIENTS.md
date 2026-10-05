@@ -7,6 +7,10 @@ interview or workflow-authoring wizard in OpenWorkGraph.
 
 ## Local clients
 
+For ambiguous resumption, start with `get_current_work_context`. Its `continuity_context` section returns stable resource candidates, recent agent executions and explicit association evidence from the latest authorized evidence tail. It does **not** assign a task name, infer that silence means completion, or treat nearby resources as the same work merely because they were close in time. Use the user's source-system connectors to inspect candidate resources before acting; ask when the remaining ambiguity matters.
+
+`get_workflow_trace` remains the canonical chronology tool. Use it when the question is "what happened?" rather than "which concrete objects or prior agent run is this user probably referring to?" Repeated-workflow and task-family views remain secondary derived indexes and are not required for continuity.
+
 Connect the compact stdio MCP launcher through Connections. Local AI access and
 individual client switches apply to every evidence and knowledge tool. In Privacy,
 choose whether to include older history for 24 hours or **until I revoke access**.
