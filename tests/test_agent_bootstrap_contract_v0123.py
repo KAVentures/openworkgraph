@@ -49,9 +49,9 @@ def test_setup_delegates_to_durable_runtime_without_touching_clone_config(home, 
     assert result["command"] == [
         str(python),
         str(installed / "owg_connect.py"),
-        "setup",
-        "--client",
+        "on",
         "codex",
+        "--mcp",
     ]
     assert not (home / ".codex" / "config.toml").exists()
 
