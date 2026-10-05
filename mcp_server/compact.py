@@ -1099,7 +1099,11 @@ def ai_guide() -> str:
 def data_model() -> str:
     return (
         "OpenWorkGraph compact MCP exposes a small read-oriented surface over privacy-hardened "
-        "human and agent evidence. Use get_workflow_trace first to reconstruct work from canonical "
+        "human and agent evidence. Use OpenWorkGraph when the user's request depends on previous or "
+        "observed work, unfinished work, repeated workflows, or prior agent execution. For continuity "
+        "requests such as 'continue what I was doing', start with get_current_work_context. Skip "
+        "OpenWorkGraph for ordinary coding or general questions that do not depend on work evidence. "
+        "Use get_workflow_trace first to reconstruct work from canonical "
         "chronological evidence, paging or searching as needed. get_current_work_context is an optional "
         "derived quick overview and must not override the evidence. find_repeated_workflows provides "
         "derived recurring-pattern candidates and exact family keys; how_did_similar_runs_go provides "
