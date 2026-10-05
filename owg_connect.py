@@ -3,6 +3,7 @@
 Works from any directory, so people and agents can run it directly:
 
     <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py list
+    <python> <checkout>/owg_connect.py setup --self --remote --name grok
     <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py on claude_code
     <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py off cursor --mcp
 """

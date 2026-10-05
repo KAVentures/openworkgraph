@@ -26,6 +26,80 @@ def home(tmp_path, monkeypatch):
     return home
 
 
+def test_self_diagnostic_is_read_only_and_refuses_to_guess_environment(home, monkeypatch):
+    monkeypatch.setattr(connections, "_find_installed_runtime", lambda: None)
+
+    result = connections.setup_self(name="grok")
+
+    assert result["status"] == "environment_required"
+    assert result["writes_performed"] is False
+    assert result["installed_runtime_found"] is False
+    assert result["detected_known_clients"] == []
+    assert "--local" in result["instruction"]
+    assert "--remote" in result["instruction"]
+
+
+def test_remote_self_route_never_installs_and_points_to_gateway_mcp(home):
+    result = connections.setup_self(remote=True, name="grok")
+
+    assert result["status"] == "needs_gateway"
+    assert result["environment"] == "remote"
+    assert result["writes_performed"] is False
+    assert result["do_not_install_here"] is True
+    assert result["remote_mcp"]["transport"] == "streamable_http"
+    assert result["remote_mcp"]["endpoint"].endswith("/mcp")
+    assert result["remote_mcp"]["authentication"] == "delegated OIDC"
+    assert result["repo_alone_is_enough"] is False
+    assert "do not install" in result["instruction"].lower()
+    assert "client id" in result["instruction"].lower()
+
+
+def test_unknown_local_agent_gets_generic_descriptor_not_another_clients_config(home, tmp_path, monkeypatch):
+    installed = tmp_path / "installed"
+    python = tmp_path / "runtime" / "python"
+    monkeypatch.setattr(connections, "_find_installed_runtime", lambda: (installed, python))
+    monkeypatch.setattr(connections, "_setup_access_status", lambda: {
+        "changed": False,
+        "currently_enabled": False,
+        "required": True,
+    })
+
+    result = connections.setup_self(local=True, name="Grok Cloud Desktop")
+
+    assert result["status"] == "descriptor"
+    assert result["environment"] == "local"
+    assert result["integration"] == "generic_local_mcp"
+    assert result["client_id"] == "external_grok_cloud_desktop"
+    assert result["writes_performed"] is False
+    assert result["connection"] == {
+        "name": "openworkgraph",
+        "transport": "stdio",
+        "command": str(python),
+        "args": [
+            str(installed / "mcp_server" / "launcher.py"),
+            "--client",
+            "external_grok_cloud_desktop",
+        ],
+    }
+    assert result["observe_changed"] is False
+    assert result["ai_access"]["changed"] is False
+    assert not (home / ".cursor" / "mcp.json").exists()
+    assert not (home / ".codex" / "config.toml").exists()
+
+
+def test_explicit_local_linux_does_not_offer_mac_or_windows_installer(home, monkeypatch):
+    monkeypatch.setattr(connections, "_find_installed_runtime", lambda: None)
+    monkeypatch.setattr(connections.sys, "platform", "linux")
+
+    result = connections.setup_self(local=True, name="custom-agent")
+
+    assert result["status"] == "unsupported_local_platform"
+    assert result["environment"] == "local"
+    assert result["writes_performed"] is False
+    assert result["platform"] == "linux"
+    assert "macOS and Windows" in result["reason"]
+
+
 def test_setup_from_checkout_never_writes_when_install_is_missing(home, monkeypatch):
     monkeypatch.setattr(connections, "_find_installed_runtime", lambda: None)
 
@@ -91,6 +165,32 @@ def test_fresh_checkout_setup_needs_no_site_packages(home, tmp_path):
     assert payload["writes_performed"] is False
 
 
+def test_fresh_checkout_remote_self_route_needs_no_site_packages(home, tmp_path):
+    env = os.environ.copy()
+    env.update({
+        "OWG_CONNECTIONS_HOME": str(home),
+        "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+    })
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(ROOT / "owg_connect.py"),
+            "setup",
+            "--self",
+            "--remote",
+            "--name",
+            "grok",
+        ],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    payload = json.loads(run.stdout)
+    assert payload["status"] == "needs_gateway"
+    assert payload["do_not_install_here"] is True
+    assert payload["writes_performed"] is False
+
+
 def test_setup_cli_accepts_flagged_client_and_refuses_observe(home, tmp_path):
     env = os.environ.copy()
     env.update({
@@ -123,6 +223,11 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     gemini = (ROOT / "GEMINI.md").read_text(encoding="utf-8")
 
     assert "owg_connect.py setup --client <client_id>" in agents
+    assert "owg_connect.py setup --self --local --name <your-agent-name>" in agents
+    assert "owg_connect.py setup --self --remote --name <your-agent-name>" in agents
+    assert "would observe the wrong machine" in agents
+    assert "must **not** ask the user to choose a fake local client id" in agents
+    assert "customer-controlled-openworkgraph-gateway>/mcp" in agents
     assert "do **not** launch mcp_server.compact_stdio directly" in agents
     assert "Never silently enable Observe" in agents
     assert "Setup never enables" in agents
