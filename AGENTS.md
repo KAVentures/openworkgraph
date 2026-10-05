@@ -2,6 +2,8 @@
 
 This repository is the **installation and integration contract** for OpenWorkGraph. It is not the user's work history. Work evidence stays in the user's local OpenWorkGraph store unless the user explicitly exports or synchronizes it.
 
+`SPEC.md` is the stable semantic contract for evidence, resource pointers, privacy, continuity, and interpretation. Follow it when repository implementation details are ambiguous.
+
 ## Goal
 
 When the person tells you to set up OpenWorkGraph from this repository, **perform every safe machine step yourself**. Do not ask the person to clone, download, run terminal commands, choose an installer, edit MCP JSON/TOML, or identify your client for you when you already know it.
