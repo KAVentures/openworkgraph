@@ -120,7 +120,7 @@ def test_connected_ai_guidance_is_continuity_first_not_always_on():
     server_instructions = (ROOT / "mcp_server" / "workflow_evidence_tools.py").read_text(encoding="utf-8")
 
     assert "start with get_current_work_context" in compact
-    assert "Skip OpenWorkGraph for ordinary coding" in compact
+    assert "ordinary coding or general questions" in compact
     assert "get_current_work_context" in skill
     assert "Skip it for ordinary coding" in skill
     assert "start with get_current_work_context" in server_instructions
