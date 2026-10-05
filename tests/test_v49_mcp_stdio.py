@@ -81,6 +81,10 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         "metadata": {"action": "click", "target": {"role": "button", "label": "Attestera faktura"}, "page": {"hostname": "fortnox.se", "pathname": "/invoices"}},
     }
     assert httpx.post(base + "/v1/events", json={"events": [event]}, headers=headers).status_code == 200
+    # New installs default AI access ON. This test exercises the explicit user
+    # opt-out path before verifying that MCP is denied and can be re-enabled.
+    disabled = httpx.post(base + "/v1/ai-access", json={"enabled": False}, headers=headers)
+    assert disabled.status_code == 200 and disabled.json()["enabled"] is False
 
     async def exercise() -> None:
         params = StdioServerParameters(
