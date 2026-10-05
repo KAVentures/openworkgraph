@@ -26,7 +26,17 @@ Do not guess another AI product's client id.
 
 Supported ids: claude_code, codex, cursor, vscode, gemini_cli, copilot_cli, windsurf, kiro, amazon_q, claude_desktop.
 
-Run:
+Run the OS-native bootstrap so no system Python is required:
+
+macOS:
+
+    /bin/bash owg_bootstrap.sh --client <client_id>
+
+Windows:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 --client <client_id>
+
+If a usable Python runtime is already available, the equivalent direct command is:
 
     python owg_connect.py bootstrap --local --client <client_id>
 
@@ -49,7 +59,17 @@ Do not rerun those steps manually. Read the JSON result.
 
 ## Local unknown MCP-capable client
 
-Run:
+Run the same OS-native bootstrap with your own identity.
+
+macOS:
+
+    /bin/bash owg_bootstrap.sh --self --name <your-agent-name>
+
+Windows:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 --self --name <your-agent-name>
+
+The equivalent direct command is:
 
     python owg_connect.py bootstrap --self --local --name <your-agent-name>
 
