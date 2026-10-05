@@ -3,8 +3,8 @@ from __future__ import annotations
 """Autonomous local OpenWorkGraph bootstrap for AI agents.
 
 The bootstrap performs safe machine actions itself. It stops only at boundaries
-that genuinely require the person (OS privacy approval, the global AI-access
-grant, or an app restart that cannot be performed from inside the running app).
+that genuinely require the person (OS privacy approval, AI access the person
+explicitly turned off, or an app restart that cannot be performed from inside the running app).
 
 This module intentionally uses only the Python standard library plus
 server.connections so it can run from a fresh GitHub checkout before OWG's
@@ -328,9 +328,9 @@ def _ai_access_action() -> dict[str, Any]:
     return {
         "kind": "ai_access",
         "instruction": (
-            "OpenWorkGraph AI access is OFF. Turn on AI access once in the local OpenWorkGraph dashboard. "
-            "The bootstrap will not silently enable the global switch because that could authorize other configured AI clients too. "
-            "Then rerun the same bootstrap command."
+            "OpenWorkGraph AI access is OFF because the person previously disabled it or configured it to reset OFF on restart. "
+            "Turn AI access on in the local dashboard, then rerun the same bootstrap command. "
+            "New installations normally start ON at Redacted."
         ),
     }
 

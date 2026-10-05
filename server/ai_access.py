@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 _LOCK = threading.RLock()
-_ENABLED = False
+_ENABLED = True
 _LOADED = False
-# v0.118: the switch remembers the person's choice across restarts unless they
-# ask for the older behavior ("turn AI access off every time OpenWorkGraph
-# starts"). It is still OFF on a new install, and every MCP call is checked live.
+# New installs default AI access ON at the separate Redacted context level.
+# Explicit user choices are still remembered across restarts, and the optional
+# reset-on-restart privacy setting still forces access OFF for that launch.
 _RESET_ON_RESTART = False
 _ACTIVITY: deque[dict[str, Any]] = deque(maxlen=200)
 _STATE_FILE = "ai_access.json"
@@ -31,7 +31,15 @@ def _load_unlocked() -> None:
     _LOADED = True
     try:
         value = json.loads(_state_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # No state file means a genuinely new install: AI access defaults ON
+        # at the separate Redacted context level.
+        return
     except Exception:
+        # A state file exists but cannot be trusted. Fail closed rather than
+        # reinterpreting corruption as a fresh install.
+        _ENABLED = False
+        _RESET_ON_RESTART = False
         return
     if not isinstance(value, dict):
         return
