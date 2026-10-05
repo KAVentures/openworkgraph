@@ -501,9 +501,10 @@ def test_native_bootstrap_wrappers_are_present_and_parseable():
         )
         assert checked.returncode == 0, checked.stderr
     else:
+        escaped_win = str(win).replace("'", "''")
         command = (
             "$tokens=$null;$errors=$null;"
-            f"[System.Management.Automation.Language.Parser]::ParseFile('{str(win).replace(\"'\", \"''\")}',[ref]$tokens,[ref]$errors)|Out-Null;"
+            f"[System.Management.Automation.Language.Parser]::ParseFile('{escaped_win}',[ref]$tokens,[ref]$errors)|Out-Null;"
             "if($errors.Count){$errors|ForEach-Object{$_.ToString()};exit 1}"
         )
         checked = subprocess.run(
