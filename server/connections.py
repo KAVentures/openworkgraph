@@ -218,7 +218,7 @@ def _remote_gateway_result(name: str = "") -> dict[str, Any]:
         ),
         "remote_mcp": {
             "transport": "streamable_http",
-            "endpoint": "https://<customer-controlled-openworkgraph-gateway>/mcp",
+            "endpoint": "https://owg.your-company.example/mcp",
             "authentication": "delegated OIDC",
             "prerequisites": [
                 "the user's computer is enrolled in a customer-controlled OpenWorkGraph Gateway",
