@@ -164,6 +164,7 @@ def _install_if_needed() -> dict[str, Any]:
         "runtime": installed,
         "installer_pid": launched["pid"],
         "log": launched["log"],
+        "_process": process,
     }
 
 
@@ -354,14 +355,32 @@ def run(
             "instruction": "Open OpenWorkGraph once so its private Python runtime finishes provisioning, then rerun bootstrap.",
         }
 
-    started = _start_if_needed(root, python)
-    if not started.get("ok"):
-        return {
-            "status": "start_failed",
-            "installed_root": str(root),
-            "install_performed": bool(installed.get("performed")),
-            "start": started,
-        }
+    if installed.get("performed"):
+        # The official installer owns the first launch. Wait for that exact
+        # bootstrap instead of racing it with a second start.py process.
+        health = _wait_for_health(180)
+        installer_process = installed.pop("_process", None)
+        if not health.get("ok"):
+            code = installer_process.poll() if installer_process is not None else None
+            return {
+                "status": "install_started_but_not_healthy",
+                "installed_root": str(root),
+                "install_performed": True,
+                "installer_exit_code": code,
+                "log": installed.get("log"),
+                "health": health,
+            }
+        started = {"ok": True, "performed": False, "health": health, "started_by": "official_installer"}
+    else:
+        installed.pop("_process", None)
+        started = _start_if_needed(root, python)
+        if not started.get("ok"):
+            return {
+                "status": "start_failed",
+                "installed_root": str(root),
+                "install_performed": False,
+                "start": started,
+            }
 
     if client_id:
         client = client_id
