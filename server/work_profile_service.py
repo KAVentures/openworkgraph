@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from contextualizer import contextualize_event
+from shared.core.contextualizer import contextualize_event
 from .db import connect
 from .work_profile import (
     SELF_TAG_CATEGORIES,
