@@ -40,7 +40,7 @@ def _protect_text(text: Any) -> str:
     if not raw.strip():
         return raw
     try:
-        from sensitive_identifiers import redact_sensitive_identifiers
+        from .sensitive_identifiers import redact_sensitive_identifiers
         from server.ai_context import contextual_text_redactor
         from server.privacy_pipeline import redact_for_display_now
 
