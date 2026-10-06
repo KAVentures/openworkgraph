@@ -33,6 +33,15 @@ class _PolicyView:
     def _redact_email_title_segments(self, text: str, *, owner_aliases: dict[str, str]) -> str:
         return text
 
+    def _registry_alias_should_redact(self, value: str) -> bool:
+        words = _presentation._name_words(value)
+        if not words:
+            return False
+        return not any(
+            word.strip(".'’-_").casefold() in _LEARNING_NON_NAME_WORDS
+            for word in words
+        )
+
 
 # Identity learning must be stricter than display-time recognition. Bare "to",
 # "with", "message" and "call" are common workflow language and can permanently
