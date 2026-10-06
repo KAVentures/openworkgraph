@@ -20,7 +20,7 @@ Do not guess another AI product's client id.
 - If you are running in a **cloud VM, hosted coding sandbox, remote container, browser service, or provider infrastructure**, you are remote. Do **not** install the OpenWorkGraph desktop companion there; it would observe the wrong machine.
 - If you cannot tell, run the read-only diagnostic:
 
-      python owg_connect.py bootstrap --self --name <your-agent-name>
+      python integrations/agents/owg_connect.py bootstrap --self --name <your-agent-name>
 
   It writes nothing and tells you to choose local or remote explicitly. Do not infer "local" merely from the operating system.
 
@@ -32,15 +32,15 @@ Run the OS-native bootstrap so no system Python is required:
 
 macOS:
 
-    /bin/bash owg_bootstrap.sh --client <client_id>
+    /bin/bash integrations/agents/owg_bootstrap.sh --client <client_id>
 
 Windows:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 -Client <client_id>
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\integrations\agents\owg_bootstrap.ps1 -Client <client_id>
 
 If a usable Python runtime is already available, the equivalent direct command is:
 
-    python owg_connect.py bootstrap --local --client <client_id>
+    python integrations/agents/owg_connect.py bootstrap --local --client <client_id>
 
 The bootstrap itself will, when needed:
 
@@ -65,15 +65,15 @@ Run the same OS-native bootstrap with your own identity.
 
 macOS:
 
-    /bin/bash owg_bootstrap.sh --self --name <your-agent-name>
+    /bin/bash integrations/agents/owg_bootstrap.sh --self --name <your-agent-name>
 
 Windows:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\owg_bootstrap.ps1 -Self -Name <your-agent-name>
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\integrations\agents\owg_bootstrap.ps1 -Self -Name <your-agent-name>
 
 The equivalent direct command is:
 
-    python owg_connect.py bootstrap --self --local --name <your-agent-name>
+    python integrations/agents/owg_connect.py bootstrap --self --local --name <your-agent-name>
 
 OWG will install/start itself if needed and return a generic stdio MCP descriptor. If agent_actions contains register_mcp_descriptor, register that descriptor **yourself using your own native MCP-registration mechanism**. Do not ask the person to edit config files and do not pretend to be Codex, Claude, Cursor, or another known client.
 
@@ -83,7 +83,7 @@ After registering, verify by calling get_current_work_context. Only declare setu
 
 Run:
 
-    python owg_connect.py bootstrap --self --remote --name <your-agent-name>
+    python integrations/agents/owg_connect.py bootstrap --self --remote --name <your-agent-name>
 
 A remote agent must **not** install the desktop observer in its own sandbox and must **not** ask the person to choose a fake local client id.
 

@@ -137,7 +137,7 @@ def test_cli_works_from_any_directory_and_prints_json(tmp_path):
     env = os.environ.copy()
     env.update({"OWG_CONNECTIONS_HOME": str(tmp_path / "home"), "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data")})
     (tmp_path / "home").mkdir()
-    run = lambda *a: subprocess.run([sys.executable, str(ROOT / "owg_connect.py"), *a], cwd=tmp_path,
+    run = lambda *a: subprocess.run([sys.executable, str(ROOT / "integrations" / "agents" / "owg_connect.py"), *a], cwd=tmp_path,
                                     env=env, capture_output=True, text=True, timeout=60)
     listed = run("list")
     assert listed.returncode == 0, listed.stderr

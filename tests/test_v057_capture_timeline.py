@@ -118,7 +118,7 @@ def test_demo_timeline_and_pattern_endpoints_reuse_existing_inference(tmp_path):
     code = r'''
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
-from demo_data import build_demo_events
+from apps.desktop.demo_data import build_demo_events
 from server.db import init_db, insert_events
 
 init_db()

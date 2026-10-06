@@ -158,6 +158,7 @@ SPEC.md            stable OWG semantic contract
 README.md          product overview and quick start
 docs/              detailed architecture, privacy, deployment, AI and testing docs
 
+apps/              end-user application helpers/hosts
 collector/         desktop capture
 browser_extension/ optional browser-native capture
 server/            local API, evidence, analytics and dashboard backend; domain packages group related subsystems
@@ -166,7 +167,7 @@ mcp_server/        local MCP surfaces
 gateway/           optional organization Gateway
 connector/         endpoint-to-Gateway synchronization
 dashboard/         local UI assets
-platform/          self-hosting, deployment and fleet packaging
+platform/          self-hosting, deployment, fleet and distribution packaging
 sdk/               integration SDK
 integrations/       map of agent/client/organization integration surfaces
 scripts/           build/release/development automation

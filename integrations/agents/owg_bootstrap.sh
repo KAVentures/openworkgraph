@@ -1,7 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/install.sh" ]; then
+  ROOT="$SCRIPT_DIR"
+  CONNECT="$ROOT/owg_connect.py"
+else
+  ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  CONNECT="$ROOT/integrations/agents/owg_connect.py"
+fi
 INSTALL_ROOT="$HOME/Library/Application Support/WorkflowObserver"
 LOG="/tmp/openworkgraph-agent-bootstrap-installer.log"
 
@@ -75,4 +82,4 @@ fi
 
 export OWG_INSTALLED_ROOT="$INSTALL_ROOT"
 export OWG_INSTALLED_PYTHON="$PYTHON"
-exec "$PYTHON" "$ROOT/owg_connect.py" bootstrap --local "$@"
+exec "$PYTHON" "$CONNECT" bootstrap --local "$@"

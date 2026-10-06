@@ -163,7 +163,7 @@ def test_extension_source_does_not_send_full_frame_url_and_suppresses_subframe_n
 
 
 def test_demo_data_populates_current_analytics_with_real_focus_spans(monkeypatch):
-    from demo_data import build_demo_events
+    from apps.desktop.demo_data import build_demo_events
     from server import analytics
 
     base = datetime.now(timezone.utc) - timedelta(hours=1)

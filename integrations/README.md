@@ -4,6 +4,7 @@ This directory is the map for software that connects **to** OpenWorkGraph. Packa
 
 ## Agent integrations
 
+- [agents/](agents/) — agent bootstrap/connect helpers used from a checkout; release builds retain compatibility copies at installed payload root.
 - [../adapters/](../adapters/) — Python adapters for agent runtimes and execution/approval/context hooks.
 - [plugins/openworkgraph/](plugins/openworkgraph/) — installable Claude Code plugin package with commands, hooks and the OWG skill.
 - [../openworkgraph_agent/](../openworkgraph_agent/) — compatibility Python package.

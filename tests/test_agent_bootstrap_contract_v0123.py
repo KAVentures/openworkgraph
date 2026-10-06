@@ -374,7 +374,7 @@ def test_fresh_checkout_setup_needs_no_site_packages(home, tmp_path):
         "LOCALAPPDATA": str(tmp_path / "localappdata"),
     })
     run = subprocess.run(
-        [sys.executable, "-S", str(ROOT / "owg_connect.py"), "setup", "--client", "cursor"],
+        [sys.executable, "-S", str(ROOT / "integrations" / "agents" / "owg_connect.py"), "setup", "--client", "cursor"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
     assert run.returncode == 0, run.stderr
@@ -393,7 +393,7 @@ def test_fresh_checkout_remote_self_route_needs_no_site_packages(home, tmp_path)
         [
             sys.executable,
             "-S",
-            str(ROOT / "owg_connect.py"),
+            str(ROOT / "integrations" / "agents" / "owg_connect.py"),
             "setup",
             "--self",
             "--remote",
@@ -419,7 +419,7 @@ def test_fresh_checkout_autonomous_remote_bootstrap_needs_no_site_packages(home,
         [
             sys.executable,
             "-S",
-            str(ROOT / "owg_connect.py"),
+            str(ROOT / "integrations" / "agents" / "owg_connect.py"),
             "bootstrap",
             "--self",
             "--remote",
@@ -443,7 +443,7 @@ def test_setup_cli_accepts_flagged_client_and_refuses_observe(home, tmp_path):
     })
 
     configured = subprocess.run(
-        [sys.executable, str(ROOT / "owg_connect.py"), "setup", "--client", "cursor", "--allow-source"],
+        [sys.executable, str(ROOT / "integrations" / "agents" / "owg_connect.py"), "setup", "--client", "cursor", "--allow-source"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
     assert configured.returncode == 0, configured.stderr
@@ -452,7 +452,7 @@ def test_setup_cli_accepts_flagged_client_and_refuses_observe(home, tmp_path):
     assert payload["observe_changed"] is False
 
     refused = subprocess.run(
-        [sys.executable, str(ROOT / "owg_connect.py"), "setup", "--client", "cursor", "--observe", "--allow-source"],
+        [sys.executable, str(ROOT / "integrations" / "agents" / "owg_connect.py"), "setup", "--client", "cursor", "--observe", "--allow-source"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
     assert refused.returncode == 2
@@ -466,11 +466,11 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     gemini = (ROOT / "GEMINI.md").read_text(encoding="utf-8")
 
-    assert "owg_connect.py bootstrap --local --client <client_id>" in agents
-    assert "/bin/bash owg_bootstrap.sh --client <client_id>" in agents
-    assert "owg_bootstrap.ps1 -Client <client_id>" in agents
-    assert "owg_connect.py bootstrap --self --local --name <your-agent-name>" in agents
-    assert "owg_connect.py bootstrap --self --remote --name <your-agent-name>" in agents
+    assert "integrations/agents/owg_connect.py bootstrap --local --client <client_id>" in agents
+    assert "/bin/bash integrations/agents/owg_bootstrap.sh --client <client_id>" in agents
+    assert "integrations\\agents\\owg_bootstrap.ps1 -Client <client_id>" in agents
+    assert "integrations/agents/owg_connect.py bootstrap --self --local --name <your-agent-name>" in agents
+    assert "integrations/agents/owg_connect.py bootstrap --self --remote --name <your-agent-name>" in agents
     assert "perform every safe machine step yourself" in agents
     assert "Do not ask the person to clone, download, run terminal commands" in agents
     assert "would observe the wrong machine" in agents
@@ -483,8 +483,8 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
 
 
 def test_native_bootstrap_wrappers_are_present_and_parseable():
-    mac = ROOT / "owg_bootstrap.sh"
-    win = ROOT / "owg_bootstrap.ps1"
+    mac = ROOT / "integrations" / "agents" / "owg_bootstrap.sh"
+    win = ROOT / "integrations" / "agents" / "owg_bootstrap.ps1"
     assert mac.exists() and win.exists()
 
     mac_text = mac.read_text(encoding="utf-8")

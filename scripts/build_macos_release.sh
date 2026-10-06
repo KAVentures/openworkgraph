@@ -30,6 +30,18 @@ rsync -a \
   --exclude 'config.json' \
   "$ROOT/" "$STAGE/"
 
+# Preserve the historical installed payload surface while keeping source helpers
+# organized away from repository root.
+cp "$ROOT/integrations/agents/owg_connect.py" "$STAGE/owg_connect.py"
+cp "$ROOT/integrations/agents/owg_bootstrap.sh" "$STAGE/owg_bootstrap.sh"
+cp "$ROOT/integrations/agents/owg_bootstrap.ps1" "$STAGE/owg_bootstrap.ps1"
+cp "$ROOT/platform/distribution/launchers/TRY_DEMO_ON_MAC.command" "$STAGE/TRY_DEMO_ON_MAC.command"
+cp "$ROOT/platform/distribution/launchers/TRY_DEMO_ON_WINDOWS.bat" "$STAGE/TRY_DEMO_ON_WINDOWS.bat"
+cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR.command" "$STAGE/ADD_BROWSER_SENSOR.command"
+cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR_WINDOWS.bat" "$STAGE/ADD_BROWSER_SENSOR_WINDOWS.bat"
+cp "$ROOT/apps/desktop/windows_tray.py" "$STAGE/windows_tray.py"
+cp "$ROOT/apps/desktop/demo_data.py" "$STAGE/demo_data.py"
+
 BUILD_SHA="${GITHUB_SHA:-}"
 if [ -z "$BUILD_SHA" ]; then
   BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
@@ -81,7 +93,7 @@ EOF
 # Same self-contained payload, but filename selects isolated synthetic demo mode.
 cp "$LAUNCHER" "$DEMO_LAUNCHER"
 
-cp "$ROOT/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
+cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR.command" "$PKG/ADD_BROWSER_SENSOR.command"
 cp "$ROOT/docs/ai/guide.md" "$PKG/AI_GUIDE.md"
 cp "$ROOT/docs/ai/starter-prompt.md" "$PKG/PROMPT.md"
 cp "$ROOT/LICENSE" "$PKG/LICENSE"

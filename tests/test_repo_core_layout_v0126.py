@@ -55,7 +55,7 @@ def test_runtime_code_uses_canonical_shared_core_imports():
         "server/v46_migration.py": "shared.core.contextualizer",
         "server/work_profile/service.py": "shared.core.contextualizer",
         "connector/policy.py": "shared.core.sensitive_identifiers",
-        "demo_data.py": "shared.core.resource_references",
+        "apps/desktop/demo_data.py": "shared.core.resource_references",
     }
     for path, import_fragment in expected.items():
         text = (ROOT / path).read_text(encoding="utf-8")

@@ -99,3 +99,36 @@ def test_platform_deployment_assets_are_grouped_off_root():
     builder = (ROOT / "scripts" / "build_enterprise_release.py").read_text(encoding="utf-8")
     assert 'ROOT / "platform" / "enterprise"' in builder
     assert 'kit_stage / "enterprise"' in builder
+
+
+def test_root_helper_implementations_live_behind_product_boundaries():
+    moved = {
+        "owg_connect.py": ROOT / "integrations" / "agents" / "owg_connect.py",
+        "owg_bootstrap.sh": ROOT / "integrations" / "agents" / "owg_bootstrap.sh",
+        "owg_bootstrap.ps1": ROOT / "integrations" / "agents" / "owg_bootstrap.ps1",
+        "TRY_DEMO_ON_MAC.command": ROOT / "platform" / "distribution" / "launchers" / "TRY_DEMO_ON_MAC.command",
+        "TRY_DEMO_ON_WINDOWS.bat": ROOT / "platform" / "distribution" / "launchers" / "TRY_DEMO_ON_WINDOWS.bat",
+        "ADD_BROWSER_SENSOR.command": ROOT / "platform" / "distribution" / "launchers" / "ADD_BROWSER_SENSOR.command",
+        "ADD_BROWSER_SENSOR_WINDOWS.bat": ROOT / "platform" / "distribution" / "launchers" / "ADD_BROWSER_SENSOR_WINDOWS.bat",
+        "windows_tray.py": ROOT / "apps" / "desktop" / "windows_tray.py",
+        "demo_data.py": ROOT / "apps" / "desktop" / "demo_data.py",
+    }
+    for old_root_name, canonical in moved.items():
+        assert not (ROOT / old_root_name).exists()
+        assert canonical.is_file()
+
+    mac_release = (ROOT / "scripts" / "build_macos_release.sh").read_text(encoding="utf-8")
+    windows_release = (ROOT / "scripts" / "build_windows_release.ps1").read_text(encoding="utf-8")
+    for compatibility_name in (
+        "owg_connect.py",
+        "owg_bootstrap.sh",
+        "owg_bootstrap.ps1",
+        "TRY_DEMO_ON_MAC.command",
+        "TRY_DEMO_ON_WINDOWS.bat",
+        "ADD_BROWSER_SENSOR.command",
+        "ADD_BROWSER_SENSOR_WINDOWS.bat",
+        "windows_tray.py",
+        "demo_data.py",
+    ):
+        assert compatibility_name in mac_release
+        assert compatibility_name in windows_release

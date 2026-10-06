@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import resource_references
-from demo_data import (
+from apps.desktop.demo_data import (
     build_agent_demo_payloads,
     build_agent_handoff_human_events,
     build_human_demo_events,
@@ -106,9 +106,9 @@ def test_agent_example_is_separate_optional_structural_evidence():
 
 def test_demo_launchers_share_the_live_private_runtime_and_ship_in_packages():
     mac = (ROOT / "START_ON_MAC.command").read_text(encoding="utf-8")
-    mac_demo = (ROOT / "TRY_DEMO_ON_MAC.command").read_text(encoding="utf-8")
+    mac_demo = (ROOT / "platform" / "distribution" / "launchers" / "TRY_DEMO_ON_MAC.command").read_text(encoding="utf-8")
     win = (ROOT / "START_ON_WINDOWS.ps1").read_text(encoding="utf-8")
-    win_demo = (ROOT / "TRY_DEMO_ON_WINDOWS.bat").read_text(encoding="utf-8")
+    win_demo = (ROOT / "platform" / "distribution" / "launchers" / "TRY_DEMO_ON_WINDOWS.bat").read_text(encoding="utf-8")
     mac_package = (ROOT / "scripts" / "build_macos_release.sh").read_text(encoding="utf-8")
     win_package = (ROOT / "scripts" / "build_windows_release.ps1").read_text(encoding="utf-8")
 
