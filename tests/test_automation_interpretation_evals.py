@@ -135,18 +135,16 @@ def test_product_value_arms_include_realistic_user_and_honest_mcp_mapping():
     payload = json.loads(EVAL_PATH.read_text(encoding="utf-8"))
     assert payload["product_value_arms"]["C_real_owg"].startswith("user_intent plus access to the real compact OWG MCP")
     mapped = [case for case in payload["cases"] if case.get("mcp_fixture_case_id")]
-    assert len(mapped) >= 12
+    assert mapped == []
     assert all(case["realistic_user_explanation"].strip() for case in payload["cases"])
-    assert all(str(case["mcp_fixture_case_id"]).startswith("reconstruction-") for case in mapped)
+    assert payload["real_mcp_protocol"]["minimum_runs_when_repeated"] >= 3
+    assert payload["real_mcp_protocol"]["detail_levels"] == ["redacted", "full"]
 
 
-def test_real_mcp_fixture_links_exist():
-    from evals.reconstruction.fixtures import generate_cases
-
-    available = {case["case_id"] for case in generate_cases()}
+def test_real_mcp_protocol_rejects_borrowed_reconstruction_mappings():
     payload = json.loads(EVAL_PATH.read_text(encoding="utf-8"))
-    linked = {case["mcp_fixture_case_id"] for case in payload["cases"] if case.get("mcp_fixture_case_id")}
-    assert linked <= available
+    assert "mismatched reconstruction fixtures" in payload["real_mcp_protocol"]["invalid_prior_result"]
+    assert all(case.get("real_mcp_ready") is False for case in payload["cases"])
 
 
 def test_four_arm_comparison_reports_primary_and_retrieval_gaps(tmp_path):
@@ -166,3 +164,17 @@ def test_four_arm_comparison_reports_primary_and_retrieval_gaps(tmp_path):
     assert report["primary_product_uplift"]["total_score"] > 0
     assert report["retrieval_interpretation_gap"]["total_score"] == 0
     assert report["weak_baseline_uplift"]["total_score"] > report["primary_product_uplift"]["total_score"]
+
+
+def test_scorer_supports_same_subset_across_product_arms(tmp_path):
+    from evals.score_automation_interpretation import compare_arms
+
+    subset = {case["id"] for case in _cases()[:3]}
+    paths = {}
+    for name in ("realistic_user", "real_owg", "curated_oracle"):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(_perfect_score_sheet()), encoding="utf-8")
+        paths[name] = path
+    report = compare_arms(paths, case_ids=subset)
+    assert all(len(arm["case_scores"]) == 3 for arm in report["arms"].values())
+    assert report["primary_product_uplift"]["total_score"] == 0
