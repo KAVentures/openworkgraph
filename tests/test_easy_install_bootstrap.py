@@ -17,7 +17,7 @@ def test_bootstrap_installers_are_pinned_to_repo_release_version():
 
 
 def test_macos_bootstrap_delegates_to_existing_release_launcher():
-    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    text = (ROOT / "platform" / "distribution" / "installers" / "install.sh").read_text(encoding="utf-8")
 
     assert "OpenWorkGraph-macOS.zip" in text
     assert "START_OPENWORKGRAPH.command" in text
@@ -35,7 +35,7 @@ def test_macos_bootstrap_delegates_to_existing_release_launcher():
 
 
 def test_windows_bootstrap_delegates_to_existing_release_launcher():
-    text = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    text = (ROOT / "platform" / "distribution" / "installers" / "install.ps1").read_text(encoding="utf-8")
 
     assert "OpenWorkGraph-Windows.zip" in text
     assert "START_OPENWORKGRAPH.cmd" in text

@@ -178,7 +178,7 @@ def test_old_default_value_gets_document_boundaries_and_app_only_is_opt_in(tmp_p
 
 
 def test_example_config_ships_the_new_defaults():
-    example = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text())
+    example = json.loads((Path(__file__).resolve().parents[1] / "apps" / "desktop" / "config.example.json").read_text())
     assert example["change_detection"] == "application_and_document"
     assert example["away_detection_enabled"] is True and example["away_after_seconds"] == 300
 

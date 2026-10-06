@@ -161,7 +161,7 @@ with TestClient(app) as client:
 
 
 def test_secure_capture_supervisor_keeps_launcher_contract_and_uses_controlled_worker():
-    start=(ROOT/'start.py').read_text(encoding='utf-8')
+    start=(ROOT/'apps'/'desktop'/'start.py').read_text(encoding='utf-8')
     supervisor=(ROOT/'collector'/'secure_main.py').read_text(encoding='utf-8')
     worker=(ROOT/'collector'/'secure_worker.py').read_text(encoding='utf-8')
     assert '"-m", "collector.secure_main"' in start

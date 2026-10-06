@@ -21,7 +21,7 @@ def _free_port() -> int:
 
 
 def test_normal_launcher_is_stdio_first_without_replacing_observer():
-    source = _read("start.py")
+    source = _read("apps/desktop/start.py")
     assert '"server.secure_app:app"' in source
     assert '"-m", "collector.secure_main"' in source
     assert "write_browser_pairing_bundle" in source

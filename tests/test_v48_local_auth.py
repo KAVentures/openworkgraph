@@ -262,7 +262,7 @@ def test_mcp_http_endpoint_rejects_unauthenticated_clients(secured_api):
 
 
 def test_browser_pairing_bundle_is_runtime_only_and_launcher_preserves_core_paths():
-    start = (ROOT / "start.py").read_text(encoding="utf-8")
+    start = (ROOT / "apps" / "desktop" / "start.py").read_text(encoding="utf-8")
     optional = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "server.secure_app:app" in start
