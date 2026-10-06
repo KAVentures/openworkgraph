@@ -171,3 +171,25 @@ def test_new_connection_paths_use_compact_surface():
     assert "mcp_server.secure_stdio" not in bundle
     assert '"args": ["-m", "mcp_server.secure_stdio"]' not in secure_app
     assert "mcp_server.http_app:app" not in control
+
+
+def test_compact_agent_summary_exposes_observed_successful_ending_without_upgrading_terminal_outcome():
+    from mcp_server.compact import _agent_run_summary
+
+    summary = _agent_run_summary({
+        "execution_id": "execution:aaaaaaaaaaaaaaaa",
+        "outcome_status": "unknown",
+        "outcome_basis": "no_terminal_outcome_observed",
+        "last_tool_status": "success",
+        "last_observed_event_is_successful_tool_call": True,
+        "observed_end_state": "successful_tool_call_observed_at_trace_end",
+        "derived": True,
+        "authoritative": False,
+    })
+
+    assert summary["outcome_status"] == "unknown"
+    assert summary["last_tool_status"] == "success"
+    assert summary["last_observed_event_is_successful_tool_call"] is True
+    assert summary["observed_end_state"] == "successful_tool_call_observed_at_trace_end"
+    assert summary["observed_outcome_summary"] == "succeeded (observed final step)"
+    assert summary["observed_outcome_summary_is_terminal_run_status"] is False

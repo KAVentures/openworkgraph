@@ -346,3 +346,43 @@ def test_manual_transfer_finding_emits_single_source_destination_at_threshold(mo
     assert rows[0]["destination_surface"] == "Microsoft Excel"
     assert rows[0]["occurrence_count"] == 3
     assert rows[0]["grouping_basis"] == "destination_surface"
+
+
+def test_pulse_balances_finding_categories_before_filling_remaining_slots():
+    from server.context_pulse import _balanced_finding_selection
+
+    def candidate(fid, kind):
+        return ({"finding_id": fid, "finding_kind": kind}, "baseline")
+
+    candidates = [
+        candidate("w1", "repeated_workflow"),
+        candidate("w2", "repeated_workflow"),
+        candidate("w3", "repeated_workflow"),
+        candidate("t1", "manual_transfer"),
+        candidate("a1", "agent_recovered_failure"),
+        candidate("x1", "repeated_surface_transition"),
+        candidate("e1", "surface_engagement"),
+    ]
+
+    selected = _balanced_finding_selection(candidates, 5)
+    assert [item["finding_kind"] for item, _status in selected] == [
+        "repeated_workflow",
+        "manual_transfer",
+        "agent_recovered_failure",
+        "repeated_surface_transition",
+        "surface_engagement",
+    ]
+
+    # Once every available category has representation, normal priority order fills.
+    selected_more = _balanced_finding_selection(candidates, 7)
+    assert [item["finding_id"] for item, _status in selected_more] == [
+        "w1", "t1", "a1", "x1", "e1", "w2", "w3"
+    ]
+
+
+def test_context_pulse_mcp_and_route_default_to_ten_findings():
+    route = (ROOT / "server" / "context_pulse_routes.py").read_text(encoding="utf-8")
+    compact = (ROOT / "mcp_server" / "compact_hardening.py").read_text(encoding="utf-8")
+    assert "finding_limit: int = 10" in route
+    assert "finding_limit: int = 10" in compact
+    assert "reserve one slot per available category" in compact

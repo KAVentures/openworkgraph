@@ -93,7 +93,7 @@ def get_context_pulse(
     request: Request,
     cursor: str | None = None,
     recent_limit: int = 12,
-    finding_limit: int = 6,
+    finding_limit: int = 10,
     lookback_days: int = 30,
     recent_detail: str = "compact",
 ) -> dict[str, Any]:
