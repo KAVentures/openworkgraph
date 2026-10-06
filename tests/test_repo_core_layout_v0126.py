@@ -53,7 +53,7 @@ def test_runtime_code_uses_canonical_shared_core_imports():
         "server/procedural_feedback.py": "shared.core.semantic_actions",
         "server/typed_privacy_policy.py": "shared.core.sensitive_identifiers",
         "server/v46_migration.py": "shared.core.contextualizer",
-        "server/work_profile_service.py": "shared.core.contextualizer",
+        "server/work_profile/service.py": "shared.core.contextualizer",
         "connector/policy.py": "shared.core.sensitive_identifiers",
         "demo_data.py": "shared.core.resource_references",
     }
