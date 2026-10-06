@@ -71,13 +71,14 @@ def test_request_sends_only_blind_case_payload_and_parses_prediction():
             api_key="secret-test-value",
             model="test-model",
             case=case,
-            temperature=0.0,
+            temperature=None,
             timeout=5,
         )
 
     assert prediction["case_id"] == case["case_id"]
     assert meta["response_id"] == "resp-test"
     assert captured["auth"] == "Bearer secret-test-value"
+    assert "temperature" not in captured["body"]
     user = json.loads(captured["body"]["messages"][1]["content"])
     assert set(user) == {"case_id", "presented_evidence"}
     assert "ground_truth" not in captured["body"]["messages"][1]["content"]
