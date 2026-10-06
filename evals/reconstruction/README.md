@@ -62,6 +62,34 @@ Score:
 Record the exact model ID, client/version, settings and repository SHA with the
 results.
 
+### One-command external runner
+
+For a genuinely blind model run, use the external runner. The request contains only
+`case_id`, `presented_evidence`, and the reconstruction instruction; it never sends
+`ground_truth` or `source_events`.
+
+Direct OpenAI-compatible endpoint:
+
+    export OPENAI_API_KEY=...
+    python -m evals.reconstruction.run_external --model <exact-model-id>
+
+Vercel AI Gateway (also OpenAI-compatible):
+
+    export AI_GATEWAY_API_KEY=...
+    python -m evals.reconstruction.run_external \
+      --base-url https://ai-gateway.vercel.sh/v1 \
+      --api-key-env AI_GATEWAY_API_KEY \
+      --model <provider/model-id>
+
+Use an exact currently supported model ID from the provider/gateway model catalog.
+Do not commit credentials. Temperature is omitted by default for compatibility with
+reasoning models; pass `--temperature` only when the selected model supports it.
+
+The runner writes ignored local artifacts under `evals/reconstruction/results/`:
+predictions JSONL, a scored report, and run metadata including revision, model,
+usage metadata returned by the endpoint, and elapsed time. `--resume` continues a
+partially completed run without re-paying for completed cases.
+
 ## Stage B: real OWG/MCP path
 
 Load each case's source_events into a clean OWG instance, then expose the
