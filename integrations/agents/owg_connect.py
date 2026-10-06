@@ -2,8 +2,8 @@
 
 Works from any directory, so people and agents can run it directly:
 
-    <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py list
-    <python> <checkout>/owg_connect.py bootstrap --local --client codex
+    <OpenWorkGraph python> <OpenWorkGraph root>/integrations/agents/owg_connect.py list
+    <python> <checkout>/integrations/agents/owg_connect.py bootstrap --local --client codex
     <python> <checkout>/owg_connect.py bootstrap --self --remote --name grok
     <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py on claude_code
     <OpenWorkGraph python> <OpenWorkGraph root>/owg_connect.py off cursor --mcp
@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 

@@ -173,7 +173,7 @@ def main() -> None:
 
         opened_dashboard = dashboard_url(env)
         if args.mode == "demo":
-            subprocess.check_call([sys.executable, "demo_data.py"], cwd=ROOT, env=env)
+            subprocess.check_call([sys.executable, "apps/desktop/demo_data.py"], cwd=ROOT, env=env)
             if not args.no_open_dashboard:
                 webbrowser.open(opened_dashboard)
             print("\nDemo is open in your browser.")

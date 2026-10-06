@@ -30,6 +30,18 @@ if ($LASTEXITCODE -ge 8) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }
 
+# Preserve the historical installed payload surface while keeping source helpers
+# organized away from repository root.
+Copy-Item (Join-Path $Root "integrations\agents\owg_connect.py") (Join-Path $Payload "owg_connect.py")
+Copy-Item (Join-Path $Root "integrations\agents\owg_bootstrap.sh") (Join-Path $Payload "owg_bootstrap.sh")
+Copy-Item (Join-Path $Root "integrations\agents\owg_bootstrap.ps1") (Join-Path $Payload "owg_bootstrap.ps1")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\TRY_DEMO_ON_MAC.command") (Join-Path $Payload "TRY_DEMO_ON_MAC.command")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\TRY_DEMO_ON_WINDOWS.bat") (Join-Path $Payload "TRY_DEMO_ON_WINDOWS.bat")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\ADD_BROWSER_SENSOR.command") (Join-Path $Payload "ADD_BROWSER_SENSOR.command")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Payload "ADD_BROWSER_SENSOR_WINDOWS.bat")
+Copy-Item (Join-Path $Root "apps\desktop\windows_tray.py") (Join-Path $Payload "windows_tray.py")
+Copy-Item (Join-Path $Root "apps\desktop\demo_data.py") (Join-Path $Payload "demo_data.py")
+
 $BuildCommit = $env:GITHUB_SHA
 if ([string]::IsNullOrWhiteSpace($BuildCommit)) {
     try { $BuildCommit = (& git -C $Root rev-parse HEAD).Trim() } catch { $BuildCommit = "" }
@@ -52,7 +64,7 @@ call "%~dp0.openworkgraph-src\TRY_DEMO_ON_WINDOWS.bat"
 exit /b %ERRORLEVEL%
 '@ | Set-Content -Path (Join-Path $Package "TRY_DEMO_OPENWORKGRAPH.cmd") -Encoding ascii
 
-Copy-Item (Join-Path $Root "ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Package "ADD_BROWSER_SENSOR.cmd")
 Copy-Item (Join-Path $Root "docs\ai\guide.md") (Join-Path $Package "AI_GUIDE.md")
 Copy-Item (Join-Path $Root "docs\ai\starter-prompt.md") (Join-Path $Package "PROMPT.md")
 Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Package "LICENSE")
