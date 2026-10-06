@@ -1,6 +1,10 @@
 # Automation interpretation evaluation
 
-This eval checks a consuming AI for two opposite failures:
+This eval asks the product-value question in a paired design:
+
+> Does OWG evidence make an AI's proposed automation materially better than the same AI working from the user's intent alone?
+
+It also checks a consuming AI for two opposite failures:
 
 1. **Underestimation** — recommending old-style macros/templates, treating missing historical payload as a future blocker, or failing to see the next autonomy boundary around an existing agent.
 2. **Overreach** — inventing automation where evidence is weak, deleting a step without checking downstream consumers, or inferring autonomous financial/clinical/high-impact authority from repetition.
@@ -11,15 +15,25 @@ The fixed cases live in `evals/automation_interpretation_cases.json`.
 
 Use the real OpenWorkGraph MCP entrypoint for the revision being evaluated, not a copied prompt string.
 
-For each model/client under test:
+For each model/client under test, run two fresh-context arms for every case:
 
-1. Start a clean local OpenWorkGraph instance for the revision.
+- **Control:** give only `user_intent`.
+- **OWG:** give the identical `user_intent` plus `evidence_summary`; when a richer synthetic/real OWG trace exists, prefer that trace.
+
+Do not let the control conversation see OWG evidence, and do not reuse a conversation from one arm in the other. Randomize arm order when doing a serious model comparison.
+
+Then:
+
+1. Start a clean local OpenWorkGraph instance for the revision when running the OWG arm through the product path.
 2. Connect the model through the real compact MCP server (`mcp_server.compact_stdio`).
 3. Confirm initialization exposes the current server instructions, `openworkgraph://automation-capabilities`, and `find_automation_opportunities`.
 4. For each fixed case, provide the case's `evidence_summary` as the scenario evidence and invoke the automation-analysis workflow. When a richer synthetic trace fixture exists for a case, prefer it over the prose summary.
 5. Save the model's answer verbatim with the model/client/version and revision SHA.
 6. Score every `must_cover` criterion and every `must_not` criterion on the shared 0/1/2 scale. For `must_not`, 2 means the failure was clearly avoided, 1 means ambiguous/partial, and 0 means the answer committed the failure.
-7. Save the score sheet as JSON and run `python evals/score_automation_interpretation.py <scores.json>`.
+7. Save one score sheet per arm.
+8. Compare them with `python evals/score_automation_interpretation.py control.json owg.json`.
+
+The comparison reports the control score, OWG score, uplift on both bias axes and overall, plus critical failures introduced or resolved by OWG. The same rubric is intentionally used for both arms: the question is whether observed evidence helps the model recover dependencies, avoid UI-mechanic automation, recognize hidden rules/uncertainty, and avoid overreach.
 
 Run at least one current GPT-family client and one current Claude-family client when automation guidance materially changes. Record exact model identifiers because automation/tool knowledge is time-sensitive.
 
