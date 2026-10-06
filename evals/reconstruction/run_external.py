@@ -64,7 +64,7 @@ def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: se
 
 
 def _request(client: httpx.Client, *, base_url: str, api_key: str, model: str, case: dict[str, Any],
-             temperature: float, timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
+             temperature: float | None, timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
     url = base_url.rstrip("/") + "/chat/completions"
     user_payload = {
         "case_id": case["case_id"],
@@ -72,13 +72,14 @@ def _request(client: httpx.Client, *, base_url: str, api_key: str, model: str, c
     }
     body: dict[str, Any] = {
         "model": model,
-        "temperature": temperature,
         "messages": [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, separators=(",", ":"))},
         ],
         "response_format": {"type": "json_object"},
     }
+    if temperature is not None:
+        body["temperature"] = temperature
     response = client.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", default=os.getenv("OWG_EVAL_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--api-key-env", default=os.getenv("OWG_EVAL_API_KEY_ENV", DEFAULT_KEY_ENV))
     parser.add_argument("--output-dir", default="evals/reconstruction/results")
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--temperature", type=float, help="optional sampling temperature; omitted by default for reasoning-model compatibility")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--max-cases", type=int, help="debug only; omitted means all 30 cases")
     parser.add_argument("--resume", action="store_true")
