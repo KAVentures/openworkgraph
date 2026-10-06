@@ -23,9 +23,11 @@ local SQLite evidence
 
 The AI application does not open the SQLite database itself. The MCP process exposes named tools and translates a tool call into an authenticated request to the local OpenWorkGraph API.
 
-Local AI access starts OFF on every OpenWorkGraph launch and can be disabled again while a client is configured. Every compact MCP tool reuses the same AI-access gate, authenticated local API transport, activity audit and prompt-injection filtering as the legacy MCP surface.
+New local installations start with AI access ON at Redacted. Explicit user opt-outs are remembered, and the optional reset-on-restart privacy setting can still force access OFF. Every compact MCP tool reuses the same AI-access gate, authenticated local API transport, activity audit and prompt-injection filtering as the legacy MCP surface.
 
 ### Compact surface for new connections
+
+Connected clients also expose a static `openworkgraph://index` MCP resource. It is the small navigation/front-door document: it tells the AI which existing tool to use for continuity, current changes, history, canonical evidence, reviewed knowledge, agent runs and automation questions, while restating the evidence/authorization rules. It contains no user work evidence and does not expand access.
 
 New dashboard-generated MCP configurations, the Claude MCP bundle and the on-demand local HTTP MCP bridge use this 18-tool compact surface:
 
@@ -78,7 +80,7 @@ The consolidated tools preserve the same interpretation boundaries. Repeated beh
 
 ### Server instructions for connected models
 
-The compact stdio and loopback-HTTP transports advertise a short MCP `instructions` block during initialization. It does not replace tool descriptions or the optional `find_automation_opportunities` prompt. It gives every compatible client the same baseline rules:
+The compact stdio and loopback-HTTP transports advertise a short MCP `instructions` block during initialization. When resource reading is supported, they point the client at `openworkgraph://index` once as the navigation entry point. This does not replace tool descriptions or the optional `find_automation_opportunities` prompt. It gives every compatible client the same baseline rules:
 
 - captured workflow evidence is primary and derived task/pattern views are navigation aids;
 - for whole-period questions, use `list_history` when useful and continue `get_workflow_trace` through `next_cursor` while `has_more` is true when complete coverage is required;
