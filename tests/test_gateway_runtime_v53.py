@@ -55,3 +55,41 @@ with TestClient(app) as client:
     assert completed.returncode == 0, (
         f"isolated secure-app check failed\nstdout={completed.stdout}\nstderr={completed.stderr}"
     )
+
+
+def test_desktop_parent_supervises_api_and_collector_siblings(monkeypatch):
+    from apps.desktop import start
+
+    class Proc:
+        def __init__(self, code):
+            self.code = code
+
+        def poll(self):
+            return self.code
+
+    stopped = []
+    monkeypatch.setattr(start, "stop_process", lambda process: stopped.append(process))
+
+    api = Proc(7)
+    collector = Proc(None)
+    try:
+        start.supervise_runtime(api, collector, poll_interval=0.01)
+        assert False, "dead API must fail the parent"
+    except RuntimeError as exc:
+        assert "local API exited unexpectedly" in str(exc)
+    assert stopped == [collector]
+
+    api2 = Proc(None)
+    collector2 = Proc(9)
+    try:
+        start.supervise_runtime(api2, collector2, poll_interval=0.01)
+        assert False, "dead collector must fail the parent"
+    except RuntimeError as exc:
+        assert "collector exited unexpectedly" in str(exc)
+
+
+def test_desktop_start_text_matches_actual_redacted_ai_default():
+    start = _read("apps/desktop/start.py")
+    assert "AI access starts ON at Redacted on a new install" in start
+    assert "A new install starts ON at Redacted" in start
+    assert "AI access starts OFF on a new install" not in start

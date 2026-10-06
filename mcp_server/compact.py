@@ -721,17 +721,20 @@ def get_work_profile(scope: str = "current") -> dict[str, Any]:
 def find_repeated_workflows(
     task_family: str = "",
     max_events: int = 25_000,
-    limit: int = 20,
+    limit: int = 10,
     since: str | None = None,
     until: str | None = None,
+    include_legacy: bool = False,
 ) -> dict[str, Any]:
     """Find repeated structural work in the permitted evidence window.
 
     Uses the current recording when saved-history access is off, or the granted
-    dates when selected. Supply dates for older examples. Prefer candidate_clusters,
-    which are exact structural navigation variants; family names are only coarse
-    compatibility tags. Neither is semantic ground truth. Select execution_ids and
-    inspect canonical evidence before inferring intent or workflow meaning.
+    dates when selected. Supply dates for older examples. candidate_clusters are
+    deterministic, optional-step-tolerant navigation candidates with readable core
+    steps and explicit variants. They are not semantic ground truth. Select
+    execution_ids and inspect canonical evidence before inferring intent or workflow
+    meaning. The default response is compact for AI clients; include_legacy=True
+    returns the older duplicated compatibility projections when required.
     """
     name = "find_repeated_workflows"
     core._begin(name)
@@ -748,32 +751,111 @@ def find_repeated_workflows(
             raise ToolError("Choose dates inside your permitted history range, or use the current recording. Use get_workflow_trace with since/until to inspect specific evidence.") from exc
         raise
     query = str(task_family or "").strip().casefold()
-    families = [row for row in result.get("families", [])
-                if not query or query in str(row).casefold()]
-    clusters = [row for row in result.get("candidate_clusters", [])
-                if not query or query in str(row).casefold()]
-    selected = families[:_bounded(limit, maximum=100)]
-    selected_clusters = clusters[:_bounded(limit, maximum=100)]
-    patterns = [dict(row, observed_count=row.get("execution_count", 0),
-                     typical_steps=row.get("high_support_structural_steps", []),
-                     typical_duration_seconds=row.get("median_execution_duration_seconds", 0),
-                     duration_basis="observed_execution_elapsed_time") for row in selected]
-    examples = [dict(run, family_key=row.get("family_key"))
-                for row in selected for run in row.get("executions", [])][:_bounded(limit, maximum=100)]
-    result.update({"patterns": patterns, "examples": examples,
-                   "candidate_clusters": selected_clusters,
-                   "preferred_candidates": selected_clusters or selected,
-                   "preferred_candidate_basis": "exact_structural_sequence_navigation" if selected_clusters else "coarse_family_navigation",
-                   "automation_candidates": selected_clusters or selected,
-                   "procedural_families": selected,
-                   "returned": len(selected_clusters or selected),
-                   "families": families[:_bounded(limit, maximum=100)],
-                   "task_family": task_family,
-                   "search_semantics": "lexical match over derived candidate clusters, family identifiers and structural steps",
-                   "next_step": "Prefer candidate_clusters and select their execution_ids, then call get_workflow_evidence with those explicit execution_ids and the same dates. Coarse family keys are compatibility/navigation tags only. Ask about business rules not observed.",
-                   "canonical_evidence_overrides_derived_indexes": True,
-                   "needs_human_review": True})
-    return core._finish(name, result)
+    families = [
+        row for row in result.get("families", [])
+        if not query or query in str(row).casefold()
+    ]
+    clusters = [
+        row for row in result.get("candidate_clusters", [])
+        if not query or query in str(row).casefold()
+    ]
+    bounded = _bounded(limit, maximum=100)
+    selected_clusters = clusters[:bounded]
+
+    compact_clusters: list[dict[str, Any]] = []
+    for row in selected_clusters:
+        compact_clusters.append({
+            "candidate_cluster_id": row.get("candidate_cluster_id"),
+            "run_count": row.get("execution_count", 0),
+            "core_steps": list(row.get("core_steps") or [])[:12],
+            "variations": list(row.get("observed_variations") or [])[:8],
+            "exact_variant_count": row.get("exact_variant_count", 0),
+            "coarse_family_keys": list(row.get("coarse_family_keys") or [])[:8],
+            "median_duration_seconds": row.get("median_duration_seconds"),
+            "first_observed_at": row.get("first_observed_at"),
+            "last_observed_at": row.get("last_observed_at"),
+            "execution_ids": list(row.get("execution_ids") or [])[:12],
+            "derived": True,
+            "authoritative": False,
+            "cluster_is_business_workflow_ground_truth": False,
+        })
+
+    response: dict[str, Any] = {
+        "candidate_clusters": compact_clusters,
+        "returned": len(compact_clusters),
+        "candidate_total": len(clusters),
+        "task_family": task_family,
+        "preferred_candidate_basis": "tolerant_structural_core_with_exact_variants",
+        "search_semantics": (
+            "lexical match over derived candidate clusters, coarse family tags, "
+            "readable core steps and variations"
+        ),
+        "next_step": (
+            "Select candidate execution_ids, then call get_workflow_evidence with "
+            "those explicit execution_ids and the same dates. Inspect canonical "
+            "evidence before inferring workflow meaning or business rules."
+        ),
+        "canonical_evidence_tool": "get_workflow_trace",
+        "canonical_evidence_overrides_derived_indexes": True,
+        "coarse_families_kept_for_compatibility": True,
+        "legacy_detail_included": bool(include_legacy),
+        "needs_human_review": True,
+    }
+
+    # Keep a very small family index in the compact response so older clients can
+    # still discover stable family keys without paying for duplicated executions.
+    response["families"] = [{
+        "family_key": row.get("family_key"),
+        "execution_count": row.get("execution_count", 0),
+        "family_is_ground_truth": False,
+    } for row in families[:bounded]]
+
+    # Compatibility aliases stay lightweight by default. This keeps existing
+    # clients functional without serializing the same full executions several
+    # times into a ChatGPT tool response.
+    response["patterns"] = [{
+        "family_key": row.get("family_key"),
+        "execution_count": row.get("execution_count", 0),
+        "observed_count": row.get("execution_count", 0),
+        "typical_steps": list(row.get("high_support_structural_steps") or [])[:8],
+        "typical_duration_seconds": row.get("median_execution_duration_seconds", 0),
+        "family_is_ground_truth": False,
+    } for row in families[:bounded]]
+    response["examples"] = [
+        {
+            "execution_id": run.get("execution_id"),
+            "family_key": row.get("family_key"),
+        }
+        for row in families[:bounded]
+        for run in (row.get("executions") or [])[:2]
+    ][:bounded]
+
+    if include_legacy:
+        selected = families[:bounded]
+        patterns = [
+            dict(
+                row,
+                observed_count=row.get("execution_count", 0),
+                typical_steps=row.get("high_support_structural_steps", []),
+                typical_duration_seconds=row.get("median_execution_duration_seconds", 0),
+                duration_basis="observed_execution_elapsed_time",
+            )
+            for row in selected
+        ]
+        examples = [
+            dict(run, family_key=row.get("family_key"))
+            for row in selected
+            for run in row.get("executions", [])
+        ][:bounded]
+        response.update({
+            "patterns": patterns,
+            "examples": examples,
+            "preferred_candidates": selected_clusters or selected,
+            "automation_candidates": selected_clusters or selected,
+            "procedural_families": selected,
+        })
+
+    return core._finish(name, response)
 
 
 @mcp.tool()
@@ -1115,7 +1197,7 @@ def data_model() -> str:
         "Use get_workflow_trace first to reconstruct work from canonical "
         "chronological evidence, paging or searching as needed. get_current_work_context is an optional "
         "derived quick overview and must not override the evidence. find_repeated_workflows provides "
-        "derived recurring-pattern candidates and exact family keys; how_did_similar_runs_go provides "
+        "derived recurring-pattern candidates with readable core paths and optional-step variants; coarse family keys remain compatibility metadata. how_did_similar_runs_go provides "
         "descriptive prior-run feedback with privacy-safe readable human steps; get_task_context provides "
         "bounded organizational context; and get_agent_runs provides structural agent execution evidence. "
         "Token counts are exact observed telemetry when present and unknown when absent; they are never estimated. "

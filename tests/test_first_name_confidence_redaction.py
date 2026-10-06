@@ -187,3 +187,39 @@ def test_policy_remains_presentation_only(monkeypatch, tmp_path):
     assert safe["observed_at"] == raw["observed_at"]
     assert safe["keypress_count"] == 17
     assert safe["duration_seconds"] == 12.5
+
+
+def test_stateful_identity_learning_does_not_turn_customer_companies_into_people(monkeypatch, tmp_path):
+    presentation = _presentation(monkeypatch, tmp_path)
+
+    # Reproduce the dangerous shape from a multi-workflow day: organization
+    # display names appear next to email addresses before later CRM/account titles.
+    _learn({
+        "surface": "Outlook",
+        "label": "From: Acme Logistics <koyar@acme.se>",
+    })
+    _learn({
+        "surface": "Outlook",
+        "label": "From: Volvo Cars <fleet@volvocars.example>",
+    })
+    _learn({
+        "surface": "Outlook",
+        "label": "Quote from Anna Svensson <anna.svensson@example.com>",
+    })
+
+    from server import ai_context
+    safe = ai_context.redact_contextually({
+        "salesforce_account": "Acme Logistics",
+        "customer_title": "Volvo Cars",
+        "note": "Quote from Anna Svensson",
+    })
+
+    assert safe["salesforce_account"] == "Acme Logistics"
+    assert safe["customer_title"] == "Volvo Cars"
+    assert "Anna Svensson" not in safe["note"]
+    assert "PERSON" in safe["note"]
+
+    registry = json.loads((tmp_path / ".presentation_people.json").read_text(encoding="utf-8"))
+    assert presentation._alias_hash("Acme Logistics") not in registry
+    assert presentation._alias_hash("Volvo Cars") not in registry
+    assert presentation._alias_hash("Anna Svensson") in registry

@@ -22,7 +22,7 @@ The tool is intentionally different from the other OWG views:
 - `get_workflow_evidence` packages explicitly selected runs for skill/procedure
   drafting, with support counts, provenance and bounded canonical evidence.
 
-Prefer explicit `execution_ids` when the user selected examples. When discovery returns `candidate_clusters`, prefer those execution IDs over a coarse `family_key`. Candidate clusters are exact structural navigation variants, not business-workflow truth; family keys remain compatibility/coarse tags.
+Prefer explicit `execution_ids` when the user selected examples. When discovery returns `candidate_clusters`, prefer those execution IDs over a coarse `family_key`. Candidate clusters are deterministic structural navigation candidates that tolerate optional/substituted steps while preserving exact variants underneath. They are not business-workflow truth; family keys remain compatibility/coarse tags.
 
 When drafting:
 1. reconstruct the intended outcome from canonical evidence rather than copying a

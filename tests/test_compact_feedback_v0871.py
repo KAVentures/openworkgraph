@@ -243,3 +243,68 @@ def test_feedback_and_task_context_tool_descriptions_explain_inputs():
     assert "family_key" in context_doc
     assert "task_family" in context_doc
     assert "structural step" in context_doc
+
+
+def test_find_repeated_workflows_default_payload_stays_chatgpt_sized(monkeypatch):
+    import json
+    from mcp_server import compact
+
+    monkeypatch.setattr(compact.core, "_begin", lambda _name: None)
+    monkeypatch.setattr(compact.core, "_finish", lambda _name, value: value)
+
+    families = []
+    clusters = []
+    for i in range(20):
+        family = f"human:family.{i}"
+        executions = [
+            {"execution_id": f"execution:{i:02x}{j:014x}", "started_at": "2026-10-06T09:00:00Z"}
+            for j in range(20)
+        ]
+        families.append({
+            "family_key": family,
+            "execution_count": 20,
+            "high_support_structural_steps": [f"surface:{i}:{j}" for j in range(16)],
+            "median_execution_duration_seconds": 123.4,
+            "executions": executions,
+        })
+        clusters.append({
+            "candidate_cluster_id": f"cluster:{i:016x}",
+            "execution_count": 20,
+            "core_steps": [f"Readable App {i} · Step {j}" for j in range(12)],
+            "observed_variations": [
+                {
+                    "step": f"Readable App {i} · Optional {j}",
+                    "support_runs": 5,
+                    "runs_total": 20,
+                    "support_fraction": 0.25,
+                    "absent_in_runs": 15,
+                    "variation_only": True,
+                }
+                for j in range(8)
+            ],
+            "exact_variant_count": 3,
+            "coarse_family_keys": [family],
+            "median_duration_seconds": 123.4,
+            "first_observed_at": "2026-10-01T09:00:00Z",
+            "last_observed_at": "2026-10-06T09:00:00Z",
+            "execution_ids": [row["execution_id"] for row in executions],
+        })
+
+    monkeypatch.setattr(
+        compact.secure_runtime,
+        "secure_get",
+        lambda path, _params=None: {
+            "families": families,
+            "candidate_clusters": clusters,
+        } if path == "/v1/workflow-evidence/families" else {},
+    )
+
+    result = compact.find_repeated_workflows()
+    encoded = json.dumps(result, separators=(",", ":")).encode("utf-8")
+    assert len(encoded) < 25_000
+    assert result["returned"] == 10
+    assert result["legacy_detail_included"] is False
+    assert "procedural_families" not in result
+    assert "automation_candidates" not in result
+    assert len(result["candidate_clusters"][0]["execution_ids"]) == 12
+    assert len(result["candidate_clusters"][0]["variations"]) == 8

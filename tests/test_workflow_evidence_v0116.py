@@ -240,3 +240,69 @@ def test_history_guard_clamps_family_discovery_to_explicit_saved_history_range()
             },
         )
     ]
+
+
+def test_transfer_destination_rollup_keeps_source_breakdown_without_hiding_exact_pairs():
+    from server.workflow_evidence import _clipboard_by_destination
+
+    exact = [
+        {
+            "source_surface": "Microsoft Excel",
+            "destination_surface": "Internal Pricing Tool",
+            "observed_transfer_count": 2,
+            "supporting_execution_ids": ["execution:aaaaaaaaaaaaaaaa", "execution:bbbbbbbbbbbbbbbb"],
+        },
+        {
+            "source_surface": "Adobe Acrobat",
+            "destination_surface": "Internal Pricing Tool",
+            "observed_transfer_count": 2,
+            "supporting_execution_ids": ["execution:cccccccccccccccc", "execution:dddddddddddddddd"],
+        },
+    ]
+    rows = _clipboard_by_destination(exact)
+    assert len(rows) == 1
+    assert rows[0]["destination_surface"] == "Internal Pricing Tool"
+    assert rows[0]["observed_transfer_count"] == 4
+    assert rows[0]["support_runs"] == 4
+    assert rows[0]["clipboard_contents_observed"] is False
+    assert rows[0]["source_breakdown"] == [
+        {
+            "source_surface": "Adobe Acrobat",
+            "observed_transfer_count": 2,
+            "supporting_execution_ids": ["execution:cccccccccccccccc", "execution:dddddddddddddddd"],
+        },
+        {
+            "source_surface": "Microsoft Excel",
+            "observed_transfer_count": 2,
+            "supporting_execution_ids": ["execution:aaaaaaaaaaaaaaaa", "execution:bbbbbbbbbbbbbbbb"],
+        },
+    ]
+
+
+def test_candidate_projection_reuses_central_readable_agent_steps(monkeypatch):
+    from server import agent_execution_traces, procedural_feedback, workflow_evidence
+
+    monkeypatch.setattr(procedural_feedback, "_human_runs", lambda _raw: [])
+    monkeypatch.setattr(
+        agent_execution_traces,
+        "agent_execution_traces",
+        lambda *_args, **_kwargs: {
+            "executions": [{
+                "execution_id": "execution:aaaaaaaaaaaaaaaa",
+                "structural_steps": ["Read", "Grep", "Edit", "Bash"],
+            }]
+        },
+    )
+    projected = workflow_evidence._candidate_runs(
+        [],
+        [{
+            "execution_id": "execution:aaaaaaaaaaaaaaaa",
+            "actor_kind": "agent",
+            "steps": [
+                "tool:filesystem:tool:4914deadbeef",
+                "tool:search:tool:1111deadbeef",
+            ],
+        }],
+    )
+    assert projected[0]["semantic_steps"] == ["Read", "Grep", "Edit", "Bash"]
+    assert projected[0]["structural_steps"][0].startswith("tool:filesystem:")
