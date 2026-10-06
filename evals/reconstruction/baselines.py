@@ -47,8 +47,26 @@ def group_by_resource(case: dict[str, Any]) -> dict[str, Any]:
     return _prediction(case, groups)
 
 
+def group_by_position_parity(case: dict[str, Any]) -> dict[str, Any]:
+    """Deliberately naive alternating-position shortcut."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for index, event in enumerate(case["presented_evidence"]):
+        groups[str(index % 2)].append(str(event["event_id"]))
+    return _prediction(case, groups)
+
+
+def group_by_application(case: dict[str, Any]) -> dict[str, Any]:
+    """Deliberately naive shortcut that treats each application as one workflow."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for event in case["presented_evidence"]:
+        groups[str(event.get("app") or "unknown")].append(str(event["event_id"]))
+    return _prediction(case, groups)
+
+
 def score_baselines(cases: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {
         "tab_context": aggregate(cases, [group_by_tab(case) for case in cases]),
         "resource_reference": aggregate(cases, [group_by_resource(case) for case in cases]),
+        "position_parity": aggregate(cases, [group_by_position_parity(case) for case in cases]),
+        "application": aggregate(cases, [group_by_application(case) for case in cases]),
     }
