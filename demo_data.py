@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from resource_references import normalize_resource_reference
+from shared.core.resource_references import normalize_resource_reference
 from server.agent_ingest import ingest_agent_payloads
 from server.browser_signal_settings import apply_profile, save_settings
 from server.db import init_db, insert_events
