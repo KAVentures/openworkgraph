@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +36,18 @@ _KIND = {
     "linear": ("linear", "issue"),
 }
 
+def _opaque_id(namespace: str, value: str) -> str:
+    """Stable synthetic identity that preserves equality without semantic leakage."""
+    digest = hashlib.sha256(f"{namespace}:{value}".encode("utf-8")).hexdigest()[:16]
+    return f"{namespace}-{digest}"
+
+
+def case_family_id(case_id: str) -> str:
+    """Return the independent scenario family for variants such as ...-v1."""
+    head, marker, suffix = str(case_id).rpartition("-v")
+    return head if marker and suffix.isdigit() else str(case_id)
+
+
 def _iso(base: datetime, seconds: int) -> str:
     return (base + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
@@ -57,6 +71,9 @@ def _event(
     base = datetime(2026, 10, 6, 8, 0, tzinfo=timezone.utc)
     app, title, host = _APP[surface]
     event_id = f"e{idx:03d}"
+    opaque_resource = _opaque_id("r", resource) if resource else None
+    opaque_tab = _opaque_id("t", tab) if tab else None
+    opaque_transfer = _opaque_id("x", clipboard_transfer) if clipboard_transfer else None
     metadata: dict[str, Any] = {
         "action": action,
         "semantic_action": action,
@@ -66,20 +83,20 @@ def _event(
     if host:
         metadata["page"] = {
             "hostname": host,
-            "pathname": f"/opaque/{resource or surface}",
+            "pathname": f"/opaque/{_opaque_id("p", resource or surface)}",
             "title": f"{title} · {label}",
         }
     if tab:
-        metadata["tab_context_id"] = tab
+        metadata["tab_context_id"] = opaque_tab
     if resource and surface in _KIND and not omit_resource:
         provider, kind = _KIND[surface]
         metadata["resource_reference"] = {
             "provider": provider,
             "resource_kind": kind,
-            "resource_ref": f"owg:r:{resource}",
+            "resource_ref": f"owg:r:{opaque_resource}",
         }
     if clipboard_transfer:
-        metadata["clipboard_transfer_id"] = clipboard_transfer
+        metadata["clipboard_transfer_id"] = opaque_transfer
         metadata["clipboard_source_observed"] = clipboard_action == "paste"
         metadata["action"] = clipboard_action or action
     return {
@@ -194,6 +211,7 @@ def _case(case_id: str, events: list[dict[str, Any]], *, requires_uncertainty: b
         wf_list.append(row)
     return {
         "case_id": case_id,
+        "family_id": case_family_id(case_id),
         "presented_evidence": [_trace_projection(e) for e in events],
         "source_events": [_source_event(e) for e in events],
         "ground_truth": {
@@ -404,10 +422,12 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
     i = 1
     def E(seconds: int, surface: str, action: str, *, workflow: str, label: str = "Open item",
           resource: str | None = None, checkpoint: str | None = None, role: str = "checkpoint",
-          tab: str | None = None, omit_resource: bool = False) -> None:
+          tab: str | None = None, omit_resource: bool = False,
+          clipboard_transfer: str | None = None, clipboard_action: str | None = None) -> None:
         nonlocal i
         add(_event(i, seconds, surface, action, label=label, resource=resource, workflow=workflow,
-                   checkpoint=checkpoint, role=role, tab=tab, omit_resource=omit_resource))
+                   checkpoint=checkpoint, role=role, tab=tab, omit_resource=omit_resource,
+                   clipboard_transfer=clipboard_transfer, clipboard_action=clipboard_action))
         i += 1
 
     # 20 independent topologies. Labels are intentionally generic: identity must
@@ -416,23 +436,33 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
         for t,w,r,c in [(0,"A","mail-71","request"),(12,"B","mail-83","request"),(25,"A","acct-71","account"),
                         (39,"B","acct-83","account"),(54,"A","mail-71","reply"),(68,"B","mail-83","reply")]:
             surf="gmail" if "mail" in r else "salesforce"; E(t,surf,"click",workflow=w,resource=r,checkpoint=c,tab="tab-shared")
-    elif kind == 12:  # no resource refs at all; tab/action continuity only
-        for t,surf,w,c,tab in [(0,"gmail","A","request","t1"),(14,"slack","B","request",None),(29,"salesforce","A","account","t1"),
-                               (43,"jira","B","issue","t2"),(61,"sheets","A","check","t3"),(79,"jira","B","resolve","t2"),(96,"gmail","A","reply","t1")]:
-            E(t,surf,"click" if surf not in ("slack",) else "focus",workflow=w,resource=f"x-{t}",checkpoint=c,tab=tab,omit_resource=True)
+    elif kind == 12:  # no resource refs; weak semantic continuity must carry the Slack -> Jira link
+        specs = [
+            (0,"gmail","A","request","t1","Renewal request"),
+            (14,"slack","B","request",None,"Escalation request"),
+            (29,"salesforce","A","account","t1","Renewal account"),
+            (43,"jira","B","issue","t2","Escalation issue"),
+            (61,"sheets","A","check","t3","Renewal pricing"),
+            (79,"jira","B","resolve","t2","Resolve escalation"),
+            (96,"gmail","A","reply","t1","Renewal reply"),
+        ]
+        for t,surf,w,c,tab,label in specs:
+            E(t,surf,"click" if surf != "slack" else "focus",workflow=w,resource=f"x-{t}",
+              checkpoint=c,tab=tab,omit_resource=True,label=label)
     elif kind == 13:  # five-way interleave
         specs=[("A","gmail","m11"),("B","jira","j22"),("C","github","p33"),("D","docs","d44"),("E","salesforce","s55")]
         t=0
         for round_no in range(3):
             for w,surf,res in specs:
                 E(t,surf,"click",workflow=w,resource=res,checkpoint=f"step{round_no+1}",tab=f"tab-{res}"); t+=9
-    elif kind == 14:  # abandoned workflow among two completed ones
+    elif kind == 14:  # abandoned workflow has enough evidence to be work, but no completion
         E(0,"gmail","click",workflow="A",resource="m21",checkpoint="request",tab="t1")
         E(13,"github","click",workflow="B",resource="p22",checkpoint="review",tab="t2")
         E(28,"salesforce","click",workflow="A",resource="s21",checkpoint="account",tab="t3")
-        E(45,"docs","click",workflow="C",resource="d23",checkpoint="open",tab="t4")
+        E(45,"docs","click",workflow="C",resource="d23",checkpoint="open",tab="t4",label="Open draft")
         E(63,"github","click",workflow="B",resource="p22",checkpoint="finish",tab="t2")
-        E(81,"gmail","click",workflow="A",resource="m21",checkpoint="reply",tab="t1")
+        E(72,"docs","click",workflow="C",resource="d23",checkpoint="edit",tab="t4",label="Edit draft")
+        E(88,"gmail","click",workflow="A",resource="m21",checkpoint="reply",tab="t1")
     elif kind == 15:  # near-duplicate account/resource names, distinct refs
         for t,w,res in [(0,"A","acct-20418"),(11,"B","acct-20481"),(23,"A","acct-20418"),(36,"B","acct-20481"),(51,"A","acct-20418"),(67,"B","acct-20481")]:
             E(t,"salesforce","click",workflow=w,resource=res,checkpoint=f"s{t}",tab="same-tab")
@@ -448,17 +478,28 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
         E(48,"salesforce","click",workflow="A",resource="s41",checkpoint="account",tab="t3")
         E(64,"jira","click",workflow="B",resource="j42",checkpoint="resolve",tab="t2")
         E(82,"gmail","click",workflow="A",resource="m41",checkpoint="reply",tab="t1")
-    elif kind == 18:  # hidden threshold: uncertainty required
+    elif kind == 18:  # linked Slack step, but its governing rule remains hidden
         E(0,"salesforce","click",workflow="A",resource="s51",checkpoint="account",tab="t1")
-        E(18,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
-        E(41,"salesforce","click",workflow="A",resource="s51",checkpoint="save",tab="t1")
+        E(12,"salesforce","click",workflow="A",resource="s51",checkpoint="context",tab="t1",
+          label="Copy request details",clipboard_transfer="case18-link",clipboard_action="copy")
+        E(24,"slack","paste",workflow="A",resource=None,checkpoint="approval",label="New message",
+          clipboard_transfer="case18-link",clipboard_action="paste")
+        E(47,"salesforce","click",workflow="A",resource="s51",checkpoint="save",tab="t1")
     elif kind == 19:  # apparent rule is observable in evidence; uncertainty NOT required
         E(0,"salesforce","click",workflow="A",resource="s61",checkpoint="account",tab="t1",label="Discount 25%")
         E(19,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="Approve discounts over 20%")
         E(43,"salesforce","click",workflow="A",resource="s61",checkpoint="save",tab="t1")
-    elif kind == 20:  # generic titles and no refs
-        for t,surf,w,c in [(0,"gmail","A","request"),(17,"gmail","B","request"),(35,"salesforce","A","open"),(54,"salesforce","B","open"),(75,"gmail","A","reply"),(96,"gmail","B","reply")]:
-            E(t,surf,"click",workflow=w,resource=None,checkpoint=c,tab=None,omit_resource=True,label="Open item")
+    elif kind == 20:  # no refs/tabs; semantic cues are fair, chronology alone is not
+        specs = [
+            (0,"gmail","A","request","Open renewal request"),
+            (17,"gmail","B","request","Open billing request"),
+            (35,"salesforce","B","open","Review billing account"),
+            (54,"salesforce","A","open","Review renewal account"),
+            (75,"gmail","A","reply","Send renewal reply"),
+            (96,"gmail","B","reply","Send billing reply"),
+        ]
+        for t,surf,w,c,label in specs:
+            E(t,surf,"click",workflow=w,resource=None,checkpoint=c,tab=None,omit_resource=True,label=label)
     elif kind == 21:  # shared spreadsheet, three workflows
         for t,w,res in [(0,"A","m71"),(12,"B","j72"),(25,"C","p73"),(40,"A","sheet-shared"),(55,"B","sheet-shared"),(70,"C","sheet-shared"),(88,"A","m71"),(104,"B","j72"),(121,"C","p73")]:
             surf="sheets" if res=="sheet-shared" else ("gmail" if res.startswith("m") else "jira" if res.startswith("j") else "github")
@@ -489,20 +530,23 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
     elif kind == 26:  # no tab IDs, refs carry continuity
         for t,w,surf,res in [(0,"A","gmail","m121"),(13,"B","jira","j122"),(27,"A","salesforce","s121"),(42,"B","jira","j122"),(58,"A","gmail","m121")]:
             E(t,surf,"click",workflow=w,resource=res,checkpoint=f"s{t}",tab=None)
-    elif kind == 27:  # no refs, apps/actions carry a weak but solvable pattern
-        for t,w,surf in [(0,"A","gmail"),(10,"B","github"),(22,"A","salesforce"),(35,"B","terminal"),(49,"A","gmail"),(64,"B","github")]:
+    elif kind == 27:  # no refs; app/action pattern is useful but position alternation is not
+        for t,w,surf in [(0,"A","gmail"),(10,"B","github"),(22,"B","terminal"),(35,"A","salesforce"),(49,"A","gmail"),(64,"B","github")]:
             E(t,surf,"focus" if surf=="terminal" else "click",workflow=w,resource=None,checkpoint=f"s{t}",tab=None,omit_resource=True,label="Open item")
-    elif kind == 28:  # incomplete capture: uncertainty required
+    elif kind == 28:  # linked incomplete capture: membership is clear, trigger/outcome is not
         E(0,"gmail","click",workflow="A",resource="m141",checkpoint="request",tab="t1")
         E(19,"salesforce","click",workflow="A",resource="s141",checkpoint="account",tab="t2")
-        E(38,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
-        # Capture ends before the approval response/trigger is observable.
+        E(30,"salesforce","click",workflow="A",resource="s141",checkpoint="context",tab="t2",
+          label="Copy request details",clipboard_transfer="case28-link",clipboard_action="copy")
+        E(42,"slack","paste",workflow="A",resource=None,checkpoint="approval",label="New message",
+          clipboard_transfer="case28-link",clipboard_action="paste")
+        # Capture ends before the response and governing trigger are observable.
     elif kind == 29:  # observed rule text, complete enough: uncertainty not required
         E(0,"docs","click",workflow="A",resource="policy151",checkpoint="policy",tab="tp",label="Orders above 5000 require approval")
         E(21,"salesforce","click",workflow="A",resource="s151",checkpoint="record",tab="t1",label="Order total 6200")
         E(42,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
         E(63,"salesforce","click",workflow="A",resource="s151",checkpoint="save",tab="t1")
-    else:  # 30: long 80-event session, four interleaved workflows + noise
+    elif kind == 30:  # long 68-event session, four interleaved workflows + noise
         resources={"A":("gmail","m201"),"B":("jira","j202"),"C":("github","p203"),"D":("salesforce","s204")}
         t=0
         for n in range(16):
@@ -513,21 +557,48 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
             if n % 4 == 1:
                 E(t,"docs","click",workflow="NOISE",resource=f"noise-{n}",role="noise",tab=f"tn-{n}",label="Open document")
                 t += 5
+    elif kind == 31:  # hidden monetary threshold; linked approval request, no rule text
+        E(0,"salesforce","click",workflow="A",resource="s311",checkpoint="record",tab="t1",label="Open order")
+        E(14,"salesforce","click",workflow="A",resource="s311",checkpoint="context",tab="t1",
+          label="Copy order details",clipboard_transfer="case31-link",clipboard_action="copy")
+        E(29,"slack","paste",workflow="A",resource=None,checkpoint="review",label="New message",
+          clipboard_transfer="case31-link",clipboard_action="paste")
+        E(51,"salesforce","click",workflow="A",resource="s311",checkpoint="save",tab="t1",label="Save order")
+    elif kind == 32:  # matched observable-rule counterpart to 31
+        E(0,"docs","click",workflow="A",resource="policy321",checkpoint="policy",tab="tp",
+          label="Orders above 10000 require finance review")
+        E(17,"salesforce","click",workflow="A",resource="s321",checkpoint="record",tab="t1",label="Order total 12500")
+        E(31,"slack","focus",workflow="A",resource=None,checkpoint="review",label="Finance review")
+        E(54,"salesforce","click",workflow="A",resource="s321",checkpoint="save",tab="t1",label="Save order")
+    elif kind == 33:  # hidden legal-review condition; linkage is observable, rule is not
+        E(0,"gmail","click",workflow="A",resource="m331",checkpoint="request",tab="t1",label="Open contract request")
+        E(16,"docs","click",workflow="A",resource="d331",checkpoint="draft",tab="t2",label="Edit contract draft")
+        E(30,"docs","click",workflow="A",resource="d331",checkpoint="context",tab="t2",
+          label="Copy contract excerpt",clipboard_transfer="case33-link",clipboard_action="copy")
+        E(45,"slack","paste",workflow="A",resource=None,checkpoint="review",label="New message",
+          clipboard_transfer="case33-link",clipboard_action="paste")
+    else:  # 34: matched observable-rule counterpart to 33
+        E(0,"docs","click",workflow="A",resource="policy341",checkpoint="policy",tab="tp",
+          label="Indemnity changes require legal review")
+        E(18,"gmail","click",workflow="A",resource="m341",checkpoint="request",tab="t1",label="Open contract request")
+        E(34,"docs","click",workflow="A",resource="d341",checkpoint="draft",tab="t2",label="Indemnity clause changed")
+        E(51,"slack","focus",workflow="A",resource=None,checkpoint="review",label="Legal review")
+        E(72,"gmail","click",workflow="A",resource="m341",checkpoint="reply",tab="t1",label="Send reply")
 
     return _case(
         f"reconstruction-{kind:02d}",
         events,
-        requires_uncertainty=(kind in {18, 28}),
-        note=("A causal/business rule is deliberately not observable." if kind in {18, 28} else ""),
+        requires_uncertainty=(kind in {18, 28, 31, 33}),
+        note=("A causal/business rule is deliberately not observable." if kind in {18, 28, 31, 33} else ""),
     )
 
 def generate_cases() -> list[dict[str, Any]]:
-    # Thirty independent scenario families are the primary statistical units.
+    # Thirty-four independent scenario families are the primary statistical units.
     # The first ten retain three structural variants for regression coverage;
-    # the additional twenty are single, deliberately different hard topologies.
+    # the additional twenty-four are single, deliberately different hard topologies.
     return (
         [_scenario(kind, variant) for kind in range(1, 11) for variant in range(3)]
-        + [_advanced_scenario(kind) for kind in range(11, 31)]
+        + [_advanced_scenario(kind) for kind in range(11, 35)]
     )
 
 def write_cases(path: Path) -> None:
@@ -564,11 +635,29 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
             errors.append(f"{cid}: internal identity fields leaked into AI-facing evidence")
         if any("session_id" not in e for e in events):
             errors.append(f"{cid}: session_id missing from AI-facing trace fixture")
+        if str(case.get("family_id") or "") != case_family_id(cid):
+            errors.append(f"{cid}: invalid or missing family_id")
         source_events = case.get("source_events") or []
         if any("_truth" in e or "workflow_id" in e or "checkpoint_id" in e for e in source_events):
             errors.append(f"{cid}: hidden ground truth leaked into source events")
         if [str(e.get("event_id") or "") for e in source_events] != event_ids:
             errors.append(f"{cid}: source/presented event IDs differ")
+        for surface_name, surface_events in (("presented", events), ("source", source_events)):
+            for event in surface_events:
+                meta = event.get("metadata") or {}
+                page = meta.get("page") or {}
+                ref = (meta.get("resource_reference") or {}).get("resource_ref")
+                tab = meta.get("tab_context_id")
+                transfer = meta.get("clipboard_transfer_id")
+                path = page.get("pathname")
+                if ref and not re.fullmatch(r"owg:r:r-[0-9a-f]{16}", str(ref)):
+                    errors.append(f"{cid}: non-opaque {surface_name} resource_ref")
+                if tab and not re.fullmatch(r"t-[0-9a-f]{16}", str(tab)):
+                    errors.append(f"{cid}: non-opaque {surface_name} tab_context_id")
+                if transfer and not re.fullmatch(r"x-[0-9a-f]{16}", str(transfer)):
+                    errors.append(f"{cid}: non-opaque {surface_name} clipboard_transfer_id")
+                if path and not re.fullmatch(r"/opaque/p-[0-9a-f]{16}", str(path)):
+                    errors.append(f"{cid}: non-opaque {surface_name} page pathname")
         truth = case.get("ground_truth") or {}
         used: list[str] = []
         for workflow in truth.get("workflows") or []:
@@ -594,14 +683,17 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
     if len(set(signatures)) != len(cases):
         errors.append("corpus contains structurally duplicate cases")
     independent = [case for case in cases if "-v" not in str(case.get("case_id") or "")]
-    if len(independent) < 20:
-        errors.append("corpus needs at least 20 independent non-variant hard scenarios")
+    if len(independent) < 24:
+        errors.append("corpus needs at least 24 independent non-variant hard scenarios")
     uncertainty_cases = [
         case for case in cases
         if bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
     ]
-    if len(uncertainty_cases) < 5:
-        errors.append("corpus needs at least 5 independent/variant uncertainty cases")
+    if len(uncertainty_cases) < 7:
+        errors.append("corpus needs at least 7 uncertainty cases")
+    uncertainty_families = {str(case.get("family_id") or "") for case in uncertainty_cases}
+    if len(uncertainty_families) < 5:
+        errors.append("corpus needs at least 5 distinct uncertainty families")
     long_cases = [case for case in cases if len(case.get("presented_evidence") or []) >= 50]
     if not long_cases:
         errors.append("corpus needs at least one 50+ event session")
