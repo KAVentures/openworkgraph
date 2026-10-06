@@ -118,7 +118,8 @@ truth by maximum event overlap.
 | Exact workflow-count accuracy | >= 0.90 |
 | Meaningful-checkpoint recall | >= 0.90 |
 | Unrelated-interruption rejection | >= 0.95 |
-| Hidden-rule uncertainty accuracy | >= 0.90 |
+| Hidden-rule uncertainty recall | >= 0.90 |
+| Unnecessary uncertainty rate | <= 0.10 |
 
 The scorer also reports ordering accuracy, automation-relevance precision/recall
 and UI-mechanic precision/recall.
