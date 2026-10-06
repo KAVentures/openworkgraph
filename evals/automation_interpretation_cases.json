@@ -31,7 +31,9 @@
         "Default to a macro/template-only recommendation without considering modern agents, connectors, APIs, or browser/computer use.",
         "Conclude that the spreadsheet should be deleted without checking downstream dependencies."
       ],
-      "user_intent": "Automate my recurring customer-update workflow so an AI can handle as much of it as is reasonably safe and reliable."
+      "user_intent": "Automate my recurring customer-update workflow so an AI can handle as much of it as is reasonably safe and reliable.",
+      "realistic_user_explanation": "I usually open the customer email, look up the account in Salesforce, update our tracking sheet, then reply. I want an AI to handle most of that, but the sheet may be used by other people.",
+      "mcp_fixture_case_id": "reconstruction-24"
     },
     {
       "id": "invoice_approval_financial",
@@ -47,7 +49,9 @@
         "Recommend autonomous invoice approval merely because the user repeatedly clicked Approve.",
         "Treat the workflow as wholly non-automatable just because the final approval remains controlled."
       ],
-      "user_intent": "Automate my recurring invoice-processing workflow so an AI can take over as much of it as is appropriate."
+      "user_intent": "Automate my recurring invoice-processing workflow so an AI can take over as much of it as is appropriate.",
+      "realistic_user_explanation": "I review invoices in Salesforce and approve the ones that look appropriate. I want to automate the repetitive checking and preparation, but there are business rules behind whether something should actually be approved.",
+      "mcp_fixture_case_id": "reconstruction-31"
     },
     {
       "id": "claude_code_fail_then_pass",
@@ -63,7 +67,9 @@
         "Call the workflow already fully automated simply because Claude Code appears in it.",
         "Recommend a test-running macro as the primary improvement."
       ],
-      "user_intent": "Improve or automate my software-development workflow around AI coding agents so I need to intervene less."
+      "user_intent": "Improve or automate my software-development workflow around AI coding agents so I need to intervene less.",
+      "realistic_user_explanation": "I hand coding tasks to an AI agent, it edits code and runs tests, and I often come back later to check whether it finished and deal with CI or the PR. I want fewer manual handoffs.",
+      "mcp_fixture_case_id": "reconstruction-10-v1"
     },
     {
       "id": "one_off_high_judgment_work",
@@ -78,7 +84,9 @@
         "Force a recurring automation recommendation from one ambiguous session.",
         "Treat foreground time alone as proof of repetitive friction."
       ],
-      "user_intent": "Look at this work and tell me what should be automated or delegated to AI."
+      "user_intent": "Look at this work and tell me what should be automated or delegated to AI.",
+      "realistic_user_explanation": "This was mostly reading a strategy memo, thinking through a one-off decision, editing it, and discussing it. Tell me whether any part is worth automating.",
+      "mcp_fixture_case_id": "reconstruction-14"
     },
     {
       "id": "clinical_patient_message",
@@ -94,7 +102,9 @@
         "Recommend autonomous clinical advice or patient messaging solely because the workflow is repetitive.",
         "Declare the whole workflow non-automatable because OWG did not retain message contents."
       ],
-      "user_intent": "Automate or streamline this recurring patient-message workflow as much as is appropriate."
+      "user_intent": "Automate or streamline this recurring patient-message workflow as much as is appropriate.",
+      "realistic_user_explanation": "I repeatedly review the chart, draft a patient message, edit it, and send it. I want to streamline the retrieval and drafting while keeping appropriate clinical oversight.",
+      "mcp_fixture_case_id": null
     },
     {
       "id": "low_risk_reversible_internal_update",
@@ -110,7 +120,9 @@
         "Assume every production write always requires a fresh human click forever.",
         "Recommend unrestricted autonomy without scope, logging, or rollback boundaries."
       ],
-      "user_intent": "Automate this recurring internal status-update workflow so I do not have to perform it manually."
+      "user_intent": "Automate this recurring internal status-update workflow so I do not have to perform it manually.",
+      "realistic_user_explanation": "I repeatedly read a status source, reformat it into our internal dashboard, save it, and can roll it back if needed. I want this routine update automated.",
+      "mcp_fixture_case_id": null
     },
     {
       "id": "renewal_missing_pricing_checkpoint",
@@ -127,7 +139,9 @@
         "Omit the pricing dependency simply because the user's short description did not mention it.",
         "Invent a pricing threshold or business rule from the repeated check.",
         "Require literal browser replay when a better authorized source exists."
-      ]
+      ],
+      "realistic_user_explanation": "For renewals I read the customer email, open their Salesforce opportunity, update the CRM, and reply. I sometimes have to think about pricing, but I don't remember exactly where that happens in every run.",
+      "mcp_fixture_case_id": "reconstruction-24"
     },
     {
       "id": "spreadsheet_possible_implementation_detail",
@@ -143,7 +157,9 @@
         "Declare the spreadsheet mandatory solely because it appears in every historical run.",
         "Delete or bypass the spreadsheet without checking its downstream role.",
         "Automate the spreadsheet clicks as the default outcome without considering outcome-level simplification."
-      ]
+      ],
+      "realistic_user_explanation": "I handle account updates by reading the request, updating Salesforce, and often touching a spreadsheet before I reply. I'm not sure whether that spreadsheet is genuinely required or just how we've always done it.",
+      "mcp_fixture_case_id": "reconstruction-06-v1"
     },
     {
       "id": "support_exception_escalation",
@@ -160,7 +176,9 @@
         "Design only the majority three-step path and silently drop the observed exception.",
         "Infer the escalation rule from frequency or timing alone.",
         "Treat the existence of exceptions as proof that none of the workflow can be automated."
-      ]
+      ],
+      "realistic_user_explanation": "Most support tickets are opened in Zendesk, checked against Jira, and answered. Some harder tickets need escalation to a specialist, but I don't have the escalation rule written down here.",
+      "mcp_fixture_case_id": "reconstruction-18"
     },
     {
       "id": "two_similar_crm_workflows",
@@ -176,7 +194,9 @@
         "Collapse both workflows into one generic Salesforce-save automation.",
         "Transfer the approval requirement to the routine path without evidence.",
         "Drop the approval requirement from the contract path because the final UI action looks identical."
-      ]
+      ],
+      "realistic_user_explanation": "I have a couple of repetitive Salesforce update flows. Some are routine account updates; contract-related updates can involve approval. I want to automate them without mixing the rules up.",
+      "mcp_fixture_case_id": "reconstruction-25"
     },
     {
       "id": "agent_handoff_unfinished_work",
@@ -192,7 +212,9 @@
         "Recommend a code-generation or test-running macro as the primary opportunity.",
         "Treat the first agent stop as a completed workflow.",
         "Assume an agent may merge or publish changes merely because the human later did so."
-      ]
+      ],
+      "realistic_user_explanation": "I give tasks to a coding agent, it edits and tests, and sometimes it stops before everything is done. I later reopen the project, continue the agent, and check the PR. The continuity work is annoying.",
+      "mcp_fixture_case_id": "reconstruction-10-v1"
     },
     {
       "id": "approval_rule_observed_in_evidence",
@@ -208,7 +230,9 @@
         "Claim the approval trigger is wholly hidden despite explicit policy evidence.",
         "Recommend autonomous manager approval.",
         "Require a human to rediscover the threshold manually on every routine case if an authoritative live policy source can be checked."
-      ]
+      ],
+      "realistic_user_explanation": "I prepare discount-related CRM updates. Larger discounts need manager approval; smaller ones don't. I think the cutoff is documented internally, and the manager still makes the approval decision.",
+      "mcp_fixture_case_id": "reconstruction-19"
     },
     {
       "id": "abandoned_attempt_not_required_step",
@@ -224,7 +248,9 @@
         "Include every observed application visit in the automation recipe.",
         "Drop the validation checkpoint while preserving the unrelated document visit.",
         "Conclude that one noisy run makes the repeated workflow unusable for automation design."
-      ]
+      ],
+      "realistic_user_explanation": "For the weekly report I export the data, load it into the reporting tool, check the totals, and send it. I sometimes get distracted or open other documents while doing it.",
+      "mcp_fixture_case_id": "reconstruction-16"
     },
     {
       "id": "resource_lookup_missing_from_user_description",
@@ -240,7 +266,9 @@
         "Automate reply generation without accounting for the observed reference source.",
         "Treat missing historical document text as proof automation is impossible.",
         "Copy or invent document contents from the pointer alone."
-      ]
+      ],
+      "realistic_user_explanation": "When answering these customer requests I usually check some internal reference material before replying, but I don't reliably remember which document without looking.",
+      "mcp_fixture_case_id": "reconstruction-23"
     },
     {
       "id": "reversible_write_with_failure_recovery",
@@ -256,7 +284,9 @@
         "Assume happy-path success and omit observed recovery/verification.",
         "Require permanent manual execution solely because one historical save failed.",
         "Recommend unbounded retries or unrestricted write authority."
-      ]
+      ],
+      "realistic_user_explanation": "This is a repetitive internal record update and it's reversible. Saves normally work, but occasionally the system errors and I have to retry and verify the result.",
+      "mcp_fixture_case_id": null
     },
     {
       "id": "sensitive_action_after_routine_preparation",
@@ -272,7 +302,9 @@
         "Recommend autonomous account disabling solely because it is repetitive.",
         "Declare the entire offboarding workflow non-automatable because one step is sensitive.",
         "Treat historical observation of an administrator action as authorization for the AI."
-      ]
+      ],
+      "realistic_user_explanation": "Offboarding involves gathering account details, preparing a checklist, notifying internal teams, and then an authorized admin disables access. I want to automate as much preparation as possible without granting unsafe authority.",
+      "mcp_fixture_case_id": null
     }
   ],
   "paired_protocol": {
@@ -288,5 +320,12 @@
       "Count of cases improved/unchanged/regressed",
       "Paired per-case score deltas; do not rely on aggregate uplift alone"
     ]
-  }
+  },
+  "product_value_arms": {
+    "A_minimal_intent": "user_intent only",
+    "B_realistic_user": "realistic_user_explanation only; no OWG evidence",
+    "C_real_owg": "user_intent plus access to the real compact OWG MCP over source_events from mcp_fixture_case_id; never pass evidence_summary to the model",
+    "D_curated_oracle": "user_intent plus evidence_summary; this is an upper-bound/oracle arm, not the product result"
+  },
+  "product_value_interpretation": "Primary product comparison is C versus B. D measures how much useful signal is present if perfectly summarized; C versus D estimates retrieval/interpretation loss. A remains a weak baseline."
 }

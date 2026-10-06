@@ -70,3 +70,21 @@ Provider credentials and paid model calls are intentionally not part of normal r
 Do not claim that OWG improves automation design merely because the OWG arm has a positive total delta. Inspect the paired case deltas and every critical failure. A useful result should be directionally consistent across distinct scenarios: OWG should recover observed dependencies and exception paths that the intent-only arm could not know, while not causing the model to preserve incidental UI mechanics or infer hidden rules/authority from repetition.
 
 The strongest synthetic evidence is: positive overall and per-axis uplift, improvement across multiple independent cases, no new critical failures, and specific resolved failures attributable to information present only in OWG evidence. This remains an engineering benchmark; real user sessions with blinded scoring are required before making an external quantitative product claim.
+
+
+## Four-arm product-value check
+
+The paired intent-only versus curated-summary result is useful but is not the final product test. Use four fresh-context arms:
+
+1. **Minimal intent** — `user_intent` only. This is the deliberately weak baseline.
+2. **Realistic user** — `realistic_user_explanation` only. This is the primary non-OWG comparator.
+3. **Real OWG** — give only `user_intent`, seed the referenced reconstruction fixture's `source_events` into a clean OWG instance, connect the model through the real compact MCP, and let the model decide which OWG tools to call. Never include `evidence_summary` in this arm.
+4. **Curated oracle** — `user_intent + evidence_summary`. This estimates the upper bound if relevant observations were perfectly summarized.
+
+The primary product result is **Real OWG minus Realistic user**. Curated oracle minus Real OWG estimates retrieval/interpretation loss. Minimal intent remains useful for continuity with earlier runs but should not be presented as the realistic product baseline.
+
+Cases with `mcp_fixture_case_id=null` are excluded from the Real OWG paired comparison until an honest seedable trace exists. Do not substitute a merely similar fixture. The current corpus maps 12/16 cases to existing deterministic reconstruction traces; this deliberately reuses the raw-evidence benchmark instead of duplicating another event corpus.
+
+For the Real OWG arm, preserve the actual product path: seed source events into a clean local store, enable the intended AI history/detail policy, start the compact MCP entrypoint, and allow the model to navigate with tools such as `find_repeated_workflows`, `get_workflow_evidence`, and `get_workflow_trace`. Record tool calls as part of the run artifact. A test that directly places `presented_evidence` or `evidence_summary` in the model prompt is not a Real OWG run.
+
+Run arms in separate conversations/processes and randomize order when practical. Blind graders to arm identity and shuffle answers exactly as in the paired curated-summary protocol.
