@@ -348,6 +348,10 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
             errors.append(f"{cid}: duplicate event ids")
         if any("_truth" in e or "workflow_id" in e or "checkpoint_id" in e for e in events):
             errors.append(f"{cid}: hidden ground truth leaked into presented evidence")
+        if any(any(key in e for key in ("actor_id", "device_id", "sensor_id", "schema_version")) for e in events):
+            errors.append(f"{cid}: internal identity fields leaked into AI-facing evidence")
+        if any("session_id" not in e for e in events):
+            errors.append(f"{cid}: session_id missing from AI-facing trace fixture")
         source_events = case.get("source_events") or []
         if any("_truth" in e or "workflow_id" in e or "checkpoint_id" in e for e in source_events):
             errors.append(f"{cid}: hidden ground truth leaked into source events")
