@@ -123,8 +123,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           foreach ($Path in @(
-            "enterprise\windows\install-managed.ps1",
-            "enterprise\windows\detect.ps1",
+            "platform\enterprise\windows\install-managed.ps1",
+            "platform\enterprise\windows\detect.ps1",
             "scripts\build_windows_enterprise_installer.ps1"
           )) {
             $Errors = $null
