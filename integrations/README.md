@@ -1,18 +1,18 @@
 # OpenWorkGraph integrations
 
-This directory is the map for software that connects **to** OpenWorkGraph. Some compatibility/published packages still live at the repository root for now; this page is the single navigation surface while those paths are migrated safely.
+This directory is the map for software that connects **to** OpenWorkGraph. Packaging-only integration assets live here. Importable/runtime compatibility packages remain at the repository root until they can be migrated without breaking Python imports, published package paths, installers, or customer configurations.
 
 ## Agent integrations
 
 - [../adapters/](../adapters/) — Python adapters for agent runtimes and execution/approval/context hooks.
-- [../plugins/openworkgraph/](../plugins/openworkgraph/) — installable agent/plugin package with commands, hooks and OWG skill.
+- [plugins/openworkgraph/](plugins/openworkgraph/) — installable Claude Code plugin package with commands, hooks and the OWG skill.
 - [../openworkgraph_agent/](../openworkgraph_agent/) — compatibility Python package.
 - [../sdk/](../sdk/) — published Python/TypeScript integration SDKs.
 
 ## MCP packaging
 
 - [../mcp_server/](../mcp_server/) — local MCP implementation used by connected AI clients.
-- [../mcpb/](../mcpb/) — MCP bundle wrapper/manifest used for packaged client installation.
+- [mcpb/](mcpb/) — MCP bundle wrapper/manifest used for packaged client installation.
 
 ## Productivity-suite integrations
 

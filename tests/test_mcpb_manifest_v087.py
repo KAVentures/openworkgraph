@@ -28,7 +28,7 @@ EXPECTED_COMPACT_TOOLS = {
 
 
 def test_mcpb_manifest_advertises_exact_compact_default_surface():
-    manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((ROOT / "integrations" / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     names = {str(item.get("name") or "") for item in manifest.get("tools") or []}
     assert names == EXPECTED_COMPACT_TOOLS
     description = str(manifest.get("long_description") or "")

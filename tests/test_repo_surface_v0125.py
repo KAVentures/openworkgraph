@@ -57,3 +57,20 @@ def test_root_public_contract_is_small_and_navigable():
     assert "[docs/README.md](docs/README.md)" in readme
     assert "Everything more detailed belongs here." in docs_index
     assert "SPEC.md" in agents
+
+
+def test_packaging_only_integrations_live_under_integrations():
+    assert not (ROOT / "mcpb").exists()
+    assert not (ROOT / "plugins").exists()
+    assert (ROOT / "integrations" / "mcpb" / "manifest.json").is_file()
+    assert (ROOT / "integrations" / "plugins" / "openworkgraph" / ".mcp.json").is_file()
+
+    marketplace = (ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+    assert "./integrations/plugins/openworkgraph" in marketplace
+
+    build_mcpb = (ROOT / "scripts" / "build_mcpb.py").read_text(encoding="utf-8")
+    assert 'SOURCE = ROOT / "integrations" / "mcpb"' in build_mcpb
+
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert "integrations/plugins/openworkgraph/scripts/find-and-launch.mjs" in workflow
+    assert "integrations/plugins/openworkgraph/scripts/check-openworkgraph.mjs" in workflow

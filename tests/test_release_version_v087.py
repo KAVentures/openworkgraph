@@ -12,7 +12,7 @@ EXPECTED_VERSION = "0.122.0"
 def test_release_version_sources_are_aligned():
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((ROOT / "integrations" / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     sdk_python = tomllib.loads((ROOT / "sdk" / "python" / "pyproject.toml").read_text(encoding="utf-8"))
     sdk_node = json.loads((ROOT / "sdk" / "typescript" / "package.json").read_text(encoding="utf-8"))
 
