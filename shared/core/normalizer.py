@@ -66,9 +66,11 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
     if host.endswith("atlassian.net"):
         if "confluence" in low_title:
             return "Confluence"
-        if "jira" in low_title:
+        if "jira" in low_title or path.startswith("/jira"):
             return "Jira"
         return "Atlassian"
+    if host.endswith("zendesk.com") or "zendesk" in low_title:
+        return "Zendesk"
     if host.endswith("salesforce.com") or host.endswith("force.com") or "salesforce" in low_title:
         return "Salesforce"
     if host.endswith("hubspot.com") or "hubspot" in low_title:
@@ -78,7 +80,7 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
         ("google docs", "Google Docs"), ("google sheets", "Google Sheets"),
         ("google slides", "Google Slides"), ("google drive", "Google Drive"),
         ("gmail", "Gmail"), ("chatgpt", "ChatGPT"), ("github", "GitHub"),
-        ("lovable", "Lovable"), ("salesforce", "Salesforce"), ("hubspot", "HubSpot"),
+        ("lovable", "Lovable"), ("salesforce", "Salesforce"), ("zendesk", "Zendesk"), ("hubspot", "HubSpot"),
         ("notion", "Notion"), ("figma", "Figma"), ("slack", "Slack"),
         ("microsoft teams", "Microsoft Teams"), ("outlook", "Outlook"),
         ("sharepoint", "SharePoint"),

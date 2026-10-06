@@ -16,6 +16,7 @@ from .local_auth import (
     consume_browser_pair_request,
     consume_export_ticket,
     consume_pairing_code,
+    create_dashboard_session,
     dashboard_session_valid,
     ensure_browser_secret,
     exchange_dashboard_bootstrap,
@@ -88,7 +89,12 @@ def _bootstrap_script() -> str:
   let dashboardSession = sessionStorage.getItem(SESSION_KEY) || '';
   const fragment = new URLSearchParams((location.hash || '').replace(/^#/, ''));
   const bootstrap = fragment.get('bootstrap') || '';
-  if (bootstrap) history.replaceState(null, '', location.pathname + location.search);
+  const directSession = fragment.get('session') || '';
+  if (bootstrap || directSession) history.replaceState(null, '', location.pathname + location.search);
+  if (directSession) {
+    dashboardSession = directSession;
+    sessionStorage.setItem(SESSION_KEY, dashboardSession);
+  }
 
   window.__owgAuthReady = (async () => {
     if (dashboardSession) return true;
@@ -110,7 +116,7 @@ def _bootstrap_script() -> str:
 
   window.fetch = async (input, init={}) => {
     const url = typeof input === 'string' ? input : String(input?.url || '');
-    if (!url.startsWith('/v1/') || url === '/v1/dashboard-session') return nativeFetch(input, init);
+    if (!url.startsWith('/v1/') || url === '/v1/dashboard-session' || url === '/v1/dashboard-session/reopen') return nativeFetch(input, init);
     const authenticated = await window.__owgAuthReady;
     const headers = new Headers(init.headers || (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
     if (authenticated && dashboardSession && !headers.has('Authorization')) {
@@ -430,6 +436,19 @@ async def local_capability_guard(request: Request, call_next):
         if not session:
             return _json_error("invalid or already-used dashboard bootstrap", 401)
         return JSONResponse({"status": "ok", "session": session, "lifetime": "process"})
+
+    if path == "/v1/dashboard-session/reopen" and method == "POST":
+        # Desktop menu hosts can reopen an authenticated dashboard without
+        # restarting the observer. The stable same-user API capability authorizes
+        # minting a fresh process-scoped dashboard session; the token is returned
+        # only to the local caller and is carried to the browser in a URL fragment.
+        if not bearer_matches(request.headers.get("authorization")):
+            return _json_error("API authentication required", 401)
+        return JSONResponse({
+            "status": "ok",
+            "session": create_dashboard_session(),
+            "lifetime": "process",
+        })
 
     if path == "/v1/browser-challenge" and method == "POST":
         try:

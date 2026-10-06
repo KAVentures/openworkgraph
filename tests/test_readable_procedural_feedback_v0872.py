@@ -95,6 +95,22 @@ def test_unknown_web_surface_is_pseudonymized_not_echoed():
     assert "internal.example" not in steps[0]
 
 
+
+def test_readable_surface_layer_reuses_safe_desktop_app_names_and_known_saas_hosts():
+    from server import procedural_feedback as feedback
+    from shared.core.normalizer import safe_surface
+
+    assert feedback._safe_desktop_surface("Microsoft Excel") == "Microsoft Excel"
+    assert feedback._safe_desktop_surface("Adobe Acrobat Reader") == "Adobe Acrobat"
+    assert feedback._safe_desktop_surface("Citrix Viewer") == "Citrix"
+    assert safe_surface(hostname="acme.zendesk.com") == "Zendesk"
+    assert safe_surface(hostname="acme.atlassian.net", pathname="/jira/software/c/projects/OPS") == "Jira"
+
+    unsafe = feedback._safe_desktop_surface("/Users/anna/Secret Customer.xlsx")
+    assert unsafe.startswith("Desktop app ")
+    assert "Secret Customer" not in unsafe
+
+
 def test_semantic_projection_cannot_change_structural_family_key(monkeypatch):
     from server import procedural_feedback as feedback
 

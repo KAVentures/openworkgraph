@@ -894,7 +894,7 @@ def list_connections() -> dict[str, Any]:
         "cli": cli_command(),
         "notes": {
             "on_off": "On/off takes effect immediately; no restart needed once a client is set up.",
-            "mcp_master_switch": "MCP reads also require the dashboard AI-access switch. A new install starts OFF; afterward the person's choice is remembered unless Privacy is set to reset it on restart.",
+            "mcp_master_switch": "MCP reads also require the dashboard AI-access switch. A new install starts ON at Redacted; afterward the person's choice is remembered unless Privacy is set to reset it on restart.",
         },
     }
 

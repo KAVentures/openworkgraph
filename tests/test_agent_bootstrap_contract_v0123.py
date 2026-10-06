@@ -477,6 +477,8 @@ def test_agent_instruction_contract_is_short_safe_and_canonical():
     assert "must **not** ask the person to choose a fake local client id" in agents
     assert "https://owg.your-company.example/mcp" in agents
     assert "Never silently enable Observe" in agents
+    assert "Installing or connecting MCP alone is not consent to enable Observe" in agents
+    assert "copy/cut/paste occurrence and linkage (never clipboard values)" in agents
     assert "get_current_work_context" in agents
     assert "Do **not** call OpenWorkGraph for ordinary coding" in agents
     assert "AGENTS.md" in claude and "AGENTS.md" in gemini
@@ -533,4 +535,5 @@ def test_connected_ai_guidance_is_continuity_first_not_always_on():
 def test_connection_note_matches_persistent_ai_access_behavior():
     notes = connections.list_connections()["notes"]
     assert "remembered" in notes["mcp_master_switch"]
+    assert "starts ON at Redacted" in notes["mcp_master_switch"]
     assert "resets to OFF" not in notes["mcp_master_switch"]

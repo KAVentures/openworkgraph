@@ -138,12 +138,14 @@ def _friendly_browser_surface(hostname: str, pathname: str = "", title: str = ""
     if host.endswith("linear.app"):
         return "Linear"
     if host.endswith("atlassian.net"):
-        # Jira and Confluence often live on the same tenant domain; title helps.
+        # Jira and Confluence often live on the same tenant domain; title/path helps.
         if "confluence" in t.lower():
             return "Confluence"
-        if "jira" in t.lower():
+        if "jira" in t.lower() or path.lower().startswith("/jira"):
             return "Jira"
         return "Atlassian"
+    if host.endswith("zendesk.com") or "zendesk" in t.lower():
+        return "Zendesk"
     if host.endswith("salesforce.com") or host.endswith("force.com"):
         return "Salesforce"
     if host.endswith("hubspot.com"):
@@ -168,6 +170,7 @@ def _surface_from_title(title: str) -> str:
         ("chatgpt", "ChatGPT"),
         ("lovable", "Lovable"),
         ("github", "GitHub"),
+        ("zendesk", "Zendesk"),
         ("notion", "Notion"),
         ("salesforce", "Salesforce"),
         ("hubspot", "HubSpot"),

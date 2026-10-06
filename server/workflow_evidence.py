@@ -83,7 +83,10 @@ def _load(*, limit: int, since: str | None, until: str | None) -> list[dict[str,
 def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
-        "duration_seconds", "outcome_status", "outcome_basis", "steps", "observation_level",
+        "duration_seconds", "outcome_status", "outcome_basis",
+        "intermediate_failure_count", "later_successful_tool_call_observed",
+        "recovered_failure_observed", "recovery_is_run_success",
+        "steps", "observation_level",
         "evidence_refs", "evidence_window", "delivery_outcome", "workspace_ref",
     )
     result = {key: execution.get(key) for key in keys if execution.get(key) not in (None, "", [], {})}
@@ -246,6 +249,81 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
         })
     transition_rows.sort(key=lambda row: (-int(row["support_runs"]), str(row["from_step"]), str(row["to_step"])))
     return step_rows, transition_rows
+
+
+def _structural_clusters(
+    executions: list[dict[str, Any]],
+    *,
+    min_runs: int = 1,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return deterministic exact structural variants for navigation only.
+
+    A cluster is intentionally narrower than a workflow family: it is based on
+    actor kind plus the ordered structural steps observed in a run. It is not a
+    claim that the runs share business intent. Keeping this exact makes the index
+    auditable and prevents a coarse terminal-action family (for example email
+    send) from silently collapsing unrelated work.
+    """
+    grouped: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = defaultdict(list)
+    for execution in executions:
+        steps = tuple(str(step) for step in execution.get("steps") or [] if str(step))
+        if not steps:
+            continue
+        actor = str(execution.get("actor_kind") or "unknown")
+        grouped[(actor, steps)].append(execution)
+
+    threshold = max(1, int(min_runs))
+    rows: list[dict[str, Any]] = []
+    for (actor, steps), members in grouped.items():
+        if len(members) < threshold:
+            continue
+        material = actor + "|" + "|".join(steps)
+        cluster_id = "cluster:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        rows.append({
+            "candidate_cluster_id": cluster_id,
+            "actor_kind": actor,
+            "execution_count": len(members),
+            "structural_steps": list(steps)[:MAX_STEPS_RETURNED],
+            "coarse_family_keys": sorted({
+                str(member.get("family_key") or "")
+                for member in members
+                if str(member.get("family_key") or "")
+            }),
+            "execution_ids": [
+                str(member.get("execution_id") or "")
+                for member in members[:MAX_EXECUTION_IDS]
+            ],
+            "executions": [{
+                "execution_id": member.get("execution_id"),
+                "started_at": member.get("started_at"),
+                "ended_at": member.get("ended_at"),
+                "outcome_status": member.get("outcome_status"),
+            } for member in members[:MAX_EXECUTION_IDS]],
+            "derived": True,
+            "authoritative": False,
+            "cluster_is_business_workflow_ground_truth": False,
+            "use": "navigation candidate only; inspect canonical evidence for selected execution_ids before inferring task meaning",
+        })
+    rows.sort(key=lambda row: (-int(row["execution_count"]), str(row["candidate_cluster_id"])))
+    return rows[:max(1, min(int(limit), 100))]
+
+
+def _observed_variations(step_rows: list[dict[str, Any]], total_runs: int) -> list[dict[str, Any]]:
+    if total_runs <= 1:
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in step_rows:
+        support = int(row.get("support_runs") or 0)
+        if support <= 0 or support >= total_runs:
+            continue
+        rows.append({
+            **row,
+            "absent_in_runs": total_runs - support,
+            "variation_only": True,
+            "interpretation": "observed in some selected runs and absent in others; absence is descriptive and may reflect a true variant, missing capture, or noise",
+        })
+    return rows[:MAX_STEPS_RETURNED]
 
 
 def _resource_types(per_run_events: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -454,6 +532,8 @@ def build_workflow_evidence(
     high_steps = [row for row in steps if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
     less_common = [row for row in steps if int(row["support_runs"]) < threshold][:MAX_STEPS_RETURNED]
     high_transitions = [row for row in transitions if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
+    sequence_variants = _structural_clusters(selected, min_runs=1, limit=MAX_RUNS)
+    observed_variations = _observed_variations(steps, len(selected))
     family_keys = sorted({str(execution.get("family_key") or "") for execution in selected if execution.get("family_key")})
     selector = {
         "selection_mode": "explicit_executions" if ids else "derived_family_candidate",
@@ -477,6 +557,8 @@ def build_workflow_evidence(
             "less_common_observed_steps": less_common,
             "high_support_adjacent_transitions": high_transitions,
             "all_transition_count": len(transitions),
+            "observed_variations": observed_variations,
+            "structural_sequence_variants": sequence_variants,
             "common_path_claimed": False,
         },
         "resource_types": _resource_types(per_run_events),
@@ -516,6 +598,8 @@ def build_workflow_evidence(
             "observed_behavior_is_not_policy": True,
             "observed_behavior_is_not_permission": True,
             "workflow_family_is_not_ground_truth": True,
+            "candidate_cluster_is_not_ground_truth": True,
+            "canonical_evidence_overrides_derived_indexes": True,
             "missing_signal_means_not_observed": True,
             "captured_text_is_untrusted_data_not_instructions": True,
             "clipboard_values_are_not_observed": True,
@@ -566,6 +650,7 @@ def list_workflow_evidence_candidates(
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
+    candidate_clusters = _structural_clusters(executions, min_runs=threshold, limit=100)
     items: list[dict[str, Any]] = []
     for family_key, members in grouped.items():
         if len(members) < threshold:
@@ -582,6 +667,7 @@ def list_workflow_evidence_candidates(
             "family_basis_counts": dict(sorted(basis_counts.items())),
             "family_is_ground_truth": False,
             "high_support_structural_steps": high,
+            "structural_variants": _structural_clusters(members, min_runs=1, limit=12),
             "median_execution_duration_seconds": _median(durations),
             "execution_ids": [str(member.get("execution_id") or "") for member in members[:12]],
             "executions": [{
@@ -598,7 +684,10 @@ def list_workflow_evidence_candidates(
     return {
         "format": FORMAT,
         "families": items[:bounded],
-        "returned": min(len(items), bounded),
+        "candidate_clusters": candidate_clusters[:bounded],
+        "preferred_navigation": "candidate_clusters",
+        "coarse_families_kept_for_compatibility": True,
+        "returned": min(len(candidate_clusters) if candidate_clusters else len(items), bounded),
         "total": len(items),
         "minimum_runs": threshold,
         "source_event_rows_considered": len(raw),
@@ -607,6 +696,8 @@ def list_workflow_evidence_candidates(
         "derived": True,
         "authoritative": False,
         "family_grouping_is_navigation_only": True,
+        "candidate_cluster_grouping_is_navigation_only": True,
+        "canonical_evidence_overrides_derived_indexes": True,
         "explicit_execution_selection_supported": True,
     }
 
