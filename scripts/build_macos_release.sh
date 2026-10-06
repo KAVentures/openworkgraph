@@ -41,6 +41,15 @@ cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR.command" "$STAGE/AD
 cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR_WINDOWS.bat" "$STAGE/ADD_BROWSER_SENSOR_WINDOWS.bat"
 cp "$ROOT/apps/desktop/windows_tray.py" "$STAGE/windows_tray.py"
 cp "$ROOT/apps/desktop/demo_data.py" "$STAGE/demo_data.py"
+cp "$ROOT/apps/desktop/start.py" "$STAGE/start.py"
+cp "$ROOT/apps/desktop/config.example.json" "$STAGE/config.example.json"
+cp "$ROOT/platform/distribution/launchers/START_ON_MAC.command" "$STAGE/START_ON_MAC.command"
+cp "$ROOT/platform/distribution/launchers/START_ON_WINDOWS.bat" "$STAGE/START_ON_WINDOWS.bat"
+cp "$ROOT/platform/distribution/launchers/START_ON_WINDOWS.ps1" "$STAGE/START_ON_WINDOWS.ps1"
+cp "$ROOT/platform/distribution/installers/install.sh" "$STAGE/install.sh"
+cp "$ROOT/platform/distribution/installers/install.ps1" "$STAGE/install.ps1"
+cp "$ROOT/platform/distribution/installers/uninstall.sh" "$STAGE/uninstall.sh"
+cp "$ROOT/platform/distribution/installers/uninstall.ps1" "$STAGE/uninstall.ps1"
 
 BUILD_SHA="${GITHUB_SHA:-}"
 if [ -z "$BUILD_SHA" ]; then

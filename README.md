@@ -158,7 +158,7 @@ SPEC.md            stable OWG semantic contract
 README.md          product overview and quick start
 docs/              detailed architecture, privacy, deployment, AI and testing docs
 
-apps/              end-user application helpers/hosts
+apps/              desktop application entrypoints/hosts
 collector/         desktop capture
 browser_extension/ optional browser-native capture
 server/            local API, evidence, analytics and dashboard backend; domain packages group related subsystems
@@ -174,7 +174,7 @@ scripts/           build/release/development automation
 tests/             regression suite
 ```
 
-The current repository still contains several root compatibility launchers/modules and some published integration packages at top level. See **[integrations/README.md](integrations/README.md)** for one navigation map. Physical moves happen only through compatibility-preserving steps with full cross-platform CI.
+The remaining non-contract root Python files are compatibility aliases for older imports. Runtime entrypoints, installers, and helper launchers now live behind `apps/`, `integrations/`, and `platform/`; release artifacts materialize their established compatibility filenames. See **[integrations/README.md](integrations/README.md)** for one navigation map.
 
 ## Development
 

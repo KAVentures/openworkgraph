@@ -41,6 +41,15 @@ Copy-Item (Join-Path $Root "platform\distribution\launchers\ADD_BROWSER_SENSOR.c
 Copy-Item (Join-Path $Root "platform\distribution\launchers\ADD_BROWSER_SENSOR_WINDOWS.bat") (Join-Path $Payload "ADD_BROWSER_SENSOR_WINDOWS.bat")
 Copy-Item (Join-Path $Root "apps\desktop\windows_tray.py") (Join-Path $Payload "windows_tray.py")
 Copy-Item (Join-Path $Root "apps\desktop\demo_data.py") (Join-Path $Payload "demo_data.py")
+Copy-Item (Join-Path $Root "apps\desktop\start.py") (Join-Path $Payload "start.py")
+Copy-Item (Join-Path $Root "apps\desktop\config.example.json") (Join-Path $Payload "config.example.json")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\START_ON_MAC.command") (Join-Path $Payload "START_ON_MAC.command")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\START_ON_WINDOWS.bat") (Join-Path $Payload "START_ON_WINDOWS.bat")
+Copy-Item (Join-Path $Root "platform\distribution\launchers\START_ON_WINDOWS.ps1") (Join-Path $Payload "START_ON_WINDOWS.ps1")
+Copy-Item (Join-Path $Root "platform\distribution\installers\install.sh") (Join-Path $Payload "install.sh")
+Copy-Item (Join-Path $Root "platform\distribution\installers\install.ps1") (Join-Path $Payload "install.ps1")
+Copy-Item (Join-Path $Root "platform\distribution\installers\uninstall.sh") (Join-Path $Payload "uninstall.sh")
+Copy-Item (Join-Path $Root "platform\distribution\installers\uninstall.ps1") (Join-Path $Payload "uninstall.ps1")
 
 $BuildCommit = $env:GITHUB_SHA
 if ([string]::IsNullOrWhiteSpace($BuildCommit)) {

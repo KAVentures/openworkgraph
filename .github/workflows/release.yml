@@ -388,7 +388,7 @@ jobs:
           VERSION="$(tr -d '[:space:]' < VERSION)"
           TAG="v${VERSION}"
 
-          cp install.sh install.ps1 uninstall.sh uninstall.ps1 release-assets/
+          cp platform/distribution/installers/install.sh platform/distribution/installers/install.ps1 platform/distribution/installers/uninstall.sh platform/distribution/installers/uninstall.ps1 release-assets/
 
           MAC_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-macOS-v*.pkg' ! -name '*.sha256' | head -n 1)"
           WIN_VERSIONED="$(find release-assets -maxdepth 1 -type f -name 'OpenWorkGraph-Windows-Setup-v*.exe' | head -n 1)"

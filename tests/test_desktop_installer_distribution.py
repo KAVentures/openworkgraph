@@ -113,7 +113,7 @@ def test_windows_installer_still_defaults_to_start_at_sign_in():
 
 
 def test_start_py_supports_silent_supervisor_launches():
-    text = (ROOT / "start.py").read_text(encoding="utf-8")
+    text = (ROOT / "apps" / "desktop" / "start.py").read_text(encoding="utf-8")
 
     assert 'parser.add_argument("--no-open-dashboard", action="store_true")' in text
     assert text.count("if not args.no_open_dashboard:") == 2

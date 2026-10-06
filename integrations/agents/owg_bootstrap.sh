@@ -5,9 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/install.sh" ]; then
   ROOT="$SCRIPT_DIR"
   CONNECT="$ROOT/owg_connect.py"
+  INSTALLER="$ROOT/install.sh"
 else
   ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
   CONNECT="$ROOT/integrations/agents/owg_connect.py"
+  INSTALLER="$ROOT/platform/distribution/installers/install.sh"
 fi
 INSTALL_ROOT="$HOME/Library/Application Support/WorkflowObserver"
 LOG="/tmp/openworkgraph-agent-bootstrap-installer.log"
@@ -41,7 +43,7 @@ LAUNCHED=0
 INSTALL_PID=""
 
 if [ -z "$PYTHON" ]; then
-  /bin/bash "$ROOT/install.sh" >"$LOG" 2>&1 &
+  /bin/bash "$INSTALLER" >"$LOG" 2>&1 &
   INSTALL_PID=$!
   LAUNCHED=1
 

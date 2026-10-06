@@ -24,6 +24,27 @@ mkdir -p "$MACOS" "$PAYLOAD"
 
 rsync -a   --exclude '.git/'   --exclude '.github/'   --exclude '.venv/'   --exclude '.runtime/'   --exclude '.pytest_cache/'   --exclude '__pycache__/'   --exclude 'data/'   --exclude 'dist/'   --exclude 'tests/'   --exclude 'config.json'   "$ROOT/" "$PAYLOAD/"
 
+# Materialize the same historical payload-root compatibility surface as the
+# tester ZIP builders.
+cp "$ROOT/integrations/agents/owg_connect.py" "$PAYLOAD/owg_connect.py"
+cp "$ROOT/integrations/agents/owg_bootstrap.sh" "$PAYLOAD/owg_bootstrap.sh"
+cp "$ROOT/integrations/agents/owg_bootstrap.ps1" "$PAYLOAD/owg_bootstrap.ps1"
+cp "$ROOT/platform/distribution/launchers/TRY_DEMO_ON_MAC.command" "$PAYLOAD/TRY_DEMO_ON_MAC.command"
+cp "$ROOT/platform/distribution/launchers/TRY_DEMO_ON_WINDOWS.bat" "$PAYLOAD/TRY_DEMO_ON_WINDOWS.bat"
+cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR.command" "$PAYLOAD/ADD_BROWSER_SENSOR.command"
+cp "$ROOT/platform/distribution/launchers/ADD_BROWSER_SENSOR_WINDOWS.bat" "$PAYLOAD/ADD_BROWSER_SENSOR_WINDOWS.bat"
+cp "$ROOT/apps/desktop/windows_tray.py" "$PAYLOAD/windows_tray.py"
+cp "$ROOT/apps/desktop/demo_data.py" "$PAYLOAD/demo_data.py"
+cp "$ROOT/apps/desktop/start.py" "$PAYLOAD/start.py"
+cp "$ROOT/apps/desktop/config.example.json" "$PAYLOAD/config.example.json"
+cp "$ROOT/platform/distribution/launchers/START_ON_MAC.command" "$PAYLOAD/START_ON_MAC.command"
+cp "$ROOT/platform/distribution/launchers/START_ON_WINDOWS.bat" "$PAYLOAD/START_ON_WINDOWS.bat"
+cp "$ROOT/platform/distribution/launchers/START_ON_WINDOWS.ps1" "$PAYLOAD/START_ON_WINDOWS.ps1"
+cp "$ROOT/platform/distribution/installers/install.sh" "$PAYLOAD/install.sh"
+cp "$ROOT/platform/distribution/installers/install.ps1" "$PAYLOAD/install.ps1"
+cp "$ROOT/platform/distribution/installers/uninstall.sh" "$PAYLOAD/uninstall.sh"
+cp "$ROOT/platform/distribution/installers/uninstall.ps1" "$PAYLOAD/uninstall.ps1"
+
 BUILD_SHA="${GITHUB_SHA:-}"
 if [[ -z "$BUILD_SHA" ]]; then
   BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"

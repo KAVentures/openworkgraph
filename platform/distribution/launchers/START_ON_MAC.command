@@ -12,7 +12,12 @@ if [ "$MODE" != "observe" ] && [ "$MODE" != "demo" ]; then
   exit 2
 fi
 
-SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
+  SOURCE_DIR="$SCRIPT_DIR"
+else
+  SOURCE_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+fi
 INSTALL_DIR="$HOME/Library/Application Support/WorkflowObserver"
 RUNTIME_DIR="$INSTALL_DIR/.runtime"
 LOG_FILE="$HOME/Library/Logs/WorkflowObserver-setup.log"
@@ -45,6 +50,30 @@ rsync -a --delete \
   --exclude 'data/' \
   --exclude 'config.json' \
   "$SOURCE_DIR/" "$INSTALL_DIR/"
+
+# A source checkout keeps implementation helpers organized below apps/,
+# integrations/, and platform/. Installed payloads retain the historical root
+# filenames for compatibility with shortcuts, older integrations, and upgrades.
+if [ "$SCRIPT_DIR" != "$SOURCE_DIR" ]; then
+  cp "$SOURCE_DIR/apps/desktop/start.py" "$INSTALL_DIR/start.py"
+  cp "$SOURCE_DIR/apps/desktop/config.example.json" "$INSTALL_DIR/config.example.json"
+  cp "$SOURCE_DIR/apps/desktop/demo_data.py" "$INSTALL_DIR/demo_data.py"
+  cp "$SOURCE_DIR/apps/desktop/windows_tray.py" "$INSTALL_DIR/windows_tray.py"
+  cp "$SOURCE_DIR/integrations/agents/owg_connect.py" "$INSTALL_DIR/owg_connect.py"
+  cp "$SOURCE_DIR/integrations/agents/owg_bootstrap.sh" "$INSTALL_DIR/owg_bootstrap.sh"
+  cp "$SOURCE_DIR/integrations/agents/owg_bootstrap.ps1" "$INSTALL_DIR/owg_bootstrap.ps1"
+  cp "$SOURCE_DIR/platform/distribution/launchers/START_ON_MAC.command" "$INSTALL_DIR/START_ON_MAC.command"
+  cp "$SOURCE_DIR/platform/distribution/launchers/START_ON_WINDOWS.bat" "$INSTALL_DIR/START_ON_WINDOWS.bat"
+  cp "$SOURCE_DIR/platform/distribution/launchers/START_ON_WINDOWS.ps1" "$INSTALL_DIR/START_ON_WINDOWS.ps1"
+  cp "$SOURCE_DIR/platform/distribution/launchers/TRY_DEMO_ON_MAC.command" "$INSTALL_DIR/TRY_DEMO_ON_MAC.command"
+  cp "$SOURCE_DIR/platform/distribution/launchers/TRY_DEMO_ON_WINDOWS.bat" "$INSTALL_DIR/TRY_DEMO_ON_WINDOWS.bat"
+  cp "$SOURCE_DIR/platform/distribution/launchers/ADD_BROWSER_SENSOR.command" "$INSTALL_DIR/ADD_BROWSER_SENSOR.command"
+  cp "$SOURCE_DIR/platform/distribution/launchers/ADD_BROWSER_SENSOR_WINDOWS.bat" "$INSTALL_DIR/ADD_BROWSER_SENSOR_WINDOWS.bat"
+  cp "$SOURCE_DIR/platform/distribution/installers/install.sh" "$INSTALL_DIR/install.sh"
+  cp "$SOURCE_DIR/platform/distribution/installers/install.ps1" "$INSTALL_DIR/install.ps1"
+  cp "$SOURCE_DIR/platform/distribution/installers/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+  cp "$SOURCE_DIR/platform/distribution/installers/uninstall.ps1" "$INSTALL_DIR/uninstall.ps1"
+fi
 
 cd "$INSTALL_DIR"
 

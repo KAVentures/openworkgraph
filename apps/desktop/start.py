@@ -14,6 +14,11 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+HERE = Path(__file__).resolve().parent
+ROOT = HERE if (HERE / "server").is_dir() else HERE.parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from server.local_auth import (
     ensure_api_token,
     ensure_browser_secret,
@@ -21,9 +26,8 @@ from server.local_auth import (
     write_browser_pairing_bundle,
 )
 
-ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "config.json"
-EXAMPLE = ROOT / "config.example.json"
+EXAMPLE = HERE / "config.example.json" if HERE != ROOT else ROOT / "config.example.json"
 API_HOST = "127.0.0.1"
 API_PORT = 8787
 DASHBOARD = f"http://{API_HOST}:{API_PORT}"
