@@ -159,6 +159,30 @@ def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) ->
     out["cases"] = len(rows)
     out["workflow_count_accuracy"] = round(mean(1.0 if row["workflow_count_exact"] else 0.0 for row in rows), 6)
     out["uncertainty_accuracy"] = round(mean(1.0 if row["uncertainty_correct"] else 0.0 for row in rows), 6)
+
+    required_rows = [
+        row for case, row in zip(cases, rows)
+        if bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
+    ]
+    ordinary_rows = [
+        (case, row) for case, row in zip(cases, rows)
+        if not bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
+    ]
+    by_prediction = {
+        str(item.get("case_id") or ""): bool(item.get("insufficient_evidence"))
+        for item in predictions
+    }
+    out["required_uncertainty_recall"] = round(
+        mean(1.0 if by_prediction.get(str(row["case_id"]), False) else 0.0 for row in required_rows),
+        6,
+    ) if required_rows else 1.0
+    out["unnecessary_uncertainty_rate"] = round(
+        mean(
+            1.0 if by_prediction.get(str(case.get("case_id") or ""), False) else 0.0
+            for case, _row in ordinary_rows
+        ),
+        6,
+    ) if ordinary_rows else 0.0
     out["per_case"] = rows
     return out
 
@@ -168,7 +192,8 @@ THRESHOLDS = {
     "workflow_count_accuracy": (">=", 0.90),
     "checkpoint_recall": (">=", 0.90),
     "interruption_rejection": (">=", 0.95),
-    "uncertainty_accuracy": (">=", 0.90),
+    "required_uncertainty_recall": (">=", 0.90),
+    "unnecessary_uncertainty_rate": ("<=", 0.10),
 }
 
 def acceptance(report: dict[str, Any]) -> dict[str, Any]:
