@@ -30,7 +30,8 @@
         "Treat missing historical email bodies as proof that the workflow cannot be automated.",
         "Default to a macro/template-only recommendation without considering modern agents, connectors, APIs, or browser/computer use.",
         "Conclude that the spreadsheet should be deleted without checking downstream dependencies."
-      ]
+      ],
+      "user_intent": "Automate my recurring customer-update workflow so an AI can handle as much of it as is reasonably safe and reliable."
     },
     {
       "id": "invoice_approval_financial",
@@ -45,7 +46,8 @@
       "must_not": [
         "Recommend autonomous invoice approval merely because the user repeatedly clicked Approve.",
         "Treat the workflow as wholly non-automatable just because the final approval remains controlled."
-      ]
+      ],
+      "user_intent": "Automate my recurring invoice-processing workflow so an AI can take over as much of it as is appropriate."
     },
     {
       "id": "claude_code_fail_then_pass",
@@ -60,7 +62,8 @@
       "must_not": [
         "Call the workflow already fully automated simply because Claude Code appears in it.",
         "Recommend a test-running macro as the primary improvement."
-      ]
+      ],
+      "user_intent": "Improve or automate my software-development workflow around AI coding agents so I need to intervene less."
     },
     {
       "id": "one_off_high_judgment_work",
@@ -74,7 +77,8 @@
       "must_not": [
         "Force a recurring automation recommendation from one ambiguous session.",
         "Treat foreground time alone as proof of repetitive friction."
-      ]
+      ],
+      "user_intent": "Look at this work and tell me what should be automated or delegated to AI."
     },
     {
       "id": "clinical_patient_message",
@@ -89,7 +93,8 @@
       "must_not": [
         "Recommend autonomous clinical advice or patient messaging solely because the workflow is repetitive.",
         "Declare the whole workflow non-automatable because OWG did not retain message contents."
-      ]
+      ],
+      "user_intent": "Automate or streamline this recurring patient-message workflow as much as is appropriate."
     },
     {
       "id": "low_risk_reversible_internal_update",
@@ -104,7 +109,14 @@
       "must_not": [
         "Assume every production write always requires a fresh human click forever.",
         "Recommend unrestricted autonomy without scope, logging, or rollback boundaries."
-      ]
+      ],
+      "user_intent": "Automate this recurring internal status-update workflow so I do not have to perform it manually."
     }
-  ]
+  ],
+  "paired_protocol": {
+    "control_arm": "Give the model only user_intent. It must draft the automation approach without OWG evidence.",
+    "owg_arm": "Give the same model the same user_intent plus evidence_summary (or the richer OWG trace when available).",
+    "comparison": "Score both arms against the same must_cover and must_not criteria. Report per-axis and total OWG uplift as OWG score minus control score.",
+    "interpretation": "Positive uplift shows that OWG evidence improved the automation design on this corpus; inspect regressions and critical failures even when aggregate uplift is positive."
+  }
 }
