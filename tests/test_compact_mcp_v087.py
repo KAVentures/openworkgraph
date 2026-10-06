@@ -228,6 +228,8 @@ def test_current_context_orients_ai_to_repeated_and_agent_evidence(monkeypatch):
     import mcp_server.compact as compact
 
     def fake_get(path, params=None):
+        if path == "/v1/ai-access":
+            return {"enabled": True, "detail_level": "redacted"}
         if path == "/v1/workflow-trace":
             return {"rows": [{"event_id": "e1", "observed_at": "2026-10-06T10:00:00+00:00", "app": "Gmail"}]}
         if path == "/v1/context-pulse":
