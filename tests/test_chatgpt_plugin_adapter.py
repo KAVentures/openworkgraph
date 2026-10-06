@@ -29,3 +29,18 @@ def test_chatgpt_integration_does_not_duplicate_storage_or_sync():
     integration = Path("integrations/chatgpt")
     names = {path.name for path in integration.rglob("*") if path.is_file()}
     assert names == {"README.md", "SKILL.md"}
+
+
+def test_chatgpt_skill_routes_implicit_and_explicit_owg_intent():
+    skill = Path("integrations/chatgpt/SKILL.md").read_text(encoding="utf-8")
+    assert "The user should not need to name OpenWorkGraph" in skill
+    assert "continue what I was doing" in skill
+    assert "use OWG" in skill
+    assert "prefer one cheap context/search lookup" in skill
+
+
+def test_gateway_tool_descriptions_are_routing_aware():
+    source = Path("gateway/mcp.py").read_text(encoding="utf-8")
+    assert "Use first for continuity or ambiguous recent-work requests" in source
+    assert "past work item, person, project, phrase, resource, or prior handling" in source
+    assert "prior AI or agent work, handoff" in source
