@@ -193,3 +193,32 @@ def test_compact_agent_summary_exposes_observed_successful_ending_without_upgrad
     assert summary["observed_end_state"] == "successful_tool_call_observed_at_trace_end"
     assert summary["observed_outcome_summary"] == "succeeded (observed final step)"
     assert summary["observed_outcome_summary_is_terminal_run_status"] is False
+
+
+def test_compact_agent_summary_uses_last_tool_before_session_end_bookkeeping():
+    from mcp_server.compact import _agent_run_summary
+
+    execution = {
+        "execution_id": "execution:bbbbbbbbbbbbbbbb",
+        "outcome_status": "unknown",
+        "outcome_basis": "no_terminal_outcome_observed",
+        "last_tool_status": "success",
+        # SessionEnd is bookkeeping after the successful tool, so the legacy
+        # "final event is tool" flag is false even though the last tool succeeded.
+        "last_observed_event_is_successful_tool_call": False,
+        "observed_end_state": "no_terminal_run_status_observed",
+        "events": [
+            {"operation": "tool_call", "status": "success"},
+            {"event_type": "SessionEnd"},
+        ],
+        "derived": True,
+        "authoritative": False,
+    }
+
+    summary = _agent_run_summary(execution)
+
+    assert summary["outcome_status"] == "unknown"
+    assert summary["last_tool_status"] == "success"
+    assert summary["last_observed_event_is_successful_tool_call"] is False
+    assert summary["observed_outcome_summary"] == "succeeded (observed final step)"
+    assert summary["observed_outcome_summary_is_terminal_run_status"] is False
