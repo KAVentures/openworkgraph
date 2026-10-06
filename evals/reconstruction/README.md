@@ -28,13 +28,21 @@ IDs, or the answer key.
 
 ## Corpus
 
-fixtures.py is the committed answer-key generator for 30 deterministic synthetic
-cases. Generated JSONL is intentionally not committed, which keeps the repository
+fixtures.py is the committed answer-key generator for 50 deterministic synthetic
+cases spanning 30 independent scenario families. The original ten families retain structural
+variants for regression coverage; twenty additional families use distinct topologies. Generated JSONL is intentionally not committed, which keeps the repository
 small while making the corpus exactly reproducible.
 
-Synthetic cases are engineering tests, not evidence of product value. After the
-synthetic benchmark is stable, run the same protocol on 20-30 manually annotated
-real sessions.
+Synthetic cases are engineering tests, not evidence of product value. The corpus deliberately
+includes same-tab multiplexing, missing resource references, 4–5 concurrent workflows,
+abandoned work, near-duplicate resources, ambiguous interruptions, balanced uncertainty,
+and a 50+ event session. A deterministic 20% holdout can be exported with `prepare --split holdout`; use
+`--split development` while iterating. Because the answer-key generator is open source, this
+is a procedural holdout rather than a secret test set: do not inspect/tune against holdout
+predictions during development.
+
+After the synthetic benchmark is stable, run the same protocol on 20-30 manually annotated
+real sessions. Those sessions, not synthetic scores, answer the product question.
 
 Validate the built-in corpus:
 
