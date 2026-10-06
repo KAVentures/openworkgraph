@@ -37,8 +37,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare blind raw-evidence reconstruction prompts")
     parser.add_argument("--cases", help="optional exported JSONL corpus")
     parser.add_argument("--output", required=True, help="JSONL output with prompt + evidence; no answer key")
+    parser.add_argument("--split", choices=("all", "development", "holdout"), default="all",
+                        help="deterministic case split; holdout is for final evaluation, not fixture tuning")
     args = parser.parse_args(argv)
     cases = load_cases(Path(args.cases)) if args.cases else load_cases()
+    if args.split != "all":
+        # Stable split by case ID, independent of corpus order. The holdout still
+        # lives in source for reproducibility; discipline is procedural, not secrecy.
+        import hashlib
+        want_holdout = args.split == "holdout"
+        cases = [
+            case for case in cases
+            if (int(hashlib.sha256(str(case["case_id"]).encode()).hexdigest()[:8], 16) % 5 == 0) == want_holdout
+        ]
     out = Path(args.output)
     with out.open("w", encoding="utf-8") as fh:
         for case in cases:
