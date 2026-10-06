@@ -60,3 +60,25 @@ def test_runtime_code_uses_canonical_shared_core_imports():
     for path, import_fragment in expected.items():
         text = (ROOT / path).read_text(encoding="utf-8")
         assert import_fragment in text
+
+
+def test_no_production_python_depends_on_legacy_root_core_imports():
+    legacy_imports = tuple(
+        pattern
+        for name in CORE_MODULES
+        for pattern in (f"from {name} import ", f"import {name}")
+    )
+    for path in ROOT.rglob("*.py"):
+        relative = path.relative_to(ROOT)
+        if relative.parts and relative.parts[0] in {"tests", ".venv"}:
+            continue
+        if relative.parent == Path(".") and relative.stem in CORE_MODULES:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            assert not any(stripped.startswith(pattern) for pattern in legacy_imports), (
+                f"{relative} still depends on a legacy root core module: {stripped}"
+            )
