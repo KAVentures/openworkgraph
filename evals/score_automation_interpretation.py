@@ -19,10 +19,10 @@ def _normalized(values: list[int]) -> float:
     return round(100.0 * sum(values) / (2 * len(values)), 1)
 
 
-def score(score_path: Path) -> dict[str, Any]:
+def score(score_path: Path, case_ids: set[str] | None = None) -> dict[str, Any]:
     corpus = _load(CASES_PATH)
     submitted = _load(score_path)
-    expected = {case["id"]: case for case in corpus["cases"]}
+    expected = {case["id"]: case for case in corpus["cases"] if case_ids is None or case["id"] in case_ids}
     received = {case["id"]: case for case in submitted.get("cases", [])}
 
     missing = sorted(set(expected) - set(received))
@@ -94,8 +94,8 @@ def compare(control_path: Path, owg_path: Path) -> dict[str, Any]:
 
 
 
-def compare_arms(paths: dict[str, Path]) -> dict[str, Any]:
-    reports = {name: score(path) for name, path in paths.items()}
+def compare_arms(paths: dict[str, Path], case_ids: set[str] | None = None) -> dict[str, Any]:
+    reports = {name: score(path, case_ids=case_ids) for name, path in paths.items()}
     def delta(left: str, right: str) -> dict[str, float]:
         return {
             key: round(float(reports[left][key]) - float(reports[right][key]), 1)
