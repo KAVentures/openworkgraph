@@ -33,7 +33,7 @@ sha(browser)
 kit_stage = DIST / "enterprise-kit"
 if kit_stage.exists():
     shutil.rmtree(kit_stage)
-shutil.copytree(ROOT / "enterprise", kit_stage / "enterprise")
+shutil.copytree(ROOT / "platform" / "enterprise", kit_stage / "enterprise")
 for doc in ("SELF_HOSTING.md", "ORGANIZATION_ROLLOUT.md", "DATA_LIFECYCLE.md"):
     shutil.copy2(ROOT / "docs" / doc, kit_stage / doc)
 shutil.copy2(browser, kit_stage / browser.name)

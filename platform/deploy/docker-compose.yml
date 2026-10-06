@@ -16,8 +16,8 @@ services:
 
   gateway:
     build:
-      context: ..
-      dockerfile: deploy/Dockerfile.gateway
+      context: ../..
+      dockerfile: platform/deploy/Dockerfile.gateway
     restart: unless-stopped
     depends_on:
       postgres:

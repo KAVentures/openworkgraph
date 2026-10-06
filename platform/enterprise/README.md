@@ -6,7 +6,7 @@ This directory turns the existing customer-hosted Gateway and managed endpoint s
 
 - macOS: deploy the normal OpenWorkGraph `.pkg` to `/Applications` with Jamf or another MDM, then deploy a per-device managed enrollment file.
 - Windows: deploy **OpenWorkGraph-Windows-Enterprise-Setup.exe** machine-wide with Intune/SYSTEM or another endpoint manager. Immutable runtime code lives under Program Files; each employee's mutable OpenWorkGraph state stays in LocalAppData. The ordinary per-user Setup EXE remains available for no-admin pilots.
-- Gateway: self-host `deploy/docker-compose.yml` + PostgreSQL behind customer-controlled HTTPS.
+- Gateway: self-host `platform/deploy/docker-compose.yml` + PostgreSQL behind customer-controlled HTTPS.
 - Browser sensor: publish the release-built browser ZIP to the Chrome/Edge store your organization uses, then substitute its real store extension ID into the included policy templates.
 
 ## The 10-minute pilot path
