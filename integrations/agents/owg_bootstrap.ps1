@@ -11,9 +11,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (Test-Path (Join-Path $ScriptDir "install.ps1")) {
     $Root = $ScriptDir
     $ConnectScript = Join-Path $Root "owg_connect.py"
+    $InstallerScript = Join-Path $Root "install.ps1"
 } else {
     $Root = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
     $ConnectScript = Join-Path $Root "integrations\agents\owg_connect.py"
+    $InstallerScript = Join-Path $Root "platform\distribution\installers\install.ps1"
 }
 $InstallRoot = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
 $Log = Join-Path ([System.IO.Path]::GetTempPath()) "openworkgraph-agent-bootstrap-installer.log"
@@ -60,7 +62,6 @@ $Installer = $null
 $Launched = $false
 
 if (-not $Python) {
-    $InstallerScript = Join-Path $Root "install.ps1"
     $Installer = Start-Process powershell.exe -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",

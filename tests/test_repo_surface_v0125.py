@@ -132,3 +132,32 @@ def test_root_helper_implementations_live_behind_product_boundaries():
     ):
         assert compatibility_name in mac_release
         assert compatibility_name in windows_release
+
+
+def test_runtime_entrypoints_are_source_organized_but_payload_compatible():
+    moved = {
+        "START_ON_MAC.command": ROOT / "platform" / "distribution" / "launchers" / "START_ON_MAC.command",
+        "START_ON_WINDOWS.bat": ROOT / "platform" / "distribution" / "launchers" / "START_ON_WINDOWS.bat",
+        "START_ON_WINDOWS.ps1": ROOT / "platform" / "distribution" / "launchers" / "START_ON_WINDOWS.ps1",
+        "install.sh": ROOT / "platform" / "distribution" / "installers" / "install.sh",
+        "install.ps1": ROOT / "platform" / "distribution" / "installers" / "install.ps1",
+        "uninstall.sh": ROOT / "platform" / "distribution" / "installers" / "uninstall.sh",
+        "uninstall.ps1": ROOT / "platform" / "distribution" / "installers" / "uninstall.ps1",
+        "start.py": ROOT / "apps" / "desktop" / "start.py",
+        "config.example.json": ROOT / "apps" / "desktop" / "config.example.json",
+    }
+    for old_root_name, canonical in moved.items():
+        assert not (ROOT / old_root_name).exists()
+        assert canonical.is_file()
+
+    mac_release = (ROOT / "scripts" / "build_macos_release.sh").read_text(encoding="utf-8")
+    mac_app = (ROOT / "scripts" / "build_macos_app_bundle.sh").read_text(encoding="utf-8")
+    windows_release = (ROOT / "scripts" / "build_windows_release.ps1").read_text(encoding="utf-8")
+    for compatibility_name in moved:
+        assert compatibility_name in mac_release
+        assert compatibility_name in mac_app
+        assert compatibility_name in windows_release
+
+    release_workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "platform/distribution/installers/install.sh" in release_workflow
+    assert "platform/distribution/installers/uninstall.ps1" in release_workflow

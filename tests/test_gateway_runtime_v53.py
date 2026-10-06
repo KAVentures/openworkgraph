@@ -13,7 +13,7 @@ def _read(path: str) -> str:
 
 
 def test_enterprise_controls_extend_the_established_secure_app():
-    start = _read("start.py")
+    start = _read("apps/desktop/start.py")
     runner = _read("server/enterprise_runner.py")
     enterprise = _read("server/enterprise_app.py")
 

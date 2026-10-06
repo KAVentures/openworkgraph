@@ -5,8 +5,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_bootstrap_installers_are_pinned_to_repo_release_version():
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    mac = (ROOT / "install.sh").read_text(encoding="utf-8")
-    windows = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    mac = (ROOT / "platform" / "distribution" / "installers" / "install.sh").read_text(encoding="utf-8")
+    windows = (ROOT / "platform" / "distribution" / "installers" / "install.ps1").read_text(encoding="utf-8")
 
     assert f'RELEASE_VERSION="{version}"' in mac
     assert f'$ReleaseVersion = "{version}"' in windows
@@ -17,7 +17,7 @@ def test_bootstrap_installers_are_pinned_to_repo_release_version():
 
 
 def test_macos_bootstrap_delegates_to_existing_release_launcher():
-    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    text = (ROOT / "platform" / "distribution" / "installers" / "install.sh").read_text(encoding="utf-8")
 
     assert "OpenWorkGraph-macOS.zip" in text
     assert "START_OPENWORKGRAPH.command" in text
@@ -35,7 +35,7 @@ def test_macos_bootstrap_delegates_to_existing_release_launcher():
 
 
 def test_windows_bootstrap_delegates_to_existing_release_launcher():
-    text = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    text = (ROOT / "platform" / "distribution" / "installers" / "install.ps1").read_text(encoding="utf-8")
 
     assert "OpenWorkGraph-Windows.zip" in text
     assert "START_OPENWORKGRAPH.cmd" in text
@@ -52,8 +52,8 @@ def test_windows_bootstrap_delegates_to_existing_release_launcher():
 
 
 def test_existing_platform_launchers_still_preserve_user_state_on_upgrade():
-    mac = (ROOT / "START_ON_MAC.command").read_text(encoding="utf-8")
-    windows = (ROOT / "START_ON_WINDOWS.ps1").read_text(encoding="utf-8")
+    mac = (ROOT / "platform" / "distribution" / "launchers" / "START_ON_MAC.command").read_text(encoding="utf-8")
+    windows = (ROOT / "platform" / "distribution" / "launchers" / "START_ON_WINDOWS.ps1").read_text(encoding="utf-8")
 
     # The easy installer must continue to inherit these preservation rules.
     assert "--exclude '.venv/'" in mac
@@ -68,8 +68,8 @@ def test_existing_platform_launchers_still_preserve_user_state_on_upgrade():
 
 
 def test_uninstall_helpers_are_explicit_and_refuse_running_service():
-    mac = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
-    windows = (ROOT / "uninstall.ps1").read_text(encoding="utf-8")
+    mac = (ROOT / "platform" / "distribution" / "installers" / "uninstall.sh").read_text(encoding="utf-8")
+    windows = (ROOT / "platform" / "distribution" / "installers" / "uninstall.ps1").read_text(encoding="utf-8")
 
     assert "Type DELETE to continue" in mac
     assert "-iTCP:8787" in mac

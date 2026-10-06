@@ -85,7 +85,7 @@ def test_manual_browser_pairing_is_short_lived_one_time_and_extension_scoped(tmp
 
 
 def test_launcher_refuses_unknown_api_port_and_http_mcp_is_explicit_and_verified():
-    source = (ROOT / "start.py").read_text(encoding="utf-8")
+    source = (ROOT / "apps" / "desktop" / "start.py").read_text(encoding="utf-8")
     optional = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
     http_app = (ROOT / "mcp_server" / "http_app.py").read_text(encoding="utf-8")
 

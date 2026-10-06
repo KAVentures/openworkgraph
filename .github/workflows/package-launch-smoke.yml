@@ -17,7 +17,7 @@ jobs:
       - name: Parse install and uninstall scripts
         shell: powershell
         run: |
-          foreach ($path in @("install.ps1", "uninstall.ps1")) {
+          foreach ($path in @("platform\\distribution\\installers\\install.ps1", "platform\\distribution\\installers\\uninstall.ps1")) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
@@ -92,7 +92,7 @@ jobs:
             throw "OpenWorkGraph remained reachable on port 8787 after cleanup"
           }
 
-          $installer = (Resolve-Path "install.ps1").Path
+          $installer = (Resolve-Path "platform\\distribution\\installers\\install.ps1").Path
           $first = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer -PassThru -WindowStyle Hidden
           try {
             Wait-Healthy $first "easy installer"
@@ -123,7 +123,7 @@ jobs:
             throw "Expected external setup log was not created"
           }
 
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Resolve-Path "uninstall.ps1").Path -Yes
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Resolve-Path "platform\\distribution\\installers\\uninstall.ps1").Path -Yes
           if ($LASTEXITCODE -ne 0) { throw "Windows uninstall helper failed" }
           if (Test-Path $shortcut) { throw "Shortcut remained after uninstall" }
           if (Test-Path $installDir) { throw "Install directory remained after uninstall" }
@@ -135,8 +135,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Parse install and uninstall scripts
         run: |
-          bash -n install.sh
-          bash -n uninstall.sh
+          bash -n platform/distribution/installers/install.sh
+          bash -n platform/distribution/installers/uninstall.sh
       - name: Build tester ZIP
         run: bash scripts/build_macos_release.sh
       - name: Prepare isolated easy-install environment
@@ -185,7 +185,7 @@ jobs:
             fi
           }
 
-          bash install.sh >"$RUNNER_TEMP/owg-install.log" 2>&1 &
+          bash platform/distribution/installers/install.sh >"$RUNNER_TEMP/owg-install.log" 2>&1 &
           first=$!
           wait_healthy "$first" "easy installer" "$RUNNER_TEMP/owg-install.log"
           terminate_tree "$first"
@@ -204,6 +204,6 @@ jobs:
           terminate_tree "$second"
           sleep 2
 
-          bash uninstall.sh --yes
+          bash platform/distribution/installers/uninstall.sh --yes
           test ! -e "$APP"
           test ! -e "$HOME/Library/Application Support/WorkflowObserver"

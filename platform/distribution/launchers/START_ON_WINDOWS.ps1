@@ -6,7 +6,12 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (Test-Path (Join-Path $ScriptDir "pyproject.toml")) {
+    $SourceDir = $ScriptDir
+} else {
+    $SourceDir = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
+}
 $InstallDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
 $RuntimeDir = Join-Path $InstallDir ".runtime"
 $LogDir = Join-Path $env:LOCALAPPDATA "OpenWorkGraph-logs"
@@ -72,6 +77,32 @@ try {
         # Robocopy codes 0-7 are success/informational; >=8 is failure.
         if ($LASTEXITCODE -ge 8) {
             Fail "Could not copy OpenWorkGraph into the local application folder (robocopy exit $LASTEXITCODE)."
+        }
+    }
+
+    if ([System.IO.Path]::GetFullPath($ScriptDir).TrimEnd('\') -ne $sourceFull) {
+        $compat = @{
+            "apps\desktop\start.py" = "start.py"
+            "apps\desktop\config.example.json" = "config.example.json"
+            "apps\desktop\demo_data.py" = "demo_data.py"
+            "apps\desktop\windows_tray.py" = "windows_tray.py"
+            "integrations\agents\owg_connect.py" = "owg_connect.py"
+            "integrations\agents\owg_bootstrap.sh" = "owg_bootstrap.sh"
+            "integrations\agents\owg_bootstrap.ps1" = "owg_bootstrap.ps1"
+            "platform\distribution\launchers\START_ON_MAC.command" = "START_ON_MAC.command"
+            "platform\distribution\launchers\START_ON_WINDOWS.bat" = "START_ON_WINDOWS.bat"
+            "platform\distribution\launchers\START_ON_WINDOWS.ps1" = "START_ON_WINDOWS.ps1"
+            "platform\distribution\launchers\TRY_DEMO_ON_MAC.command" = "TRY_DEMO_ON_MAC.command"
+            "platform\distribution\launchers\TRY_DEMO_ON_WINDOWS.bat" = "TRY_DEMO_ON_WINDOWS.bat"
+            "platform\distribution\launchers\ADD_BROWSER_SENSOR.command" = "ADD_BROWSER_SENSOR.command"
+            "platform\distribution\launchers\ADD_BROWSER_SENSOR_WINDOWS.bat" = "ADD_BROWSER_SENSOR_WINDOWS.bat"
+            "platform\distribution\installers\install.sh" = "install.sh"
+            "platform\distribution\installers\install.ps1" = "install.ps1"
+            "platform\distribution\installers\uninstall.sh" = "uninstall.sh"
+            "platform\distribution\installers\uninstall.ps1" = "uninstall.ps1"
+        }
+        foreach ($entry in $compat.GetEnumerator()) {
+            Copy-Item (Join-Path $SourceDir $entry.Key) (Join-Path $InstallDir $entry.Value) -Force
         }
     }
 
