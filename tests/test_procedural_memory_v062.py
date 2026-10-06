@@ -277,5 +277,19 @@ def test_intermediate_agent_failure_is_not_promoted_to_failed_run_without_termin
     assert execution["recovery_is_run_success"] is False
     assert execution["last_tool_status"] == "success"
     assert execution["last_observed_event_is_successful_tool_call"] is True
-    assert execution["observed_end_state"] == "successful_tool_call_observed_at_trace_end"
+    assert execution["observed_end_state"] == "last_tool_call_success_observed_before_trace_end"
     assert pm.failure_patterns(raw)["patterns"] == []
+
+
+def test_last_tool_success_survives_session_end_bookkeeping(monkeypatch):
+    monkeypatch.setattr(pm, "candidate_tasks", lambda **_kwargs: {"tasks": []})
+    raw = [
+        _agent_event(run="session-end-a", when="2026-09-25T03:00:00+00:00", operation="run_started", status="running", suffix="start"),
+        _agent_event(run="session-end-a", when="2026-09-25T03:00:01+00:00", operation="tool_call", status="success", tool_name="bash", tool_category="shell", suffix="pass"),
+        _agent_event(run="session-end-a", when="2026-09-25T03:00:02+00:00", operation="session_end", status="observed", suffix="session-end"),
+    ]
+    execution = pm.derive_executions(raw)[0]
+    assert execution["outcome_status"] == "unknown"
+    assert execution["last_tool_status"] == "success"
+    assert execution["last_observed_event_is_successful_tool_call"] is True
+    assert execution["observed_end_state"] == "last_tool_call_success_observed_before_trace_end"

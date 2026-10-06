@@ -107,5 +107,34 @@ def test_partial_run_exposes_successful_trace_end_without_claiming_run_success()
     assert execution["run_finish_observed"] is False
     assert execution["outcome_status"] == "unknown"
     assert execution["last_tool_status"] == "success"
+    assert execution["last_observed_tool_call_was_successful"] is True
     assert execution["last_observed_event_is_successful_tool_call"] is True
-    assert execution["observed_end_state"] == "successful_tool_call_observed_at_trace_end"
+    assert execution["observed_end_state"] == "last_tool_call_success_observed_before_trace_end"
+
+
+
+def test_last_tool_success_survives_session_end_event():
+    events = _events()[:3]
+    common = {
+        "agent_name": "Agent X",
+        "provider": "test",
+        "framework": "custom-agent",
+        "observation_level": "native_trace",
+        "run_id": "raw-run-secret",
+        "trace_id": "raw-trace-secret",
+        "workflow_id": "workflow-secret",
+    }
+    events.append(agent_event_to_evidence({
+        **common,
+        "event_id": "event-secret-session-end",
+        "observed_at": (BASE + timedelta(seconds=3)).isoformat(),
+        "operation": "session_end",
+        "status": "observed",
+    }))
+    execution = agent_execution_traces(events)["executions"][0]
+    assert execution["run_finish_observed"] is False
+    assert execution["outcome_status"] == "unknown"
+    assert execution["last_tool_status"] == "success"
+    assert execution["last_observed_tool_call_was_successful"] is True
+    assert execution["last_observed_event_is_successful_tool_call"] is True
+    assert execution["observed_end_state"] == "last_tool_call_success_observed_before_trace_end"
