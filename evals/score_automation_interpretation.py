@@ -72,13 +72,34 @@ def score(score_path: Path) -> dict[str, Any]:
     }
 
 
+def compare(control_path: Path, owg_path: Path) -> dict[str, Any]:
+    control = score(control_path)
+    owg = score(owg_path)
+    axes = ("underestimation_score", "overreach_score", "total_score")
+    control_cases = {row["id"]: row["score"] for row in control["case_scores"]}
+    owg_cases = {row["id"]: row["score"] for row in owg["case_scores"]}
+    deltas = {case_id: round(float(owg_cases[case_id]) - float(control_cases[case_id]), 1)
+              for case_id in control_cases}
+    return {
+        "control": control,
+        "owg": owg,
+        "uplift": {key: round(float(owg[key]) - float(control[key]), 1) for key in axes},
+        "case_deltas": deltas,
+        "cases_improved": sum(delta > 0 for delta in deltas.values()),
+        "cases_unchanged": sum(delta == 0 for delta in deltas.values()),
+        "cases_regressed": sum(delta < 0 for delta in deltas.values()),
+        "new_critical_failures": sorted(set(owg["critical_failures"]) - set(control["critical_failures"])),
+        "resolved_critical_failures": sorted(set(control["critical_failures"]) - set(owg["critical_failures"])),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
-    if len(args) != 1:
-        print("usage: python evals/score_automation_interpretation.py <scores.json>", file=sys.stderr)
+    if len(args) not in (1, 2):
+        print("usage: python evals/score_automation_interpretation.py <scores.json> [owg-scores.json]", file=sys.stderr)
         return 2
     try:
-        report = score(Path(args[0]))
+        report = score(Path(args[0])) if len(args) == 1 else compare(Path(args[0]), Path(args[1]))
     except Exception as exc:
         print(f"score error: {exc}", file=sys.stderr)
         return 1

@@ -30,15 +30,16 @@ def _perfect_score_sheet() -> dict:
 
 def test_automation_interpretation_eval_has_balanced_underestimation_and_overreach_cases():
     cases = _cases()
-    assert 5 <= len(cases) <= 8
+    assert 14 <= len(cases) <= 20
     axes = [case["bias_axis"] for case in cases]
-    assert axes.count("underestimation") >= 2
-    assert axes.count("overreach") >= 2
+    assert axes.count("underestimation") >= 6
+    assert axes.count("overreach") >= 6
     assert len({case["id"] for case in cases}) == len(cases)
 
 
 def test_each_eval_case_has_positive_and_negative_criteria():
     for case in _cases():
+        assert case["user_intent"].strip()
         assert case["evidence_summary"].strip()
         assert len(case["must_cover"]) >= 3
         assert len(case["must_not"]) >= 2
@@ -87,3 +88,44 @@ def test_eval_scorer_flags_must_not_violation_as_critical(tmp_path):
 
     assert report["total_score"] < 100.0
     assert report["critical_failures"] == ["gmail_salesforce_sheets_reply:must_not[0]"]
+
+
+def test_paired_scorer_reports_owg_uplift(tmp_path):
+    from evals.score_automation_interpretation import compare
+
+    owg = _perfect_score_sheet()
+    control = _perfect_score_sheet()
+    control["cases"][0]["must_cover"][0] = 0
+    control["cases"][1]["must_not"][0] = 0
+    control_path = tmp_path / "control.json"
+    owg_path = tmp_path / "owg.json"
+    control_path.write_text(json.dumps(control), encoding="utf-8")
+    owg_path.write_text(json.dumps(owg), encoding="utf-8")
+
+    report = compare(control_path, owg_path)
+    assert report["uplift"]["total_score"] > 0
+    assert report["new_critical_failures"] == []
+    assert report["resolved_critical_failures"]
+    assert report["cases_improved"] == 2
+    assert report["cases_regressed"] == 0
+    assert len(report["case_deltas"]) == len(_cases())
+
+
+def test_eval_set_covers_product_value_failure_modes():
+    text = EVAL_PATH.read_text(encoding="utf-8").lower()
+    concepts = (
+        "pricing",
+        "exception",
+        "escalation",
+        "downstream",
+        "resource pointer",
+        "unfinished",
+        "failure detection",
+        "recovery",
+        "approval threshold",
+        "interruption/noise",
+        "access revocation",
+        "live authorized",
+    )
+    for concept in concepts:
+        assert concept in text

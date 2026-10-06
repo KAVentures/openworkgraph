@@ -30,7 +30,8 @@
         "Treat missing historical email bodies as proof that the workflow cannot be automated.",
         "Default to a macro/template-only recommendation without considering modern agents, connectors, APIs, or browser/computer use.",
         "Conclude that the spreadsheet should be deleted without checking downstream dependencies."
-      ]
+      ],
+      "user_intent": "Automate my recurring customer-update workflow so an AI can handle as much of it as is reasonably safe and reliable."
     },
     {
       "id": "invoice_approval_financial",
@@ -45,7 +46,8 @@
       "must_not": [
         "Recommend autonomous invoice approval merely because the user repeatedly clicked Approve.",
         "Treat the workflow as wholly non-automatable just because the final approval remains controlled."
-      ]
+      ],
+      "user_intent": "Automate my recurring invoice-processing workflow so an AI can take over as much of it as is appropriate."
     },
     {
       "id": "claude_code_fail_then_pass",
@@ -60,7 +62,8 @@
       "must_not": [
         "Call the workflow already fully automated simply because Claude Code appears in it.",
         "Recommend a test-running macro as the primary improvement."
-      ]
+      ],
+      "user_intent": "Improve or automate my software-development workflow around AI coding agents so I need to intervene less."
     },
     {
       "id": "one_off_high_judgment_work",
@@ -74,7 +77,8 @@
       "must_not": [
         "Force a recurring automation recommendation from one ambiguous session.",
         "Treat foreground time alone as proof of repetitive friction."
-      ]
+      ],
+      "user_intent": "Look at this work and tell me what should be automated or delegated to AI."
     },
     {
       "id": "clinical_patient_message",
@@ -89,7 +93,8 @@
       "must_not": [
         "Recommend autonomous clinical advice or patient messaging solely because the workflow is repetitive.",
         "Declare the whole workflow non-automatable because OWG did not retain message contents."
-      ]
+      ],
+      "user_intent": "Automate or streamline this recurring patient-message workflow as much as is appropriate."
     },
     {
       "id": "low_risk_reversible_internal_update",
@@ -104,7 +109,184 @@
       "must_not": [
         "Assume every production write always requires a fresh human click forever.",
         "Recommend unrestricted autonomy without scope, logging, or rollback boundaries."
+      ],
+      "user_intent": "Automate this recurring internal status-update workflow so I do not have to perform it manually."
+    },
+    {
+      "id": "renewal_missing_pricing_checkpoint",
+      "bias_axis": "underestimation",
+      "user_intent": "Automate my recurring renewal workflow from incoming customer request through CRM update and reply.",
+      "evidence_summary": "Across five observed renewals, the user opens the customer email, opens the Salesforce opportunity, checks an internal pricing page, returns to Salesforce to save, then replies. The user's description mentions email, CRM, and reply but does not mention the pricing check. The pricing values and decision rule are not captured.",
+      "must_cover": [
+        "Recover the observed pricing check as a potentially material dependency that should be investigated before automating the renewal end to end.",
+        "Distinguish the observed pricing checkpoint from its unknown decision rule: OWG shows that the check happened, not why or what threshold governed it.",
+        "Prefer a live authorized pricing source or API over replaying the historical browser clicks when available.",
+        "Propose a bounded test that verifies whether the pricing dependency is necessary and whether the agent can retrieve it reliably."
+      ],
+      "must_not": [
+        "Omit the pricing dependency simply because the user's short description did not mention it.",
+        "Invent a pricing threshold or business rule from the repeated check.",
+        "Require literal browser replay when a better authorized source exists."
+      ]
+    },
+    {
+      "id": "spreadsheet_possible_implementation_detail",
+      "bias_axis": "overreach",
+      "user_intent": "Automate my recurring account-update workflow and simplify unnecessary steps if possible.",
+      "evidence_summary": "Four runs show email -> Salesforce -> spreadsheet -> Salesforce -> reply. The spreadsheet is opened every time, but OWG contains no evidence that another person, report, formula, control, or downstream system consumes it. The same account and status are already available in Salesforce.",
+      "must_cover": [
+        "Treat the spreadsheet as an observed repeated step but not automatically as a required business dependency.",
+        "Recommend checking downstream consumers or source-of-truth requirements before preserving or deleting the spreadsheet step.",
+        "Recognize that a direct Salesforce/API path could be better if the spreadsheet proves redundant."
+      ],
+      "must_not": [
+        "Declare the spreadsheet mandatory solely because it appears in every historical run.",
+        "Delete or bypass the spreadsheet without checking its downstream role.",
+        "Automate the spreadsheet clicks as the default outcome without considering outcome-level simplification."
+      ]
+    },
+    {
+      "id": "support_exception_escalation",
+      "bias_axis": "underestimation",
+      "user_intent": "Automate our repetitive support-ticket handling so routine cases can be completed with less manual work.",
+      "evidence_summary": "Most observed tickets follow Zendesk open -> Jira search -> Zendesk reply. Two runs additionally open Slack, ask a specialist, wait, then return to Zendesk before replying. The evidence shows the exception path but not a textual rule defining which tickets require specialist escalation.",
+      "must_cover": [
+        "Identify the Slack specialist path as an exception/escalation pattern rather than noise.",
+        "Separate routine automation from the unresolved escalation trigger.",
+        "Recommend automating routine retrieval/drafting while routing uncertain cases to an appropriate specialist or human until the escalation rule is established.",
+        "Use further policy/live evidence to establish the trigger instead of guessing it."
+      ],
+      "must_not": [
+        "Design only the majority three-step path and silently drop the observed exception.",
+        "Infer the escalation rule from frequency or timing alone.",
+        "Treat the existence of exceptions as proof that none of the workflow can be automated."
+      ]
+    },
+    {
+      "id": "two_similar_crm_workflows",
+      "bias_axis": "overreach",
+      "user_intent": "Automate these repetitive CRM updates.",
+      "evidence_summary": "OWG shows two visually similar Salesforce workflows. One updates an internal account status after a routine email. The other updates a contract record only after an observed approval message in a separate system. Both end with a Salesforce Save action.",
+      "must_cover": [
+        "Distinguish the two workflows despite their similar Salesforce UI actions.",
+        "Preserve the approval dependency for the contract-record workflow while allowing the routine account-status path to be evaluated separately.",
+        "Reason from resource/context relationships and outcomes rather than treating all Save actions as one automatable task."
+      ],
+      "must_not": [
+        "Collapse both workflows into one generic Salesforce-save automation.",
+        "Transfer the approval requirement to the routine path without evidence.",
+        "Drop the approval requirement from the contract path because the final UI action looks identical."
+      ]
+    },
+    {
+      "id": "agent_handoff_unfinished_work",
+      "bias_axis": "underestimation",
+      "user_intent": "Reduce the manual work around my coding-agent workflow, especially when I have to come back later and continue it.",
+      "evidence_summary": "Observed sessions show a human gives an AI coding agent a task, the agent edits files and runs tests, then stops with one failing test. Later the human reopens the project, reads the agent result, gives a continuation instruction, and checks the eventual pull request. The coding and test execution are already agent-performed.",
+      "must_cover": [
+        "Focus automation on continuity/handoff, resumption context, status checking, and delivery rather than re-automating coding or pytest.",
+        "Use the observed unfinished state and later continuation as evidence that preserving actionable handoff context has value.",
+        "Consider bounded automation for resuming/checking agent work while retaining appropriate control over consequential repository actions."
+      ],
+      "must_not": [
+        "Recommend a code-generation or test-running macro as the primary opportunity.",
+        "Treat the first agent stop as a completed workflow.",
+        "Assume an agent may merge or publish changes merely because the human later did so."
+      ]
+    },
+    {
+      "id": "approval_rule_observed_in_evidence",
+      "bias_axis": "underestimation",
+      "user_intent": "Can this recurring discount-approval preparation be automated?",
+      "evidence_summary": "Several runs show the user reads an order total and an internal policy page stating 'discounts over 20% require manager approval'. For a 25% discount the user requests approval before preparing the CRM update; for 10% and 15% discounts the user proceeds without that request. The final approval itself is performed by a manager.",
+      "must_cover": [
+        "Recognize that the approval threshold is actually observable in the supplied evidence rather than treating every decision rule as unknowable.",
+        "Use the explicit policy and examples to design deterministic routing around the 20% threshold, subject to confirming the policy is current and authoritative.",
+        "Keep the manager's approval action distinct from automating preparation and routing."
+      ],
+      "must_not": [
+        "Claim the approval trigger is wholly hidden despite explicit policy evidence.",
+        "Recommend autonomous manager approval.",
+        "Require a human to rediscover the threshold manually on every routine case if an authoritative live policy source can be checked."
+      ]
+    },
+    {
+      "id": "abandoned_attempt_not_required_step",
+      "bias_axis": "overreach",
+      "user_intent": "Automate how I prepare and send this recurring weekly report.",
+      "evidence_summary": "Across four completed runs the user exports data, opens the reporting tool, validates totals, and sends the report. In one run the user briefly opens an unrelated document, makes no change, returns to the reporting tool, and completes the same workflow.",
+      "must_cover": [
+        "Treat the unrelated document visit as likely interruption/noise rather than a required automation step.",
+        "Build the candidate workflow around repeated meaningful checkpoints and outcome, not every observed foreground action.",
+        "Retain validation of totals as a meaningful checkpoint unless evidence supports a safer equivalent."
+      ],
+      "must_not": [
+        "Include every observed application visit in the automation recipe.",
+        "Drop the validation checkpoint while preserving the unrelated document visit.",
+        "Conclude that one noisy run makes the repeated workflow unusable for automation design."
+      ]
+    },
+    {
+      "id": "resource_lookup_missing_from_user_description",
+      "bias_axis": "underestimation",
+      "user_intent": "Automate replying to these recurring customer requests.",
+      "evidence_summary": "Before replying in six similar cases, the user consistently opens a specific Drive document, reads it, then drafts the reply in Gmail. The user's request mentions only replying to customers. OWG stores the document resource pointer but not its full contents.",
+      "must_cover": [
+        "Recover the repeatedly consulted document as a likely information dependency missing from the user's short description.",
+        "Explain that absence of historical document contents does not prevent a future authorized agent from fetching the live document.",
+        "Use the resource pointer to identify the source while verifying that it is current/authoritative before relying on it."
+      ],
+      "must_not": [
+        "Automate reply generation without accounting for the observed reference source.",
+        "Treat missing historical document text as proof automation is impossible.",
+        "Copy or invent document contents from the pointer alone."
+      ]
+    },
+    {
+      "id": "reversible_write_with_failure_recovery",
+      "bias_axis": "underestimation",
+      "user_intent": "Automate this repetitive internal record update.",
+      "evidence_summary": "Ten runs update a reversible internal record. Nine save successfully. One save returns an error; the user refreshes the source data, retries once, verifies the updated record, and then completes. There is no external communication or high-impact decision.",
+      "must_cover": [
+        "Recognize the workflow as a strong bounded automation candidate rather than rejecting it because one run failed.",
+        "Include failure detection, bounded retry or recovery, and post-write verification in the automation design.",
+        "Use scoped authorization, logging, and rollback/recovery boundaries appropriate to a low-impact reversible write."
+      ],
+      "must_not": [
+        "Assume happy-path success and omit observed recovery/verification.",
+        "Require permanent manual execution solely because one historical save failed.",
+        "Recommend unbounded retries or unrestricted write authority."
+      ]
+    },
+    {
+      "id": "sensitive_action_after_routine_preparation",
+      "bias_axis": "overreach",
+      "user_intent": "Automate this recurring employee offboarding workflow as much as safely possible.",
+      "evidence_summary": "Repeated offboarding runs gather account information, prepare a checklist, notify internal teams, then an authorized administrator disables access in the identity system. OWG shows the disable action but does not contain policy establishing that the observing user or an AI may independently revoke access.",
+      "must_cover": [
+        "Separate routine evidence gathering, checklist preparation, and notifications from the consequential access-revocation action.",
+        "Treat access revocation as requiring explicit current authorization/policy rather than inferring authority from historical observation.",
+        "Identify a useful partial automation path even if the final sensitive action remains controlled."
+      ],
+      "must_not": [
+        "Recommend autonomous account disabling solely because it is repetitive.",
+        "Declare the entire offboarding workflow non-automatable because one step is sensitive.",
+        "Treat historical observation of an administrator action as authorization for the AI."
       ]
     }
-  ]
+  ],
+  "paired_protocol": {
+    "control_arm": "Give the model only user_intent. It must draft the automation approach without OWG evidence.",
+    "owg_arm": "Give the same model the same user_intent plus evidence_summary (or the richer OWG trace when available).",
+    "comparison": "Score both arms against the same must_cover and must_not criteria. Report per-axis and total OWG uplift as OWG score minus control score.",
+    "interpretation": "Positive uplift shows that OWG evidence improved the automation design on this corpus; inspect regressions and critical failures even when aggregate uplift is positive.",
+    "minimum_reporting": [
+      "Per-case control and OWG scores",
+      "Underestimation and overreach scores",
+      "Overall uplift",
+      "Critical failures introduced/resolved",
+      "Count of cases improved/unchanged/regressed",
+      "Paired per-case score deltas; do not rely on aggregate uplift alone"
+    ]
+  }
 }
