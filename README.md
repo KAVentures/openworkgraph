@@ -140,6 +140,7 @@ New installations default to **Redacted** AI context. The user can turn AI acces
 
 Useful AI entry points include:
 
+- `openworkgraph://index` — one small navigation resource that tells an AI which existing tool to use and restates the evidence/authorization rules;
 - `get_current_work_context` — resume ambiguous prior work;
 - `get_workflow_trace` — inspect canonical chronology;
 - `get_workflow_evidence` — gather reviewed examples for a procedure/automation;
@@ -167,11 +168,12 @@ connector/         endpoint-to-Gateway synchronization
 dashboard/         local UI assets
 enterprise/        fleet deployment kit
 sdk/               integration SDK
+integrations/       map of agent/client/organization integration surfaces
 scripts/           build/release/development automation
 tests/             regression suite
 ```
 
-The current repository still contains several root compatibility launchers/modules. They will be migrated only in compatibility-preserving steps with full cross-platform CI.
+The current repository still contains several root compatibility launchers/modules and some published integration packages at top level. See **[integrations/README.md](integrations/README.md)** for one navigation map. Physical moves happen only through compatibility-preserving steps with full cross-platform CI.
 
 ## Development
 
