@@ -47,7 +47,7 @@ def split_cases(cases: list[dict], split: str) -> list[dict]:
     for case in cases:
         cid = str(case.get("case_id") or "")
         family_id = str(case.get("family_id") or case_family_id(cid))
-        is_holdout = int(hashlib.sha256(family_id.encode()).hexdigest()[:8], 16) % 5 == 0
+        is_holdout = int(hashlib.sha256(f"family-v1:{family_id}".encode()).hexdigest()[:8], 16) % 5 == 0
         if is_holdout == want_holdout:
             selected.append(case)
     return selected
