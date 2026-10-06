@@ -116,7 +116,7 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
     def get_context_pulse(
         cursor: str | None = None,
         recent_limit: int = 12,
-        finding_limit: int = 6,
+        finding_limit: int = 10,
         lookback_days: int = 30,
         recent_detail: str = "compact",
     ) -> dict[str, Any]:
@@ -126,8 +126,10 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
         canonical-origin evidence that arrived since this caller's bookmark.
         Findings are deterministic evidence-backed aggregates, never advice. A
         repeated-workflow finding may use task inference, and says so explicitly.
-        Defaults deliberately fit a small context budget; raise the limits, use
-        ``recent_detail='rich'``, or call get_workflow_trace when more is needed.
+        Findings reserve one slot per available category (workflow, transfer,
+        agent, transition, engagement) before remaining slots are filled by normal
+        rank. Defaults deliberately fit a small context budget; raise the limits,
+        use ``recent_detail='rich'``, or call get_workflow_trace when more is needed.
         """
         name = "get_context_pulse"
         compact_module.core._begin(name)

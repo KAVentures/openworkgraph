@@ -213,7 +213,7 @@ def _slim_trace(trace: dict[str, Any]) -> dict[str, Any]:
 
 
 def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         key: execution.get(key)
         for key in (
             "execution_id",
@@ -223,6 +223,9 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
             "observation_level",
             "outcome_status",
             "outcome_basis",
+            "last_tool_status",
+            "last_observed_event_is_successful_tool_call",
+            "observed_end_state",
             "observed_family_key",
             "observed_family_basis",
             "run_start_observed",
@@ -251,6 +254,13 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
         )
         if key in execution
     }
+    if (
+        str(summary.get("outcome_status") or "").lower() in {"", "unknown", "not_observed"}
+        and summary.get("last_observed_event_is_successful_tool_call") is True
+    ):
+        summary["observed_outcome_summary"] = "succeeded (observed final step)"
+        summary["observed_outcome_summary_is_terminal_run_status"] = False
+    return summary
 
 
 def _profile_has_work(profile: Any) -> bool:

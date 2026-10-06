@@ -285,6 +285,56 @@ def _findings(
     return findings[:_MAX_TRACKED_FINDINGS], truncated or len(findings) > _MAX_TRACKED_FINDINGS
 
 
+def _finding_category(kind: str) -> str:
+    value = str(kind or "")
+    if value == "repeated_workflow":
+        return "workflow"
+    if value == "manual_transfer":
+        return "transfer"
+    if value.startswith("agent_"):
+        return "agent"
+    if value == "repeated_surface_transition":
+        return "transition"
+    if value == "surface_engagement":
+        return "engagement"
+    return value or "other"
+
+
+def _balanced_finding_selection(
+    candidates: list[tuple[dict[str, Any], str]],
+    limit: int,
+) -> list[tuple[dict[str, Any], str]]:
+    """Reserve one slot per finding category before filling by normal rank."""
+    if limit <= 0 or not candidates:
+        return []
+
+    selected: list[tuple[dict[str, Any], str]] = []
+    selected_ids: set[str] = set()
+    seen_categories: set[str] = set()
+
+    for candidate in candidates:
+        item, _status = candidate
+        category = _finding_category(str(item.get("finding_kind") or ""))
+        if category in seen_categories:
+            continue
+        selected.append(candidate)
+        selected_ids.add(str(item.get("finding_id") or ""))
+        seen_categories.add(category)
+        if len(selected) >= limit:
+            return selected
+
+    for candidate in candidates:
+        item, _status = candidate
+        finding_id = str(item.get("finding_id") or "")
+        if finding_id in selected_ids:
+            continue
+        selected.append(candidate)
+        selected_ids.add(finding_id)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def context_pulse(
     *,
     cursor: str | None = None,
@@ -376,7 +426,7 @@ def context_pulse(
             status = "baseline" if baseline_pending and previous is None else ("new" if previous is None else "changed")
             candidates.append((item, status))
 
-    selected = candidates[:output_finding_limit] if output_finding_limit > 0 else []
+    selected = _balanced_finding_selection(candidates, output_finding_limit)
     changed: list[dict[str, Any]] = []
     for item, status in selected:
         out = {key: value for key, value in item.items() if key != "material_version"}
