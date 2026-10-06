@@ -87,6 +87,8 @@ def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds", "outcome_status", "outcome_basis",
         "intermediate_failure_count", "later_successful_tool_call_observed",
         "recovered_failure_observed", "recovery_is_run_success",
+        "last_tool_status", "last_observed_event_is_successful_tool_call",
+        "observed_end_state",
         "steps", "observation_level",
         "evidence_refs", "evidence_window", "delivery_outcome", "workspace_ref",
     )

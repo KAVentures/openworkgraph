@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from .db import rows, normalized_rows, table_revision
-from shared.core.normalizer import normalize_event
+from shared.core.normalizer import normalize_event, safe_surface
 from shared.core.browser_utils import is_browser_app
 
 
@@ -95,65 +95,16 @@ def _parse_ts(value: str | None) -> float | None:
 
 
 def _friendly_browser_surface(hostname: str, pathname: str = "", title: str = "") -> str:
-    host = (hostname or "").lower().strip(".")
-    path = pathname or ""
-    t = title or ""
-
-    # High-value enterprise/browser tools. This is intentionally based on web
-    # identity, not the browser process, so effort is attributed to the tool.
-    if host in {"chatgpt.com", "chat.openai.com"}:
-        return "ChatGPT"
-    if host.endswith("lovable.dev"):
-        return "Lovable"
-    if host in {"github.com", "www.github.com"} or host.endswith(".github.com"):
-        return "GitHub"
-    if host in {"mail.google.com"}:
-        return "Gmail"
-    if host == "docs.google.com":
-        if path.startswith("/spreadsheets"):
-            return "Google Sheets"
-        if path.startswith("/document"):
-            return "Google Docs"
-        if path.startswith("/presentation"):
-            return "Google Slides"
-        if path.startswith("/forms"):
-            return "Google Forms"
-        return "Google Workspace"
-    if host in {"drive.google.com"}:
-        return "Google Drive"
-    if host.endswith("notion.so") or host == "notion.com" or host.endswith(".notion.com"):
-        return "Notion"
-    if host.endswith("slack.com"):
-        return "Slack"
-    if host in {"teams.microsoft.com", "teams.cloud.microsoft"}:
-        return "Microsoft Teams"
-    if host in {"outlook.office.com", "outlook.office365.com", "outlook.live.com"}:
-        return "Outlook"
-    if host.endswith("sharepoint.com"):
-        return "SharePoint"
-    if host in {"office.com", "www.office.com", "microsoft365.com", "www.microsoft365.com"}:
-        return "Microsoft 365"
-    if host.endswith("figma.com"):
-        return "Figma"
-    if host.endswith("linear.app"):
-        return "Linear"
-    if host.endswith("atlassian.net"):
-        # Jira and Confluence often live on the same tenant domain; title/path helps.
-        if "confluence" in t.lower():
-            return "Confluence"
-        if "jira" in t.lower() or path.lower().startswith("/jira"):
-            return "Jira"
-        return "Atlassian"
-    if host.endswith("zendesk.com") or "zendesk" in t.lower():
-        return "Zendesk"
-    if host.endswith("salesforce.com") or host.endswith("force.com"):
-        return "Salesforce"
-    if host.endswith("hubspot.com"):
-        return "HubSpot"
-
-    if host.startswith("www."):
-        host = host[4:]
-    return host or _surface_from_title(t) or "Browser"
+    """Use the shared browser identity mapper, preserving legacy title fallback."""
+    surface = safe_surface(
+        app="Browser",
+        hostname=hostname,
+        pathname=pathname,
+        title=title,
+    )
+    if surface != "Browser":
+        return surface
+    return _surface_from_title(title)
 
 
 def _surface_from_title(title: str) -> str:

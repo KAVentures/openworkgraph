@@ -295,21 +295,50 @@ def test_simulated_workday_answer_shape_is_specific_without_sensitive_content(mo
     monkeypatch.setattr(compact.core, "_finish", lambda _name, value: value)
 
     pattern = {
-        "family_key": "human:crm.update", "execution_count": 3,
-        "high_support_structural_steps": ["Gmail · Open Email", "Salesforce · Open Account", "Google Sheets · Update Status", "Gmail · Send"],
+        "family_key": "human:crm.update",
+        "execution_count": 3,
+        "high_support_structural_steps": [
+            "surface:gmail",
+            "surface:salesforce",
+            "surface:sheets",
+            "surface:gmail",
+        ],
         "median_execution_duration_seconds": 660,
+    }
+    candidate = {
+        "candidate_cluster_id": "cluster:0123456789abcdef",
+        "execution_count": 3,
+        "core_steps": [
+            "Gmail · Open Email",
+            "Salesforce · Open Account",
+            "Google Sheets · Update Status",
+            "Gmail · Send",
+        ],
+        "observed_variations": [],
+        "exact_variant_count": 1,
+        "coarse_family_keys": ["human:crm.update"],
+        "median_duration_seconds": 660,
+        "first_observed_at": "2026-10-01T09:00:00Z",
+        "last_observed_at": "2026-10-03T09:00:00Z",
+        "execution_ids": [
+            "execution:aaaaaaaaaaaaaaaa",
+            "execution:bbbbbbbbbbbbbbbb",
+            "execution:cccccccccccccccc",
+        ],
     }
     def fake_get(path: str, params=None):
         assert path == "/v1/workflow-evidence/families"
-        return {"families": [pattern]}
+        return {"families": [pattern], "candidate_clusters": [candidate]}
 
     monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
     result = compact.find_repeated_workflows()
-    [workflow] = result["patterns"]
-    assert workflow["observed_count"] == 3
-    assert workflow["typical_duration_seconds"] == 660
-    assert workflow["typical_steps"][0] == "Gmail · Open Email"
-    assert workflow["typical_steps"][-1] == "Gmail · Send"
+    [workflow] = result["candidate_clusters"]
+    assert workflow["run_count"] == 3
+    assert workflow["median_duration_seconds"] == 660
+    assert workflow["core_steps"][0] == "Gmail · Open Email"
+    assert workflow["core_steps"][-1] == "Gmail · Send"
+    assert "patterns" not in result
+    assert "examples" not in result
     dump = json.dumps(result, ensure_ascii=False)
     assert "Erik Lindqvist" not in dump
     assert "Anna Svensson" not in dump

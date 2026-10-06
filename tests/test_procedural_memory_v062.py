@@ -275,4 +275,7 @@ def test_intermediate_agent_failure_is_not_promoted_to_failed_run_without_termin
     assert execution["later_successful_tool_call_observed"] is True
     assert execution["recovered_failure_observed"] is True
     assert execution["recovery_is_run_success"] is False
+    assert execution["last_tool_status"] == "success"
+    assert execution["last_observed_event_is_successful_tool_call"] is True
+    assert execution["observed_end_state"] == "successful_tool_call_observed_at_trace_end"
     assert pm.failure_patterns(raw)["patterns"] == []

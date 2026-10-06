@@ -75,3 +75,15 @@ def test_effort_uses_browser_hostname_when_available(monkeypatch):
     out = analytics.summary()
     assert out["surfaces"][0]["surface"] == "Google Sheets"
     assert out["surfaces"][0]["keypress_count"] == 40
+
+
+def test_friendly_browser_surface_uses_shared_product_and_hostname_identity():
+    from server.analytics import _friendly_browser_surface
+
+    assert _friendly_browser_surface("acme.zendesk.com") == "Zendesk"
+    assert _friendly_browser_surface(
+        "acme.atlassian.net",
+        "/jira/software/c/projects/OPS",
+        "",
+    ) == "Jira"
+    assert _friendly_browser_surface("pricing.internal.acme.se") == "pricing.internal.acme.se"

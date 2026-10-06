@@ -303,6 +303,52 @@ def _transfer_patterns(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(grouped.values(), key=lambda x: (-int(x["count"]), str(x["source_surface"]), str(x["destination_surface"])))
 
 
+def _transfer_destinations(transfers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in transfers:
+        if not item.get("cross_surface"):
+            continue
+        destination = str(item.get("destination_surface") or "").strip()
+        source = str(item.get("source_surface") or "").strip() or "Unknown"
+        if not destination:
+            continue
+        slot = grouped.setdefault(destination, {
+            "destination_surface": destination,
+            "count": 0,
+            "sources": {},
+            "example_event_ids": [],
+        })
+        count = int(item.get("count") or 0)
+        slot["count"] += count
+        slot["sources"][source] = int(slot["sources"].get(source) or 0) + count
+        slot["example_event_ids"].extend(
+            str(value) for value in (item.get("example_event_ids") or []) if value
+        )
+
+    rows: list[dict[str, Any]] = []
+    for destination, slot in grouped.items():
+        sources = [
+            {"source_surface": source, "count": count}
+            for source, count in sorted(
+                slot["sources"].items(),
+                key=lambda pair: (-int(pair[1]), str(pair[0])),
+            )
+        ]
+        rows.append({
+            "destination_surface": destination,
+            "count": int(slot["count"]),
+            "source_breakdown": sources,
+            "example_event_ids": list(dict.fromkeys(slot["example_event_ids"]))[:10],
+            "clipboard_contents_captured": False,
+            "grouping_basis": "destination_surface",
+            "task_identity_inferred": False,
+        })
+    return sorted(
+        rows,
+        key=lambda row: (-int(row["count"]), str(row["destination_surface"])),
+    )
+
+
 def _ai_usage(focus: list[dict[str, Any]], transfers: list[dict[str, Any]], context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     usage: dict[str, dict[str, Any]] = {}
 
@@ -433,6 +479,7 @@ def compute_work_profile(*, scope: str = "current", now: datetime | None = None)
     focus = _focus_rows(since)
     context = _context_rows(since)
     transfers = _transfer_patterns(context)
+    transfer_destinations = _transfer_destinations(transfers)
     tags = list_self_tags(since=since)
     profile = {
         "scope": scope,
@@ -441,6 +488,7 @@ def compute_work_profile(*, scope: str = "current", now: datetime | None = None)
         "data_layer": "derived_local_work_profile",
         "fragmentation": _fragmentation(focus),
         "manual_transfer_patterns": transfers,
+        "manual_transfer_destinations": transfer_destinations,
         "manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers),
         "cross_surface_manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers if x.get("cross_surface")),
         "daily_rhythm": _rhythm(focus),
@@ -459,6 +507,7 @@ def compute_work_profile(*, scope: str = "current", now: datetime | None = None)
             "not_a_productivity_score": True,
             "derived_metrics_are_regeneratable": True,
             "manual_transfers_use_existing_clipboard_transfer_links": True,
+            "manual_transfer_destinations_are_rollups_not_task_identity": True,
             "navigation_hunting_candidates_require_review": True,
             "communication_actions_are_workload_context_not_quality": True,
             "daily_gaps_are_not_assumed_to_be_breaks": True,

@@ -72,7 +72,7 @@ def test_semantic_steps_use_safe_surface_and_action_vocabulary():
     assert "surface:" not in encoded
 
 
-def test_unknown_web_surface_is_pseudonymized_not_echoed():
+def test_unknown_web_surface_reuses_privacy_hardened_hostname():
     from server import procedural_feedback as feedback
 
     task = {
@@ -88,12 +88,29 @@ def test_unknown_web_surface_is_pseudonymized_not_echoed():
         )
     ]
     steps = feedback._semantic_steps(task, events)
-    assert len(steps) == 1
-    assert steps[0].startswith("Web app ")
-    assert steps[0].endswith(" · Send")
-    assert "customer-secret" not in steps[0]
-    assert "internal.example" not in steps[0]
+    assert steps == ["customer-secret.internal.example · Send"]
 
+
+
+
+def test_readable_browser_step_reuses_already_normalized_page_surface():
+    from server import procedural_feedback as feedback
+
+    task = {
+        "started_at": "2026-09-26T10:00:00+00:00",
+        "ended_at": "2026-09-26T10:05:00+00:00",
+    }
+    event = _browser_event(
+        "2026-09-26T10:00:10+00:00",
+        "",
+        "/",
+        "Open ticket",
+    )
+    event["metadata"]["page"] = {
+        "surface": "Zendesk",
+        "title": "Zendesk",
+    }
+    assert feedback._semantic_steps(task, [event]) == ["Zendesk · Open ticket"]
 
 
 def test_readable_surface_layer_reuses_safe_desktop_app_names_and_known_saas_hosts():
@@ -106,6 +123,7 @@ def test_readable_surface_layer_reuses_safe_desktop_app_names_and_known_saas_hos
     assert feedback._safe_desktop_surface("Password Manager") == "Password Manager"
     assert safe_surface(hostname="acme.zendesk.com") == "Zendesk"
     assert safe_surface(hostname="acme.atlassian.net", pathname="/jira/software/c/projects/OPS") == "Jira"
+    assert safe_surface(hostname="pricing.internal.acme.se") == "pricing.internal.acme.se"
 
     unsafe = feedback._safe_desktop_surface("/Users/anna/Secret Customer.xlsx")
     assert unsafe.startswith("Desktop app ")

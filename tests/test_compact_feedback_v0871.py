@@ -123,12 +123,13 @@ def test_repeated_workflow_key_feeds_feedback_loop(monkeypatch):
     compact, _calls = _install_feedback_fakes(monkeypatch)
 
     repeated = compact.find_repeated_workflows(task_family="email.compose_send")
-    assert repeated["patterns"][0]["execution_count"] == 3
-    assert repeated["patterns"][0]["family_key"] == "human:email.compose_send"
-    assert repeated["examples"][0]["family_key"] == "human:email.compose_send"
+    assert repeated["families"][0]["execution_count"] == 3
+    assert repeated["families"][0]["family_key"] == "human:email.compose_send"
+    assert "patterns" not in repeated
+    assert "examples" not in repeated
 
     feedback = compact.how_did_similar_runs_go(
-        family_key=repeated["patterns"][0]["family_key"]
+        family_key=repeated["families"][0]["family_key"]
     )
     assert feedback["status"] == "ok"
     assert feedback["family_key"] == "human:email.compose_send"
@@ -306,5 +307,35 @@ def test_find_repeated_workflows_default_payload_stays_chatgpt_sized(monkeypatch
     assert result["legacy_detail_included"] is False
     assert "procedural_families" not in result
     assert "automation_candidates" not in result
+    assert "patterns" not in result
+    assert "examples" not in result
     assert len(result["candidate_clusters"][0]["execution_ids"]) == 10
     assert len(result["candidate_clusters"][0]["variations"]) == 6
+
+
+def test_find_repeated_workflows_legacy_projection_is_explicit_opt_in(monkeypatch):
+    from mcp_server import compact
+
+    monkeypatch.setattr(compact.core, "_begin", lambda _name: None)
+    monkeypatch.setattr(compact.core, "_finish", lambda _name, value: value)
+    payload = {
+        "families": [{
+            "family_key": "human:email.compose_send",
+            "execution_count": 2,
+            "high_support_structural_steps": ["surface:gmail"],
+            "median_execution_duration_seconds": 10,
+            "executions": [{"execution_id": "execution:aaaaaaaaaaaaaaaa"}],
+        }],
+        "candidate_clusters": [],
+    }
+    monkeypatch.setattr(
+        compact.secure_runtime,
+        "secure_get",
+        lambda path, _params=None: payload if path == "/v1/workflow-evidence/families" else {},
+    )
+
+    result = compact.find_repeated_workflows(include_legacy=True)
+    assert result["legacy_detail_included"] is True
+    assert result["patterns"][0]["family_key"] == "human:email.compose_send"
+    assert result["examples"][0]["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
+    assert result["procedural_families"][0]["family_key"] == "human:email.compose_send"

@@ -112,6 +112,9 @@ def _safe_event_surface(event: dict[str, Any], *, last_browser_surface: str = ""
     page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
 
     if event_type.startswith("browser_"):
+        normalized_surface = str(page.get("surface") or "").strip()
+        if normalized_surface and normalized_surface != "Browser":
+            return normalized_surface
         return safe_surface(
             app=app,
             hostname=str(page.get("hostname") or ""),

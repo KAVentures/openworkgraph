@@ -317,3 +317,32 @@ def test_agent_recovered_failures_are_not_reported_as_failed_runs(monkeypatch):
     assert rows[0]["recovered_run_count"] == 2
     assert rows[0]["failing_run_count"] == 0
     assert rows[0]["run_outcome_inferred_from_final_tool"] is False
+
+
+def test_manual_transfer_finding_emits_single_source_destination_at_threshold(monkeypatch):
+    from server import context_pulse_findings as findings
+    from server import work_profile
+
+    monkeypatch.setattr(findings, "_frozen_context_rows", lambda **_kwargs: [{"surface": "x"}])
+    monkeypatch.setattr(
+        work_profile,
+        "_transfer_patterns",
+        lambda _rows: [{
+            "source_surface": "Citrix",
+            "destination_surface": "Microsoft Excel",
+            "count": 3,
+            "cross_surface": True,
+            "example_event_ids": ["e1", "e2", "e3"],
+        }],
+    )
+
+    rows = findings.manual_transfer_findings(
+        snapshot_context_max_id=10,
+        snapshot_at="2026-10-06T10:00:00+00:00",
+        lookback_days=30,
+    )
+    assert len(rows) == 1
+    assert rows[0]["source_surface"] == "Citrix"
+    assert rows[0]["destination_surface"] == "Microsoft Excel"
+    assert rows[0]["occurrence_count"] == 3
+    assert rows[0]["grouping_basis"] == "destination_surface"
