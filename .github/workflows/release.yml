@@ -275,7 +275,7 @@ jobs:
               names = set(z.namelist())
               assert "enterprise/README.md" in names
               assert "enterprise/windows/install-managed.ps1" in names
-              assert "platform/enterprise/macos/install-managed.sh" in names
+              assert "enterprise/macos/install-managed.sh" in names
               assert "enterprise/FLEET_ACCEPTANCE.md" in names
           PY
       - name: Upload enterprise assets
