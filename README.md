@@ -140,6 +140,7 @@ New installations default to **Redacted** AI context. The user can turn AI acces
 
 Useful AI entry points include:
 
+- `openworkgraph://index` — one small navigation resource that tells an AI which existing tool to use and restates the evidence/authorization rules;
 - `get_current_work_context` — resume ambiguous prior work;
 - `get_workflow_trace` — inspect canonical chronology;
 - `get_workflow_evidence` — gather reviewed examples for a procedure/automation;
