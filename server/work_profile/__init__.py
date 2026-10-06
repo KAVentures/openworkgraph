@@ -8,7 +8,7 @@ import os
 import statistics
 from typing import Any
 
-from .db import connect
+from server.db import connect
 
 SELF_TAG_CATEGORIES = (
     "Routine admin",

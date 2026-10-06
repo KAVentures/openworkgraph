@@ -15,8 +15,8 @@ from typing import Any, Iterable
 
 from . import exporter as base
 from .context_layers import candidate_tasks
-from .work_profile_service import compute_work_profile
-from .work_profile_export import append_profile_sheets, profile_tables
+from .work_profile.service import compute_work_profile
+from .work_profile.export import append_profile_sheets, profile_tables
 
 AI_DATA_DICTIONARY_MD = base.AI_DATA_DICTIONARY_MD
 AI_STARTER_PROMPT_MD = base.AI_STARTER_PROMPT_MD
