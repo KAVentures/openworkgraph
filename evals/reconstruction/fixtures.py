@@ -375,17 +375,25 @@ def _structural_signature(case: dict[str, Any]) -> tuple[Any, ...]:
         return table[key]
 
     rows = []
+    previous_at: datetime | None = None
     for event in case.get("presented_evidence") or []:
         metadata = event.get("metadata") or {}
         ref = (metadata.get("resource_reference") or {}).get("resource_ref")
+        page = metadata.get("page") or {}
+        observed_at = datetime.fromisoformat(str(event.get("observed_at")).replace("Z", "+00:00"))
+        gap_seconds = None if previous_at is None else int((observed_at - previous_at).total_seconds())
+        previous_at = observed_at
         rows.append((
             event.get("app"),
+            page.get("host"),
+            page.get("path"),
             event.get("event_type"),
             event.get("action"),
             event.get("semantic_action"),
             workflow_for.get(str(event.get("event_id")), "unknown"),
             canon(ref, resource_ids, "R"),
             canon(event.get("tab_context_id"), tab_ids, "T"),
+            gap_seconds,
         ))
     return tuple(rows)
 
