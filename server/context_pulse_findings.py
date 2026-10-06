@@ -80,7 +80,7 @@ def repeated_workflow_findings(raw_rows: list[dict[str, Any]], lookback_days: in
             )
         cluster_id = str(candidate.get("candidate_cluster_id") or "")
         findings.append({
-            "finding_id": _finding_id("workflow_candidate", cluster_id),
+            "finding_id": _finding_id("task_candidate", cluster_id),
             "finding_kind": "repeated_workflow",
             "candidate_cluster_id": cluster_id,
             "coarse_family_keys": list(candidate.get("coarse_family_keys") or []),
@@ -202,6 +202,7 @@ def manual_transfer_findings(
         findings.append({
             "finding_id": _finding_id("manual_transfer_destination", destination),
             "finding_kind": "manual_transfer",
+            "source_surface": sources[0]["source_surface"] if len(sources) == 1 else "Multiple sources",
             "destination_surface": destination,
             "source_breakdown": sources,
             "occurrence_count": count,

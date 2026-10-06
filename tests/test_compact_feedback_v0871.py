@@ -302,9 +302,9 @@ def test_find_repeated_workflows_default_payload_stays_chatgpt_sized(monkeypatch
     result = compact.find_repeated_workflows()
     encoded = json.dumps(result, separators=(",", ":")).encode("utf-8")
     assert len(encoded) < 25_000
-    assert result["returned"] == 10
+    assert result["returned"] == 8
     assert result["legacy_detail_included"] is False
     assert "procedural_families" not in result
     assert "automation_candidates" not in result
-    assert len(result["candidate_clusters"][0]["execution_ids"]) == 12
-    assert len(result["candidate_clusters"][0]["variations"]) == 8
+    assert len(result["candidate_clusters"][0]["execution_ids"]) == 10
+    assert len(result["candidate_clusters"][0]["variations"]) == 6

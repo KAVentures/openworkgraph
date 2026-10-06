@@ -82,6 +82,13 @@ class _IdentityLearningView(_PolicyView):
                 return False
         return _presentation._looks_like_person_name(value, allow_single=allow_single)
 
+    def _tail_name_candidate(self, value: str) -> tuple[str, str]:
+        """Reuse parsing, but reject display names the learning policy distrusts."""
+        prefix, candidate = _presentation._tail_name_candidate(value)
+        if candidate and not self._looks_like_person_name(candidate, allow_single=True):
+            return str(value or ""), ""
+        return prefix, candidate
+
 
 _VIEW = _PolicyView()
 _LEARNING_VIEW = _IdentityLearningView()

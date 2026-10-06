@@ -223,3 +223,20 @@ def test_stateful_identity_learning_does_not_turn_customer_companies_into_people
     assert presentation._alias_hash("Acme Logistics") not in registry
     assert presentation._alias_hash("Volvo Cars") not in registry
     assert presentation._alias_hash("Anna Svensson") in registry
+
+
+def test_legacy_contaminated_company_aliases_do_not_override_organization_safeguards(monkeypatch, tmp_path):
+    presentation = _presentation(monkeypatch, tmp_path)
+    false_token = presentation._token("PERSON", "shared@example.com")
+    presentation._save_people_registry_data({
+        presentation._alias_hash("Acme Logistics"): [false_token],
+        presentation._alias_hash("Volvo Cars"): [false_token],
+    })
+
+    from server import ai_context
+    safe = ai_context.redact_contextually({
+        "account": "Acme Logistics",
+        "customer": "Volvo Cars",
+    })
+    assert safe["account"] == "Acme Logistics"
+    assert safe["customer"] == "Volvo Cars"
