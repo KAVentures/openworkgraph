@@ -256,7 +256,10 @@ def _agent_run_summary(execution: dict[str, Any]) -> dict[str, Any]:
     }
     if (
         str(summary.get("outcome_status") or "").lower() in {"", "unknown", "not_observed"}
-        and summary.get("last_observed_event_is_successful_tool_call") is True
+        # SessionEnd and other bookkeeping may follow the final tool event.
+        # For the compact observed-outcome hint, the relevant fact is whether
+        # the last tool event before trace end succeeded.
+        and str(summary.get("last_tool_status") or "").lower() == "success"
     ):
         summary["observed_outcome_summary"] = "succeeded (observed final step)"
         summary["observed_outcome_summary_is_terminal_run_status"] = False
