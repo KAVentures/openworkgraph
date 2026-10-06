@@ -219,7 +219,7 @@ def _scenario(kind: int, variant: int) -> dict[str, Any]:
     if kind == 1:
         E(0,"gmail","click",label="Open renewal",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
         E(20,"salesforce","click",label="Open account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf-a")
-        E(40,"slack","focus",label="Support ping",resource=None,workflow="B",checkpoint="support_request")
+        E(40,"slack","focus",label="New message",resource=None,workflow="B",checkpoint="support_request")
         E(55,"jira","click",label="Open issue",resource=f"jira-b{v}",workflow="B",checkpoint="issue",tab="tab-jira-b")
         E(80,"salesforce","click",label="Return to account",resource=f"acct-a{v}",workflow="A",role="ui",tab="tab-sf-a")
         E(100,"sheets","click",label="Check pricing",resource=f"sheet-a{v}",workflow="A",checkpoint="pricing",tab="tab-sheet-a")
@@ -227,54 +227,54 @@ def _scenario(kind: int, variant: int) -> dict[str, Any]:
         E(145,"salesforce","click",label="Save renewal",resource=f"acct-a{v}",workflow="A",checkpoint="crm_update",tab="tab-sf-a")
         E(165,"gmail","click",label="Send reply",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
     elif kind == 2:
-        E(0,"gmail","click",label="Open customer Alpha",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
+        E(0,"gmail","click",label="Open message",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
         E(18,"gmail","click",label="Reply",resource=f"mail-a{v}",workflow="A",role="ui",tab="tab-a")
-        E(34,"gmail","click",label="Open customer Beta",resource=f"mail-b{v}",workflow="B",checkpoint="request",tab="tab-b")
-        E(48,"salesforce","click",label="Open Beta account",resource=f"acct-b{v}",workflow="B",checkpoint="account",tab="tab-sf-b")
-        E(68,"gmail","click",label="Return Alpha",resource=f"mail-a{v}",workflow="A",role="ui",tab="tab-a")
-        E(82,"salesforce","click",label="Open Alpha account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf-a")
-        E(100,"gmail","click",label="Send Alpha",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
-        E(118,"gmail","click",label="Return Beta",resource=f"mail-b{v}",workflow="B",role="ui",tab="tab-b")
-        E(132,"gmail","click",label="Send Beta",resource=f"mail-b{v}",workflow="B",checkpoint="reply",tab="tab-b")
+        E(34,"gmail","click",label="Open message",resource=f"mail-b{v}",workflow="B",checkpoint="request",tab="tab-b")
+        E(48,"salesforce","click",label="Open account",resource=f"acct-b{v}",workflow="B",checkpoint="account",tab="tab-sf-b")
+        E(68,"gmail","click",label="Return message",resource=f"mail-a{v}",workflow="A",role="ui",tab="tab-a")
+        E(82,"salesforce","click",label="Open account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf-a")
+        E(100,"gmail","click",label="Send reply",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
+        E(118,"gmail","click",label="Return message",resource=f"mail-b{v}",workflow="B",role="ui",tab="tab-b")
+        E(132,"gmail","click",label="Send reply",resource=f"mail-b{v}",workflow="B",checkpoint="reply",tab="tab-b")
     elif kind == 3:
-        E(0,"salesforce","click",label="Open Opportunity A",resource=f"opp-a{v}",workflow="A",checkpoint="open",tab="tab-a")
+        E(0,"salesforce","click",label="Open opportunity",resource=f"opp-a{v}",workflow="A",checkpoint="open",tab="tab-a")
         E(18,"salesforce","click",label="Edit stage",resource=f"opp-a{v}",workflow="A",checkpoint="edit",tab="tab-a")
-        E(32,"salesforce","click",label="Open Opportunity B",resource=f"opp-b{v}",workflow="B",checkpoint="open",tab="tab-b")
+        E(32,"salesforce","click",label="Open opportunity",resource=f"opp-b{v}",workflow="B",checkpoint="open",tab="tab-b")
         E(48,"salesforce","click",label="Edit owner",resource=f"opp-b{v}",workflow="B",checkpoint="edit",tab="tab-b")
         E(64,"salesforce","click",label="Return Opportunity A",resource=f"opp-a{v}",workflow="A",role="ui",tab="tab-a")
-        E(80,"salesforce","click",label="Save A",resource=f"opp-a{v}",workflow="A",checkpoint="save",tab="tab-a")
+        E(80,"salesforce","click",label="Save",resource=f"opp-a{v}",workflow="A",checkpoint="save",tab="tab-a")
         E(96,"salesforce","click",label="Return Opportunity B",resource=f"opp-b{v}",workflow="B",role="ui",tab="tab-b")
-        E(112,"salesforce","click",label="Save B",resource=f"opp-b{v}",workflow="B",checkpoint="save",tab="tab-b")
+        E(112,"salesforce","click",label="Save",resource=f"opp-b{v}",workflow="B",checkpoint="save",tab="tab-b")
     elif kind == 4:
         E(0,"outlook","focus",label="Finance request",resource=None,workflow="C",checkpoint="request")
         E(15,"gmail","click",label="Renewal request",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
         E(30,"slack","focus",label="Support request",resource=None,workflow="B",checkpoint="request")
-        E(48,"salesforce","click",label="Account A",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf-a")
+        E(48,"salesforce","click",label="Open account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf-a")
         E(66,"excel","focus",label="Rate table",resource=None,workflow="C",checkpoint="rate")
-        E(84,"jira","click",label="Ticket B",resource=f"jira-b{v}",workflow="B",checkpoint="ticket",tab="tab-b")
+        E(84,"jira","click",label="Open issue",resource=f"jira-b{v}",workflow="B",checkpoint="ticket",tab="tab-b")
         E(104,"pricing","click",label="Update rate",resource=None,workflow="C",checkpoint="update")
-        E(122,"sheets","click",label="Pricing A",resource=f"sheet-a{v}",workflow="A",checkpoint="pricing",tab="tab-sheet")
+        E(122,"sheets","click",label="Open spreadsheet",resource=f"sheet-a{v}",workflow="A",checkpoint="pricing",tab="tab-sheet")
         E(140,"jira","click",label="Resolve ticket",resource=f"jira-b{v}",workflow="B",checkpoint="resolve",tab="tab-b")
         E(158,"gmail","click",label="Send renewal",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
         E(176,"pricing","click",label="Save rate",resource=None,workflow="C",checkpoint="save")
     elif kind == 5:
         E(0,"gmail","click",label="Open renewal",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
-        E(25,"salesforce","click",label="Account A",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-a2")
+        E(25,"salesforce","click",label="Open account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-a2")
         E(50,"github","click",label="Review PR",resource=f"pr-b{v}",workflow="B",checkpoint="review",tab="tab-b")
         E(85,"github","click",label="Comment PR",resource=f"pr-b{v}",workflow="B",checkpoint="comment",tab="tab-b")
         E(260,"github","click",label="Approve PR",resource=f"pr-b{v}",workflow="B",checkpoint="approve",tab="tab-b")
-        E(420,"salesforce","click",label="Return account A",resource=f"acct-a{v}",workflow="A",role="ui",tab="tab-a2")
+        E(420,"salesforce","click",label="Return account",resource=f"acct-a{v}",workflow="A",role="ui",tab="tab-a2")
         E(440,"gmail","click",label="Send renewal",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
     elif kind == 6:
         shared=f"sheet-shared{v}"
-        E(0,"gmail","click",label="Customer A",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
-        E(20,"sheets","click",label="Pricing row A",resource=shared,workflow="A",checkpoint="pricing",tab="tab-shared")
-        E(38,"outlook","focus",label="Finance B",resource=None,workflow="B",checkpoint="request")
-        E(56,"sheets","click",label="Rate row B",resource=shared,workflow="B",checkpoint="rate",tab="tab-shared")
-        E(76,"salesforce","click",label="Update A",resource=f"acct-a{v}",workflow="A",checkpoint="update",tab="tab-sf")
-        E(96,"pricing","click",label="Update B",resource=None,workflow="B",checkpoint="update")
-        E(116,"gmail","click",label="Send A",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
-        E(136,"pricing","click",label="Save B",resource=None,workflow="B",checkpoint="save")
+        E(0,"gmail","click",label="Open message",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
+        E(20,"sheets","click",label="Open row",resource=shared,workflow="A",checkpoint="pricing",tab="tab-shared")
+        E(38,"outlook","focus",label="Open request",resource=None,workflow="B",checkpoint="request")
+        E(56,"sheets","click",label="Open row",resource=shared,workflow="B",checkpoint="rate",tab="tab-shared")
+        E(76,"salesforce","click",label="Save record",resource=f"acct-a{v}",workflow="A",checkpoint="update",tab="tab-sf")
+        E(96,"pricing","click",label="Save record",resource=None,workflow="B",checkpoint="update")
+        E(116,"gmail","click",label="Send reply",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
+        E(136,"pricing","click",label="Save",resource=None,workflow="B",checkpoint="save")
     elif kind == 7:
         E(0,"gmail","click",label="Open renewal",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
         E(20,"salesforce","click",label="Account",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf")
@@ -282,37 +282,92 @@ def _scenario(kind: int, variant: int) -> dict[str, Any]:
         E(60,"slack","focus",label="Request manager approval",resource=None,workflow="A",checkpoint="approval")
         E(90,"salesforce","click",label="Save renewal",resource=f"acct-a{v}",workflow="A",checkpoint="update",tab="tab-sf")
         E(108,"gmail","click",label="Send reply",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
-        E(125,"jira","click",label="Unrelated ticket",resource=f"jira-b{v}",workflow="NOISE",role="noise",tab="tab-noise")
+        E(125,"jira","click",label="Open issue",resource=f"jira-b{v}",workflow="NOISE",role="noise",tab="tab-noise")
     elif kind == 8:
         E(0,"gmail","click",label="Open order change",resource=f"mail-a{v}",workflow="A",checkpoint="request",tab="tab-a")
         E(18,"salesforce","click",label="Customer record",resource=f"acct-a{v}",workflow="A",checkpoint="account",tab="tab-sf",omit_resource=(v%2==0))
-        E(35,"slack","focus",label="Different project",resource=None,workflow="B",checkpoint="request")
-        E(52,"docs","click",label="Project B document",resource=f"doc-b{v}",workflow="B",checkpoint="document",tab="tab-b",omit_resource=(v%2==1))
+        E(35,"slack","focus",label="Open message",resource=None,workflow="B",checkpoint="request")
+        E(52,"docs","click",label="Open document",resource=f"doc-b{v}",workflow="B",checkpoint="document",tab="tab-b",omit_resource=(v%2==1))
         E(72,"salesforce","click",label="Return customer",resource=f"acct-a{v}",workflow="A",role="ui",tab="tab-sf",omit_resource=(v%2==0))
         E(90,"gmail","click",label="Send order change",resource=f"mail-a{v}",workflow="A",checkpoint="reply",tab="tab-a")
-        E(108,"docs","click",label="Edit project B",resource=f"doc-b{v}",workflow="B",checkpoint="edit",tab="tab-b",omit_resource=(v%2==1))
+        E(108,"docs","click",label="Edit document",resource=f"doc-b{v}",workflow="B",checkpoint="edit",tab="tab-b",omit_resource=(v%2==1))
     elif kind == 9:
         transfer=f"xfer-{v}"
         E(0,"sheets","click",label="Copy approved price",resource=f"sheet-a{v}",workflow="A",checkpoint="source",tab="tab-sheet",clipboard_transfer=transfer,clipboard_action="copy")
-        E(18,"slack","focus",label="Support ping",resource=None,workflow="B",checkpoint="request")
-        E(34,"jira","click",label="Open support issue",resource=f"jira-b{v}",workflow="B",checkpoint="issue",tab="tab-b")
+        E(18,"slack","focus",label="New message",resource=None,workflow="B",checkpoint="request")
+        E(34,"jira","click",label="Open issue",resource=f"jira-b{v}",workflow="B",checkpoint="issue",tab="tab-b")
         E(52,"salesforce","click",label="Paste approved price",resource=f"acct-a{v}",workflow="A",checkpoint="destination",tab="tab-sf",clipboard_transfer=transfer,clipboard_action="paste")
         E(70,"salesforce","click",label="Save account",resource=f"acct-a{v}",workflow="A",checkpoint="save",tab="tab-sf")
-        E(88,"jira","click",label="Resolve support",resource=f"jira-b{v}",workflow="B",checkpoint="resolve",tab="tab-b")
+        E(88,"jira","click",label="Resolve issue",resource=f"jira-b{v}",workflow="B",checkpoint="resolve",tab="tab-b")
     else:
         E(0,"github","click",label="Open PR",resource=f"pr-a{v}",workflow="A",checkpoint="review",tab="tab-a")
         E(18,"terminal","focus",label="Agent starts tests",resource=None,workflow="A",checkpoint="agent_test",actor_kind="agent")
-        E(36,"gmail","click",label="Customer message",resource=f"mail-b{v}",workflow="B",checkpoint="request",tab="tab-b")
+        E(36,"gmail","click",label="Open message",resource=f"mail-b{v}",workflow="B",checkpoint="request",tab="tab-b")
         E(54,"terminal","focus",label="Agent reports failing test",resource=None,workflow="A",checkpoint="agent_failure",actor_kind="agent")
         E(74,"github","click",label="Inspect failing file",resource=f"pr-a{v}",workflow="A",checkpoint="inspect",tab="tab-a")
-        E(94,"gmail","click",label="Send customer reply",resource=f"mail-b{v}",workflow="B",checkpoint="reply",tab="tab-b")
+        E(94,"gmail","click",label="Send reply",resource=f"mail-b{v}",workflow="B",checkpoint="reply",tab="tab-b")
         E(114,"github","click",label="Push fix",resource=f"pr-a{v}",workflow="A",checkpoint="fix",tab="tab-a")
+
+    # Each variant changes structure, not merely IDs/timing. This prevents the
+    # corpus from being ten templates repeated three times while retaining the
+    # same scenario family for controlled analysis.
+    if v == 1 and len(events) >= 5:
+        # Add realistic passive/noise activity at a non-terminal point.
+        insert_at = max(2, len(events) // 2)
+        noise = _event(
+            900 + kind,
+            int((datetime.fromisoformat(events[insert_at]["observed_at"].replace("Z", "+00:00")) - datetime(2026, 10, 6, 8, 0, tzinfo=timezone.utc)).total_seconds()) - v * 3 + 7,
+            "docs",
+            "click",
+            label="Open document",
+            resource=f"reference-{kind}-{v}",
+            workflow="NOISE",
+            role="noise",
+            tab=f"tab-reference-{kind}",
+        )
+        events.insert(insert_at, noise)
+    elif v == 2 and len(events) >= 6:
+        # Remove one UI-only return when available, then add a same-surface
+        # distractor. Membership/order therefore differs from v1/v2.
+        ui_index = next((idx for idx, e in enumerate(events) if e["_truth"]["role"] == "ui"), None)
+        if ui_index is not None:
+            events.pop(ui_index)
+        insert_at = min(3, len(events) - 1)
+        noise = _event(
+            950 + kind,
+            int((datetime.fromisoformat(events[insert_at]["observed_at"].replace("Z", "+00:00")) - datetime(2026, 10, 6, 8, 0, tzinfo=timezone.utc)).total_seconds()) - v * 3 + 5,
+            "gmail" if kind % 2 else "salesforce",
+            "click",
+            label="Open item",
+            resource=f"distractor-{kind}-{v}",
+            workflow="NOISE",
+            role="noise",
+            tab=f"tab-distractor-{kind}",
+        )
+        events.insert(insert_at, noise)
 
     return _case(
         f"reconstruction-{kind:02d}-v{variant+1}",
         events,
         requires_uncertainty=(kind == 7),
         note=("Approval was observed, but the trigger rule is deliberately absent from evidence." if kind == 7 else ""),
+    )
+
+def _structural_signature(case: dict[str, Any]) -> tuple[Any, ...]:
+    truth_by_event: dict[str, str] = {}
+    for workflow in (case.get("ground_truth") or {}).get("workflows") or []:
+        for event_id in workflow.get("event_ids") or []:
+            truth_by_event[str(event_id)] = "workflow"
+    for event_id in (case.get("ground_truth") or {}).get("noise_event_ids") or []:
+        truth_by_event[str(event_id)] = "noise"
+    return tuple(
+        (
+            event.get("app"),
+            event.get("event_type"),
+            bool((event.get("metadata") or {}).get("resource_reference")),
+            truth_by_event.get(str(event.get("event_id")), "unknown"),
+        )
+        for event in case.get("presented_evidence") or []
     )
 
 def generate_cases() -> list[dict[str, Any]]:
@@ -366,6 +421,21 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
             missing = sorted(set(event_ids) - set(used))
             extra = sorted(set(used) - set(event_ids))
             errors.append(f"{cid}: truth partition mismatch missing={missing} extra={extra}")
+        revealing = ("unrelated", "different project", "customer alpha", "customer beta", "ticket b", "update b", "opportunity a", "opportunity b")
+        visible_text = " ".join(
+            str(value).lower()
+            for event in events
+            for value in (
+                event.get("window_title", ""),
+                event.get("target_label", ""),
+                ((event.get("metadata") or {}).get("page") or {}).get("title", ""),
+            )
+        )
+        if any(token in visible_text for token in revealing):
+            errors.append(f"{cid}: answer-revealing synthetic label leaked into presented evidence")
+    signatures = [_structural_signature(case) for case in cases]
+    if len(set(signatures)) != len(cases):
+        errors.append("corpus contains structurally duplicate cases")
     return errors
 
 if __name__ == "__main__":
