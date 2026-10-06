@@ -108,7 +108,7 @@ def test_claude_plugin_marketplace_files_are_self_contained():
     root = Path(__file__).resolve().parents[1]
     marketplace = json.loads((root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert marketplace["plugins"][0]["source"] == "./integrations/plugins/openworkgraph"
-    plugin = root / "plugins" / "openworkgraph"
+    plugin = root / "integrations" / "plugins" / "openworkgraph"
     manifest = json.loads((plugin / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "openworkgraph"
     mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))
