@@ -83,7 +83,7 @@ def _event(
     if host:
         metadata["page"] = {
             "hostname": host,
-            "pathname": f"/opaque/{_opaque_id("p", resource or surface)}",
+            "pathname": f"/opaque/{_opaque_id('p', resource or surface)}",
             "title": f"{title} · {label}",
         }
     if tab:
@@ -430,7 +430,7 @@ def _advanced_scenario(kind: int) -> dict[str, Any]:
                    clipboard_transfer=clipboard_transfer, clipboard_action=clipboard_action))
         i += 1
 
-    # 20 independent topologies. Labels are intentionally generic: identity must
+    # 24 independent topologies. Labels are intentionally generic: identity must
     # come from chronology, resource/tab continuity, actions, or explicit evidence.
     if kind == 11:  # two workflows multiplexed in one browser tab
         for t,w,r,c in [(0,"A","mail-71","request"),(12,"B","mail-83","request"),(25,"A","acct-71","account"),
