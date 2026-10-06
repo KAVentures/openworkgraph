@@ -9,7 +9,7 @@ It also checks a consuming AI for two opposite failures:
 1. **Underestimation** — recommending old-style macros/templates, treating missing historical payload as a future blocker, or failing to see the next autonomy boundary around an existing agent.
 2. **Overreach** — inventing automation where evidence is weak, deleting a step without checking downstream consumers, or inferring autonomous financial/clinical/high-impact authority from repetition.
 
-The fixed cases live in `evals/automation_interpretation_cases.json`.
+The fixed cases live in `evals/automation_interpretation_cases.json`. The corpus contains 16 structurally distinct scenarios spanning missing dependencies, hidden versus observed rules, exception paths, potentially redundant UI steps, agent handoffs, noisy/abandoned actions, resource lookups, failure recovery, low-risk reversible writes, and consequential financial/clinical/access-control actions. It is intentionally smaller than the reconstruction benchmark because each case is rubric-scored twice, but broad enough that one lucky scenario cannot dominate the conclusion.
 
 ## Run protocol
 
@@ -33,7 +33,7 @@ Then:
 7. Save one score sheet per arm.
 8. Compare them with `python evals/score_automation_interpretation.py control.json owg.json`.
 
-The comparison reports the control score, OWG score, uplift on both bias axes and overall, plus critical failures introduced or resolved by OWG. The same rubric is intentionally used for both arms: the question is whether observed evidence helps the model recover dependencies, avoid UI-mechanic automation, recognize hidden rules/uncertainty, and avoid overreach.
+The comparison reports the control score, OWG score, uplift on both bias axes and overall, per-case paired deltas, counts improved/unchanged/regressed, plus critical failures introduced or resolved by OWG. The same rubric is intentionally used for both arms: the question is whether observed evidence helps the model recover dependencies, avoid UI-mechanic automation, recognize hidden rules/uncertainty, and avoid overreach.
 
 Run at least one current GPT-family client and one current Claude-family client when automation guidance materially changes. Record exact model identifiers because automation/tool knowledge is time-sensitive.
 
@@ -63,3 +63,10 @@ Do not optimize only the total score. A guidance change should not be accepted m
 For a release candidate, compare both axes with the previous revision and inspect every critical failure. The goal is simultaneously to raise frontier awareness and preserve consequence-aware restraint.
 
 Provider credentials and paid model calls are intentionally not part of normal repository CI. This keeps ordinary tests deterministic and free of external cost. Teams that have provider/model access can run this protocol in their own evaluation job and archive the score sheets as artifacts.
+
+
+## Interpretation of product value
+
+Do not claim that OWG improves automation design merely because the OWG arm has a positive total delta. Inspect the paired case deltas and every critical failure. A useful result should be directionally consistent across distinct scenarios: OWG should recover observed dependencies and exception paths that the intent-only arm could not know, while not causing the model to preserve incidental UI mechanics or infer hidden rules/authority from repetition.
+
+The strongest synthetic evidence is: positive overall and per-axis uplift, improvement across multiple independent cases, no new critical failures, and specific resolved failures attributable to information present only in OWG evidence. This remains an engineering benchmark; real user sessions with blinded scoring are required before making an external quantitative product claim.
