@@ -13,6 +13,7 @@ from typing import Any
 
 from . import presentation as _presentation
 from . import first_name_policy, mail_row_policy, typed_privacy_policy, mail_subject_policy
+from .contextual_redaction import ORGANIZATIONS
 
 
 class _PolicyView:
@@ -32,6 +33,15 @@ class _PolicyView:
     def _redact_email_title_segments(self, text: str, *, owner_aliases: dict[str, str]) -> str:
         return text
 
+    def _registry_alias_should_redact(self, value: str) -> bool:
+        words = _presentation._name_words(value)
+        if not words:
+            return False
+        return not any(
+            word.strip(".'’-_").casefold() in _LEARNING_NON_NAME_WORDS
+            for word in words
+        )
+
 
 # Identity learning must be stricter than display-time recognition. Bare "to",
 # "with", "message" and "call" are common workflow language and can permanently
@@ -47,9 +57,17 @@ _STRONG_IDENTITY_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_LEARNING_NON_NAME_WORDS = set(_presentation.NON_NAME_WORDS) | {
+_LEARNING_NON_NAME_WORDS = set(_presentation.NON_NAME_WORDS) | set(ORGANIZATIONS) | {
     "team", "group", "department", "progress", "done", "backlog", "board",
     "queue", "sprint", "legal", "finance", "support", "review", "todo", "do",
+    # Organization-like display names commonly appear before shared inbox or
+    # account email addresses. They are not strong enough evidence to persist a
+    # person identity, because one mistaken learned alias contaminates later AI
+    # context across unrelated titles.
+    "acme", "logistics", "cars", "automotive", "motors", "technologies", "technology",
+    "tech", "solutions", "services", "systems", "consulting", "healthcare", "health",
+    "energy", "bank", "capital", "partners", "ventures", "labs", "studio", "agency",
+    "company", "corporation", "foundation", "institute", "university", "hospital",
 }
 
 
@@ -72,6 +90,13 @@ class _IdentityLearningView(_PolicyView):
             if bare in self.NON_NAME_WORDS:
                 return False
         return _presentation._looks_like_person_name(value, allow_single=allow_single)
+
+    def _tail_name_candidate(self, value: str) -> tuple[str, str]:
+        """Reuse parsing, but reject display names the learning policy distrusts."""
+        prefix, candidate = _presentation._tail_name_candidate(value)
+        if candidate and not self._looks_like_person_name(candidate, allow_single=True):
+            return str(value or ""), ""
+        return prefix, candidate
 
 
 _VIEW = _PolicyView()

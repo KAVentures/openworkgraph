@@ -343,6 +343,13 @@ def build_redactor(presentation: Any, *, persist_registry: bool = False):
                 if any(not gap.isspace() for gap in gaps):
                     continue
                 candidate = text[start:end]
+                registry_guard = getattr(
+                    presentation,
+                    "_registry_alias_should_redact",
+                    lambda _candidate: True,
+                )
+                if not registry_guard(candidate):
+                    continue
                 replacement = registry_replacement(candidate, registry)
                 if not replacement:
                     continue

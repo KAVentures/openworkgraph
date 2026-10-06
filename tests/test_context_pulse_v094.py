@@ -217,3 +217,103 @@ def test_context_pulse_architecture_stays_observe_independent_and_factual():
 def test_context_pulse_route_is_registered_in_production_runner():
     runner=(ROOT/'server'/'enterprise_runner.py').read_text(encoding='utf-8')
     assert 'import server.context_pulse_routes' in runner
+
+
+def test_pulse_repeated_workflows_use_shared_candidates_not_coarse_family_counts():
+    source = (ROOT / "server" / "context_pulse_findings.py").read_text(encoding="utf-8")
+    assert "cluster_runs(" in source
+    assert '"candidate_cluster_id"' in source
+    assert '"coarse_family_keys"' in source
+    assert 'by_family' not in source
+
+
+def test_manual_transfer_finding_rolls_up_alternate_sources_by_destination(monkeypatch):
+    from server import context_pulse_findings as findings
+    from server import work_profile
+
+    monkeypatch.setattr(findings, "_frozen_context_rows", lambda **_kwargs: [{"surface": "x"}])
+    monkeypatch.setattr(
+        work_profile,
+        "_transfer_patterns",
+        lambda _rows: [
+            {
+                "source_surface": "Microsoft Excel",
+                "destination_surface": "Internal Pricing Tool",
+                "count": 2,
+                "cross_surface": True,
+                "example_event_ids": ["e1", "e2"],
+            },
+            {
+                "source_surface": "Adobe Acrobat",
+                "destination_surface": "Internal Pricing Tool",
+                "count": 2,
+                "cross_surface": True,
+                "example_event_ids": ["e3", "e4"],
+            },
+        ],
+    )
+
+    rows = findings.manual_transfer_findings(
+        snapshot_context_max_id=10,
+        snapshot_at="2026-10-06T10:00:00+00:00",
+        lookback_days=30,
+    )
+    assert len(rows) == 1
+    assert rows[0]["occurrence_count"] == 4
+    assert rows[0]["destination_surface"] == "Internal Pricing Tool"
+    assert rows[0]["grouping_basis"] == "destination_surface"
+    assert rows[0]["task_identity_inferred"] is False
+    assert rows[0]["source_breakdown"] == [
+        {"source_surface": "Adobe Acrobat", "occurrence_count": 2},
+        {"source_surface": "Microsoft Excel", "occurrence_count": 2},
+    ]
+
+
+def test_agent_recovered_failures_are_not_reported_as_failed_runs(monkeypatch):
+    from server import agent_execution_traces, context_pulse_findings as findings, procedural_memory
+
+    monkeypatch.setattr(
+        agent_execution_traces,
+        "agent_execution_traces",
+        lambda *_args, **_kwargs: {
+            "executions": [
+                {
+                    "execution_id": "execution:aaaaaaaaaaaaaaaa",
+                    "agent": {"name": "Claude Code"},
+                    "started_at": "2026-10-06T09:00:00Z",
+                    "structural_steps": ["tool:shell:error", "tool:code:success", "tool:shell:success"],
+                },
+                {
+                    "execution_id": "execution:bbbbbbbbbbbbbbbb",
+                    "agent": {"name": "Claude Code"},
+                    "started_at": "2026-10-06T10:00:00Z",
+                    "structural_steps": ["tool:shell:error", "tool:code:success", "tool:shell:success"],
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        procedural_memory,
+        "derive_executions",
+        lambda _raw: [
+            {
+                "execution_id": "execution:aaaaaaaaaaaaaaaa",
+                "actor_kind": "agent",
+                "outcome_status": "unknown",
+                "recovered_failure_observed": True,
+            },
+            {
+                "execution_id": "execution:bbbbbbbbbbbbbbbb",
+                "actor_kind": "agent",
+                "outcome_status": "unknown",
+                "recovered_failure_observed": True,
+            },
+        ],
+    )
+
+    rows = findings.agent_failure_findings([], 30)
+    assert len(rows) == 1
+    assert rows[0]["finding_kind"] == "agent_recovered_failure"
+    assert rows[0]["recovered_run_count"] == 2
+    assert rows[0]["failing_run_count"] == 0
+    assert rows[0]["run_outcome_inferred_from_final_tool"] is False

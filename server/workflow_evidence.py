@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from . import analytics
 from .procedural_memory import derive_executions, load_recent_evidence
 from .work_profile import _canonical_surface
+from .workflow_candidates import cluster_runs
 
 FORMAT = "openworkgraph.workflow-evidence.v1"
 MAX_SOURCE_EVENTS = 100_000
@@ -251,63 +252,75 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return step_rows, transition_rows
 
 
+def _candidate_runs(
+    raw_events: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Overlay the one privacy-safe readable projection onto structural runs."""
+    readable_by_id: dict[str, list[str]] = {}
+    try:
+        from .procedural_feedback import _human_runs
+        for run in _human_runs(raw_events):
+            execution_id = str(run.get("execution_id") or "")
+            if execution_id:
+                readable_by_id[execution_id] = [
+                    str(step) for step in (run.get("semantic_steps") or []) if str(step)
+                ]
+    except Exception:
+        # Discovery must remain available even when the optional readable
+        # human projection cannot be built.
+        readable_by_id = {}
+
+    try:
+        from .agent_execution_traces import agent_execution_traces
+        agent_traces = agent_execution_traces(
+            raw_events,
+            limit=max(1, min(len(executions), 100)),
+            max_events_per_execution=200,
+        ).get("executions") or []
+        for trace in agent_traces:
+            execution_id = str(trace.get("execution_id") or "")
+            steps = [str(step) for step in (trace.get("structural_steps") or []) if str(step)]
+            if execution_id and steps:
+                # agent_execution_traces uses the centralized readable,
+                # privacy-safe tool label projection (Read/Grep/Edit/Bash, etc.).
+                readable_by_id[execution_id] = steps
+    except Exception:
+        pass
+
+    projected: list[dict[str, Any]] = []
+    for execution in executions:
+        item = dict(execution)
+        item["structural_steps"] = [
+            str(step) for step in (execution.get("steps") or []) if str(step)
+        ]
+        readable = readable_by_id.get(str(execution.get("execution_id") or ""))
+        if readable:
+            item["semantic_steps"] = readable
+        projected.append(item)
+    return projected
+
+
 def _structural_clusters(
     executions: list[dict[str, Any]],
     *,
     min_runs: int = 1,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """Return deterministic exact structural variants for navigation only.
-
-    A cluster is intentionally narrower than a workflow family: it is based on
-    actor kind plus the ordered structural steps observed in a run. It is not a
-    claim that the runs share business intent. Keeping this exact makes the index
-    auditable and prevents a coarse terminal-action family (for example email
-    send) from silently collapsing unrelated work.
-    """
-    grouped: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = defaultdict(list)
+    """Compatibility wrapper around the shared tolerant candidate projection."""
+    projected = []
     for execution in executions:
-        steps = tuple(str(step) for step in execution.get("steps") or [] if str(step))
-        if not steps:
-            continue
-        actor = str(execution.get("actor_kind") or "unknown")
-        grouped[(actor, steps)].append(execution)
-
-    threshold = max(1, int(min_runs))
-    rows: list[dict[str, Any]] = []
-    for (actor, steps), members in grouped.items():
-        if len(members) < threshold:
-            continue
-        material = actor + "|" + "|".join(steps)
-        cluster_id = "cluster:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        rows.append({
-            "candidate_cluster_id": cluster_id,
-            "actor_kind": actor,
-            "execution_count": len(members),
-            "structural_steps": list(steps)[:MAX_STEPS_RETURNED],
-            "coarse_family_keys": sorted({
-                str(member.get("family_key") or "")
-                for member in members
-                if str(member.get("family_key") or "")
-            }),
-            "execution_ids": [
-                str(member.get("execution_id") or "")
-                for member in members[:MAX_EXECUTION_IDS]
-            ],
-            "executions": [{
-                "execution_id": member.get("execution_id"),
-                "started_at": member.get("started_at"),
-                "ended_at": member.get("ended_at"),
-                "outcome_status": member.get("outcome_status"),
-            } for member in members[:MAX_EXECUTION_IDS]],
-            "derived": True,
-            "authoritative": False,
-            "cluster_is_business_workflow_ground_truth": False,
-            "use": "navigation candidate only; inspect canonical evidence for selected execution_ids before inferring task meaning",
-        })
-    rows.sort(key=lambda row: (-int(row["execution_count"]), str(row["candidate_cluster_id"])))
-    return rows[:max(1, min(int(limit), 100))]
-
+        item = dict(execution)
+        item.setdefault("structural_steps", list(execution.get("steps") or []))
+        item.setdefault("semantic_steps", list(execution.get("steps") or []))
+        projected.append(item)
+    return cluster_runs(
+        projected,
+        min_runs=min_runs,
+        structural_key="structural_steps",
+        readable_key="semantic_steps",
+        limit=limit,
+    )
 
 def _observed_variations(step_rows: list[dict[str, Any]], total_runs: int) -> list[dict[str, Any]]:
     if total_runs <= 1:
@@ -414,6 +427,55 @@ def _clipboard_transfers(per_run_events: dict[str, list[dict[str, Any]]]) -> lis
             "interpretation": "copy/cut-to-paste occurrence and linkage only; clipboard values were not captured",
         })
     rows.sort(key=lambda row: (-int(row["support_runs"]), -int(row["observed_transfer_count"]), str(row["source_surface"])))
+    return rows
+
+
+def _clipboard_by_destination(transfers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in transfers:
+        destination = str(row.get("destination_surface") or "").strip()
+        source = str(row.get("source_surface") or "").strip()
+        if not destination:
+            continue
+        slot = grouped.setdefault(destination, {
+            "destination_surface": destination,
+            "observed_transfer_count": 0,
+            "supporting_execution_ids": [],
+            "sources": {},
+        })
+        slot["observed_transfer_count"] += int(row.get("observed_transfer_count") or 0)
+        for execution_id in row.get("supporting_execution_ids") or []:
+            value = str(execution_id or "")
+            if value and value not in slot["supporting_execution_ids"]:
+                slot["supporting_execution_ids"].append(value)
+        source_slot = slot["sources"].setdefault(source or "Unknown", {
+            "source_surface": source or "Unknown",
+            "observed_transfer_count": 0,
+            "supporting_execution_ids": [],
+        })
+        source_slot["observed_transfer_count"] += int(row.get("observed_transfer_count") or 0)
+        for execution_id in row.get("supporting_execution_ids") or []:
+            value = str(execution_id or "")
+            if value and value not in source_slot["supporting_execution_ids"]:
+                source_slot["supporting_execution_ids"].append(value)
+
+    rows: list[dict[str, Any]] = []
+    for destination, slot in grouped.items():
+        sources = sorted(
+            slot.pop("sources").values(),
+            key=lambda item: (-int(item["observed_transfer_count"]), str(item["source_surface"])),
+        )
+        rows.append({
+            **slot,
+            "support_runs": len(slot["supporting_execution_ids"]),
+            "source_breakdown": sources,
+            "clipboard_contents_observed": False,
+            "interpretation": (
+                "workflow-scoped transfer aggregation by destination; exact source→destination "
+                "pairs remain available in clipboard_transfers"
+            ),
+        })
+    rows.sort(key=lambda row: (-int(row["observed_transfer_count"]), str(row["destination_surface"])))
     return rows
 
 
@@ -532,7 +594,14 @@ def build_workflow_evidence(
     high_steps = [row for row in steps if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
     less_common = [row for row in steps if int(row["support_runs"]) < threshold][:MAX_STEPS_RETURNED]
     high_transitions = [row for row in transitions if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
-    sequence_variants = _structural_clusters(selected, min_runs=1, limit=MAX_RUNS)
+    selected_candidates = _candidate_runs(raw, selected)
+    sequence_variants = cluster_runs(
+        selected_candidates,
+        min_runs=1,
+        structural_key="structural_steps",
+        readable_key="semantic_steps",
+        limit=MAX_RUNS,
+    )
     observed_variations = _observed_variations(steps, len(selected))
     family_keys = sorted({str(execution.get("family_key") or "") for execution in selected if execution.get("family_key")})
     selector = {
@@ -564,6 +633,9 @@ def build_workflow_evidence(
         "resource_types": _resource_types(per_run_events),
         "data_movement": {
             "clipboard_transfers": _clipboard_transfers(per_run_events),
+            "clipboard_transfers_by_destination": _clipboard_by_destination(
+                _clipboard_transfers(per_run_events)
+            ),
             "clipboard_contents_captured": False,
             "interpretation": "transfer occurrence/linkage only; use the live source system to obtain values when an automation runs",
         },
@@ -650,7 +722,13 @@ def list_workflow_evidence_candidates(
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
-    candidate_clusters = _structural_clusters(executions, min_runs=threshold, limit=100)
+    candidate_clusters = cluster_runs(
+        _candidate_runs(raw, executions),
+        min_runs=threshold,
+        structural_key="structural_steps",
+        readable_key="semantic_steps",
+        limit=100,
+    )
     items: list[dict[str, Any]] = []
     for family_key, members in grouped.items():
         if len(members) < threshold:

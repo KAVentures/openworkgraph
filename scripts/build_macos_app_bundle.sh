@@ -213,18 +213,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         let service = SMAppService.mainApp
 
-        // Existing users get the reliable behavior on their first v0.121+
-        // launch. After that, never silently reverse the user's explicit choice.
+        // Preserve every existing explicit choice. On a genuinely new install,
+        // explain the reliability benefit and ask before registering background
+        // startup; installing OWG is not implicit consent to change login items.
         if defaults.object(forKey: loginPreferenceKey) == nil {
-            do {
-                if service.status == .notRegistered {
-                    try service.register()
+            let alert = NSAlert()
+            alert.messageText = "Keep OpenWorkGraph running after you restart your Mac?"
+            alert.informativeText = "Starting automatically helps observation resume after a restart so you do not have to remember to reopen OpenWorkGraph. You can change this later from the OWG menu."
+            alert.addButton(withTitle: "Start Automatically")
+            alert.addButton(withTitle: "Not Now")
+            let choice = alert.runModal()
+
+            if choice == .alertFirstButtonReturn {
+                do {
+                    if service.status == .notRegistered {
+                        try service.register()
+                    }
+                    defaults.set(true, forKey: loginPreferenceKey)
+                } catch {
+                    defaults.set(false, forKey: loginPreferenceKey)
+                    let failure = NSAlert()
+                    failure.messageText = "Could not enable Start at Login"
+                    failure.informativeText = error.localizedDescription
+                    failure.runModal()
                 }
-                defaults.set(true, forKey: loginPreferenceKey)
-            } catch {
-                // Registration can require user approval. Keep the app usable
-                // and expose the current state in the menu instead of failing launch.
-                defaults.set(true, forKey: loginPreferenceKey)
+            } else {
+                defaults.set(false, forKey: loginPreferenceKey)
             }
         }
 

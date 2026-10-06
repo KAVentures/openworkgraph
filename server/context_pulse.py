@@ -270,13 +270,15 @@ def _findings(
         "repeated_workflow": 0,
         "manual_transfer": 1,
         "agent_repeated_failure": 2,
+        "agent_recovered_failure": 2,
+        "agent_intermediate_failure": 2,
         "repeated_surface_transition": 3,
         "surface_engagement": 4,
     }
     findings.sort(
         key=lambda item: (
             rank.get(str(item.get("finding_kind") or ""), 9),
-            -int(item.get("occurrence_count") or item.get("failing_run_count") or item.get("active_days") or 0),
+            -int(item.get("occurrence_count") or item.get("run_count") or item.get("failing_run_count") or item.get("active_days") or 0),
             str(item.get("finding_id") or ""),
         )
     )

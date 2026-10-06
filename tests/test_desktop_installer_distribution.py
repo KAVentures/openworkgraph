@@ -66,7 +66,7 @@ def test_signed_workflow_can_replace_stable_aliases():
     assert "--clobber" in workflow
 
 
-def test_macos_app_registers_login_start_and_bounds_crash_recovery():
+def test_macos_app_asks_before_first_login_start_and_bounds_crash_recovery():
     text = (ROOT / "scripts" / "build_macos_app_bundle.sh").read_text(encoding="utf-8")
 
     assert "import ServiceManagement" in text
@@ -74,6 +74,10 @@ def test_macos_app_registers_login_start_and_bounds_crash_recovery():
     assert "try service.register()" in text
     assert "try service.unregister()" in text
     assert "Start OpenWorkGraph at Login" in text
+    assert "Keep OpenWorkGraph running after you restart your Mac?" in text
+    assert 'alert.addButton(withTitle: "Start Automatically")' in text
+    assert 'alert.addButton(withTitle: "Not Now")' in text
+    assert "if choice == .alertFirstButtonReturn" in text
     assert "maxCrashRestarts = 5" in text
     assert "crashWindow: TimeInterval = 5 * 60" in text
     assert "handleUnexpectedExit" in text

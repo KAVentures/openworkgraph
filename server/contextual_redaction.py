@@ -370,7 +370,12 @@ class Detector:
             # 6. Already learned full identities: "Koyar Afrasyab".
             if i + 1 < len(words) and text[w.end:words[i + 1].start] == " ":
                 pair = f"{key} {_possessive_base(words[i + 1].text)}"
-                if self._is_learned(pair) and self._plain_name_word(words[i + 1].text):
+                if (
+                    self._is_learned(pair)
+                    and not self._stop(key)
+                    and key not in ORGANIZATIONS
+                    and self._plain_name_word(words[i + 1].text)
+                ):
                     add(i, i + 2)
 
         return sorted(found)

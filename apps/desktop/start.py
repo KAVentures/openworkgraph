@@ -79,6 +79,37 @@ def stop_process(p: subprocess.Popen | None) -> None:
         p.kill()
 
 
+def supervise_runtime(
+    api: subprocess.Popen,
+    collector: subprocess.Popen | None = None,
+    *,
+    poll_interval: float = 0.25,
+) -> None:
+    """Keep the parent alive only while the runtime children are healthy.
+
+    The packaged Mac/Windows host supervises this parent process. If the API dies
+    while the collector remains alive, exit non-zero so the outer bounded
+    supervisor can restart the complete runtime instead of leaving capture pointed
+    at a dead local service.
+    """
+    while True:
+        api_code = api.poll()
+        collector_code = collector.poll() if collector is not None else None
+        if api_code is not None:
+            if collector is not None and collector_code is None:
+                stop_process(collector)
+            raise RuntimeError(
+                f"OpenWorkGraph local API exited unexpectedly (code {api_code})."
+            )
+        if collector is not None and collector_code is not None:
+            if collector_code != 0:
+                raise RuntimeError(
+                    f"OpenWorkGraph collector exited unexpectedly (code {collector_code})."
+                )
+            return
+        time.sleep(max(0.05, float(poll_interval)))
+
+
 def mode_environment(mode: str) -> dict[str, str]:
     env = os.environ.copy()
     data_dir = ROOT / "data" / ("demo" if mode == "demo" else "live")
@@ -185,10 +216,9 @@ def main() -> None:
             print("It demonstrates ordinary human capture, timing, browser object correlation and copy/paste linkage without an AI agent.")
             print("A separate synthetic coding-agent handoff later in the timeline demonstrates optional agent telemetry.")
             print("Demo data is isolated from your real observations and is never Gateway-synchronized.")
-            print("AI access follows your saved local setting. A new install starts OFF; Privacy can optionally reset it on restart.")
+            print("AI access follows your saved local setting. A new install starts ON at Redacted; Privacy can optionally reset it on restart.")
             print("Close this window or press Ctrl+C when finished.\n")
-            while True:
-                time.sleep(1)
+            supervise_runtime(api)
         else:
             if not args.no_open_dashboard:
                 webbrowser.open(opened_dashboard)
@@ -196,7 +226,7 @@ def main() -> None:
             print("The dashboard shows THIS RUN only and begins at 0 on every launch.")
             print("Unchanged focus is summarized as a span rather than stored as repeated polling rows.")
             print("The durable local outbox retries capture events if the local API is temporarily unavailable.")
-            print("AI access starts OFF on a new install; your choice is remembered unless Privacy is set to reset it on restart.")
+            print("AI access starts ON at Redacted on a new install; your choice is remembered unless Privacy is set to reset it on restart.")
             print("Organization Gateway sharing is OFF unless explicitly enrolled; connect/pause/resume/disconnect from the dashboard.")
             print("Reload browser_extension/ after upgrades; the dashboard warns if its version is stale.")
             print("Press Ctrl+C to stop.\n")
@@ -205,7 +235,7 @@ def main() -> None:
             collector = subprocess.Popen([
                 sys.executable, "-m", "collector.secure_main", "--config", str(CONFIG)
             ], cwd=ROOT, env=collector_env)
-            collector.wait()
+            supervise_runtime(api, collector)
     except KeyboardInterrupt:
         print("\nStopping OpenWorkGraph…")
     finally:
