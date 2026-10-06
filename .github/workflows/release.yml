@@ -123,8 +123,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           foreach ($Path in @(
-            "enterprise\windows\install-managed.ps1",
-            "enterprise\windows\detect.ps1",
+            "platform\enterprise\windows\install-managed.ps1",
+            "platform\enterprise\windows\detect.ps1",
             "scripts\build_windows_enterprise_installer.ps1"
           )) {
             $Errors = $null
@@ -255,8 +255,8 @@ jobs:
           python-version: "3.11"
       - name: Parse enterprise deployment tooling
         run: |
-          python -m py_compile scripts/build_enterprise_release.py enterprise/health/fleet_health.py
-          bash -n enterprise/macos/install-managed.sh
+          python -m py_compile scripts/build_enterprise_release.py platform/enterprise/health/fleet_health.py
+          bash -n platform/enterprise/macos/install-managed.sh
       - name: Build browser sensor and enterprise deployment kit
         run: python scripts/build_enterprise_release.py
       - name: Verify enterprise release contents

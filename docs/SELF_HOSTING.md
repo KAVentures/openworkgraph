@@ -31,10 +31,10 @@ Requirements: Docker with Docker Compose.
 ```bash
 git clone https://github.com/KAVentures/openworkgraph.git
 cd openworkgraph
-cp deploy/.env.example deploy/.env
+cp platform/deploy/.env.example platform/deploy/.env
 ```
 
-Replace every placeholder in `deploy/.env` with an independently generated secret. For example:
+Replace every placeholder in `platform/deploy/.env` with an independently generated secret. For example:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -43,7 +43,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 Start PostgreSQL and the Gateway:
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
+docker compose --env-file platform/deploy/.env -f platform/deploy/docker-compose.yml up -d --build
 ```
 
 By default the Gateway is exposed on port `8790`; PostgreSQL is not published to the host network.
@@ -58,7 +58,7 @@ Production deployments should terminate TLS at a customer-controlled reverse pro
 
 Then open `https://<your-gateway>/admin` to create the first administrator with `OWG_GATEWAY_ADMIN_TOKEN`, and follow [ORGANIZATION_ROLLOUT.md](ORGANIZATION_ROLLOUT.md). Employees see what the Gateway holds about them at `https://<your-gateway>/me`.
 
-Identity settings (all optional, also listed in `deploy/.env.example`):
+Identity settings (all optional, also listed in `platform/deploy/.env.example`):
 
 | Variable | Purpose |
 |---|---|

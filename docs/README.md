@@ -48,7 +48,7 @@ Sweden-specific deployment/compliance material is under [compliance/sweden/](com
 - [Enterprise policy signing](ENTERPRISE_POLICY_SIGNING.md)
 - [Signed releases](SIGNED_RELEASES.md)
 
-The fleet/deployment artifacts themselves live under [../enterprise/](../enterprise/README.md).
+The fleet/deployment artifacts themselves live under [../platform/enterprise/](../platform/enterprise/README.md).
 
 ## Testing and packaging
 

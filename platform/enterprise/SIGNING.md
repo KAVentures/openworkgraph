@@ -31,4 +31,4 @@ The workflow signs and verifies both the normal per-user Setup EXE and the enter
 
 ## Release rule
 
-Do not describe an unsigned build as frictionless enterprise software. A production pilot should use the signed assets and pass `enterprise/FLEET_ACCEPTANCE.md`.
+Do not describe an unsigned build as frictionless enterprise software. A production pilot should use the signed assets and pass `FLEET_ACCEPTANCE.md`.

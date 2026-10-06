@@ -231,8 +231,8 @@ def test_docker_deployment_passes_every_identity_setting():
     for module in ("admin_accounts.py", "sso.py", "employees.py", "me_access.py", "identity_routes.py"):
         used |= set(re.findall(r'getenv\("(OWG_GATEWAY_[A-Z_]+)"', (root / "gateway" / module).read_text()))
     assert {"OWG_GATEWAY_SSO_CLIENT_ID", "OWG_GATEWAY_PUBLIC_URL", "OWG_GATEWAY_ADMIN_TOKEN_API"} <= used
-    compose = (root / "deploy" / "docker-compose.yml").read_text()
-    example = (root / "deploy" / ".env.example").read_text()
+    compose = (root / "platform" / "deploy" / "docker-compose.yml").read_text()
+    example = (root / "platform" / "deploy" / ".env.example").read_text()
     for var in sorted(used):
         assert f"      {var}: ${{{var}" in compose, var
         assert re.search(rf"^{var}=", example, re.M), var

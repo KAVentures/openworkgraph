@@ -97,7 +97,7 @@ employee OWG -> endpoint sharing policy -> customer-controlled Gateway/Postgres
                                            REST                 MCP
 ```
 
-See **[Self-hosting](docs/SELF_HOSTING.md)** and the **[Enterprise Deployment Kit](enterprise/README.md)**.
+See **[Self-hosting](docs/SELF_HOSTING.md)** and the **[Enterprise Deployment Kit](platform/enterprise/README.md)**.
 
 ## Evidence, not guesses
 
@@ -166,7 +166,7 @@ mcp_server/        local MCP surfaces
 gateway/           optional organization Gateway
 connector/         endpoint-to-Gateway synchronization
 dashboard/         local UI assets
-enterprise/        fleet deployment kit
+platform/          self-hosting, deployment and fleet packaging
 sdk/               integration SDK
 integrations/       map of agent/client/organization integration surfaces
 scripts/           build/release/development automation
