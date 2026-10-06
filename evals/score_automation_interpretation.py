@@ -23,7 +23,15 @@ def score(score_path: Path, case_ids: set[str] | None = None) -> dict[str, Any]:
     corpus = _load(CASES_PATH)
     submitted = _load(score_path)
     expected = {case["id"]: case for case in corpus["cases"] if case_ids is None or case["id"] in case_ids}
-    received = {case["id"]: case for case in submitted.get("cases", [])}
+    received_all = {case["id"]: case for case in submitted.get("cases", [])}
+    # A real-MCP arm may only be valid for the semantically matched subset.
+    # Accept a full score sheet and project it onto that exact subset so every
+    # arm can be generated from the same blinded grading artifact.
+    received = (
+        {case_id: case for case_id, case in received_all.items() if case_id in expected}
+        if case_ids is not None
+        else received_all
+    )
 
     missing = sorted(set(expected) - set(received))
     extra = sorted(set(received) - set(expected))
