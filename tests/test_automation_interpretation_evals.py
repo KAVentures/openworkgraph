@@ -129,3 +129,40 @@ def test_eval_set_covers_product_value_failure_modes():
     )
     for concept in concepts:
         assert concept in text
+
+
+def test_product_value_arms_include_realistic_user_and_honest_mcp_mapping():
+    payload = json.loads(EVAL_PATH.read_text(encoding="utf-8"))
+    assert payload["product_value_arms"]["C_real_owg"].startswith("user_intent plus access to the real compact OWG MCP")
+    mapped = [case for case in payload["cases"] if case.get("mcp_fixture_case_id")]
+    assert len(mapped) >= 12
+    assert all(case["realistic_user_explanation"].strip() for case in payload["cases"])
+    assert all(str(case["mcp_fixture_case_id"]).startswith("reconstruction-") for case in mapped)
+
+
+def test_real_mcp_fixture_links_exist():
+    from evals.reconstruction.fixtures import generate_cases
+
+    available = {case["case_id"] for case in generate_cases()}
+    payload = json.loads(EVAL_PATH.read_text(encoding="utf-8"))
+    linked = {case["mcp_fixture_case_id"] for case in payload["cases"] if case.get("mcp_fixture_case_id")}
+    assert linked <= available
+
+
+def test_four_arm_comparison_reports_primary_and_retrieval_gaps(tmp_path):
+    from evals.score_automation_interpretation import compare_arms
+
+    sheets = {}
+    for name in ("minimal_intent", "realistic_user", "real_owg", "curated_oracle"):
+        sheet = _perfect_score_sheet()
+        if name == "minimal_intent":
+            sheet["cases"][0]["must_cover"][0] = 0
+        elif name == "realistic_user":
+            sheet["cases"][0]["must_cover"][0] = 1
+        paths = tmp_path / f"{name}.json"
+        paths.write_text(json.dumps(sheet), encoding="utf-8")
+        sheets[name] = paths
+    report = compare_arms(sheets)
+    assert report["primary_product_uplift"]["total_score"] > 0
+    assert report["retrieval_interpretation_gap"]["total_score"] == 0
+    assert report["weak_baseline_uplift"]["total_score"] > report["primary_product_uplift"]["total_score"]
