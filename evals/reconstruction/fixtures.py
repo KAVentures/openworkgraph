@@ -566,6 +566,18 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
     signatures = [_structural_signature(case) for case in cases]
     if len(set(signatures)) != len(cases):
         errors.append("corpus contains structurally duplicate cases")
+    independent = [case for case in cases if "-v" not in str(case.get("case_id") or "")]
+    if len(independent) < 20:
+        errors.append("corpus needs at least 20 independent non-variant hard scenarios")
+    uncertainty_cases = [
+        case for case in cases
+        if bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
+    ]
+    if len(uncertainty_cases) < 5:
+        errors.append("corpus needs at least 5 independent/variant uncertainty cases")
+    long_cases = [case for case in cases if len(case.get("presented_evidence") or []) >= 50]
+    if not long_cases:
+        errors.append("corpus needs at least one 50+ event session")
     return errors
 
 if __name__ == "__main__":
