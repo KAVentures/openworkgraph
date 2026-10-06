@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .prepare import SYSTEM_INSTRUCTION
+from .prepare import SYSTEM_INSTRUCTION, split_cases
 from .fixtures import load_cases
 from .scoring import acceptance, aggregate
 
@@ -113,7 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default="evals/reconstruction/results")
     parser.add_argument("--temperature", type=float, help="optional sampling temperature; omitted by default for reasoning-model compatibility")
     parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument("--max-cases", type=int, help="debug only; omitted means all 30 cases")
+    parser.add_argument("--split", choices=("all", "development", "holdout"), default="all",
+                        help="family-level split; use holdout only for final evaluation")
+    parser.add_argument("--max-cases", type=int, help="debug only; omitted means the full selected split")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
 
@@ -121,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     if not api_key:
         parser.error(f"missing credential environment variable {args.api_key_env}; never put API keys in repo files")
 
-    cases = load_cases()
+    cases = split_cases(load_cases(), args.split)
     if args.max_cases is not None:
         if args.max_cases < 1:
             parser.error("--max-cases must be >= 1")
@@ -130,9 +132,10 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_model = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.model)
-    predictions_path = out_dir / f"{safe_model}.predictions.jsonl"
-    report_path = out_dir / f"{safe_model}.report.json"
-    metadata_path = out_dir / f"{safe_model}.metadata.json"
+    split_suffix = "" if args.split == "all" else f".{args.split}"
+    predictions_path = out_dir / f"{safe_model}{split_suffix}.predictions.jsonl"
+    report_path = out_dir / f"{safe_model}{split_suffix}.report.json"
+    metadata_path = out_dir / f"{safe_model}{split_suffix}.metadata.json"
 
     existing: dict[str, dict[str, Any]] = {}
     if args.resume and predictions_path.exists():
@@ -175,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         "model_requested": args.model,
         "base_url": args.base_url,
         "temperature": args.temperature,
+        "split": args.split,
         "cases": len(cases),
         "revision": _revision(),
         "elapsed_seconds": round(time.time() - started, 3),
