@@ -89,7 +89,7 @@ def test_macos_app_registers_login_start_and_bounds_crash_recovery():
 
 
 def test_windows_tray_recovers_only_unexpected_child_exits():
-    text = (ROOT / "windows_tray.py").read_text(encoding="utf-8")
+    text = (ROOT / "apps" / "desktop" / "windows_tray.py").read_text(encoding="utf-8")
 
     assert "_MAX_CRASH_RESTARTS = 5" in text
     assert "_RESTART_WINDOW_SECONDS = 5 * 60" in text
@@ -121,7 +121,7 @@ def test_start_py_supports_silent_supervisor_launches():
 
 def test_enterprise_windows_installer_is_machine_wide_but_keeps_user_state_writable():
     installer = (ROOT / "scripts" / "build_windows_enterprise_installer.ps1").read_text(encoding="utf-8")
-    tray = (ROOT / "windows_tray.py").read_text(encoding="utf-8")
+    tray = (ROOT / "apps" / "desktop" / "windows_tray.py").read_text(encoding="utf-8")
 
     assert "PrivilegesRequired=admin" in installer
     assert "DefaultDirName={autopf}\\OpenWorkGraph" in installer
