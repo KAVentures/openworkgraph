@@ -93,6 +93,23 @@ def compare(control_path: Path, owg_path: Path) -> dict[str, Any]:
     }
 
 
+
+def compare_arms(paths: dict[str, Path]) -> dict[str, Any]:
+    reports = {name: score(path) for name, path in paths.items()}
+    def delta(left: str, right: str) -> dict[str, float]:
+        return {
+            key: round(float(reports[left][key]) - float(reports[right][key]), 1)
+            for key in ("underestimation_score", "overreach_score", "total_score")
+        }
+    result: dict[str, Any] = {"arms": reports}
+    if "real_owg" in reports and "realistic_user" in reports:
+        result["primary_product_uplift"] = delta("real_owg", "realistic_user")
+    if "real_owg" in reports and "curated_oracle" in reports:
+        result["retrieval_interpretation_gap"] = delta("curated_oracle", "real_owg")
+    if "minimal_intent" in reports and "real_owg" in reports:
+        result["weak_baseline_uplift"] = delta("real_owg", "minimal_intent")
+    return result
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
     if len(args) not in (1, 2):
