@@ -152,6 +152,16 @@ def _semantic_steps(task: dict[str, Any], session_events: list[dict[str, Any]]) 
         if when is None or when < start - 0.001 or when > end + 0.001:
             continue
         event_type = str(event.get("event_type") or "")
+        if event_type in {"focus_span", "focus_period"}:
+            if is_browser_app(str(event.get("app") or "")):
+                continue
+            surface = _safe_desktop_surface(event.get("app"))
+            step = f"{surface} · Work"
+            if not out or out[-1] != step:
+                out.append(step)
+            if len(out) >= _MAX_STEPS:
+                break
+            continue
         if not event_type.startswith(("browser_", "screen_")):
             continue
         surface = _safe_event_surface(event, last_browser_surface=last_browser_surface)

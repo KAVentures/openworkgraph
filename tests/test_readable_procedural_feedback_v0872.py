@@ -111,6 +111,43 @@ def test_readable_surface_layer_reuses_safe_desktop_app_names_and_known_saas_hos
     assert "Secret Customer" not in unsafe
 
 
+def test_readable_steps_include_desktop_focus_without_inventing_business_actions():
+    from server import procedural_feedback as feedback
+
+    task = {
+        "started_at": "2026-09-26T10:00:00+00:00",
+        "ended_at": "2026-09-26T10:05:00+00:00",
+    }
+    events = [
+        {
+            "event_id": "desktop-1",
+            "observed_at": "2026-09-26T10:00:10+00:00",
+            "session_id": "session-1",
+            "event_type": "focus_span",
+            "app": "Microsoft Excel",
+            "window_title": "Nordea_Q4_Rates.xlsx",
+            "source": "desktop",
+            "duration_seconds": 30,
+            "metadata": {},
+        },
+        {
+            "event_id": "desktop-2",
+            "observed_at": "2026-09-26T10:01:10+00:00",
+            "session_id": "session-1",
+            "event_type": "focus_span",
+            "app": "Citrix Viewer",
+            "window_title": "Patient 123",
+            "source": "desktop",
+            "duration_seconds": 30,
+            "metadata": {},
+        },
+    ]
+    steps = feedback._semantic_steps(task, events)
+    assert steps == ["Microsoft Excel · Work", "Citrix · Work"]
+    assert "Nordea_Q4_Rates.xlsx" not in json.dumps(steps)
+    assert "Patient 123" not in json.dumps(steps)
+
+
 def test_semantic_projection_cannot_change_structural_family_key(monkeypatch):
     from server import procedural_feedback as feedback
 
