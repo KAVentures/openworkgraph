@@ -211,11 +211,11 @@ def test_http_mcp_is_off_by_default_and_avoids_occupied_8788(v49_api):
 
 
 def test_mcpb_manifest_and_builder_are_local_compact_stdio_wrapper():
-    manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((ROOT / "integrations" / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == "0.3"
     assert manifest["server"]["type"] == "node"
     assert manifest["server"]["entry_point"] == "server/index.js"
     assert any(x.get("name") == "get_workflow_trace" for x in manifest["tools"])
-    wrapper = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
+    wrapper = (ROOT / "integrations" / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
     assert "mcp_server" in wrapper and "launcher.py" in wrapper
     assert "WORKFLOW_OBSERVER_API" not in wrapper

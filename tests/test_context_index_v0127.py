@@ -50,10 +50,10 @@ def test_integration_surfaces_have_one_navigation_map():
     text = (ROOT / "integrations" / "README.md").read_text(encoding="utf-8")
     for path in (
         "../adapters/",
-        "../plugins/openworkgraph/",
+        "plugins/openworkgraph/",
         "../sdk/",
         "../mcp_server/",
-        "../mcpb/",
+        "mcpb/",
         "../connector/",
         "../gateway/",
     ):
