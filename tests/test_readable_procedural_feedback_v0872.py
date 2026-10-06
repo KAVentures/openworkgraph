@@ -103,6 +103,7 @@ def test_readable_surface_layer_reuses_safe_desktop_app_names_and_known_saas_hos
     assert feedback._safe_desktop_surface("Microsoft Excel") == "Microsoft Excel"
     assert feedback._safe_desktop_surface("Adobe Acrobat Reader") == "Adobe Acrobat"
     assert feedback._safe_desktop_surface("Citrix Viewer") == "Citrix"
+    assert feedback._safe_desktop_surface("Password Manager") == "Password Manager"
     assert safe_surface(hostname="acme.zendesk.com") == "Zendesk"
     assert safe_surface(hostname="acme.atlassian.net", pathname="/jira/software/c/projects/OPS") == "Jira"
 

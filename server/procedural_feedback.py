@@ -78,7 +78,7 @@ def _safe_desktop_surface(app: Any) -> str:
         return "Browser"
     low = raw.casefold()
     for needles, display in _DESKTOP_DISPLAY:
-        if any(needle in low for needle in needles):
+        if any(re.search(rf"\b{re.escape(needle)}\b", low) for needle in needles):
             return display
 
     token = memory._surface_key(raw)
