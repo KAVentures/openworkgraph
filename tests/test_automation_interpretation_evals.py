@@ -30,10 +30,10 @@ def _perfect_score_sheet() -> dict:
 
 def test_automation_interpretation_eval_has_balanced_underestimation_and_overreach_cases():
     cases = _cases()
-    assert 5 <= len(cases) <= 8
+    assert 14 <= len(cases) <= 20
     axes = [case["bias_axis"] for case in cases]
-    assert axes.count("underestimation") >= 2
-    assert axes.count("overreach") >= 2
+    assert axes.count("underestimation") >= 6
+    assert axes.count("overreach") >= 6
     assert len({case["id"] for case in cases}) == len(cases)
 
 
@@ -106,3 +106,26 @@ def test_paired_scorer_reports_owg_uplift(tmp_path):
     assert report["uplift"]["total_score"] > 0
     assert report["new_critical_failures"] == []
     assert report["resolved_critical_failures"]
+    assert report["cases_improved"] == 2
+    assert report["cases_regressed"] == 0
+    assert len(report["case_deltas"]) == len(_cases())
+
+
+def test_eval_set_covers_product_value_failure_modes():
+    text = EVAL_PATH.read_text(encoding="utf-8").lower()
+    concepts = (
+        "pricing",
+        "exception",
+        "escalation",
+        "downstream",
+        "resource pointer",
+        "unfinished",
+        "failure detection",
+        "recovery",
+        "approval threshold",
+        "interruption/noise",
+        "access revocation",
+        "live authorized",
+    )
+    for concept in concepts:
+        assert concept in text
