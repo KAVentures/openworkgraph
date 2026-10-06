@@ -370,8 +370,138 @@ def _structural_signature(case: dict[str, Any]) -> tuple[Any, ...]:
         for event in case.get("presented_evidence") or []
     )
 
+def _advanced_scenario(kind: int) -> dict[str, Any]:
+    """Independent hard scenarios; unlike _scenario variants these change topology."""
+    events: list[dict[str, Any]] = []
+    add = events.append
+    i = 1
+    def E(seconds: int, surface: str, action: str, *, workflow: str, label: str = "Open item",
+          resource: str | None = None, checkpoint: str | None = None, role: str = "checkpoint",
+          tab: str | None = None, omit_resource: bool = False) -> None:
+        nonlocal i
+        add(_event(i, seconds, surface, action, label=label, resource=resource, workflow=workflow,
+                   checkpoint=checkpoint, role=role, tab=tab, omit_resource=omit_resource))
+        i += 1
+
+    # 20 independent topologies. Labels are intentionally generic: identity must
+    # come from chronology, resource/tab continuity, actions, or explicit evidence.
+    if kind == 11:  # two workflows multiplexed in one browser tab
+        for t,w,r,c in [(0,"A","mail-71","request"),(12,"B","mail-83","request"),(25,"A","acct-71","account"),
+                        (39,"B","acct-83","account"),(54,"A","mail-71","reply"),(68,"B","mail-83","reply")]:
+            surf="gmail" if "mail" in r else "salesforce"; E(t,surf,"click",workflow=w,resource=r,checkpoint=c,tab="tab-shared")
+    elif kind == 12:  # no resource refs at all; tab/action continuity only
+        for t,surf,w,c,tab in [(0,"gmail","A","request","t1"),(14,"slack","B","request",None),(29,"salesforce","A","account","t1"),
+                               (43,"jira","B","issue","t2"),(61,"sheets","A","check","t3"),(79,"jira","B","resolve","t2"),(96,"gmail","A","reply","t1")]:
+            E(t,surf,"click" if surf not in ("slack",) else "focus",workflow=w,resource=f"x-{t}",checkpoint=c,tab=tab,omit_resource=True)
+    elif kind == 13:  # five-way interleave
+        specs=[("A","gmail","m11"),("B","jira","j22"),("C","github","p33"),("D","docs","d44"),("E","salesforce","s55")]
+        t=0
+        for round_no in range(3):
+            for w,surf,res in specs:
+                E(t,surf,"click",workflow=w,resource=res,checkpoint=f"step{round_no+1}",tab=f"tab-{res}"); t+=9
+    elif kind == 14:  # abandoned workflow among two completed ones
+        E(0,"gmail","click",workflow="A",resource="m21",checkpoint="request",tab="t1")
+        E(13,"github","click",workflow="B",resource="p22",checkpoint="review",tab="t2")
+        E(28,"salesforce","click",workflow="A",resource="s21",checkpoint="account",tab="t3")
+        E(45,"docs","click",workflow="C",resource="d23",checkpoint="open",tab="t4")
+        E(63,"github","click",workflow="B",resource="p22",checkpoint="finish",tab="t2")
+        E(81,"gmail","click",workflow="A",resource="m21",checkpoint="reply",tab="t1")
+    elif kind == 15:  # near-duplicate account/resource names, distinct refs
+        for t,w,res in [(0,"A","acct-20418"),(11,"B","acct-20481"),(23,"A","acct-20418"),(36,"B","acct-20481"),(51,"A","acct-20418"),(67,"B","acct-20481")]:
+            E(t,"salesforce","click",workflow=w,resource=res,checkpoint=f"s{t}",tab="same-tab")
+    elif kind == 16:  # unrelated Slack ping ignored
+        E(0,"gmail","click",workflow="A",resource="m31",checkpoint="request",tab="t1")
+        E(15,"slack","focus",workflow="NOISE",resource=None,role="noise",label="New message")
+        E(31,"salesforce","click",workflow="A",resource="s31",checkpoint="account",tab="t2")
+        E(49,"gmail","click",workflow="A",resource="m31",checkpoint="reply",tab="t1")
+    elif kind == 17:  # Slack ping starts real second workflow
+        E(0,"gmail","click",workflow="A",resource="m41",checkpoint="request",tab="t1")
+        E(15,"slack","focus",workflow="B",resource=None,checkpoint="request",label="New message")
+        E(31,"jira","click",workflow="B",resource="j42",checkpoint="issue",tab="t2")
+        E(48,"salesforce","click",workflow="A",resource="s41",checkpoint="account",tab="t3")
+        E(64,"jira","click",workflow="B",resource="j42",checkpoint="resolve",tab="t2")
+        E(82,"gmail","click",workflow="A",resource="m41",checkpoint="reply",tab="t1")
+    elif kind == 18:  # hidden threshold: uncertainty required
+        E(0,"salesforce","click",workflow="A",resource="s51",checkpoint="account",tab="t1")
+        E(18,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
+        E(41,"salesforce","click",workflow="A",resource="s51",checkpoint="save",tab="t1")
+    elif kind == 19:  # apparent rule is observable in evidence; uncertainty NOT required
+        E(0,"salesforce","click",workflow="A",resource="s61",checkpoint="account",tab="t1",label="Discount 25%")
+        E(19,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="Approve discounts over 20%")
+        E(43,"salesforce","click",workflow="A",resource="s61",checkpoint="save",tab="t1")
+    elif kind == 20:  # generic titles and no refs
+        for t,surf,w,c in [(0,"gmail","A","request"),(17,"gmail","B","request"),(35,"salesforce","A","open"),(54,"salesforce","B","open"),(75,"gmail","A","reply"),(96,"gmail","B","reply")]:
+            E(t,surf,"click",workflow=w,resource=None,checkpoint=c,tab=None,omit_resource=True,label="Open item")
+    elif kind == 21:  # shared spreadsheet, three workflows
+        for t,w,res in [(0,"A","m71"),(12,"B","j72"),(25,"C","p73"),(40,"A","sheet-shared"),(55,"B","sheet-shared"),(70,"C","sheet-shared"),(88,"A","m71"),(104,"B","j72"),(121,"C","p73")]:
+            surf="sheets" if res=="sheet-shared" else ("gmail" if res.startswith("m") else "jira" if res.startswith("j") else "github")
+            E(t,surf,"click",workflow=w,resource=res,checkpoint=f"s{t}",tab="shared-sheet" if surf=="sheets" else f"t-{w}")
+    elif kind == 22:  # long gap then resume, no completion before gap
+        E(0,"gmail","click",workflow="A",resource="m81",checkpoint="request",tab="t1")
+        E(25,"salesforce","click",workflow="A",resource="s81",checkpoint="account",tab="t2")
+        E(600,"jira","click",workflow="B",resource="j82",checkpoint="issue",tab="t3")
+        E(780,"salesforce","click",workflow="A",resource="s81",checkpoint="save",tab="t2")
+        E(805,"gmail","click",workflow="A",resource="m81",checkpoint="reply",tab="t1")
+    elif kind == 23:  # same resource used by unrelated workflows at different stages
+        E(0,"gmail","click",workflow="A",resource="m91",checkpoint="request",tab="t1")
+        E(15,"sheets","click",workflow="A",resource="shared91",checkpoint="lookup",tab="ts")
+        E(32,"outlook","focus",workflow="B",resource=None,checkpoint="request")
+        E(49,"sheets","click",workflow="B",resource="shared91",checkpoint="lookup",tab="ts")
+        E(68,"gmail","click",workflow="A",resource="m91",checkpoint="reply",tab="t1")
+        E(84,"pricing","click",workflow="B",resource=None,checkpoint="save")
+    elif kind == 24:  # one workflow splits into parallel-looking resources then rejoins
+        E(0,"gmail","click",workflow="A",resource="m101",checkpoint="request",tab="t1")
+        E(14,"salesforce","click",workflow="A",resource="s101",checkpoint="account",tab="t2")
+        E(29,"docs","click",workflow="A",resource="d101",checkpoint="contract",tab="t3")
+        E(44,"sheets","click",workflow="A",resource="sh101",checkpoint="pricing",tab="t4")
+        E(61,"salesforce","click",workflow="A",resource="s101",checkpoint="save",tab="t2")
+        E(77,"gmail","click",workflow="A",resource="m101",checkpoint="reply",tab="t1")
+    elif kind == 25:  # two similar email->CRM workflows cross in time
+        for t,w,surf,res,c in [(0,"A","gmail","m111","request"),(8,"B","gmail","m112","request"),(20,"B","salesforce","s112","account"),(33,"A","salesforce","s111","account"),(47,"B","gmail","m112","reply"),(59,"A","gmail","m111","reply")]:
+            E(t,surf,"click",workflow=w,resource=res,checkpoint=c,tab=f"t-{res}")
+    elif kind == 26:  # no tab IDs, refs carry continuity
+        for t,w,surf,res in [(0,"A","gmail","m121"),(13,"B","jira","j122"),(27,"A","salesforce","s121"),(42,"B","jira","j122"),(58,"A","gmail","m121")]:
+            E(t,surf,"click",workflow=w,resource=res,checkpoint=f"s{t}",tab=None)
+    elif kind == 27:  # no refs, apps/actions carry a weak but solvable pattern
+        for t,w,surf in [(0,"A","gmail"),(10,"B","github"),(22,"A","salesforce"),(35,"B","terminal"),(49,"A","gmail"),(64,"B","github")]:
+            E(t,surf,"focus" if surf=="terminal" else "click",workflow=w,resource=None,checkpoint=f"s{t}",tab=None,omit_resource=True,label="Open item")
+    elif kind == 28:  # incomplete capture: uncertainty required
+        E(0,"gmail","click",workflow="A",resource="m141",checkpoint="request",tab="t1")
+        E(19,"salesforce","click",workflow="A",resource="s141",checkpoint="account",tab="t2")
+        E(38,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
+        # Capture ends before the approval response/trigger is observable.
+    elif kind == 29:  # observed rule text, complete enough: uncertainty not required
+        E(0,"docs","click",workflow="A",resource="policy151",checkpoint="policy",tab="tp",label="Orders above 5000 require approval")
+        E(21,"salesforce","click",workflow="A",resource="s151",checkpoint="record",tab="t1",label="Order total 6200")
+        E(42,"slack","focus",workflow="A",resource=None,checkpoint="approval",label="New message")
+        E(63,"salesforce","click",workflow="A",resource="s151",checkpoint="save",tab="t1")
+    else:  # 30: long 80-event session, four interleaved workflows + noise
+        resources={"A":("gmail","m201"),"B":("jira","j202"),"C":("github","p203"),"D":("salesforce","s204")}
+        t=0
+        for n in range(16):
+            for w in ("A","B","C","D"):
+                surf,res=resources[w]
+                E(t,surf,"click",workflow=w,resource=res,checkpoint=f"step{n+1}",tab=f"t-{w}",label="Open item")
+                t += 5
+            if n % 4 == 1:
+                E(t,"docs","click",workflow="NOISE",resource=f"noise-{n}",role="noise",tab=f"tn-{n}",label="Open document")
+                t += 5
+
+    return _case(
+        f"reconstruction-{kind:02d}",
+        events,
+        requires_uncertainty=(kind in {18, 28}),
+        note=("A causal/business rule is deliberately not observable." if kind in {18, 28} else ""),
+    )
+
 def generate_cases() -> list[dict[str, Any]]:
-    return [_scenario(kind, variant) for kind in range(1, 11) for variant in range(3)]
+    # Thirty independent scenario families are the primary statistical units.
+    # The first ten retain three structural variants for regression coverage;
+    # the additional twenty are single, deliberately different hard topologies.
+    return (
+        [_scenario(kind, variant) for kind in range(1, 11) for variant in range(3)]
+        + [_advanced_scenario(kind) for kind in range(11, 31)]
+    )
 
 def write_cases(path: Path) -> None:
     cases = generate_cases()
