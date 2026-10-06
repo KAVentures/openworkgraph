@@ -14,8 +14,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from browser_privacy import harden_browser_event, sanitize_browser_page, browser_event_is_excluded
-from browser_utils import is_browser_app
+from shared.core.browser_privacy import harden_browser_event, sanitize_browser_page, browser_event_is_excluded
+from shared.core.browser_utils import is_browser_app
 from .analytics import (
     search_events, search_operational_events, summary, timeline,
     operational_timeline, semantic_activity,
