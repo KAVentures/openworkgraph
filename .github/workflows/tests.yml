@@ -59,8 +59,8 @@ jobs:
           node --check browser_extension/content.js
           node --check browser_extension/content_enrichment.js
           node --check dashboard/gateway_panel.js
-          node --check plugins/openworkgraph/scripts/find-and-launch.mjs
-          node --check plugins/openworkgraph/scripts/check-openworkgraph.mjs
+          node --check integrations/plugins/openworkgraph/scripts/find-and-launch.mjs
+          node --check integrations/plugins/openworkgraph/scripts/check-openworkgraph.mjs
       - name: Authenticated dashboard JavaScript syntax
         run: python scripts/check_injected_dashboard_js.py
       - name: Browser sensor JavaScript tests

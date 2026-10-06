@@ -160,7 +160,7 @@ def test_legacy_stdio_entrypoint_remains_available_and_unchanged_in_source():
 
 
 def test_new_connection_paths_use_compact_surface():
-    bundle = (ROOT / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
+    bundle = (ROOT / "integrations" / "mcpb" / "server" / "index.js").read_text(encoding="utf-8")
     launcher = (ROOT / "mcp_server" / "launcher.py").read_text(encoding="utf-8")
     control = (ROOT / "server" / "mcp_http_control.py").read_text(encoding="utf-8")
     secure_app = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")

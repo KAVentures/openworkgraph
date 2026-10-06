@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "openworkgraph",
-      "source": "./plugins/openworkgraph",
+      "source": "./integrations/plugins/openworkgraph",
       "description": "Connect Claude Code to the local OpenWorkGraph context MCP, session checks, and /owg workflow skill."
     }
   ]

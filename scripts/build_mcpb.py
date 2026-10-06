@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "mcpb"
+SOURCE = ROOT / "integrations" / "mcpb"
 DIST = ROOT / "dist"
 OUTPUT = DIST / "OpenWorkGraph-Claude.mcpb"
 

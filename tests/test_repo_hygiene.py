@@ -15,7 +15,7 @@ def test_gateway_mcp_adapter_imports(monkeypatch):
 def test_product_versions_stay_in_sync():
     root = Path(__file__).resolve().parents[1]
     version = (root / "VERSION").read_text(encoding="utf-8").strip()
-    manifest = json.loads((root / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((root / "integrations" / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     from gateway.settings import PRODUCT_VERSION
