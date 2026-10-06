@@ -8,7 +8,13 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
+if (Test-Path (Join-Path $ScriptDir "install.ps1")) {
+    $Root = $ScriptDir
+    $ConnectScript = Join-Path $Root "owg_connect.py"
+} else {
+    $Root = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
+    $ConnectScript = Join-Path $Root "integrations\agents\owg_connect.py"
+}
 $InstallRoot = Join-Path $env:LOCALAPPDATA "OpenWorkGraph"
 $Log = Join-Path ([System.IO.Path]::GetTempPath()) "openworkgraph-agent-bootstrap-installer.log"
 $ErrLog = Join-Path ([System.IO.Path]::GetTempPath()) "openworkgraph-agent-bootstrap-installer.err.log"
@@ -108,5 +114,5 @@ if ($Self) {
 
 $env:OWG_INSTALLED_ROOT = $InstallRoot
 $env:OWG_INSTALLED_PYTHON = $Python
-& $Python (Join-Path $Root "integrations\agents\owg_connect.py") bootstrap @ArgsForBootstrap
+& $Python $ConnectScript bootstrap @ArgsForBootstrap
 exit $LASTEXITCODE

@@ -13,7 +13,8 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+ROOT = HERE if (HERE / "server").is_dir() else HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
