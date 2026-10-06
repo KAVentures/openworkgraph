@@ -55,6 +55,15 @@ _SURFACE_DISPLAY = {
     "codex": "Codex",
     "openworkgraph": "OpenWorkGraph",
 }
+_DESKTOP_DISPLAY = (
+    (("microsoft excel", "excel"), "Microsoft Excel"),
+    (("microsoft word", "word"), "Microsoft Word"),
+    (("powerpoint",), "Microsoft PowerPoint"),
+    (("adobe acrobat", "acrobat"), "Adobe Acrobat"),
+    (("citrix viewer", "citrix workspace", "citrix"), "Citrix"),
+    (("microsoft outlook", "outlook"), "Outlook"),
+    (("microsoft teams", "teams"), "Microsoft Teams"),
+)
 _PAIR_SEPARATOR_RE = re.compile(r"\s*(?:·|\s[-–—]\s)\s*", re.UNICODE)
 
 
@@ -64,13 +73,35 @@ def _event_meta(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_desktop_surface(app: Any) -> str:
-    raw = str(app or "").strip()
+    raw = re.sub(r"\s+", " ", str(app or "")).strip()
     if is_browser_app(raw):
         return "Browser"
+    low = raw.casefold()
+    for needles, display in _DESKTOP_DISPLAY:
+        if any(re.search(rf"\b{re.escape(needle)}\b", low) for needle in needles):
+            return display
+
     token = memory._surface_key(raw)
     suffix = token.split(":", 1)[1] if ":" in token else "unknown"
     if suffix in _SURFACE_DISPLAY:
         return _SURFACE_DISPLAY[suffix]
+
+    # The application/process name is already part of the canonical observed row.
+    # Reuse it only when it is clearly an app label rather than a path, identity,
+    # URL, long identifier, or instruction-like string. Structural identity stays
+    # hashed in procedural memory; this affects presentation only.
+    unsafe = (
+        not raw
+        or len(raw) > 80
+        or bool(_EMAIL_RE.search(raw))
+        or bool(_URL_RE.search(raw))
+        or bool(_LONG_ID_RE.search(raw))
+        or "/" in raw
+        or "\\" in raw
+        or _looks_instruction_like(raw)
+    )
+    if not unsafe:
+        return raw
     return f"Desktop app {suffix}"
 
 
@@ -121,6 +152,16 @@ def _semantic_steps(task: dict[str, Any], session_events: list[dict[str, Any]]) 
         if when is None or when < start - 0.001 or when > end + 0.001:
             continue
         event_type = str(event.get("event_type") or "")
+        if event_type in {"focus_span", "focus_period"}:
+            if is_browser_app(str(event.get("app") or "")):
+                continue
+            surface = _safe_desktop_surface(event.get("app"))
+            step = f"{surface} · Work"
+            if not out or out[-1] != step:
+                out.append(step)
+            if len(out) >= _MAX_STEPS:
+                break
+            continue
         if not event_type.startswith(("browser_", "screen_")):
             continue
         surface = _safe_event_surface(event, last_browser_surface=last_browser_surface)
@@ -490,12 +531,38 @@ def _readable_alignment(readable_by_execution: dict[str, list[str]], threshold: 
             "interpretation": "adjacent privacy-safe readable transition observed; not a prescribed transition",
         })
     transition_rows.sort(key=lambda row: (-int(row["support_runs"]), str(row["from_step"]), str(row["to_step"])))
+    variations = [{
+        **row,
+        "absent_in_runs": total - int(row["support_runs"]),
+        "variation_only": True,
+        "interpretation": "privacy-safe readable step observed in some selected runs and absent in others; absence may be a true variant, missing capture, or noise",
+    } for row in step_rows if 0 < int(row["support_runs"]) < total]
+
+    sequence_counts: Counter[tuple[str, ...]] = Counter(
+        tuple(str(step) for step in steps)
+        for steps in readable_by_execution.values()
+    )
+    sequence_ids: dict[tuple[str, ...], list[str]] = defaultdict(list)
+    for execution_id, steps in readable_by_execution.items():
+        sequence_ids[tuple(str(step) for step in steps)].append(execution_id)
+    sequence_variants = [{
+        "steps": list(sequence),
+        "support_runs": count,
+        "runs_total": total,
+        "support_fraction": round(count / total, 4) if total else 0.0,
+        "supporting_execution_ids": sequence_ids[sequence][:10],
+        "derived": True,
+        "authoritative": False,
+    } for sequence, count in sequence_counts.most_common()]
+
     return {
         "method": "privacy-safe semantic steps derived from canonical evidence; no semantic workflow meaning is inferred",
         "step_vocabulary": "privacy_safe_semantic",
         "high_support_minimum_runs": threshold,
         "high_support_steps": [row for row in step_rows if int(row["support_runs"]) >= threshold],
         "less_common_observed_steps": [row for row in step_rows if int(row["support_runs"]) < threshold],
+        "observed_variations": variations,
+        "sequence_variants": sequence_variants,
         "high_support_adjacent_transitions": transition_rows,
         "common_path_claimed": False,
     }

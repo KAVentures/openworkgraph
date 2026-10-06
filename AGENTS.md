@@ -12,6 +12,8 @@ Stop only for a step that genuinely requires the person: an operating-system pri
 
 Never silently enable Observe. Never broaden AI context from Redacted to Full.
 
+Before enabling **Observe** for the first time, make sure the person understands what is about to be recorded: foreground app/window context, privacy-filtered interaction metadata, browser context when the optional sensor is installed, copy/cut/paste occurrence and linkage (never clipboard values), and supported local business-object references such as an Outlook subject/time or file reference. Tell them that canonical evidence stays local unless they explicitly export/synchronize it, and that AI access defaults ON at the separate Redacted level. Obtain an explicit yes to start observation unless the person's current request already explicitly says to start/enable recording. Installing or connecting MCP alone is not consent to enable Observe.
+
 ## First: identify where you are running
 
 Do not guess another AI product's client id.

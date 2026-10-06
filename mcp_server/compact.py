@@ -728,8 +728,10 @@ def find_repeated_workflows(
     """Find repeated structural work in the permitted evidence window.
 
     Uses the current recording when saved-history access is off, or the granted
-    dates when selected. Supply dates for older examples. Family names are only
-    navigation hints; ask the person about intent and missing decision rules.
+    dates when selected. Supply dates for older examples. Prefer candidate_clusters,
+    which are exact structural navigation variants; family names are only coarse
+    compatibility tags. Neither is semantic ground truth. Select execution_ids and
+    inspect canonical evidence before inferring intent or workflow meaning.
     """
     name = "find_repeated_workflows"
     core._begin(name)
@@ -748,7 +750,10 @@ def find_repeated_workflows(
     query = str(task_family or "").strip().casefold()
     families = [row for row in result.get("families", [])
                 if not query or query in str(row).casefold()]
+    clusters = [row for row in result.get("candidate_clusters", [])
+                if not query or query in str(row).casefold()]
     selected = families[:_bounded(limit, maximum=100)]
+    selected_clusters = clusters[:_bounded(limit, maximum=100)]
     patterns = [dict(row, observed_count=row.get("execution_count", 0),
                      typical_steps=row.get("high_support_structural_steps", []),
                      typical_duration_seconds=row.get("median_execution_duration_seconds", 0),
@@ -756,13 +761,17 @@ def find_repeated_workflows(
     examples = [dict(run, family_key=row.get("family_key"))
                 for row in selected for run in row.get("executions", [])][:_bounded(limit, maximum=100)]
     result.update({"patterns": patterns, "examples": examples,
-                   "automation_candidates": selected,
+                   "candidate_clusters": selected_clusters,
+                   "preferred_candidates": selected_clusters or selected,
+                   "preferred_candidate_basis": "exact_structural_sequence_navigation" if selected_clusters else "coarse_family_navigation",
+                   "automation_candidates": selected_clusters or selected,
                    "procedural_families": selected,
-                   "returned": len(selected),
+                   "returned": len(selected_clusters or selected),
                    "families": families[:_bounded(limit, maximum=100)],
                    "task_family": task_family,
-                   "search_semantics": "lexical match over derived family identifiers and structural steps",
-                   "next_step": "Select examples, then call get_workflow_evidence with execution_ids and the same dates. Ask about business rules not observed.",
+                   "search_semantics": "lexical match over derived candidate clusters, family identifiers and structural steps",
+                   "next_step": "Prefer candidate_clusters and select their execution_ids, then call get_workflow_evidence with those explicit execution_ids and the same dates. Coarse family keys are compatibility/navigation tags only. Ask about business rules not observed.",
+                   "canonical_evidence_overrides_derived_indexes": True,
                    "needs_human_review": True})
     return core._finish(name, result)
 

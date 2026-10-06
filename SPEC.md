@@ -19,7 +19,7 @@ Observed evidence and user-stated information must never be silently rewritten i
 
 The canonical local source is the richest **persisted privacy-hardened evidence**. Historical OWG material may call this "raw" evidence; that does not mean a hidden pre-privacy capture stream exists.
 
-Derived indexes must be disposable and regeneratable from canonical evidence.
+Derived indexes must be disposable and regeneratable from canonical evidence. If a derived task, family, cluster, summary, or inferred outcome conflicts with canonical observed evidence, the canonical evidence wins. Derived groupings are retrieval aids only; they must never overwrite or silently narrow the source record.
 
 Each observed record should preserve enough provenance to answer, when available:
 

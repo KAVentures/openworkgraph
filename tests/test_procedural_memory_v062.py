@@ -257,3 +257,22 @@ def test_similarity_rejects_arbitrary_untrusted_step_strings(monkeypatch):
         pass
     else:
         raise AssertionError("untrusted free-text structural step was accepted")
+
+
+def test_intermediate_agent_failure_is_not_promoted_to_failed_run_without_terminal_status(monkeypatch):
+    monkeypatch.setattr(pm, "candidate_tasks", lambda **_kwargs: {"tasks": []})
+    raw = [
+        _agent_event(run="recover-a", when="2026-09-25T02:00:00+00:00", operation="run_started", status="running", suffix="start"),
+        _agent_event(run="recover-a", when="2026-09-25T02:00:01+00:00", operation="tool_call", status="error", tool_name="bash", tool_category="shell", suffix="fail"),
+        _agent_event(run="recover-a", when="2026-09-25T02:00:02+00:00", operation="tool_call", status="success", tool_name="edit", tool_category="code", suffix="edit"),
+        _agent_event(run="recover-a", when="2026-09-25T02:00:03+00:00", operation="tool_call", status="success", tool_name="bash", tool_category="shell", suffix="pass"),
+    ]
+    execution = pm.derive_executions(raw)[0]
+    assert execution["outcome_status"] == "unknown"
+    assert execution["outcome_basis"] == "no_terminal_outcome_observed"
+    assert execution["explicit_failure"] is False
+    assert execution["intermediate_failure_count"] == 1
+    assert execution["later_successful_tool_call_observed"] is True
+    assert execution["recovered_failure_observed"] is True
+    assert execution["recovery_is_run_success"] is False
+    assert pm.failure_patterns(raw)["patterns"] == []

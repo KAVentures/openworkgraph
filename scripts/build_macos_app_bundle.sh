@@ -262,8 +262,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openDashboard() {
-        guard let url = URL(string: "http://127.0.0.1:8787") else { return }
-        NSWorkspace.shared.open(url)
+        let tokenURL = installRoot
+            .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent("auth", isDirectory: true)
+            .appendingPathComponent(".api_token")
+        guard
+            let tokenRaw = try? String(contentsOf: tokenURL, encoding: .utf8),
+            !tokenRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let endpoint = URL(string: "http://127.0.0.1:8787/v1/dashboard-session/reopen")
+        else {
+            let alert = NSAlert()
+            alert.messageText = "OpenWorkGraph dashboard is not ready"
+            alert.informativeText = "Restart OpenWorkGraph from the menu and try again."
+            alert.runModal()
+            return
+        }
+
+        let token = tokenRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            guard
+                let http = response as? HTTPURLResponse,
+                http.statusCode == 200,
+                let data,
+                let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let session = payload["session"] as? String,
+                !session.isEmpty,
+                let encoded = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                let url = URL(string: "http://127.0.0.1:8787/#session=\(encoded)")
+            else { return }
+            DispatchQueue.main.async {
+                NSWorkspace.shared.open(url)
+            }
+        }.resume()
     }
 
     private func terminateTree() {

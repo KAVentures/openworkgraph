@@ -153,3 +153,17 @@ def test_signed_release_covers_consumer_and_enterprise_windows_installers():
     assert "build_windows_enterprise_installer.ps1" in workflow
     assert "OpenWorkGraph-Windows-Enterprise-Setup-v$Version.exe" in workflow
     assert "OpenWorkGraph-Windows-Enterprise-Setup.exe" in workflow
+
+
+def test_macos_menu_reopens_authenticated_dashboard_without_restarting_observer():
+    text = (ROOT / "scripts" / "build_macos_app_bundle.sh").read_text(encoding="utf-8")
+    secure = (ROOT / "server" / "secure_app.py").read_text(encoding="utf-8")
+
+    assert "/v1/dashboard-session/reopen" in text
+    assert ".api_token" in text
+    assert "#session=" in text
+    assert 'URLSession.shared.dataTask' in text
+    assert 'URL(string: "http://127.0.0.1:8787")' not in text
+    assert 'path == "/v1/dashboard-session/reopen"' in secure
+    assert "create_dashboard_session()" in secure
+    assert "const directSession = fragment.get('session') || '';" in secure

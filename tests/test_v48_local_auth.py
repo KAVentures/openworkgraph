@@ -141,6 +141,19 @@ def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_a
         assert client.get("/v1/summary?scope=current", headers=session_auth).status_code == 200
         assert client.get("/v1/summary?scope=current", headers=session_auth).status_code == 200
 
+        assert client.post("/v1/dashboard-session/reopen").status_code == 401
+        reopened = client.post(
+            "/v1/dashboard-session/reopen",
+            headers={"Authorization": f"Bearer {secured_api['api_token']}"},
+        )
+        assert reopened.status_code == 200
+        reopened_session = reopened.json()["session"]
+        assert reopened_session and reopened_session != session
+        assert client.get(
+            "/v1/summary?scope=current",
+            headers={"Authorization": f"OWG-Session {reopened_session}"},
+        ).status_code == 200
+
         # A host-scoped cookie replay must no longer authenticate anything.
         leaked_cookie = {"Cookie": f"owg_dashboard_session={session}"}
         assert client.get("/v1/summary?scope=current", headers=leaked_cookie).status_code == 401

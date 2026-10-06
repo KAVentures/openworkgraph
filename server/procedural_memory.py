@@ -258,21 +258,45 @@ def _agent_step(event: dict[str, Any]) -> str:
 
 
 def _agent_outcome(events: list[dict[str, Any]]) -> tuple[str, str]:
+    """Return run outcome only from explicit run-terminal evidence.
+
+    Tool-level errors remain valuable evidence but do not prove the whole run
+    failed: an agent may recover and continue. Without run_finished we therefore
+    keep the run outcome unknown rather than promoting an intermediate error.
+    """
     finished: list[str] = []
-    explicit_failures: list[str] = []
     for event in events:
         meta, _trace = _meta(event)
         operation = str(meta.get("operation") or "").lower()
         status = str(meta.get("status") or "unknown").lower()
         if operation == "run_finished" and status in _AGENT_TERMINAL:
             finished.append(status)
-        if status in _EXPLICIT_FAILURES and operation in {"run_finished", "error", "tool_call"}:
-            explicit_failures.append(status)
     if finished:
         return finished[-1], "explicit_run_terminal_status"
-    if explicit_failures:
-        return explicit_failures[-1], "explicit_failure_evidence"
     return "unknown", "no_terminal_outcome_observed"
+
+
+def _agent_failure_recovery(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe intermediate failures and observed recovery without inferring success."""
+    failures: list[int] = []
+    successful_tools: list[int] = []
+    for index, event in enumerate(events):
+        meta, _trace = _meta(event)
+        operation = str(meta.get("operation") or "").lower()
+        status = str(meta.get("status") or "unknown").lower()
+        if operation in {"tool_call", "error"} and status in _EXPLICIT_FAILURES:
+            failures.append(index)
+        if operation == "tool_call" and status == "success":
+            successful_tools.append(index)
+    later_success = bool(
+        failures and any(success_index > failures[-1] for success_index in successful_tools)
+    )
+    return {
+        "intermediate_failure_count": len(failures),
+        "later_successful_tool_call_observed": later_success,
+        "recovered_failure_observed": later_success,
+        "recovery_is_run_success": False,
+    }
 
 
 def _approval_points(events: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -369,6 +393,7 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         family_key, family_basis = _agent_family(events, steps)
         outcome, outcome_basis = _agent_outcome(events)
+        recovery = _agent_failure_recovery(events)
         start = events[0].get("observed_at")
         end = events[-1].get("observed_at")
         start_ts = _ts(start)
@@ -388,6 +413,7 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "outcome_basis": outcome_basis,
             "positive_example": outcome == "success",
             "explicit_failure": outcome in _EXPLICIT_FAILURES,
+            **recovery,
             "steps": steps[:_MAX_STEPS],
             "observation_level": observation_level,
             "evidence_refs": [_event_ref(event.get("event_id")) for event in events[:20]],
@@ -432,7 +458,10 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
     return {key: execution.get(key) for key in (
         "execution_id", "actor_kind", "family_key", "family_basis", "started_at", "ended_at",
-        "duration_seconds", "outcome_status", "outcome_basis", "steps", "observation_level",
+        "duration_seconds", "outcome_status", "outcome_basis",
+        "intermediate_failure_count", "later_successful_tool_call_observed",
+        "recovered_failure_observed", "recovery_is_run_success",
+        "steps", "observation_level",
         "evidence_refs", "evidence_window", "derived", "authoritative", "needs_review",
     )} | ({"source": execution["source"]} if execution.get("source") else {}) | (
         {"delivery_outcome": execution["delivery_outcome"]} if execution.get("delivery_outcome") else {}

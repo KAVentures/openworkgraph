@@ -107,6 +107,10 @@ def test_explicit_run_selection_keeps_support_descriptive(monkeypatch: pytest.Mo
     assert high["surface:salesforce"]["support_runs"] == 2
     assert uncommon["surface:slack"]["support_runs"] == 1
     assert "not a required order" in high["surface:gmail"]["interpretation"]
+    variations = {row["step"]: row for row in bundle["structural_alignment"]["observed_variations"]}
+    assert variations["surface:slack"]["support_runs"] == 1
+    assert variations["surface:slack"]["absent_in_runs"] == 2
+    assert len(bundle["structural_alignment"]["structural_sequence_variants"]) == 2
 
 
 def test_evidence_bundle_preserves_provenance_without_inventing_payloads(monkeypatch: pytest.MonkeyPatch):
@@ -136,6 +140,18 @@ def test_family_selection_is_navigation_only(monkeypatch: pytest.MonkeyPatch):
     assert candidates["family_grouping_is_navigation_only"] is True
     assert candidates["explicit_execution_selection_supported"] is True
     assert candidates["families"][0]["family_is_ground_truth"] is False
+    assert candidates["preferred_navigation"] == "candidate_clusters"
+    assert candidates["coarse_families_kept_for_compatibility"] is True
+    clusters = candidates["candidate_clusters"]
+    assert len(clusters) == 1
+    assert clusters[0]["execution_count"] == 2
+    assert clusters[0]["execution_ids"] == [
+        "execution:aaaaaaaaaaaaaaaa",
+        "execution:bbbbbbbbbbbbbbbb",
+    ]
+    assert clusters[0]["cluster_is_business_workflow_ground_truth"] is False
+    variants = candidates["families"][0]["structural_variants"]
+    assert sorted(row["execution_count"] for row in variants) == [1, 2]
 
 
 def test_skill_prompt_preserves_authority_boundary():
