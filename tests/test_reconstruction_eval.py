@@ -38,6 +38,8 @@ def test_oracle_predictions_score_perfectly_and_pass_thresholds():
     assert report["checkpoint_recall"] == 1.0
     assert report["interruption_rejection"] == 1.0
     assert report["uncertainty_accuracy"] == 1.0
+    assert report["required_uncertainty_recall"] == 1.0
+    assert report["unnecessary_uncertainty_rate"] == 0.0
     assert acceptance(report)["passed"] is True
 
 
@@ -50,6 +52,17 @@ def test_cross_workflow_event_is_counted_as_contamination():
     result = score_case(case, prediction)
     assert result["cross_workflow_contamination"] > 0
     assert result["workflow_assignment_precision"] < 1.0
+
+
+def test_never_admitting_uncertainty_fails_required_uncertainty_threshold():
+    cases = generate_cases()
+    predictions = [_oracle_prediction(case) for case in cases]
+    for prediction in predictions:
+        prediction["insufficient_evidence"] = False
+    report = aggregate(cases, predictions)
+    assert report["uncertainty_accuracy"] == 0.9
+    assert report["required_uncertainty_recall"] == 0.0
+    assert acceptance(report)["passed"] is False
 
 
 def test_presented_fixture_matches_ai_facing_trace_identity_boundary():
