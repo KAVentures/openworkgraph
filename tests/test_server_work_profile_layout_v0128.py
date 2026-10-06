@@ -22,7 +22,6 @@ import importlib
 pairs = {
     "server.work_profile_accuracy": "server.work_profile.accuracy",
     "server.work_profile_export": "server.work_profile.export",
-    "server.work_profile_routes": "server.work_profile.routes",
     "server.work_profile_service": "server.work_profile.service",
     "server.work_profile_signals": "server.work_profile.signals",
 }
@@ -36,6 +35,13 @@ for legacy, canonical in pairs.items():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+    # Route registration is intentionally side-effectful. Existing route tests
+    # exercise the legacy import in an isolated subprocess; keep this layout
+    # test side-effect-free and verify the alias wiring statically.
+    route_alias = (ROOT / "server" / "work_profile_routes.py").read_text(encoding="utf-8")
+    assert "from .work_profile import routes as _impl" in route_alias
+    assert "_sys.modules[__name__] = _impl" in route_alias
 
 
 def test_internal_consumers_use_canonical_work_profile_package():
