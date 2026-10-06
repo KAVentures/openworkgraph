@@ -14,10 +14,10 @@ from statistics import median
 import re
 from typing import Any
 
-from browser_utils import is_browser_app
+from shared.core.browser_utils import is_browser_app
 from mcp_server.security import _looks_instruction_like
-from normalizer import safe_action_label, safe_surface
-from semantic_actions import safe_semantic_action_label
+from shared.core.normalizer import safe_action_label, safe_surface
+from shared.core.semantic_actions import safe_semantic_action_label
 
 from .context_layers import candidate_tasks
 from .dashboard_privacy_policy import safe_dashboard_action

@@ -12,8 +12,8 @@ structured data rather than prose.
 import re
 from typing import Any
 
-from browser_privacy import sanitize_pathname, sanitize_url_value
-from sensitive_identifiers import (
+from shared.core.browser_privacy import sanitize_pathname, sanitize_url_value
+from shared.core.sensitive_identifiers import (
     redact_sensitive_identifiers,
     structured_identifier_kind,
     tokenize_structured_identifier,

@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from browser_utils import is_browser_app
-from resource_references import resource_reference_from_url
+from shared.core.browser_utils import is_browser_app
+from shared.core.resource_references import resource_reference_from_url
 from server.local_reference_lookup import remember_file_reference
 
 _CACHE_LOCK = threading.RLock()

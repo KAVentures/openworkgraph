@@ -30,8 +30,8 @@ from .boundaries import document_key, is_material_change
 from .business_context import capture_business_context
 from .instance_lock import EXIT_ALREADY_RUNNING, CollectorLock
 from .permissions import missing as missing_permissions, sensor_permissions
-from browser_utils import is_browser_app, normalized_browser_title
-from sensitive_identifiers import sanitize_event_identifiers
+from shared.core.browser_utils import is_browser_app, normalized_browser_title
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))

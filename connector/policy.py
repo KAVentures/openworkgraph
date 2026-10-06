@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sensitive_identifiers import sanitize_event_identifiers
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
 
 DEFAULT_LOCAL_POLICY: dict[str, Any] = {
     "share_excluded": False,

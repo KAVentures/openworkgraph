@@ -9,9 +9,9 @@ misclassifications are semantically corrected where the surrounding cue survives
 
 import json
 
-from contextualizer import contextualize_event
-from normalizer import normalize_event
-from sensitive_identifiers import sanitize_event_identifiers
+from shared.core.contextualizer import contextualize_event
+from shared.core.normalizer import normalize_event
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
 from .db import connect, _insert_event, _insert_context, _row_to_event
 
 MIGRATION_KEY = "sensitive_identifiers_v46"

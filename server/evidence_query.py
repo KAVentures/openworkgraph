@@ -132,7 +132,7 @@ def _display_title(value: Any, cache: dict[str, str]) -> str:
         return ""
     if text not in cache:
         try:
-            from browser_title_privacy import protect_text
+            from shared.core.browser_title_privacy import protect_text
 
             protected = protect_text(text)
             cache[text] = protected[:_MAX_TITLE] if isinstance(protected, str) else ""

@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
-from browser_privacy import harden_browser_event
-from browser_title_privacy import protect_titles_at_rest
-from contextualizer import contextualize_event
-from normalizer import normalize_event
-from sensitive_identifiers import sanitize_event_identifiers
+from shared.core.browser_privacy import harden_browser_event
+from shared.core.browser_title_privacy import protect_titles_at_rest
+from shared.core.contextualizer import contextualize_event
+from shared.core.normalizer import normalize_event
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.getenv("WORKFLOW_OBSERVER_DATA", ROOT / "data"))
