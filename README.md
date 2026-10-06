@@ -167,11 +167,12 @@ connector/         endpoint-to-Gateway synchronization
 dashboard/         local UI assets
 enterprise/        fleet deployment kit
 sdk/               integration SDK
+integrations/       map of agent/client/organization integration surfaces
 scripts/           build/release/development automation
 tests/             regression suite
 ```
 
-The current repository still contains several root compatibility launchers/modules. They will be migrated only in compatibility-preserving steps with full cross-platform CI.
+The current repository still contains several root compatibility launchers/modules and some published integration packages at top level. See **[integrations/README.md](integrations/README.md)** for one navigation map. Physical moves happen only through compatibility-preserving steps with full cross-platform CI.
 
 ## Development
 
