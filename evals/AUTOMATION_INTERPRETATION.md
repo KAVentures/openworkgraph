@@ -83,7 +83,11 @@ The paired intent-only versus curated-summary result is useful but is not the fi
 
 The primary product result is **Real OWG minus Realistic user**. Curated oracle minus Real OWG estimates retrieval/interpretation loss. Minimal intent remains useful for continuity with earlier runs but should not be presented as the realistic product baseline.
 
-Cases with `mcp_fixture_case_id=null` are excluded from the Real OWG paired comparison until an honest seedable trace exists. Do not substitute a merely similar fixture. The current corpus maps 12/16 cases to existing deterministic reconstruction traces; this deliberately reuses the raw-evidence benchmark instead of duplicating another event corpus.
+Cases are excluded from the Real OWG comparison until an **honest semantically matched multi-run trace** exists. Do not substitute a merely similar reconstruction fixture. A valid trace must encode the same material facts that the rubric scores (for example, an approval event if approval is scored, or a report-validation detour if that is scored). When the case claims repeated work, seed at least three independent executions so repetition tools can actually be exercised.
+
+The earlier 12-case run against borrowed reconstruction fixtures is invalid as a product-value estimate: several mappings lacked the facts their automation cases assumed. Its 84.7 versus 84.0 tie should not be used as evidence for or against OWG.
+
+Run eligible Real OWG cases at the normal default **Redacted** detail level and also at **Full** detail as a diagnostic. Redacted is the primary out-of-box product result; Full quantifies whether richer safe resource/tab context materially changes retrieval.
 
 For the Real OWG arm, preserve the actual product path: seed source events into a clean local store, enable the intended AI history/detail policy, start the compact MCP entrypoint, and allow the model to navigate with tools such as `find_repeated_workflows`, `get_workflow_evidence`, and `get_workflow_trace`. Record tool calls as part of the run artifact. A test that directly places `presented_evidence` or `evidence_summary` in the model prompt is not a Real OWG run.
 

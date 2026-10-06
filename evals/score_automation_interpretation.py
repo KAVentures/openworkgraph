@@ -19,11 +19,19 @@ def _normalized(values: list[int]) -> float:
     return round(100.0 * sum(values) / (2 * len(values)), 1)
 
 
-def score(score_path: Path) -> dict[str, Any]:
+def score(score_path: Path, case_ids: set[str] | None = None) -> dict[str, Any]:
     corpus = _load(CASES_PATH)
     submitted = _load(score_path)
-    expected = {case["id"]: case for case in corpus["cases"]}
-    received = {case["id"]: case for case in submitted.get("cases", [])}
+    expected = {case["id"]: case for case in corpus["cases"] if case_ids is None or case["id"] in case_ids}
+    received_all = {case["id"]: case for case in submitted.get("cases", [])}
+    # A real-MCP arm may only be valid for the semantically matched subset.
+    # Accept a full score sheet and project it onto that exact subset so every
+    # arm can be generated from the same blinded grading artifact.
+    received = (
+        {case_id: case for case_id, case in received_all.items() if case_id in expected}
+        if case_ids is not None
+        else received_all
+    )
 
     missing = sorted(set(expected) - set(received))
     extra = sorted(set(received) - set(expected))
@@ -94,8 +102,8 @@ def compare(control_path: Path, owg_path: Path) -> dict[str, Any]:
 
 
 
-def compare_arms(paths: dict[str, Path]) -> dict[str, Any]:
-    reports = {name: score(path) for name, path in paths.items()}
+def compare_arms(paths: dict[str, Path], case_ids: set[str] | None = None) -> dict[str, Any]:
+    reports = {name: score(path, case_ids=case_ids) for name, path in paths.items()}
     def delta(left: str, right: str) -> dict[str, float]:
         return {
             key: round(float(reports[left][key]) - float(reports[right][key]), 1)
