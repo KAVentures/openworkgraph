@@ -345,7 +345,7 @@ def test_work_profile_dashboard_response_drops_rich_context_echoes():
 
 def test_dashboard_routes_preserve_mcp_profile_and_use_minimized_browser_profile():
     root = Path(__file__).resolve().parents[1]
-    routes = (root / "server" / "work_profile_routes.py").read_text(encoding="utf-8")
+    routes = (root / "server" / "work_profile" / "routes.py").read_text(encoding="utf-8")
     dashboard_js = (root / "dashboard" / "work_profile.js").read_text(encoding="utf-8")
 
     assert '@app.get("/v1/work-profile")' in routes

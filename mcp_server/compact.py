@@ -285,7 +285,7 @@ def _history_get(path: str, params: dict[str, Any] | None = None) -> dict[str, A
 
 
 def _today_since() -> str:
-    from server.work_profile_accuracy import local_day_since
+    from server.work_profile.accuracy import local_day_since
 
     return local_day_since()
 

@@ -160,7 +160,7 @@ docs/              detailed architecture, privacy, deployment, AI and testing do
 
 collector/         desktop capture
 browser_extension/ optional browser-native capture
-server/            local API, evidence, analytics and dashboard backend
+server/            local API, evidence, analytics and dashboard backend; domain packages group related subsystems
 shared/core/       low-level evidence, privacy and normalization primitives
 mcp_server/        local MCP surfaces
 gateway/           optional organization Gateway
