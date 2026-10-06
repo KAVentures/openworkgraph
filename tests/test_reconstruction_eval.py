@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from evals.reconstruction.fixtures import generate_cases, validate_cases
+import json
+
+from evals.reconstruction.fixtures import generate_cases, validate_cases, _structural_signature
+from evals.reconstruction.baselines import score_baselines
 from evals.reconstruction.scoring import acceptance, aggregate, score_case
 
 
@@ -25,7 +28,7 @@ def _oracle_prediction(case: dict) -> dict:
 
 def test_reconstruction_fixtures_are_blind_and_partition_every_event():
     cases = generate_cases()
-    assert len(cases) == 30
+    assert len(cases) == 50
     assert validate_cases(cases) == []
 
 
@@ -90,3 +93,37 @@ def test_hidden_rule_case_requires_explicit_uncertainty():
     assert score_case(case, prediction)["uncertainty_correct"] is True
     prediction["insufficient_evidence"] = False
     assert score_case(case, prediction)["uncertainty_correct"] is False
+
+
+def test_all_30_cases_are_structurally_distinct_and_labels_are_neutral():
+    cases = generate_cases()
+    assert len({_structural_signature(case) for case in cases}) == 50
+    forbidden = (
+        "unrelated", "different project", "customer alpha", "customer beta",
+        "ticket b", "update b", "opportunity a", "opportunity b",
+    )
+    for case in cases:
+        rendered = json.dumps(case["presented_evidence"]).lower()
+        assert not any(token in rendered for token in forbidden)
+
+
+def test_shortcut_baselines_do_not_pass_benchmark():
+    reports = score_baselines(generate_cases())
+    for report in reports.values():
+        assert acceptance(report)["passed"] is False
+        assert report["workflow_assignment_f1"] < 0.90
+        assert report["workflow_count_accuracy"] < 0.90
+
+
+def test_hard_corpus_has_independent_uncertainty_and_long_session_coverage():
+    cases = generate_cases()
+    independent = [case for case in cases if "-v" not in case["case_id"]]
+    assert len(independent) == 20
+    uncertain = [case for case in cases if case["ground_truth"]["requires_uncertainty"]]
+    assert len(uncertain) >= 5
+    assert any(len(case["presented_evidence"]) >= 50 for case in cases)
+    assert any(len(case["ground_truth"]["workflows"]) >= 5 for case in cases)
+    assert any(
+        all(not ((event.get("metadata") or {}).get("resource_reference")) for event in case["presented_evidence"])
+        for case in independent
+    )
