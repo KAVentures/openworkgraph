@@ -28,16 +28,21 @@ IDs, or the answer key.
 
 ## Corpus
 
-fixtures.py is the committed answer-key generator for 50 deterministic synthetic
-cases spanning 30 independent scenario families. The original ten families retain structural
-variants for regression coverage; twenty additional families use distinct topologies. Generated JSONL is intentionally not committed, which keeps the repository
+fixtures.py is the committed answer-key generator for 54 deterministic synthetic
+cases spanning 34 independent scenario families. The original ten families retain structural
+variants for regression coverage; twenty-four additional families use distinct topologies.
+All synthetic resource, tab, transfer and page-path identifiers are deterministic opaque
+tokens: equality relationships remain visible, but fixture roles such as noise/reference/
+distractor are never encoded in IDs. Generated JSONL is intentionally not committed, which keeps the repository
 small while making the corpus exactly reproducible.
 
 Synthetic cases are engineering tests, not evidence of product value. The corpus deliberately
 includes same-tab multiplexing, missing resource references, 4–5 concurrent workflows,
-abandoned work, near-duplicate resources, ambiguous interruptions, balanced uncertainty,
-and a 50+ event session. A deterministic 20% holdout can be exported with `prepare --split holdout`; use
-`--split development` while iterating. Because the answer-key generator is open source, this
+abandoned work, near-duplicate resources, ambiguous interruptions, multiple independent
+uncertainty families, and a 50+ event session. A deterministic roughly-20% holdout can be
+exported with `prepare --split holdout`; use `--split development` while iterating. Splitting
+is by independent family, so structural variants of one family can never appear on opposite
+sides of the holdout boundary. Because the answer-key generator is open source, this
 is a procedural holdout rather than a secret test set: do not inspect/tune against holdout
 predictions during development.
 
@@ -80,6 +85,10 @@ Direct OpenAI-compatible endpoint:
 
     export OPENAI_API_KEY=...
     python -m evals.reconstruction.run_external --model <exact-model-id>
+
+For development/holdout discipline, add `--split development` while iterating and run
+`--split holdout` only for the final blind check. Split-specific artifacts use distinct
+filenames, so they do not overwrite one another.
 
 Vercel AI Gateway (also OpenAI-compatible):
 
@@ -158,7 +167,10 @@ truth by maximum event overlap.
 | Unnecessary uncertainty rate | <= 0.10 |
 
 The scorer also reports ordering accuracy, automation-relevance precision/recall
-and UI-mechanic precision/recall.
+and UI-mechanic precision/recall. It reports both historical case-level metrics and a
+family-macro view. The release gate uses the family-macro metrics so the three variants
+in each of families 01-10 do not receive triple the weight of independent single-case
+families. Hidden-rule uncertainty is likewise macro-averaged across uncertainty families.
 
 These are engineering release thresholds, not claims of statistical
 significance. A publishable study should add a larger preregistered real-work

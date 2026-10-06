@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from .fixtures import load_cases
+from .fixtures import case_family_id, load_cases
 
 def _set(value: Any) -> set[str]:
     if not isinstance(value, list):
@@ -121,6 +121,7 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
 
     return {
         "case_id": case.get("case_id"),
+        "family_id": case.get("family_id") or case_family_id(str(case.get("case_id") or "")),
         "workflow_assignment_precision": round(precision, 6),
         "workflow_assignment_recall": round(recall, 6),
         "workflow_assignment_f1": round(f1, 6),
@@ -136,12 +137,11 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
         "uncertainty_correct": uncertainty_correct,
     }
 
-def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) -> dict[str, Any]:
-    by_id = {str(row.get("case_id") or ""): row for row in predictions}
-    missing = [case["case_id"] for case in cases if case["case_id"] not in by_id]
-    if missing:
-        raise ValueError(f"missing predictions for {len(missing)} cases: {missing[:5]}")
-    rows = [score_case(case, by_id[case["case_id"]]) for case in cases]
+def _summary(
+    cases: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    by_prediction: dict[str, bool],
+) -> dict[str, Any]:
     metric_names = [
         "workflow_assignment_precision",
         "workflow_assignment_recall",
@@ -160,30 +160,102 @@ def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) ->
     out["workflow_count_accuracy"] = round(mean(1.0 if row["workflow_count_exact"] else 0.0 for row in rows), 6)
     out["uncertainty_accuracy"] = round(mean(1.0 if row["uncertainty_correct"] else 0.0 for row in rows), 6)
 
-    required_rows = [
-        row for case, row in zip(cases, rows)
+    required = [
+        (case, row) for case, row in zip(cases, rows)
         if bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
     ]
-    ordinary_rows = [
+    ordinary = [
         (case, row) for case, row in zip(cases, rows)
         if not bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
     ]
+    out["required_uncertainty_recall"] = round(
+        mean(
+            1.0 if by_prediction.get(str(case.get("case_id") or ""), False) else 0.0
+            for case, _row in required
+        ),
+        6,
+    ) if required else None
+    out["unnecessary_uncertainty_rate"] = round(
+        mean(
+            1.0 if by_prediction.get(str(case.get("case_id") or ""), False) else 0.0
+            for case, _row in ordinary
+        ),
+        6,
+    ) if ordinary else None
+    return out
+
+
+def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) -> dict[str, Any]:
+    by_id = {str(row.get("case_id") or ""): row for row in predictions}
+    missing = [case["case_id"] for case in cases if case["case_id"] not in by_id]
+    if missing:
+        raise ValueError(f"missing predictions for {len(missing)} cases: {missing[:5]}")
+
+    rows = [score_case(case, by_id[case["case_id"]]) for case in cases]
     by_prediction = {
         str(item.get("case_id") or ""): bool(item.get("insufficient_evidence"))
         for item in predictions
     }
-    out["required_uncertainty_recall"] = round(
-        mean(1.0 if by_prediction.get(str(row["case_id"]), False) else 0.0 for row in required_rows),
-        6,
-    ) if required_rows else 1.0
-    out["unnecessary_uncertainty_rate"] = round(
-        mean(
-            1.0 if by_prediction.get(str(case.get("case_id") or ""), False) else 0.0
-            for case, _row in ordinary_rows
-        ),
-        6,
-    ) if ordinary_rows else 0.0
+
+    # Keep the historical case-level metrics at the top level for compatibility.
+    out = _summary(cases, rows, by_prediction)
+    out["required_uncertainty_recall"] = (
+        1.0 if out["required_uncertainty_recall"] is None else out["required_uncertainty_recall"]
+    )
+    out["unnecessary_uncertainty_rate"] = (
+        0.0 if out["unnecessary_uncertainty_rate"] is None else out["unnecessary_uncertainty_rate"]
+    )
     out["per_case"] = rows
+
+    # The independent scenario family is the statistical unit. Variants of the
+    # first ten families must not count three times more than later families.
+    grouped: dict[str, list[int]] = {}
+    for index, case in enumerate(cases):
+        fid = str(case.get("family_id") or case_family_id(str(case.get("case_id") or "")))
+        grouped.setdefault(fid, []).append(index)
+
+    family_rows: list[dict[str, Any]] = []
+    for fid, indices in sorted(grouped.items()):
+        family_cases = [cases[index] for index in indices]
+        scored_rows = [rows[index] for index in indices]
+        summary = _summary(family_cases, scored_rows, by_prediction)
+        summary["family_id"] = fid
+        family_rows.append(summary)
+
+    family_metric_names = [
+        "workflow_assignment_precision",
+        "workflow_assignment_recall",
+        "workflow_assignment_f1",
+        "cross_workflow_contamination",
+        "interruption_rejection",
+        "ordering_accuracy",
+        "checkpoint_recall",
+        "automation_relevance_precision",
+        "automation_relevance_recall",
+        "ui_mechanic_precision",
+        "ui_mechanic_recall",
+        "workflow_count_accuracy",
+        "uncertainty_accuracy",
+    ]
+    family_macro = {
+        name: round(mean(float(row[name]) for row in family_rows), 6)
+        for name in family_metric_names
+    }
+    required_family_values = [
+        float(row["required_uncertainty_recall"])
+        for row in family_rows
+        if row["required_uncertainty_recall"] is not None
+    ]
+    ordinary_family_values = [
+        float(row["unnecessary_uncertainty_rate"])
+        for row in family_rows
+        if row["unnecessary_uncertainty_rate"] is not None
+    ]
+    family_macro["required_uncertainty_recall"] = round(mean(required_family_values), 6) if required_family_values else 1.0
+    family_macro["unnecessary_uncertainty_rate"] = round(mean(ordinary_family_values), 6) if ordinary_family_values else 0.0
+    family_macro["families"] = len(family_rows)
+    family_macro["per_family"] = family_rows
+    out["family_macro"] = family_macro
     return out
 
 THRESHOLDS = {
@@ -197,13 +269,18 @@ THRESHOLDS = {
 }
 
 def acceptance(report: dict[str, Any]) -> dict[str, Any]:
+    gate = report.get("family_macro") if isinstance(report.get("family_macro"), dict) else report
     checks: dict[str, bool] = {}
+    observed: dict[str, float] = {}
     for name, (op, threshold) in THRESHOLDS.items():
-        value = float(report[name])
+        value = float(gate[name])
+        observed[name] = value
         checks[name] = value >= threshold if op == ">=" else value <= threshold
     return {
         "passed": all(checks.values()),
+        "basis": "family_macro" if gate is not report else "case_level",
         "checks": checks,
+        "observed": observed,
         "thresholds": {name: {"operator": op, "value": threshold} for name, (op, threshold) in THRESHOLDS.items()},
     }
 
