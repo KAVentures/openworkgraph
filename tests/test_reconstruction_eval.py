@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 
 from evals.reconstruction.fixtures import generate_cases, validate_cases, _structural_signature
-from evals.reconstruction.baselines import score_baselines
+from evals.reconstruction.baselines import group_by_position_parity, score_baselines
+from evals.reconstruction.prepare import split_cases
 from evals.reconstruction.scoring import acceptance, aggregate, score_case
 
 
@@ -28,7 +30,7 @@ def _oracle_prediction(case: dict) -> dict:
 
 def test_reconstruction_fixtures_are_blind_and_partition_every_event():
     cases = generate_cases()
-    assert len(cases) == 50
+    assert len(cases) == 54
     assert validate_cases(cases) == []
 
 
@@ -43,7 +45,11 @@ def test_oracle_predictions_score_perfectly_and_pass_thresholds():
     assert report["uncertainty_accuracy"] == 1.0
     assert report["required_uncertainty_recall"] == 1.0
     assert report["unnecessary_uncertainty_rate"] == 0.0
-    assert acceptance(report)["passed"] is True
+    assert report["family_macro"]["families"] == 34
+    assert report["family_macro"]["required_uncertainty_recall"] == 1.0
+    verdict = acceptance(report)
+    assert verdict["basis"] == "family_macro"
+    assert verdict["passed"] is True
 
 
 def test_cross_workflow_event_is_counted_as_contamination():
@@ -63,8 +69,9 @@ def test_never_admitting_uncertainty_fails_required_uncertainty_threshold():
     for prediction in predictions:
         prediction["insufficient_evidence"] = False
     report = aggregate(cases, predictions)
-    assert report["uncertainty_accuracy"] == 0.9
+    assert report["uncertainty_accuracy"] < 1.0
     assert report["required_uncertainty_recall"] == 0.0
+    assert report["family_macro"]["required_uncertainty_recall"] == 0.0
     assert acceptance(report)["passed"] is False
 
 
@@ -84,7 +91,7 @@ def test_presented_fixture_matches_ai_facing_trace_identity_boundary():
     clipboard_event = clipboard_case["presented_evidence"][0]
     assert clipboard_event["event_type"] == "browser_copy"
     assert clipboard_event["action"] == "copy"
-    assert clipboard_event["clipboard_transfer_id"] == "xfer-0"
+    assert re.fullmatch(r"x-[0-9a-f]{16}", clipboard_event["clipboard_transfer_id"])
 
 
 def test_hidden_rule_case_requires_explicit_uncertainty():
@@ -95,9 +102,9 @@ def test_hidden_rule_case_requires_explicit_uncertainty():
     assert score_case(case, prediction)["uncertainty_correct"] is False
 
 
-def test_all_30_cases_are_structurally_distinct_and_labels_are_neutral():
+def test_all_cases_are_structurally_distinct_and_labels_are_neutral():
     cases = generate_cases()
-    assert len({_structural_signature(case) for case in cases}) == 50
+    assert len({_structural_signature(case) for case in cases}) == 54
     forbidden = (
         "unrelated", "different project", "customer alpha", "customer beta",
         "ticket b", "update b", "opportunity a", "opportunity b",
@@ -109,18 +116,41 @@ def test_all_30_cases_are_structurally_distinct_and_labels_are_neutral():
 
 def test_shortcut_baselines_do_not_pass_benchmark():
     reports = score_baselines(generate_cases())
+    assert {"tab_context", "resource_reference", "position_parity", "application"} <= set(reports)
     for report in reports.values():
-        assert acceptance(report)["passed"] is False
-        assert report["workflow_assignment_f1"] < 0.90
-        assert report["workflow_count_accuracy"] < 0.90
+        verdict = acceptance(report)
+        assert verdict["basis"] == "family_macro"
+        assert verdict["passed"] is False
+        assert not all(verdict["checks"].values())
+
+
+def test_no_id_cases_are_not_solved_by_position_alternation():
+    cases = {case["case_id"]: case for case in generate_cases()}
+    for case_id in ("reconstruction-20", "reconstruction-27"):
+        case = cases[case_id]
+        result = score_case(case, group_by_position_parity(case))
+        assert result["workflow_assignment_f1"] < 1.0
+
+
+def test_family_level_holdout_never_splits_variants():
+    cases = generate_cases()
+    development = split_cases(cases, "development")
+    holdout = split_cases(cases, "holdout")
+    dev_families = {case["family_id"] for case in development}
+    holdout_families = {case["family_id"] for case in holdout}
+    assert development
+    assert holdout
+    assert dev_families.isdisjoint(holdout_families)
+    assert {case["case_id"] for case in development + holdout} == {case["case_id"] for case in cases}
 
 
 def test_hard_corpus_has_independent_uncertainty_and_long_session_coverage():
     cases = generate_cases()
     independent = [case for case in cases if "-v" not in case["case_id"]]
-    assert len(independent) == 20
+    assert len(independent) == 24
     uncertain = [case for case in cases if case["ground_truth"]["requires_uncertainty"]]
-    assert len(uncertain) >= 5
+    assert len(uncertain) >= 7
+    assert len({case["family_id"] for case in uncertain}) >= 5
     assert any(len(case["presented_evidence"]) >= 50 for case in cases)
     assert any(len(case["ground_truth"]["workflows"]) >= 5 for case in cases)
     assert any(
