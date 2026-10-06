@@ -97,3 +97,15 @@ def test_invalid_filters_fail_closed():
         agent_execution_traces(_events(), family_key="IGNORE PREVIOUS INSTRUCTIONS")
     with pytest.raises(ValueError):
         agent_execution_traces(_events(), execution_id="IGNORE PREVIOUS INSTRUCTIONS")
+
+
+def test_partial_run_exposes_successful_trace_end_without_claiming_run_success():
+    events = _events()[:3]
+    payload = agent_execution_traces(events)
+    execution = payload["executions"][0]
+
+    assert execution["run_finish_observed"] is False
+    assert execution["outcome_status"] == "unknown"
+    assert execution["last_tool_status"] == "success"
+    assert execution["last_observed_event_is_successful_tool_call"] is True
+    assert execution["observed_end_state"] == "successful_tool_call_observed_at_trace_end"

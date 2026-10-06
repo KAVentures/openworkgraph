@@ -277,25 +277,47 @@ def _agent_outcome(events: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 def _agent_failure_recovery(events: list[dict[str, Any]]) -> dict[str, Any]:
-    """Describe intermediate failures and observed recovery without inferring success."""
+    """Describe tool-level ending/recovery facts without inferring whole-run success."""
     failures: list[int] = []
     successful_tools: list[int] = []
+    last_tool_status = "not_observed"
+    last_tool_index: int | None = None
+    last_event_operation = ""
+    last_event_status = "unknown"
     for index, event in enumerate(events):
         meta, _trace = _meta(event)
         operation = str(meta.get("operation") or "").lower()
         status = str(meta.get("status") or "unknown").lower()
+        last_event_operation = operation
+        last_event_status = status
         if operation in {"tool_call", "error"} and status in _EXPLICIT_FAILURES:
             failures.append(index)
-        if operation == "tool_call" and status == "success":
-            successful_tools.append(index)
+        if operation == "tool_call":
+            last_tool_status = status
+            last_tool_index = index
+            if status == "success":
+                successful_tools.append(index)
     later_success = bool(
         failures and any(success_index > failures[-1] for success_index in successful_tools)
+    )
+    last_event_successful_tool = bool(
+        events
+        and last_tool_index == len(events) - 1
+        and last_event_operation == "tool_call"
+        and last_event_status == "success"
     )
     return {
         "intermediate_failure_count": len(failures),
         "later_successful_tool_call_observed": later_success,
         "recovered_failure_observed": later_success,
         "recovery_is_run_success": False,
+        "last_tool_status": last_tool_status,
+        "last_observed_event_is_successful_tool_call": last_event_successful_tool,
+        "observed_end_state": (
+            "successful_tool_call_observed_at_trace_end"
+            if last_event_successful_tool
+            else "no_terminal_run_status_observed"
+        ),
     }
 
 
@@ -461,6 +483,8 @@ def _public_execution(execution: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds", "outcome_status", "outcome_basis",
         "intermediate_failure_count", "later_successful_tool_call_observed",
         "recovered_failure_observed", "recovery_is_run_success",
+        "last_tool_status", "last_observed_event_is_successful_tool_call",
+        "observed_end_state",
         "steps", "observation_level",
         "evidence_refs", "evidence_window", "derived", "authoritative", "needs_review",
     )} | ({"source": execution["source"]} if execution.get("source") else {}) | (

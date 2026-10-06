@@ -401,6 +401,20 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
     work_summary = _work_summary(projected)
     outcome_status, outcome_basis = _resolve_outcome(base, work_summary)
     usage_totals = _usage_totals(projected)
+    tool_events = [item for item in projected if item.get("operation") == "tool_call"]
+    last_tool_status = str(tool_events[-1].get("status") or "unknown") if tool_events else "not_observed"
+    last_observed_event_is_successful_tool_call = bool(
+        projected
+        and projected[-1].get("operation") == "tool_call"
+        and str(projected[-1].get("status") or "").lower() == "success"
+    )
+    observed_end_state = (
+        "successful_tool_call_observed_at_trace_end"
+        if last_observed_event_is_successful_tool_call
+        else "no_terminal_run_status_observed"
+        if not run_finish_observed
+        else "explicit_run_terminal_status_observed"
+    )
 
     return {
         "execution_id": base["execution_id"],
@@ -410,6 +424,9 @@ def _one_trace(events: list[dict[str, Any]], *, max_events: int) -> dict[str, An
         "observation_level": base.get("observation_level"),
         "outcome_status": outcome_status,
         "outcome_basis": outcome_basis,
+        "last_tool_status": last_tool_status,
+        "last_observed_event_is_successful_tool_call": last_observed_event_is_successful_tool_call,
+        "observed_end_state": observed_end_state,
         "observed_family_key": base.get("observed_family_key"),
         "observed_family_basis": base.get("observed_family_basis"),
         "run_start_observed": run_start_observed,

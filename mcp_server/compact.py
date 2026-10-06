@@ -810,26 +810,9 @@ def find_repeated_workflows(
         "family_is_ground_truth": False,
     } for row in families[:bounded]]
 
-    # Compatibility aliases stay lightweight by default. This keeps existing
-    # clients functional without serializing the same full executions several
-    # times into a ChatGPT tool response.
-    response["patterns"] = [{
-        "family_key": row.get("family_key"),
-        "execution_count": row.get("execution_count", 0),
-        "observed_count": row.get("execution_count", 0),
-        "typical_steps": list(row.get("high_support_structural_steps") or [])[:8],
-        "typical_duration_seconds": row.get("median_execution_duration_seconds", 0),
-        "family_is_ground_truth": False,
-    } for row in families[:bounded]]
-    response["examples"] = [
-        {
-            "execution_id": run.get("execution_id"),
-            "family_key": row.get("family_key"),
-        }
-        for row in families[:bounded]
-        for run in (row.get("executions") or [])[:2]
-    ][:bounded]
-
+    # Legacy duplicated family projections are intentionally absent by default.
+    # ChatGPT/agent clients should consume candidate_clusters plus the small family
+    # index above. Older callers can request the historical projections explicitly.
     if include_legacy:
         selected = families[:bounded]
         patterns = [

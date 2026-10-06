@@ -151,9 +151,9 @@ def manual_transfer_findings(
     snapshot_at: str,
     lookback_days: int,
 ) -> list[dict[str, Any]]:
-    """Linked cross-surface transfers, aggregated by destination without payloads."""
+    """Linked cross-surface transfers, using the Work Profile destination rollup."""
     try:
-        from .work_profile import _canonical_surface, _transfer_patterns
+        from .work_profile import _canonical_surface, _transfer_patterns, _transfer_destinations
         rows = _frozen_context_rows(
             snapshot_context_max_id=snapshot_context_max_id,
             snapshot_at=snapshot_at,
@@ -161,44 +161,23 @@ def manual_transfer_findings(
         )
         for row in rows:
             row["surface"] = _canonical_surface(row.get("surface") or "Unknown")
-        patterns = _transfer_patterns(rows)
+        destinations = _transfer_destinations(_transfer_patterns(rows))
     except Exception:
         return []
 
-    grouped: dict[str, dict[str, Any]] = {}
-    for item in patterns:
-        if not item.get("cross_surface"):
-            continue
-        source = str(item.get("source_surface") or "")
-        destination = str(item.get("destination_surface") or "")
-        if not destination:
-            continue
-        slot = grouped.setdefault(destination, {
-            "count": 0,
-            "sources": {},
-            "evidence_event_ids": [],
-        })
-        count = int(item.get("count") or 0)
-        slot["count"] += count
-        slot["sources"][source or "Unknown"] = (
-            int(slot["sources"].get(source or "Unknown") or 0) + count
-        )
-        slot["evidence_event_ids"].extend(
-            str(value) for value in (item.get("example_event_ids") or []) if value
-        )
-
     findings: list[dict[str, Any]] = []
-    for destination, slot in grouped.items():
-        count = int(slot["count"])
+    for item in destinations:
+        count = int(item.get("count") or 0)
         if count < _MIN_TRANSFERS:
             continue
         sources = [
-            {"source_surface": source, "occurrence_count": source_count}
-            for source, source_count in sorted(
-                slot["sources"].items(),
-                key=lambda pair: (-int(pair[1]), str(pair[0])),
-            )
+            {
+                "source_surface": str(source.get("source_surface") or "Unknown"),
+                "occurrence_count": int(source.get("count") or 0),
+            }
+            for source in (item.get("source_breakdown") or [])
         ]
+        destination = str(item.get("destination_surface") or "")
         findings.append({
             "finding_id": _finding_id("manual_transfer_destination", destination),
             "finding_kind": "manual_transfer",
@@ -206,7 +185,7 @@ def manual_transfer_findings(
             "destination_surface": destination,
             "source_breakdown": sources,
             "occurrence_count": count,
-            "evidence_event_ids": list(dict.fromkeys(slot["evidence_event_ids"]))[:_MAX_EVIDENCE],
+            "evidence_event_ids": list(item.get("example_event_ids") or [])[:_MAX_EVIDENCE],
             "clipboard_contents_captured": False,
             "grouping_basis": "destination_surface",
             "task_identity_inferred": False,

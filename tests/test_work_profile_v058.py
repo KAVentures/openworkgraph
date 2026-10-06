@@ -80,6 +80,12 @@ def test_work_profile_derives_existing_evidence_without_new_sensor_data(monkeypa
     assert transfer["source_surface"] == "Salesforce"
     assert transfer["destination_surface"] == "ChatGPT"
     assert transfer["example_transfer_ids"] == [transfer_id]
+    destination = profile["manual_transfer_destinations"][0]
+    assert destination["destination_surface"] == "ChatGPT"
+    assert destination["count"] == 1
+    assert destination["source_breakdown"] == [{"source_surface": "Salesforce", "count": 1}]
+    assert destination["grouping_basis"] == "destination_surface"
+    assert destination["task_identity_inferred"] is False
     assert any(item["surface"] == "ChatGPT" and item["engaged_seconds"] > 0 for item in profile["ai_tool_usage"])
     assert profile["self_tags"][0]["category"] == "Blocked"
 

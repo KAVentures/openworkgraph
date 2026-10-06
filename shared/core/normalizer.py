@@ -92,7 +92,7 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
     if app and not is_browser_app(app):
         return _clean(app, 120) or "Unknown"
     if host:
-        return f"Web app {_pseudonym(host)}"
+        return host[4:] if host.startswith("www.") else host
     return "Browser" if is_browser_app(app) else (_clean(app, 120) or "Unknown")
 
 
