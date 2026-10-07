@@ -184,3 +184,8 @@ Before pressing Submit:
 
 Do not submit the Tunnel endpoint, a localhost URL, a placeholder domain, or the
 internal fixed-service-token Gateway MCP.
+
+
+### Reverse proxy trust
+
+Set `OWG_PLUGIN_FORWARDED_ALLOW_IPS` to the actual reverse-proxy/load-balancer address or CIDR accepted by Uvicorn. The container defaults to loopback and must never use `*` in production. The process-local MCP limiter separates tokenless traffic by client IP and bearer-present traffic by credential fingerprint; use an edge/WAF limiter for unauthenticated abuse and distributed multi-replica enforcement.
