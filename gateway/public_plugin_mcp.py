@@ -34,7 +34,8 @@ from .enrollment import create_enrollment_grant, init_enrollment_schema
 
 
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
-OAUTH_META = {"securitySchemes": [{"type": "oauth2", "scopes": ["work:read"]}]}
+def _oauth_meta(required_scope: str) -> dict[str, Any]:
+    return {"securitySchemes": [{"type": "oauth2", "scopes": [required_scope]}]}
 
 
 class Profile(BaseModel):
@@ -154,6 +155,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     db.init()
     init_enrollment_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
+    oauth_meta = _oauth_meta(required_scope)
     server = MCPServer(
         "OpenWorkGraph",
         instructions=(
@@ -174,7 +176,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
 
     @server.tool(
         annotations=READ,
-        meta={**OAUTH_META, "openai/profile": True},
+        meta={**oauth_meta, "openai/profile": True},
         structured_output=True,
     )
     def get_profile() -> Profile:
@@ -190,7 +192,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             nickname="OpenWorkGraph",
         )
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_current_work_context(limit: int = 50) -> dict[str, Any]:
         """Use first for continuity, ambiguous recent-work requests, or before exploring several OWG tools. Return recent synced privacy-hardened evidence plus navigation hints; it does not assert task identity."""
         organization_id, actor_id, _claims = _identity()
@@ -221,7 +223,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "authoritative": False,
         })
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def search_work(query: str, limit: int = 100) -> dict[str, Any]:
         """Use for a specific past work item, person, project, phrase, or resource. Search only this authenticated user's synced privacy-hardened evidence. No match does not prove the work never happened."""
         organization_id, actor_id, _claims = _identity()
@@ -234,7 +236,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_trace(
         since: str | None = None, until: str | None = None,
         cursor: str | None = None, limit: int = 100,
@@ -250,7 +252,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.trace.read", {"returned": result.get("returned", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
@@ -265,7 +267,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.repeated_work.read", {"returned": len(result.get("candidate_clusters") or [])})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_evidence(
         execution_ids: str = "", family_key: str = "",
         since: str | None = None, until: str | None = None,
@@ -281,7 +283,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.workflow_evidence.read", {"selected": result.get("selector", {}).get("selected_execution_count", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_agent_runs(
         since: str | None = None, limit: int = 20, max_events: int = 5_000,
     ) -> dict[str, Any]:
@@ -337,7 +339,7 @@ class PersonalLinkEndpoint:
             return
         access = await self.verifier.verify_token(authorization.split(" ", 1)[1].strip())
         if access is None:
-            await JSONResponse({"detail": "valid work:read OAuth token required"}, status_code=401)(scope, receive, send)
+            await JSONResponse({"detail": "valid OAuth token with the configured scope required"}, status_code=401)(scope, receive, send)
             return
         claims = dict(access.claims or {})
         subject = str(access.subject or claims.get("sub") or "").strip()
