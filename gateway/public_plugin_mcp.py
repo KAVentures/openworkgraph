@@ -30,6 +30,7 @@ from .query import workflow_trace
 from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
 from .hardening import SlidingWindowRateLimiter, bearer_fingerprint
+from .enrollment import create_enrollment_grant, init_enrollment_schema
 
 
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -148,6 +149,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     settings, issuer, resource, jwks, algorithms, profile_key = _settings()
     db = db or GatewayDB(settings.database_url)
     db.init()
+    init_enrollment_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=resource, jwks_url=jwks, algorithms=algorithms)
     server = MCPServer(
         "OpenWorkGraph",
@@ -309,6 +311,59 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     return server
 
 
+class PersonalLinkEndpoint:
+    """OAuth-bound non-MCP endpoint that creates a one-time local-device link code."""
+
+    def __init__(self, app: Any, *, db: GatewayDB, verifier: OIDCJWTVerifier):
+        self.app = app
+        self.db = db
+        self.verifier = verifier
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/v1/plugin/device-link":
+            await self.app(scope, receive, send)
+            return
+        from starlette.responses import JSONResponse
+        headers = {
+            key.decode("latin1").lower(): value.decode("latin1")
+            for key, value in scope.get("headers", [])
+        }
+        authorization = str(headers.get("authorization") or "")
+        if not authorization.lower().startswith("bearer "):
+            await JSONResponse({"detail": "OAuth bearer token required"}, status_code=401)(scope, receive, send)
+            return
+        access = await self.verifier.verify_token(authorization.split(" ", 1)[1].strip())
+        if access is None:
+            await JSONResponse({"detail": "valid work:read OAuth token required"}, status_code=401)(scope, receive, send)
+            return
+        claims = dict(access.claims or {})
+        subject = str(access.subject or claims.get("sub") or "").strip()
+        explicit_org = str(claims.get("owg_org_id") or "").strip()
+        explicit_actor = str(claims.get("owg_actor_id") or "").strip()
+        if explicit_org or explicit_actor:
+            await JSONResponse(
+                {"detail": "personal device linking is only for unmapped personal OAuth accounts"},
+                status_code=409,
+            )(scope, receive, send)
+            return
+        organization_id = f"oauth-sub:{subject}"
+        actor_id = organization_id
+        grant = create_enrollment_grant(
+            self.db, organization_id=organization_id, actor_id=actor_id, expires_minutes=10,
+        )
+        _audit(self.db, organization_id, actor_id, "plugin.personal_device_link.created", {
+            "grant_id": grant["grant_id"], "expires_at": grant["expires_at"],
+        })
+        await JSONResponse({
+            "enrollment_token": grant["token"],
+            "expires_at": grant["expires_at"],
+            "single_use": True,
+            "gateway_url": str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/"),
+            "history_sync_mode": "from_enrollment_forward",
+            "note": "Use this once in the local OpenWorkGraph Connect ChatGPT flow. Existing local history is not uploaded automatically.",
+        })(scope, receive, send)
+
+
 class DomainChallenge:
     def __init__(self, app: Any, token: str):
         self.app = app
@@ -366,10 +421,16 @@ class PublicPluginRateLimit:
 
 
 def create_app():
-    server = create_public_mcp()
+    settings, issuer, resource, jwks, algorithms, _profile_key = _settings()
+    db = GatewayDB(settings.database_url)
+    db.init()
+    init_enrollment_schema(db)
+    verifier = OIDCJWTVerifier(issuer=issuer, audience=resource, jwks_url=jwks, algorithms=algorithms)
+    server = create_public_mcp(db=db)
     inner = server.streamable_http_app()
+    linked = PersonalLinkEndpoint(inner, db=db, verifier=verifier)
     limit = int(os.getenv("OWG_PLUGIN_RATE_LIMIT_PER_MINUTE", "120"))
-    limited = PublicPluginRateLimit(inner, limit_per_minute=limit)
+    limited = PublicPluginRateLimit(linked, limit_per_minute=limit)
     return DomainChallenge(limited, os.getenv("OWG_PLUGIN_DOMAIN_CHALLENGE", "").strip())
 
 
