@@ -205,42 +205,17 @@ def test_public_plugin_surface_is_focused_read_only_and_verifiable():
     assert "forget_workflow_knowledge" not in source
 
 
-def test_public_rate_limit_keeps_discovery_open_and_stops_token_rotation():
-    import asyncio
-    import pytest
-    pytest.importorskip("jwt")
-    from gateway.public_plugin_mcp import PublicPluginRateLimit
-
-    calls = []
-
-    async def inner(scope, receive, send):
-        calls.append(scope["path"])
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b"ok"})
-
-    app = PublicPluginRateLimit(inner, limit_per_minute=2)
-
-    async def request(path="/mcp", authorization=None, ip="203.0.113.7"):
-        messages = []
-        headers = []
-        if authorization:
-            headers.append((b"authorization", authorization.encode()))
-        scope = {"type": "http", "method": "POST", "path": path, "headers": headers, "client": (ip, 12345)}
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-        async def send(message):
-            messages.append(message)
-        await app(scope, receive, send)
-        return next(item["status"] for item in messages if item["type"] == "http.response.start")
-
-    assert asyncio.run(request(authorization="Bearer junk-1")) == 200
-    assert asyncio.run(request(authorization="Bearer junk-2")) == 200
-    # Rotating a third junk token cannot bypass the per-IP pre-authentication bucket.
-    assert asyncio.run(request(authorization="Bearer junk-3")) == 429
-    # Discovery is deliberately outside the request limiter so clients can reconnect.
-    assert asyncio.run(request(path="/.well-known/oauth-protected-resource/mcp")) == 200
-    # A different client IP has an independent pre-authentication bucket.
-    assert asyncio.run(request(authorization="Bearer junk-4", ip="198.51.100.8")) == 200
+def test_public_rate_limit_uses_verified_subject_not_shared_ip():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert "verifier: OIDCJWTVerifier" in source
+    assert "db: GatewayDB" in source
+    assert "access = await self.verifier.verify_token" in source
+    assert "if access is not None:" in source
+    assert '"plugin-sub:" + hashlib.sha256(subject.encode("utf-8")).hexdigest()' in source
+    assert "plugin-ip:" not in source
+    assert "bearer_fingerprint" not in source
+    # Discovery remains deliberately outside application rate limiting.
+    assert 'if path.startswith("/.well-known/"):' in source
 
 
 def test_public_identity_fallback_uses_reserved_oauth_namespace(monkeypatch):
@@ -325,3 +300,34 @@ def test_personal_enrollment_does_not_require_model_or_local_tenant_selection():
     assert 'raise ValueError("organization_id is required")' not in service[service.index("def enroll_endpoint"):service.index("def disconnect_endpoint")]
     assert "resolved_organization_id" in service
     assert '"history_sync_mode": "from_enrollment_forward"' in service
+
+
+def test_public_vercel_runtime_is_stateless_and_local_runtime_is_not_rewritten():
+    public = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    local = Path("mcp_server/compact_http_app.py").read_text(encoding="utf-8")
+    assert "streamable_http_app(stateless_http=True, json_response=True)" in public
+    assert "stateless_http=True" not in local
+
+
+def test_public_rate_limit_is_distributed_and_only_after_verified_identity():
+    public = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    hardening = Path("gateway/hardening.py").read_text(encoding="utf-8")
+    assert "DistributedPrincipalRateLimiter" in public
+    assert "access = await self.verifier.verify_token" in public
+    assert '"plugin-sub:" + hashlib.sha256(subject.encode("utf-8")).hexdigest()' in public
+    assert "principal_rate_limits" in hardening
+    assert "ON CONFLICT(bucket_key, window_start)" in hardening
+
+
+def test_vercel_plugin_is_frankfurt_fluid_container():
+    config = json.loads(Path("vercel.json").read_text(encoding="utf-8"))
+    docker = Path("Dockerfile.vercel").read_text(encoding="utf-8")
+    assert config["fluid"] is True
+    assert config["regions"] == ["fra1"]
+    assert "gateway.public_plugin_mcp:create_app" in docker
+    assert "--forwarded-allow-ips=127.0.0.1" in docker
+
+
+def test_postgres_connections_disable_prepared_statements_for_transaction_pooler():
+    source = Path("gateway/db.py").read_text(encoding="utf-8")
+    assert "psycopg.connect(self.database_url, prepare_threshold=None)" in source

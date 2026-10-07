@@ -235,3 +235,69 @@ class PooledGatewayDB(GatewayDB):
                 (_now(), str(organization_id), str(device_id)),
             )
             return max(0, int(cur.rowcount or 0))
+
+
+class DistributedPrincipalRateLimiter:
+    """Database-atomic fixed-window limiter for stateless public runtimes."""
+
+    def __init__(self, db: GatewayDB) -> None:
+        self.db = db
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        with self.db.connect() as conn:
+            self.db._execute(
+                conn,
+                """CREATE TABLE IF NOT EXISTS principal_rate_limits (
+                    bucket_key TEXT NOT NULL,
+                    window_start TEXT NOT NULL,
+                    request_count INTEGER NOT NULL,
+                    PRIMARY KEY (bucket_key, window_start)
+                )""",
+            )
+
+    def check(self, key: str, limit: int) -> tuple[bool, int]:
+        if int(limit) <= 0:
+            return True, 0
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        window = now.replace(second=0, microsecond=0).isoformat()
+        retry_after = max(1, 60 - now.second)
+        with self.db.connect() as conn:
+            if self.db.is_postgres:
+                cur = self.db._execute(
+                    conn,
+                    """INSERT INTO principal_rate_limits(bucket_key, window_start, request_count)
+                       VALUES (?, ?, 1)
+                       ON CONFLICT(bucket_key, window_start)
+                       DO UPDATE SET request_count = principal_rate_limits.request_count + 1
+                       RETURNING request_count""",
+                    (str(key), window),
+                )
+                count = int(cur.fetchone()[0])
+            else:
+                self.db._execute(
+                    conn,
+                    """INSERT INTO principal_rate_limits(bucket_key, window_start, request_count)
+                       VALUES (?, ?, 1)
+                       ON CONFLICT(bucket_key, window_start)
+                       DO UPDATE SET request_count = request_count + 1""",
+                    (str(key), window),
+                )
+                cur = self.db._execute(
+                    conn,
+                    "SELECT request_count FROM principal_rate_limits WHERE bucket_key = ? AND window_start = ?",
+                    (str(key), window),
+                )
+                count = int(cur.fetchone()[0])
+            # Opportunistic bounded cleanup; no background worker is required.
+            if count == 1:
+                cutoff = now.timestamp() - 7200
+                if self.db.is_postgres:
+                    self.db._execute(
+                        conn,
+                        "DELETE FROM principal_rate_limits WHERE CAST(window_start AS TIMESTAMPTZ) < to_timestamp(?)",
+                        (cutoff,),
+                    )
+        return count <= int(limit), retry_after

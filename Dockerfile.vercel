@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY pyproject.toml LICENSE ./
+COPY gateway ./gateway
+COPY server ./server
+COPY collector ./collector
+COPY shared ./shared
+COPY mcp_server ./mcp_server
+
+RUN pip install --no-cache-dir ".[gateway]"
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=3000
+EXPOSE 3000
+
+CMD ["sh", "-c", "exec uvicorn gateway.public_plugin_mcp:create_app --factory --host 0.0.0.0 --port \"$PORT\" --proxy-headers --forwarded-allow-ips=127.0.0.1"]
