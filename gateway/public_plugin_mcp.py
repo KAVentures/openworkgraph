@@ -346,6 +346,13 @@ class PersonalLinkEndpoint:
                 status_code=409,
             )(scope, receive, send)
             return
+        if not subject:
+            await JSONResponse({"detail": "OAuth subject is required"}, status_code=401)(scope, receive, send)
+            return
+        gateway_url = str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/")
+        if not gateway_url.startswith("https://"):
+            await JSONResponse({"detail": "personal device linking is not configured"}, status_code=503)(scope, receive, send)
+            return
         organization_id = f"oauth-sub:{subject}"
         actor_id = organization_id
         grant = create_enrollment_grant(
@@ -358,7 +365,7 @@ class PersonalLinkEndpoint:
             "enrollment_token": grant["token"],
             "expires_at": grant["expires_at"],
             "single_use": True,
-            "gateway_url": str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/"),
+            "gateway_url": gateway_url,
             "history_sync_mode": "from_enrollment_forward",
             "note": "Use this once in the local OpenWorkGraph Connect ChatGPT flow. Existing local history is not uploaded automatically.",
         })(scope, receive, send)
