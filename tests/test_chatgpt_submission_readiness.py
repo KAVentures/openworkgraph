@@ -303,6 +303,8 @@ def test_personal_link_endpoint_is_oauth_bound_and_not_an_mcp_tool():
     assert 'organization_id = f"oauth-sub:{subject}"' in source
     assert '"personal device linking is only for unmapped personal OAuth accounts"' in source
     assert "create_enrollment_grant(" in source
+    assert 'if not gateway_url.startswith("https://"):' in source
+    assert '"personal device linking is not configured"' in source
     # Credential issuance stays outside the model-visible public tool surface.
     expected = {
         "get_profile", "get_current_work_context", "search_work",
