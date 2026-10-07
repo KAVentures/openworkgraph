@@ -58,7 +58,11 @@ def secured_api_v491(tmp_path):
         text=True,
     )
     base = f"http://127.0.0.1:{port}"
-    deadline = time.time() + 15
+    # Late in the full Windows CI suite the hosted runner can be CPU-bound.
+    # Keep local/other-platform feedback fast while giving Windows CI realistic
+    # process-startup headroom; all security assertions below remain unchanged.
+    startup_timeout = 45 if os.name == "nt" and os.environ.get("CI") else 15
+    deadline = time.time() + startup_timeout
     while time.time() < deadline:
         if process.poll() is not None:
             break
