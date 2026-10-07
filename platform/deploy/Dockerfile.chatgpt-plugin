@@ -13,4 +13,7 @@ RUN pip install --no-cache-dir ".[gateway]"
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8792
 
-CMD ["uvicorn", "gateway.public_plugin_mcp:create_app", "--factory", "--host", "0.0.0.0", "--port", "8792", "--proxy-headers", "--forwarded-allow-ips=*"]
+# Do not trust arbitrary client-supplied forwarding headers. Configure this to
+# the actual reverse-proxy/load-balancer addresses in production.
+ENV OWG_PLUGIN_FORWARDED_ALLOW_IPS="127.0.0.1"
+CMD ["sh", "-c", "exec uvicorn gateway.public_plugin_mcp:create_app --factory --host 0.0.0.0 --port 8792 --proxy-headers --forwarded-allow-ips=\"$OWG_PLUGIN_FORWARDED_ALLOW_IPS\""]
