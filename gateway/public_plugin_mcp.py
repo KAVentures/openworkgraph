@@ -29,7 +29,7 @@ from .settings import GatewaySettings
 from .query import workflow_trace
 from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
-from .hardening import SlidingWindowRateLimiter, bearer_fingerprint
+from .hardening import DistributedPrincipalRateLimiter
 from .enrollment import create_enrollment_grant, init_enrollment_schema
 
 
@@ -388,18 +388,24 @@ class DomainChallenge:
 
 
 class PublicPluginRateLimit:
-    def __init__(self, app: Any, *, limit_per_minute: int):
+    """Distributed limiter for authenticated public plugin traffic.
+
+    Invalid/anonymous abuse is rejected by OAuth and belongs at the hosting edge.
+    Only a verified OAuth subject is allowed to consume a database rate-limit
+    bucket, preventing rotating junk bearer strings from creating rows.
+    """
+
+    def __init__(self, app: Any, *, verifier: OIDCJWTVerifier, db: GatewayDB, limit_per_minute: int):
         self.app = app
+        self.verifier = verifier
+        self.limiter = DistributedPrincipalRateLimiter(db)
         self.limit = max(1, int(limit_per_minute))
-        self.limiter = SlidingWindowRateLimiter(window_seconds=60)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
         path = str(scope.get("path") or "")
-        # OAuth/MCP discovery must remain reachable even during junk traffic or a
-        # client cannot learn how to authenticate/reconnect.
         if path.startswith("/.well-known/"):
             await self.app(scope, receive, send)
             return
@@ -407,23 +413,24 @@ class PublicPluginRateLimit:
             key.decode("latin1").lower(): value.decode("latin1")
             for key, value in scope.get("headers", [])
         }
-        client = scope.get("client") or ("unknown", 0)
-        client_ip = str(client[0] or "unknown")
-        authorization = headers.get("authorization")
-        # Always enforce an IP bucket first. This prevents rotating junk bearer
-        # strings from manufacturing unlimited buckets before OAuth verification.
-        allowed, retry_after = self.limiter.check("plugin-ip:" + client_ip, self.limit)
-        if allowed and authorization:
-            fingerprint = bearer_fingerprint(authorization)
-            allowed, retry_after = self.limiter.check("plugin-token:" + fingerprint, self.limit)
-        if not allowed:
-            from starlette.responses import JSONResponse
-            await JSONResponse(
-                {"detail": "OpenWorkGraph plugin rate limit exceeded"},
-                status_code=429,
-                headers={"Retry-After": str(retry_after)},
-            )(scope, receive, send)
-            return
+        authorization = str(headers.get("authorization") or "")
+        if authorization.lower().startswith("bearer "):
+            access = await self.verifier.verify_token(authorization.split(" ", 1)[1].strip())
+            if access is not None:
+                subject = str(access.subject or "").strip()
+                if subject:
+                    allowed, retry_after = self.limiter.check(
+                        "plugin-sub:" + hashlib.sha256(subject.encode("utf-8")).hexdigest(),
+                        self.limit,
+                    )
+                    if not allowed:
+                        from starlette.responses import JSONResponse
+                        await JSONResponse(
+                            {"detail": "OpenWorkGraph plugin rate limit exceeded"},
+                            status_code=429,
+                            headers={"Retry-After": str(retry_after)},
+                        )(scope, receive, send)
+                        return
         await self.app(scope, receive, send)
 
 
@@ -434,10 +441,12 @@ def create_app():
     init_enrollment_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=resource, jwks_url=jwks, algorithms=algorithms)
     server = create_public_mcp(db=db)
-    inner = server.streamable_http_app()
+    # Public deployments must be stateless: a follow-up MCP request may execute
+    # in a different Vercel instance. Local compact MCP remains stateful.
+    inner = server.streamable_http_app(stateless_http=True, json_response=True)
     linked = PersonalLinkEndpoint(inner, db=db, verifier=verifier)
     limit = int(os.getenv("OWG_PLUGIN_RATE_LIMIT_PER_MINUTE", "120"))
-    limited = PublicPluginRateLimit(linked, limit_per_minute=limit)
+    limited = PublicPluginRateLimit(linked, verifier=verifier, db=db, limit_per_minute=limit)
     return DomainChallenge(limited, os.getenv("OWG_PLUGIN_DOMAIN_CHALLENGE", "").strip())
 
 
