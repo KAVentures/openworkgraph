@@ -68,7 +68,7 @@ Required token properties:
 - scope includes `work:read`;
 - optional `owg_org_id` and `owg_actor_id` claims for deployments where account
   identity differs from the Gateway organization/actor mapping. Without them,
-  `sub` is used for both, isolating each personal account.
+  the reserved `oauth-sub:<sub>` namespace is used for both. Personal devices must be explicitly linked to that same account before remote evidence is available.
 
 The authorization server must satisfy the MCP OAuth 2.1 requirements: discovery,
 authorization-code flow, PKCE S256, resource-parameter echo/audience binding, and
@@ -80,6 +80,15 @@ restrictions, also enable `openid` and `email` and expose a UserInfo endpoint re
 
 The MCP Python SDK publishes protected-resource metadata and the 401
 `WWW-Authenticate` discovery challenge from `AuthSettings`.
+
+
+## Personal account linking
+
+For personal users without explicit OWG mapping claims, linking is an explicit action outside the model tool surface. The signed-in client calls `POST /v1/plugin/device-link` with the user's OAuth bearer. The public service validates it and creates a 10-minute single-use enrollment grant bound server-side to `oauth-sub:<sub>`. The local endpoint consumes that grant through the existing `/v1/devices/enroll` flow; organization/actor input is optional because the grant is authoritative.
+
+Existing device-token sync then starts normally. The enrollment boundary remains the current local event ID, so pre-link local history stays local by default. Disconnect/revoke uses the existing device-revocation path. The device-link endpoint is deliberately not an MCP tool: observed content cannot cause the model to mint enrollment credentials, and the model never supplies a tenant identifier.
+
+Set `OWG_PLUGIN_GATEWAY_URL` to the public Gateway base URL returned to the account-link client; it must back the same evidence service as the plugin.
 
 ## Public tool surface
 
