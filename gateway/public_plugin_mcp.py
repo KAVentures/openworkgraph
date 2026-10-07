@@ -46,10 +46,11 @@ class Profile(BaseModel):
 
 
 class OIDCJWTVerifier(TokenVerifier):
-    def __init__(self, *, issuer: str, audience: str, jwks_url: str, algorithms: list[str]):
+    def __init__(self, *, issuer: str, audience: str, jwks_url: str, algorithms: list[str], required_scope: str = "work:read"):
         self.issuer = issuer.rstrip("/")
         self.audience = audience
         self.algorithms = algorithms
+        self.required_scope = required_scope
         self.jwks = jwt.PyJWKClient(jwks_url)
 
     async def verify_token(self, token: str) -> AccessToken | None:
@@ -67,7 +68,7 @@ class OIDCJWTVerifier(TokenVerifier):
             return None
         raw_scope = claims.get("scope") or ""
         scopes = raw_scope.split() if isinstance(raw_scope, str) else list(raw_scope or [])
-        if "work:read" not in scopes:
+        if self.required_scope not in scopes:
             return None
         subject = str(claims.get("sub") or "").strip()
         if not subject:
@@ -83,18 +84,20 @@ class OIDCJWTVerifier(TokenVerifier):
         )
 
 
-def _settings() -> tuple[GatewaySettings, str, str, str, list[str], str]:
+def _settings() -> tuple[GatewaySettings, str, str, str, list[str], str, str, str]:
     settings = GatewaySettings.from_env()
     issuer = os.getenv("OWG_PLUGIN_OAUTH_ISSUER", "").strip().rstrip("/")
     resource = os.getenv("OWG_PLUGIN_RESOURCE_URL", "").strip().rstrip("/")
     jwks = os.getenv("OWG_PLUGIN_OAUTH_JWKS_URL", "").strip()
     algorithms = [x.strip() for x in os.getenv("OWG_PLUGIN_OAUTH_ALGORITHMS", "RS256").split(",") if x.strip()]
     profile_key = os.getenv("OWG_PLUGIN_PROFILE_KEY", "").strip()
-    if not issuer or not resource or not jwks or not profile_key:
+    required_scope = os.getenv("OWG_PLUGIN_REQUIRED_SCOPE", "work:read").strip()
+    token_audience = os.getenv("OWG_PLUGIN_TOKEN_AUDIENCE", resource).strip()
+    if not issuer or not resource or not jwks or not profile_key or not required_scope or not token_audience:
         raise RuntimeError("OWG_PLUGIN_OAUTH_ISSUER, OWG_PLUGIN_RESOURCE_URL, OWG_PLUGIN_OAUTH_JWKS_URL and OWG_PLUGIN_PROFILE_KEY are required")
     if not resource.startswith("https://") or not resource.endswith("/mcp"):
         raise RuntimeError("OWG_PLUGIN_RESOURCE_URL must be the public HTTPS /mcp URL")
-    return settings, issuer, resource, jwks, algorithms, profile_key
+    return settings, issuer, resource, jwks, algorithms, profile_key, required_scope, token_audience
 
 
 def _identity() -> tuple[str, str, dict[str, Any]]:
@@ -146,11 +149,11 @@ def _audit(db: GatewayDB, organization_id: str, actor_id: str, action: str, deta
 
 
 def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
-    settings, issuer, resource, jwks, algorithms, profile_key = _settings()
+    settings, issuer, resource, jwks, algorithms, profile_key, required_scope, token_audience = _settings()
     db = db or GatewayDB(settings.database_url)
     db.init()
     init_enrollment_schema(db)
-    verifier = OIDCJWTVerifier(issuer=issuer, audience=resource, jwks_url=jwks, algorithms=algorithms)
+    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
     server = MCPServer(
         "OpenWorkGraph",
         instructions=(
@@ -164,7 +167,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(issuer),
             resource_server_url=AnyHttpUrl(resource),
-            required_scopes=["work:read"],
+            required_scopes=[required_scope],
             validate_token_resource=True,
         ),
     )
@@ -435,7 +438,7 @@ class PublicPluginRateLimit:
 
 
 def create_app():
-    settings, issuer, resource, jwks, algorithms, _profile_key = _settings()
+    settings, issuer, resource, jwks, algorithms, _profile_key, required_scope, token_audience = _settings()
     db = GatewayDB(settings.database_url)
     db.init()
     init_enrollment_schema(db)
