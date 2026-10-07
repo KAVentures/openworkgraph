@@ -10,7 +10,7 @@ from .service import enroll_endpoint
 def main() -> None:
     parser = argparse.ArgumentParser(description="Enroll this OpenWorkGraph endpoint with a self-hosted Gateway")
     parser.add_argument("--gateway", required=True)
-    parser.add_argument("--organization", required=True)
+    parser.add_argument("--organization", default="", help="Optional for one-time account-bound enrollment grants")
     parser.add_argument("--actor", default="")
     parser.add_argument("--device", default="")
     parser.add_argument("--enrollment-token", default=os.getenv("OWG_GATEWAY_ENROLLMENT_TOKEN", ""))

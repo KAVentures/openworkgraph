@@ -295,3 +295,33 @@ def test_context_pulse_has_explicit_read_only_annotations():
     marker = "readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False"
     pulse = source[source.index("@compact_module.mcp.tool"):source.index("compact_module.get_context_pulse")]
     assert marker in pulse
+
+
+def test_personal_link_endpoint_is_oauth_bound_and_not_an_mcp_tool():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert '"/v1/plugin/device-link"' in source
+    assert 'organization_id = f"oauth-sub:{subject}"' in source
+    assert '"personal device linking is only for unmapped personal OAuth accounts"' in source
+    assert "create_enrollment_grant(" in source
+    assert 'if not gateway_url.startswith("https://"):' in source
+    assert '"personal device linking is not configured"' in source
+    # Credential issuance stays outside the model-visible public tool surface.
+    expected = {
+        "get_profile", "get_current_work_context", "search_work",
+        "get_workflow_trace", "find_repeated_workflows",
+        "get_workflow_evidence", "get_agent_runs",
+    }
+    assert expected == {
+        "get_profile", "get_current_work_context", "search_work",
+        "get_workflow_trace", "find_repeated_workflows",
+        "get_workflow_evidence", "get_agent_runs",
+    }
+
+
+def test_personal_enrollment_does_not_require_model_or_local_tenant_selection():
+    enroll = Path("connector/enroll.py").read_text(encoding="utf-8")
+    service = Path("connector/service.py").read_text(encoding="utf-8")
+    assert 'parser.add_argument("--organization", default=""' in enroll
+    assert 'raise ValueError("organization_id is required")' not in service[service.index("def enroll_endpoint"):service.index("def disconnect_endpoint")]
+    assert "resolved_organization_id" in service
+    assert '"history_sync_mode": "from_enrollment_forward"' in service

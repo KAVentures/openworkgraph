@@ -90,8 +90,6 @@ def enroll_endpoint(
     organization_id = str(organization_id or "").strip()
     actor_id = str(actor_id or "").strip()
     enrollment_token = str(enrollment_token or "").strip()
-    if not organization_id:
-        raise ValueError("organization_id is required")
     if not enrollment_token:
         raise ValueError("enrollment token is required")
 
@@ -113,6 +111,18 @@ def enroll_endpoint(
         )
         response.raise_for_status()
         payload = response.json()
+
+    resolved_organization_id = str(payload.get("organization_id") or organization_id).strip()
+    resolved_actor_id = str(payload.get("actor_id") or actor_id).strip()
+    if not resolved_organization_id:
+        raise RuntimeError("Gateway enrollment did not resolve an organization")
+    # A one-time account-bound grant is authoritative. If the caller supplied
+    # identifiers, require the Gateway response to agree rather than silently
+    # linking the local endpoint to another account.
+    if organization_id and resolved_organization_id != organization_id:
+        raise RuntimeError("Gateway enrollment resolved a different organization")
+    if actor_id and resolved_actor_id != actor_id:
+        raise RuntimeError("Gateway enrollment resolved a different actor")
 
     token = str(payload.get("token") or "").strip()
     if not token:
@@ -156,8 +166,8 @@ def enroll_endpoint(
 
     return {
         "gateway_url": gateway_url,
-        "organization_id": str(payload.get("organization_id") or organization_id),
-        "actor_id": str(payload.get("actor_id") or actor_id),
+        "organization_id": resolved_organization_id,
+        "actor_id": resolved_actor_id,
         "device_id": str(payload.get("device_id") or resolved_device_id),
         "enrolled": True,
         "sharing_paused": False,
