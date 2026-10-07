@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from . import secure_runtime
 from .continuity import build_continuity_context, extract_resource_pointers
@@ -409,7 +410,7 @@ def _readable_feedback(
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_current_work_context(
     limit: int = 6,
     cursor: str | None = None,
@@ -605,7 +606,7 @@ def get_current_work_context(
     })
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def search_work(
     query: str = "",
     layer: str = "evidence",
@@ -664,7 +665,7 @@ def search_work(
     raise ToolError("layer must be evidence or semantic")
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_workflow_trace(
     since: str | None = None,
     until: str | None = None,
@@ -711,7 +712,7 @@ def get_workflow_trace(
     return core._finish(name, output)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def read_evidence_file(file_ref: str) -> dict[str, Any]:
     """Read one file that canonical evidence already referenced, without storing its contents.
 
@@ -738,7 +739,7 @@ def read_evidence_file(file_ref: str) -> dict[str, Any]:
     return core._finish(name, result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_work_profile(scope: str = "current") -> dict[str, Any]:
     """Return derived workflow signals such as fragmentation, effort and transfers.
 
@@ -776,7 +777,7 @@ def get_work_profile(scope: str = "current") -> dict[str, Any]:
     return core._finish(name, result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def find_repeated_workflows(
     task_family: str = "",
     max_events: int = 25_000,
@@ -900,7 +901,7 @@ def find_repeated_workflows(
     return core._finish(name, response)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_task_context(
     family_key: str = "",
     task_family: str = "",
@@ -937,7 +938,7 @@ def get_task_context(
     return secure_runtime._finish_task_context(name, result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def how_did_similar_runs_go(
     family_key: str = "",
     current_steps: str = "",
@@ -1092,7 +1093,7 @@ def how_did_similar_runs_go(
     return core._finish(name, response)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_agent_runs(
     execution_id: str = "",
     family_key: str = "",
@@ -1134,7 +1135,7 @@ def get_agent_runs(
     return core._finish(name, compact)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_agent_handoff(
     session_ref: str = "",
     source: str = "",
@@ -1166,7 +1167,7 @@ def get_agent_handoff(
     return core._finish(name, result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_playbooks(family_key: str = "", include_my_workflows: bool = False) -> dict[str, Any]:
     """Return shared, content-free playbooks: how a kind of work usually went."""
     name = "get_playbooks"
@@ -1181,7 +1182,7 @@ def get_playbooks(family_key: str = "", include_my_workflows: bool = False) -> d
 
 if _experimental_governance_enabled():
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_action_policy_advisory(
         family_key: str,
         proposed_step: str,
@@ -1196,7 +1197,7 @@ if _experimental_governance_enabled():
             {"family_key": family_key, "proposed_step": proposed_step, "completed_steps": completed},
         ))
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_governed_context_pack(
         family_key: str,
         current_steps: str = "",

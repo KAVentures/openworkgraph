@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from typing import Any
+from mcp.types import ToolAnnotations
 
 
 def register_history_tools(mcp: Any, runtime: Any) -> None:
     if getattr(mcp, "_owg_history_tools_registered", False):
         return
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def list_history(
         since: str | None = None,
         until: str | None = None,

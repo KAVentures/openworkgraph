@@ -122,6 +122,42 @@ Visible agent-session messages are a deliberate exception to the normal no-typed
 - A connected AI receives saved visible messages only through the grounded handoff boundary after the user enables AI message access. The messages are treated as untrusted observed data, not instructions, policy or authorization.
 - Organization sharing requires endpoint opt-in, organization opt-in and dedicated credential scopes. Existing pre-v0.109 device credentials are not silently broadened. Shared transcript rows obey the organization's retention floor at read time and physical cleanup/purge.
 
+## ChatGPT public plugin data boundary
+
+The public ChatGPT plugin is an optional remote read path. Installing or using the
+plugin does not make a local-only OpenWorkGraph installation upload history by
+itself. The public plugin can read only privacy-hardened evidence that the endpoint
+has separately opted to synchronize to an OpenWorkGraph Gateway.
+
+- Local capture remains independent of the plugin and Gateway.
+- OAuth identifies the plugin account; every MCP read is scoped from the validated
+  token rather than a model-supplied user, actor, device or organization ID. The
+  public profile tool returns a keyed opaque profile ID and may return the OAuth
+  provider's `name` and `email` claims when present so users can distinguish connected
+  accounts. Raw subject, organization, actor and device identifiers are not returned
+  by public evidence tools.
+- The plugin is read-only. It cannot create, edit, send or delete records in source
+  business systems.
+- Repeated-work candidates and workflow alignments are deterministic derived indexes
+  over the synchronized evidence. They are navigation aids, not policy, permission,
+  productivity scores or semantic ground truth.
+- Canonical local evidence may be richer than the synchronized Gateway subset. A
+  missing remote result therefore does not prove that the work never occurred.
+- Historical behavior never authorizes a current action. When ChatGPT has an
+  authorized live connector for the underlying system, OWG evidence should identify
+  relevant work/resources and the live connector should supply current state.
+- Disconnecting/revoking the plugin stops future plugin reads. Gateway retention and
+  deletion remain governed by the configured Gateway lifecycle; disconnecting the
+  plugin does not silently delete local history.
+- OAuth access tokens and refresh tokens are authentication material and must not be
+  stored in canonical OWG evidence or returned by MCP tools.
+
+A public deployment must publish a privacy policy that accurately discloses the
+specific synchronized fields, retention period, subprocessors/hosting, account
+deletion route, support contact and OAuth identity fields used by that deployment.
+This repository document is the technical data contract, not a substitute for the
+operator's legally applicable public privacy notice.
+
 ## Run memory
 
 History retention ("Don't keep after session", or a number of days) deletes raw evidence. Just before retention removes a session, OpenWorkGraph keeps one small record per run in it, so repeated-workflow and similar-run features still have something to learn from:

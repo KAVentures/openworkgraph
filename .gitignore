@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 
 # Local operational data — never commit captured company/user telemetry
 data/

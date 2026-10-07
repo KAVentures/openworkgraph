@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from mcp.types import ToolAnnotations
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,7 +125,7 @@ def register_automation_guidance(
     lowlevel.instructions = instructions
 
     if expose_capability_tool:
-        @mcp.tool()
+        @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
         def get_automation_capabilities() -> dict[str, Any]:
             """Return the automation-frontier rules before deciding a workflow cannot be automated.
 

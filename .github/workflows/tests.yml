@@ -220,3 +220,39 @@ jobs:
       - name: Stop self-host stack
         if: always()
         run: docker compose -f platform/deploy/docker-compose.yml down -v
+
+
+  chatgpt-plugin-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build public ChatGPT plugin image
+        run: docker build -f platform/deploy/Dockerfile.chatgpt-plugin -t openworkgraph-chatgpt-plugin:test .
+      - name: Start OAuth-protected plugin resource server
+        run: |
+          docker run -d --rm --name owg-chatgpt-plugin -p 8792:8792 \
+            -e OWG_GATEWAY_DATABASE_URL=sqlite:////tmp/openworkgraph-plugin-ci.db \
+            -e OWG_PLUGIN_OAUTH_ISSUER=https://auth.example.invalid \
+            -e OWG_PLUGIN_RESOURCE_URL=https://mcp.example.invalid/mcp \
+            -e OWG_PLUGIN_OAUTH_JWKS_URL=https://auth.example.invalid/.well-known/jwks.json \
+            -e OWG_PLUGIN_PROFILE_KEY=ci-profile-key-that-is-not-a-production-secret \
+            -e OWG_PLUGIN_DOMAIN_CHALLENGE=ci-domain-challenge \
+            openworkgraph-chatgpt-plugin:test
+      - name: Verify OAuth discovery, challenge, and fail-closed MCP
+        run: |
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8792/.well-known/openai-apps-challenge >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(curl --fail --silent http://127.0.0.1:8792/.well-known/openai-apps-challenge)" = "ci-domain-challenge"
+          curl --fail --silent http://127.0.0.1:8792/.well-known/oauth-protected-resource/mcp | grep -q 'auth.example.invalid'
+          code="$(curl --silent --output /tmp/plugin-unauth.json --write-out '%{http_code}' -X POST http://127.0.0.1:8792/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}')"
+          test "$code" = "401"
+      - name: Show plugin logs on failure
+        if: failure()
+        run: docker logs owg-chatgpt-plugin
+      - name: Stop plugin
+        if: always()
+        run: docker stop owg-chatgpt-plugin || true
