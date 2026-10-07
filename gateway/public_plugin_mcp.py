@@ -442,7 +442,7 @@ def create_app():
     db = GatewayDB(settings.database_url)
     db.init()
     init_enrollment_schema(db)
-    verifier = OIDCJWTVerifier(issuer=issuer, audience=resource, jwks_url=jwks, algorithms=algorithms)
+    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
     server = create_public_mcp(db=db)
     # Public deployments must be stateless: a follow-up MCP request may execute
     # in a different Vercel instance. Local compact MCP remains stateful.
