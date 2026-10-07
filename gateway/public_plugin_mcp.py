@@ -34,7 +34,8 @@ from .enrollment import create_enrollment_grant, init_enrollment_schema
 
 
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
-OAUTH_META = {"securitySchemes": [{"type": "oauth2", "scopes": ["work:read"]}]}
+def _oauth_meta(required_scope: str) -> dict[str, Any]:
+    return {"securitySchemes": [{"type": "oauth2", "scopes": [required_scope]}]}
 
 
 class Profile(BaseModel):
@@ -154,6 +155,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     db.init()
     init_enrollment_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
+    oauth_meta = _oauth_meta(required_scope)
     server = MCPServer(
         "OpenWorkGraph",
         instructions=(
@@ -174,7 +176,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
 
     @server.tool(
         annotations=READ,
-        meta={**OAUTH_META, "openai/profile": True},
+        meta={**oauth_meta, "openai/profile": True},
         structured_output=True,
     )
     def get_profile() -> Profile:
@@ -190,7 +192,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             nickname="OpenWorkGraph",
         )
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_current_work_context(limit: int = 50) -> dict[str, Any]:
         """Use first for continuity, ambiguous recent-work requests, or before exploring several OWG tools. Return recent synced privacy-hardened evidence plus navigation hints; it does not assert task identity."""
         organization_id, actor_id, _claims = _identity()
@@ -337,7 +339,7 @@ class PersonalLinkEndpoint:
             return
         access = await self.verifier.verify_token(authorization.split(" ", 1)[1].strip())
         if access is None:
-            await JSONResponse({"detail": "valid work:read OAuth token required"}, status_code=401)(scope, receive, send)
+            await JSONResponse({"detail": "valid OAuth token with the configured scope required"}, status_code=401)(scope, receive, send)
             return
         claims = dict(access.claims or {})
         subject = str(access.subject or claims.get("sub") or "").strip()
