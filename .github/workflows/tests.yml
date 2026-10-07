@@ -230,7 +230,7 @@ jobs:
         run: docker build -f platform/deploy/Dockerfile.chatgpt-plugin -t openworkgraph-chatgpt-plugin:test .
       - name: Start OAuth-protected plugin resource server
         run: |
-          docker run -d --rm --name owg-chatgpt-plugin -p 8792:8792 \
+          docker run -d --name owg-chatgpt-plugin -p 8792:8792 \
             -e OWG_GATEWAY_DATABASE_URL=sqlite:////tmp/openworkgraph-plugin-ci.db \
             -e OWG_PLUGIN_OAUTH_ISSUER=https://auth.example.invalid \
             -e OWG_PLUGIN_RESOURCE_URL=https://mcp.example.invalid/mcp \
@@ -240,12 +240,20 @@ jobs:
             openworkgraph-chatgpt-plugin:test
       - name: Verify OAuth discovery, challenge, and fail-closed MCP
         run: |
+          ready=0
           for i in $(seq 1 40); do
             if curl --fail --silent http://127.0.0.1:8792/.well-known/openai-apps-challenge >/dev/null; then
+              ready=1
               break
+            fi
+            if ! docker inspect --format='{{.State.Running}}' owg-chatgpt-plugin 2>/dev/null | grep -q true; then
+              echo "Plugin container exited during startup"
+              docker logs owg-chatgpt-plugin
+              exit 1
             fi
             sleep 1
           done
+          test "$ready" = "1"
           test "$(curl --fail --silent http://127.0.0.1:8792/.well-known/openai-apps-challenge)" = "ci-domain-challenge"
           curl --fail --silent http://127.0.0.1:8792/.well-known/oauth-protected-resource/mcp | grep -q 'auth.example.invalid'
           code="$(curl --silent --output /tmp/plugin-unauth.json --write-out '%{http_code}' -X POST http://127.0.0.1:8792/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}')"
@@ -255,4 +263,4 @@ jobs:
         run: docker logs owg-chatgpt-plugin
       - name: Stop plugin
         if: always()
-        run: docker stop owg-chatgpt-plugin || true
+        run: docker rm -f owg-chatgpt-plugin || true
