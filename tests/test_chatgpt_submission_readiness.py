@@ -263,7 +263,16 @@ def test_public_identity_fallback_uses_reserved_oauth_namespace(monkeypatch):
     assert organization_id == "oauth-sub:acme"
     assert actor_id == "oauth-sub:acme"
 
-    token.claims = {"sub": "acme", "owg_org_id": "org-only"}
+    partial = AccessToken(
+        token="token-2",
+        client_id="chatgpt",
+        scopes=["work:read"],
+        expires_at=4102444800,
+        resource="https://mcp.example.com/mcp",
+        subject="acme",
+        claims={"sub": "acme", "owg_org_id": "org-only"},
+    )
+    monkeypatch.setattr(public_plugin_mcp, "get_access_token", lambda: partial)
     with pytest.raises(RuntimeError, match="both owg_org_id and owg_actor_id"):
         public_plugin_mcp._identity()
 
@@ -279,3 +288,10 @@ def test_compact_empty_context_hint_names_live_tool():
     source = Path("mcp_server/compact.py").read_text(encoding="utf-8")
     assert '"tool": "search_work or get_workflow_trace with an authorized date range"' in source
     assert "search_work_history or get_workflow_trace" not in source
+
+
+def test_context_pulse_has_explicit_read_only_annotations():
+    source = Path("mcp_server/compact_hardening.py").read_text(encoding="utf-8")
+    marker = "readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False"
+    pulse = source[source.index("@compact_module.mcp.tool"):source.index("compact_module.get_context_pulse")]
+    assert marker in pulse
