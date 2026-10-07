@@ -205,16 +205,13 @@ def test_public_plugin_surface_is_focused_read_only_and_verifiable():
     assert "forget_workflow_knowledge" not in source
 
 
-def test_public_rate_limit_keeps_discovery_open_and_stops_token_rotation():
+def test_public_rate_limit_keeps_discovery_open_and_separates_valid_credentials():
     import asyncio
     import pytest
     pytest.importorskip("jwt")
     from gateway.public_plugin_mcp import PublicPluginRateLimit
 
-    calls = []
-
     async def inner(scope, receive, send):
-        calls.append(scope["path"])
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
@@ -233,15 +230,18 @@ def test_public_rate_limit_keeps_discovery_open_and_stops_token_rotation():
         await app(scope, receive, send)
         return next(item["status"] for item in messages if item["type"] == "http.response.start")
 
-    assert asyncio.run(request(authorization="Bearer junk-1")) == 200
-    assert asyncio.run(request(authorization="Bearer junk-2")) == 200
-    # Rotating a third junk token cannot bypass the per-IP pre-authentication bucket.
-    assert asyncio.run(request(authorization="Bearer junk-3")) == 429
-    # Discovery is deliberately outside the request limiter so clients can reconnect.
+    # Tokenless pre-auth traffic is bounded per client, but discovery remains open.
+    assert asyncio.run(request()) == 200
+    assert asyncio.run(request()) == 200
+    assert asyncio.run(request()) == 429
     assert asyncio.run(request(path="/.well-known/oauth-protected-resource/mcp")) == 200
-    # A different client IP has an independent pre-authentication bucket.
-    assert asyncio.run(request(authorization="Bearer junk-4", ip="198.51.100.8")) == 200
 
+    # Valid users sharing an OpenAI egress IP do not consume one global IP bucket.
+    assert asyncio.run(request(authorization="Bearer user-a")) == 200
+    assert asyncio.run(request(authorization="Bearer user-a")) == 200
+    assert asyncio.run(request(authorization="Bearer user-a")) == 429
+    assert asyncio.run(request(authorization="Bearer user-b")) == 200
+    assert asyncio.run(request(authorization="Bearer user-b")) == 200
 
 def test_public_identity_fallback_uses_reserved_oauth_namespace(monkeypatch):
     import pytest
@@ -295,3 +295,16 @@ def test_context_pulse_has_explicit_read_only_annotations():
     marker = "readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False"
     pulse = source[source.index("@compact_module.mcp.tool"):source.index("compact_module.get_context_pulse")]
     assert marker in pulse
+
+
+def test_public_agent_orientation_uses_observed_agent_shape():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert 'str(row.get("source") or "").lower() == "agent"' in source
+    assert 'startswith("agent_")' in source
+    assert 'get("trace", {}).get("run_id")' in source
+
+
+def test_plugin_image_does_not_trust_arbitrary_forwarded_headers():
+    source = Path("platform/deploy/Dockerfile.chatgpt-plugin").read_text(encoding="utf-8")
+    assert "--forwarded-allow-ips=*" not in source
+    assert 'OWG_PLUGIN_FORWARDED_ALLOW_IPS="127.0.0.1"' in source
