@@ -359,17 +359,33 @@ def test_oidc_verifier_requires_configured_scope():
     assert verifier.audience == "authenticated"
 
 
-def test_public_tool_metadata_uses_configured_oauth_scope():
-    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
-    assert 'def _oauth_meta(required_scope: str)' in source
-    assert '"scopes": [required_scope]' in source
-    assert "meta=oauth_meta" in source
-    assert '"scopes": ["work:read"]' not in source
+def test_public_tool_metadata_uses_configured_oauth_scope(monkeypatch, tmp_path):
+    import asyncio
+    from gateway.public_plugin_mcp import create_public_mcp
+
+    for key, value in {
+        "OWG_GATEWAY_DATABASE_URL": f"sqlite:///{tmp_path / 'gateway.db'}",
+        "OWG_PLUGIN_OAUTH_ISSUER": "https://auth.example.com",
+        "OWG_PLUGIN_RESOURCE_URL": "https://mcp.example.com/mcp",
+        "OWG_PLUGIN_OAUTH_JWKS_URL": "https://auth.example.com/jwks",
+        "OWG_PLUGIN_PROFILE_KEY": "test-profile-key",
+        "OWG_PLUGIN_REQUIRED_SCOPE": "openid",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    tools = asyncio.run(create_public_mcp().list_tools())
+    assert len(tools) == 7
+    assert "get_profile" in {tool.name for tool in tools}
+    for tool in tools:
+        assert tool.meta["securitySchemes"] == [{"type": "oauth2", "scopes": ["openid"]}]
 
 
 def test_vercel_image_can_split_read_plugin_from_write_gateway():
     docker = Path("Dockerfile.vercel").read_text(encoding="utf-8")
+    command = next(line.removeprefix("CMD ") for line in docker.splitlines() if line.startswith("CMD "))
+    entrypoint = json.loads(command)
     assert "OWG_VERCEL_SERVICE=plugin" in docker
-    assert 'OWG_VERCEL_SERVICE\" = \"gateway' in docker
+    assert entrypoint[:2] == ["sh", "-c"]
+    assert '$OWG_VERCEL_SERVICE" = "gateway' in entrypoint[2]
     assert "gateway.app:create_app" in docker
     assert "gateway.public_plugin_mcp:create_app" in docker

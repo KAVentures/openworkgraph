@@ -223,7 +223,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "authoritative": False,
         })
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def search_work(query: str, limit: int = 100) -> dict[str, Any]:
         """Use for a specific past work item, person, project, phrase, or resource. Search only this authenticated user's synced privacy-hardened evidence. No match does not prove the work never happened."""
         organization_id, actor_id, _claims = _identity()
@@ -236,7 +236,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_trace(
         since: str | None = None, until: str | None = None,
         cursor: str | None = None, limit: int = 100,
@@ -252,7 +252,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.trace.read", {"returned": result.get("returned", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
@@ -267,7 +267,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.repeated_work.read", {"returned": len(result.get("candidate_clusters") or [])})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_evidence(
         execution_ids: str = "", family_key: str = "",
         since: str | None = None, until: str | None = None,
@@ -283,7 +283,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.workflow_evidence.read", {"selected": result.get("selector", {}).get("selected_execution_count", 0)})
         return _protected(result)
 
-    @server.tool(annotations=READ, meta=OAUTH_META)
+    @server.tool(annotations=READ, meta=oauth_meta)
     def get_agent_runs(
         since: str | None = None, limit: int = 20, max_events: int = 5_000,
     ) -> dict[str, Any]:
