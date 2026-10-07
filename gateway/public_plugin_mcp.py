@@ -203,7 +203,9 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 "recent_canonical_evidence_available": bool(rich),
                 "repeated_work_candidates_available": "not_checked",
                 "nearby_agent_runs_available": any(
-                    str(row.get("actor_kind") or row.get("metadata", {}).get("actor_kind") or "").lower() == "agent"
+                    str(row.get("source") or "").lower() == "agent"
+                    or str(row.get("event_type") or "").lower().startswith("agent_")
+                    or bool((row.get("metadata") or {}).get("trace", {}).get("run_id"))
                     for row in rich if isinstance(row, dict)
                 ),
                 "hints_are_navigation_not_ground_truth": True,
@@ -348,12 +350,16 @@ class PublicPluginRateLimit:
         client = scope.get("client") or ("unknown", 0)
         client_ip = str(client[0] or "unknown")
         authorization = headers.get("authorization")
-        # Always enforce an IP bucket first. This prevents rotating junk bearer
-        # strings from manufacturing unlimited buckets before OAuth verification.
-        allowed, retry_after = self.limiter.check("plugin-ip:" + client_ip, self.limit)
-        if allowed and authorization:
+        # This middleware cannot know whether a bearer token is valid yet. Use a
+        # per-IP guard only for tokenless pre-auth traffic; authenticated MCP
+        # traffic is isolated by bearer fingerprint here and OAuth identity in the
+        # resource server. Production edge/WAF controls remain responsible for
+        # source-IP abuse before trusted proxy normalization.
+        if authorization:
             fingerprint = bearer_fingerprint(authorization)
             allowed, retry_after = self.limiter.check("plugin-token:" + fingerprint, self.limit)
+        else:
+            allowed, retry_after = self.limiter.check("plugin-anonymous-ip:" + client_ip, self.limit)
         if not allowed:
             from starlette.responses import JSONResponse
             await JSONResponse(
