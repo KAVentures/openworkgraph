@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir ".[gateway]"
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=3000
+ENV OWG_VERCEL_SERVICE=plugin
 EXPOSE 3000
 
-CMD ["sh", "-c", "exec uvicorn gateway.public_plugin_mcp:create_app --factory --host 0.0.0.0 --port \"$PORT\" --proxy-headers --forwarded-allow-ips=127.0.0.1"]
+CMD ["sh", "-c", "if [ \"$OWG_VERCEL_SERVICE\" = \"gateway\" ]; then exec uvicorn gateway.app:create_app --factory --host 0.0.0.0 --port \"$PORT\" --proxy-headers --forwarded-allow-ips=127.0.0.1; else exec uvicorn gateway.public_plugin_mcp:create_app --factory --host 0.0.0.0 --port \"$PORT\" --proxy-headers --forwarded-allow-ips=127.0.0.1; fi"]
