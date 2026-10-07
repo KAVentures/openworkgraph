@@ -203,3 +203,95 @@ def test_public_plugin_surface_is_focused_read_only_and_verifiable():
     assert "/.well-known/openai-apps-challenge" in source
     assert "save_workflow_knowledge" not in source
     assert "forget_workflow_knowledge" not in source
+
+
+def test_public_rate_limit_keeps_discovery_open_and_stops_token_rotation():
+    import asyncio
+    import pytest
+    pytest.importorskip("jwt")
+    from gateway.public_plugin_mcp import PublicPluginRateLimit
+
+    calls = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    app = PublicPluginRateLimit(inner, limit_per_minute=2)
+
+    async def request(path="/mcp", authorization=None, ip="203.0.113.7"):
+        messages = []
+        headers = []
+        if authorization:
+            headers.append((b"authorization", authorization.encode()))
+        scope = {"type": "http", "method": "POST", "path": path, "headers": headers, "client": (ip, 12345)}
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message):
+            messages.append(message)
+        await app(scope, receive, send)
+        return next(item["status"] for item in messages if item["type"] == "http.response.start")
+
+    assert asyncio.run(request(authorization="Bearer junk-1")) == 200
+    assert asyncio.run(request(authorization="Bearer junk-2")) == 200
+    # Rotating a third junk token cannot bypass the per-IP pre-authentication bucket.
+    assert asyncio.run(request(authorization="Bearer junk-3")) == 429
+    # Discovery is deliberately outside the request limiter so clients can reconnect.
+    assert asyncio.run(request(path="/.well-known/oauth-protected-resource/mcp")) == 200
+    # A different client IP has an independent pre-authentication bucket.
+    assert asyncio.run(request(authorization="Bearer junk-4", ip="198.51.100.8")) == 200
+
+
+def test_public_identity_fallback_uses_reserved_oauth_namespace(monkeypatch):
+    import pytest
+    pytest.importorskip("jwt")
+    from gateway import public_plugin_mcp
+    from mcp.server.auth.provider import AccessToken
+
+    token = AccessToken(
+        token="token",
+        client_id="chatgpt",
+        scopes=["work:read"],
+        expires_at=4102444800,
+        resource="https://mcp.example.com/mcp",
+        subject="acme",
+        claims={"sub": "acme"},
+    )
+    monkeypatch.setattr(public_plugin_mcp, "get_access_token", lambda: token)
+    organization_id, actor_id, _claims = public_plugin_mcp._identity()
+    assert organization_id == "oauth-sub:acme"
+    assert actor_id == "oauth-sub:acme"
+
+    partial = AccessToken(
+        token="token-2",
+        client_id="chatgpt",
+        scopes=["work:read"],
+        expires_at=4102444800,
+        resource="https://mcp.example.com/mcp",
+        subject="acme",
+        claims={"sub": "acme", "owg_org_id": "org-only"},
+    )
+    monkeypatch.setattr(public_plugin_mcp, "get_access_token", lambda: partial)
+    with pytest.raises(RuntimeError, match="both owg_org_id and owg_actor_id"):
+        public_plugin_mcp._identity()
+
+
+def test_public_agent_run_scan_has_bounded_default():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert "max_events: int = 5_000" in source
+    assert "event_budget = max(100, min(int(max_events), 5_000))" in source
+    assert "25_000 - len(raw)" not in source
+
+
+def test_compact_empty_context_hint_names_live_tool():
+    source = Path("mcp_server/compact.py").read_text(encoding="utf-8")
+    assert '"tool": "search_work or get_workflow_trace with an authorized date range"' in source
+    assert "search_work_history or get_workflow_trace" not in source
+
+
+def test_context_pulse_has_explicit_read_only_annotations():
+    source = Path("mcp_server/compact_hardening.py").read_text(encoding="utf-8")
+    marker = "readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False"
+    pulse = source[source.index("@compact_module.mcp.tool"):source.index("compact_module.get_context_pulse")]
+    assert marker in pulse

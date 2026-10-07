@@ -112,7 +112,7 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
     compact_module._slim_trace_row = _compact_trace_row
     compact_module.secure_runtime = _CompactRuntimeProxy(compact_module.secure_runtime)
 
-    @compact_module.mcp.tool()
+    @compact_module.mcp.tool(annotations=compact_module.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_context_pulse(
         cursor: str | None = None,
         recent_limit: int = 12,
