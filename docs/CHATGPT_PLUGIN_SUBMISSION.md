@@ -55,7 +55,7 @@ Required environment:
 - `OWG_PLUGIN_OAUTH_JWKS_URL`: issuer JWKS endpoint.
 - `OWG_PLUGIN_OAUTH_ALGORITHMS`: allowed JWT algorithms; defaults to `RS256`.
 - `OWG_PLUGIN_PROFILE_KEY`: high-entropy secret used only to derive stable opaque profile IDs; keep it stable across deploys and never log or expose it.
-- `OWG_PLUGIN_RATE_LIMIT_PER_MINUTE`: per-credential process-local request ceiling; defaults to 120. Use an edge/distributed limiter as well when running multiple replicas.
+- `OWG_PLUGIN_RATE_LIMIT_PER_MINUTE`: process-local ceiling applied per client IP before authentication and per bearer fingerprint when present; defaults to 120. `/.well-known/*` discovery stays exempt so authentication/reconnection cannot be locked out by the MCP limiter. Use an edge/distributed limiter as well when running multiple replicas.
 - `OWG_PLUGIN_DOMAIN_CHALLENGE`: set to the exact token supplied by the OpenAI submission portal while verifying the MCP domain. The server returns only this token at `/.well-known/openai-apps-challenge`; remove/rotate it according to the portal lifecycle.
 - `WORKFLOW_OBSERVER_GATEWAY_DATABASE_URL` / normal Gateway DB configuration.
 
