@@ -331,3 +331,29 @@ def test_vercel_plugin_is_frankfurt_fluid_container():
 def test_postgres_connections_disable_prepared_statements_for_transaction_pooler():
     source = Path("gateway/db.py").read_text(encoding="utf-8")
     assert "psycopg.connect(self.database_url, prepare_threshold=None)" in source
+
+
+def test_public_oauth_policy_defaults_remain_backward_compatible():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert 'OWG_PLUGIN_REQUIRED_SCOPE", "work:read"' in source
+    assert 'OWG_PLUGIN_TOKEN_AUDIENCE", resource' in source
+    assert "required_scopes=[required_scope]" in source
+    assert "audience=token_audience" in source
+    assert "required_scope=required_scope" in source
+
+
+def test_oidc_verifier_requires_configured_scope():
+    import asyncio
+    import pytest
+    pytest.importorskip("jwt")
+    from gateway.public_plugin_mcp import OIDCJWTVerifier
+
+    verifier = OIDCJWTVerifier(
+        issuer="https://issuer.example",
+        audience="authenticated",
+        jwks_url="https://issuer.example/jwks",
+        algorithms=["RS256"],
+        required_scope="openid",
+    )
+    assert verifier.required_scope == "openid"
+    assert verifier.audience == "authenticated"
