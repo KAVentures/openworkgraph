@@ -4,6 +4,7 @@ WORKDIR /app
 COPY pyproject.toml LICENSE ./
 COPY gateway ./gateway
 COPY server ./server
+COPY collector ./collector
 COPY shared ./shared
 COPY mcp_server ./mcp_server
 
