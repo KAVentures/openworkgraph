@@ -574,7 +574,7 @@ def get_current_work_context(
     if not navigation_hints:
         navigation_hints.append({
             "when": "older work may still matter",
-            "tool": "search_work_history or get_workflow_trace with an authorized date range",
+            "tool": "search_work or get_workflow_trace with an authorized date range",
             "reason": "the compact recent overview did not establish relevant work",
         })
 
