@@ -170,7 +170,7 @@ class GatewayDB:
                 import psycopg
             except ImportError as exc:
                 raise RuntimeError("PostgreSQL Gateway support requires `pip install '.[gateway]'`") from exc
-            conn = psycopg.connect(self.database_url)
+            conn = psycopg.connect(self.database_url, prepare_threshold=None)
             try:
                 yield conn
                 conn.commit()
