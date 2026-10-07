@@ -357,3 +357,19 @@ def test_oidc_verifier_requires_configured_scope():
     )
     assert verifier.required_scope == "openid"
     assert verifier.audience == "authenticated"
+
+
+def test_public_tool_metadata_uses_configured_oauth_scope():
+    source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
+    assert 'def _oauth_meta(required_scope: str)' in source
+    assert '"scopes": [required_scope]' in source
+    assert "meta=oauth_meta" in source
+    assert '"scopes": ["work:read"]' not in source
+
+
+def test_vercel_image_can_split_read_plugin_from_write_gateway():
+    docker = Path("Dockerfile.vercel").read_text(encoding="utf-8")
+    assert "OWG_VERCEL_SERVICE=plugin" in docker
+    assert 'OWG_VERCEL_SERVICE\" = \"gateway' in docker
+    assert "gateway.app:create_app" in docker
+    assert "gateway.public_plugin_mcp:create_app" in docker
