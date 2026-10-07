@@ -535,16 +535,62 @@ def get_current_work_context(
         )
     except Exception:
         semantic = {"events": []}
+    task_hints = [_slim_task(x) for x in list(tasks.get("tasks") or [])[:3]]
+    repeated_patterns = [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:3]]
+    semantic_activity = [
+        _slim_semantic_event(x)
+        for x in list(semantic.get("events") or [])[:semantic_limit]
+        if isinstance(x, dict)
+    ]
+    resource_count = len(list(continuity_context.get("resources") or []))
+    agent_run_count = len(list(continuity_context.get("agent_runs") or []))
+    navigation_hints: list[dict[str, Any]] = []
+    if resource_count or list(trace.get("rows") or []):
+        navigation_hints.append({
+            "when": "continuing, identifying, or locating recent work",
+            "tool": "get_workflow_trace",
+            "reason": "recent canonical evidence is available",
+        })
+    if repeated_patterns:
+        navigation_hints.append({
+            "when": "understanding, reproducing, improving, or automating repeated work",
+            "tool": "find_repeated_workflows",
+            "then": "get_workflow_evidence",
+            "reason": "derived repeated-work candidates are available; inspect selected canonical executions before inferring meaning",
+        })
+    if agent_run_count:
+        navigation_hints.append({
+            "when": "continuing or evaluating work previously attempted by an AI agent",
+            "tool": "get_agent_runs",
+            "reason": "nearby observed agent executions are available",
+        })
+    if resource_count:
+        navigation_hints.append({
+            "when": "the task refers ambiguously to a recent file, thread, record, or other work object",
+            "tool": "use continuity_context resource pointers, then inspect the live object with an authorized source connector",
+            "reason": "stable resource candidates are available",
+        })
+    if not navigation_hints:
+        navigation_hints.append({
+            "when": "older work may still matter",
+            "tool": "search_work_history or get_workflow_trace with an authorized date range",
+            "reason": "the compact recent overview did not establish relevant work",
+        })
+
     return core._finish(name, {
         "continuity_context": continuity_context,
         "trace": _slim_trace(trace),
-        "task_hints": [_slim_task(x) for x in list(tasks.get("tasks") or [])[:3]],
-        "repeated_patterns": [_slim_pattern(x) for x in list(tasks.get("patterns") or [])[:3]],
-        "semantic_activity": [
-            _slim_semantic_event(x)
-            for x in list(semantic.get("events") or [])[:semantic_limit]
-            if isinstance(x, dict)
-        ],
+        "task_hints": task_hints,
+        "repeated_patterns": repeated_patterns,
+        "semantic_activity": semantic_activity,
+        "navigation_hints": navigation_hints,
+        "orientation": {
+            "recent_canonical_evidence_available": bool(list(trace.get("rows") or [])),
+            "resource_candidates_available": resource_count > 0,
+            "repeated_work_candidates_available": bool(repeated_patterns),
+            "nearby_agent_runs_available": agent_run_count > 0,
+            "hints_are_navigation_not_ground_truth": True,
+        },
         "scope_used": scope_used,
         "scope_hint": fallback_hint,
         "evidence_tool": "get_workflow_trace",

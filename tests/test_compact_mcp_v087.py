@@ -222,3 +222,33 @@ def test_compact_agent_summary_uses_last_tool_before_session_end_bookkeeping():
     assert summary["last_observed_event_is_successful_tool_call"] is False
     assert summary["observed_outcome_summary"] == "succeeded (observed final step)"
     assert summary["observed_outcome_summary_is_terminal_run_status"] is False
+
+
+def test_current_context_orients_ai_to_repeated_and_agent_evidence(monkeypatch):
+    import mcp_server.compact as compact
+
+    def fake_get(path, params=None):
+        if path == "/v1/ai-access":
+            return {"enabled": True, "detail_level": "redacted"}
+        if path == "/v1/workflow-trace":
+            return {"rows": [{"event_id": "e1", "observed_at": "2026-10-06T10:00:00+00:00", "app": "Gmail"}]}
+        if path == "/v1/context-pulse":
+            return {"recent_evidence": [{"event_id": "e1", "observed_at": "2026-10-06T10:00:00+00:00", "app": "Gmail"}], "snapshot_at": "2026-10-06T10:01:00+00:00"}
+        if path == "/v1/agent-execution-traces":
+            return {"executions": [{"execution_id": "execution:1", "started_at": "2026-10-06T10:00:00+00:00", "ended_at": "2026-10-06T10:01:00+00:00"}]}
+        if path == "/v1/tasks":
+            return {"tasks": [], "patterns": [{"task_family": "email.reply", "observed_count": 3, "action_skeleton": ["gmail:open", "gmail:send"]}]}
+        if path == "/v1/semantic-activity":
+            return {"events": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
+    monkeypatch.setattr(compact.secure_runtime, "detail_level", lambda: "redacted")
+    result = compact.get_current_work_context(limit=6)
+    hints = result["navigation_hints"]
+    assert result["orientation"]["recent_canonical_evidence_available"] is True
+    assert result["orientation"]["repeated_work_candidates_available"] is True
+    assert result["orientation"]["nearby_agent_runs_available"] is True
+    assert any(hint.get("tool") == "find_repeated_workflows" and hint.get("then") == "get_workflow_evidence" for hint in hints)
+    assert any(hint.get("tool") == "get_agent_runs" for hint in hints)
+    assert result["orientation"]["hints_are_navigation_not_ground_truth"] is True
