@@ -1,11 +1,11 @@
-"""Thin streamable-HTTP transport for the existing read-only Gateway MCP.
+"""ChatGPT personal-plugin transport for OpenWorkGraph's rich local MCP.
 
-This module deliberately contains no evidence/query logic. It exposes the
-existing gateway.mcp server over loopback HTTP so ChatGPT can reach it through
-Secure MCP Tunnel during personal-plugin development.
+The personal plugin should expose the same compact, authenticated evidence
+surface used by local agents. Secure MCP Tunnel can reach this loopback server
+without sending the user through the reduced Gateway MCP surface.
 
-Public plugin deployment is a separate step: use a stable HTTPS endpoint and
-OAuth 2.1 rather than exposing this loopback development transport directly.
+The Gateway remains the future public/remote multi-user path; this module adds
+no evidence, storage, sync, or inference logic.
 """
 from __future__ import annotations
 
@@ -13,9 +13,7 @@ import os
 
 import uvicorn
 
-from .mcp import mcp
-
-app = mcp.streamable_http_app()
+from mcp_server.compact_http_app import app, mcp
 
 
 def main() -> None:

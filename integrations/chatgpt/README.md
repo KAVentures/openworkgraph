@@ -4,47 +4,42 @@ This is a deliberately small ChatGPT integration layer. It reuses OpenWorkGraph'
 
 ## Phase 1: personal-plugin proof
 
-Existing path:
+For the personal plugin, keep the evidence local and expose the existing rich compact MCP through Secure MCP Tunnel:
 
 ```text
 local OWG evidence
-  -> connector/sync.py (explicit opt-in)
-  -> existing OWG Gateway
-  -> gateway/mcp.py (read-only evidence tools)
-```
-
-ChatGPT adds only a transport:
-
-```text
-gateway/mcp.py
-  -> gateway/chatgpt_mcp_http.py
+  -> local OWG service + AI-access policy
+  -> mcp_server/compact_http_app.py
+  -> gateway/chatgpt_mcp_http.py (transport alias only)
   -> Secure MCP Tunnel
   -> personal ChatGPT plugin
 ```
 
-Start the existing Gateway normally. Create an actor-restricted integration token with only the read scopes needed for the proof and provide it as `OWG_GATEWAY_SERVICE_TOKEN`. Point `OWG_GATEWAY_URL` at the Gateway, then run:
+This matters because the compact MCP already exposes the orientation, repeated-work, selected-execution evidence and agent-run tools used by OWG's local AI integrations. The personal ChatGPT path must not silently downgrade to the Gateway's smaller raw-history surface.
+
+Start OpenWorkGraph normally so its local authenticated service is available, then run:
 
 ```bash
 python -m gateway.chatgpt_mcp_http
 ```
 
-The adapter binds to `127.0.0.1:8791` by default. Connect that loopback MCP server to ChatGPT with Secure MCP Tunnel. Do not expose the development adapter directly to the public internet.
+The adapter binds to `127.0.0.1:8791` by default and preserves the compact MCP bearer guard. Connect that loopback MCP server to ChatGPT with Secure MCP Tunnel using the local MCP credential. Do not expose the development adapter directly to the public internet.
 
 The model-facing guidance is in `SKILL.md`.
 
 ## Reused components
 
-- `connector/sync.py`: optional local-to-Gateway delivery; local capture does not depend on it.
-- `gateway/app.py`: tenant/actor authorization, retention and evidence APIs.
-- `gateway/auth.py`: scoped integration/device principals.
-- `gateway/mcp.py`: existing read-only model tools.
+- `mcp_server/compact_http_app.py`: existing authenticated rich local MCP.
+- `mcp_server/compact.py`: continuity/orientation and compact evidence tools.
+- `mcp_server/workflow_evidence_tools.py`: repeated-work and selected-execution evidence bridge.
 - `mcp_server/security.py`: prompt-injection protection for observed payloads.
+- `connector/sync.py` and the Gateway remain optional and are not required for the personal-plugin proof.
 
 No second database, sync daemon, task inference layer or ChatGPT-specific copy of work evidence is introduced.
 
 ## Phase 2: public single-user plugin
 
-Do not make the Phase-1 fixed service token a public-plugin authentication scheme. Public distribution requires a stable HTTPS `/mcp` endpoint and per-user OAuth 2.1 authorization. The OAuth principal should resolve to one OWG user/actor and expose only bounded read scopes.
+The public/remote plugin can use the Gateway path, but it must reach functional parity with the local compact evidence workflow before publication. Do not make a fixed service token a public-plugin authentication scheme. Public distribution requires a stable HTTPS `/mcp` endpoint and per-user OAuth 2.1 authorization. The OAuth principal should resolve to one OWG user/actor and expose only bounded read scopes.
 
 Keep this boundary additive:
 

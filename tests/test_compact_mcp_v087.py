@@ -242,6 +242,8 @@ def test_current_context_orients_ai_to_repeated_and_agent_evidence(monkeypatch):
             return {"events": []}
         raise AssertionError(path)
 
+    monkeypatch.setattr(compact.core, "_begin", lambda _name: None)
+    monkeypatch.setattr(compact.core, "_finish", lambda _name, value: value)
     monkeypatch.setattr(compact.secure_runtime, "secure_get", fake_get)
     monkeypatch.setattr(compact.secure_runtime, "detail_level", lambda: "redacted")
     result = compact.get_current_work_context(limit=6)

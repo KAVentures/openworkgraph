@@ -24,7 +24,12 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_http(url: str, process: subprocess.Popen, timeout: float = 15.0) -> None:
+def _wait_http(url: str, process: subprocess.Popen, timeout: float | None = None) -> None:
+    # A full Windows CI run can leave the host CPU-bound by the time this late
+    # integration fixture starts. Keep local feedback fast, but allow the hosted
+    # Windows runner enough startup headroom without weakening any auth assertion.
+    if timeout is None:
+        timeout = 45.0 if os.name == "nt" and os.environ.get("CI") else 15.0
     deadline = time.time() + timeout
     while time.time() < deadline:
         if process.poll() is not None:

@@ -92,7 +92,7 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
         if "use get_workflow_evidence" not in current.lower():
             lowlevel.instructions = current.rstrip() + _INSTRUCTION_APPENDIX
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_workflow_evidence(
         family_key: str = "",
         execution_ids: str = "",
@@ -144,7 +144,7 @@ def register_workflow_evidence_tools(mcp: Any, runtime_module: Any) -> None:
         }
         return runtime_module.core._finish("get_workflow_evidence", result)
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_workflow_knowledge(workflow_id: str = "", limit: int = 50) -> dict[str, Any]:
         """Read portable user-reviewed procedures and decision rules before asking again.
 

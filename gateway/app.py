@@ -16,6 +16,7 @@ from .enrollment import active_device_exists, consume_enrollment_grant, create_e
 from .lifecycle import get_retention_policy, init_lifecycle_schema, set_retention_policy
 from .policy import privacy_contract_violation
 from .query import workflow_trace
+from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
 from .settings import PRODUCT_VERSION, GatewaySettings
 
 
@@ -607,6 +608,73 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
             "interpretation": "Recent observed evidence only. The Gateway does not assert a task name, workflow family, productivity score, or inferred intent.",
         }
+
+    @app.get("/v1/workflow-evidence/families")
+    def workflow_evidence_families(
+        since: str | None = None,
+        until: str | None = None,
+        source_event_limit: int = Query(default=25_000, ge=1, le=100_000),
+        min_runs: int = Query(default=2, ge=2, le=25),
+        limit: int = Query(default=20, ge=1, le=100),
+        actor_id: str | None = None,
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "evidence:read")
+        actor_id = effective_actor(p, actor_id)
+        result = repeated_workflows(
+            db,
+            organization_id=p.organization_id,
+            actor_id=actor_id,
+            since=since,
+            until=until,
+            source_event_limit=source_event_limit,
+            min_runs=min_runs,
+            limit=limit,
+        )
+        db.audit(
+            organization_id=p.organization_id,
+            principal_id=p.token_id,
+            action="workflow_evidence.families.read",
+            details={"returned": len(result.get("candidate_clusters") or []), "actor_id": actor_id or ""},
+        )
+        return result
+
+    @app.get("/v1/workflow-evidence")
+    def selected_workflow_evidence(
+        family_key: str = "",
+        execution_ids: str = "",
+        since: str | None = None,
+        until: str | None = None,
+        source_event_limit: int = Query(default=25_000, ge=1, le=100_000),
+        max_runs: int = Query(default=12, ge=1, le=25),
+        max_events_per_run: int = Query(default=100, ge=1, le=160),
+        actor_id: str | None = None,
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "evidence:read")
+        actor_id = effective_actor(p, actor_id)
+        try:
+            result = workflow_evidence(
+                db,
+                organization_id=p.organization_id,
+                actor_id=actor_id,
+                family_key=family_key,
+                execution_ids=execution_ids,
+                since=since,
+                until=until,
+                source_event_limit=source_event_limit,
+                max_runs=max_runs,
+                max_events_per_run=max_events_per_run,
+            )
+        except WorkflowEvidenceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.audit(
+            organization_id=p.organization_id,
+            principal_id=p.token_id,
+            action="workflow_evidence.selected.read",
+            details={"selected": result.get("selector", {}).get("selected_execution_count", 0), "actor_id": actor_id or ""},
+        )
+        return result
 
     @app.get("/v1/transfers")
     def transfers(
