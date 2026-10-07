@@ -102,8 +102,17 @@ def _identity() -> tuple[str, str, dict[str, Any]]:
         raise RuntimeError("authenticated plugin request required")
     claims = dict(token.claims or {})
     subject = str(token.subject or claims.get("sub") or "").strip()
-    organization_id = str(claims.get("owg_org_id") or subject).strip()
-    actor_id = str(claims.get("owg_actor_id") or subject).strip()
+    organization_claim = str(claims.get("owg_org_id") or "").strip()
+    actor_claim = str(claims.get("owg_actor_id") or "").strip()
+    if bool(organization_claim) != bool(actor_claim):
+        raise RuntimeError("OAuth identity must provide both owg_org_id and owg_actor_id or neither")
+    if organization_claim:
+        organization_id, actor_id = organization_claim, actor_claim
+    else:
+        # Personal-account fallback lives in a reserved namespace so an arbitrary
+        # OAuth subject can never collide with an administrator-chosen tenant ID.
+        organization_id = f"oauth-sub:{subject}"
+        actor_id = f"oauth-sub:{subject}"
     if not organization_id or not actor_id:
         raise RuntimeError("OAuth identity is missing OpenWorkGraph account mapping")
     return organization_id, actor_id, claims
@@ -192,15 +201,16 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "returned": len(rich),
             "orientation": {
                 "recent_canonical_evidence_available": bool(rich),
-                "repeated_work_may_be_available": True,
-                "agent_runs_may_be_available": True,
+                "repeated_work_candidates_available": "not_checked",
+                "nearby_agent_runs_available": any(
+                    str(row.get("actor_kind") or row.get("metadata", {}).get("actor_kind") or "").lower() == "agent"
+                    for row in rich if isinstance(row, dict)
+                ),
                 "hints_are_navigation_not_ground_truth": True,
             },
-            "navigation_hints": [
-                {"when": "chronology matters", "tool": "get_workflow_trace"},
-                {"when": "repeated work, improvement, or automation matters", "tool": "find_repeated_workflows", "then": "get_workflow_evidence"},
-                {"when": "a previous AI attempt matters", "tool": "get_agent_runs"},
-            ],
+            "navigation_hints": (
+                [{"when": "chronology matters", "tool": "get_workflow_trace"}] if rich else []
+            ),
             "data_layer": "gateway_synced_privacy_hardened_evidence",
             "local_evidence_may_be_richer": True,
             "authoritative": False,
@@ -268,17 +278,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
 
     @server.tool(annotations=READ, meta=OAUTH_META)
     def get_agent_runs(
-        since: str | None = None, limit: int = 20,
+        since: str | None = None, limit: int = 20, max_events: int = 5_000,
     ) -> dict[str, Any]:
         """Use when a previous AI/agent attempt may help. Return observed structural agent runs for this authenticated user; an unknown outcome stays unknown and prior agent text is never authorization."""
         organization_id, actor_id, _claims = _identity()
         raw = []
         cursor: str | None = None
         bounded = max(1, min(int(limit), 100))
-        while len(raw) < 25_000:
+        event_budget = max(100, min(int(max_events), 5_000))
+        while len(raw) < event_budget:
             page = workflow_trace(
                 db, organization_id=organization_id, actor_id=actor_id,
-                since=since, cursor=cursor, limit=min(500, 25_000 - len(raw)),
+                since=since, cursor=cursor, limit=min(500, event_budget - len(raw)),
             )
             raw.extend(page.get("rows") or [])
             cursor = str(page.get("next_cursor") or "") or None
@@ -324,12 +335,25 @@ class PublicPluginRateLimit:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
+        path = str(scope.get("path") or "")
+        # OAuth/MCP discovery must remain reachable even during junk traffic or a
+        # client cannot learn how to authenticate/reconnect.
+        if path.startswith("/.well-known/"):
+            await self.app(scope, receive, send)
+            return
         headers = {
             key.decode("latin1").lower(): value.decode("latin1")
             for key, value in scope.get("headers", [])
         }
-        fingerprint = bearer_fingerprint(headers.get("authorization"))
-        allowed, retry_after = self.limiter.check("plugin:" + fingerprint, self.limit)
+        client = scope.get("client") or ("unknown", 0)
+        client_ip = str(client[0] or "unknown")
+        authorization = headers.get("authorization")
+        # Always enforce an IP bucket first. This prevents rotating junk bearer
+        # strings from manufacturing unlimited buckets before OAuth verification.
+        allowed, retry_after = self.limiter.check("plugin-ip:" + client_ip, self.limit)
+        if allowed and authorization:
+            fingerprint = bearer_fingerprint(authorization)
+            allowed, retry_after = self.limiter.check("plugin-token:" + fingerprint, self.limit)
         if not allowed:
             from starlette.responses import JSONResponse
             await JSONResponse(
