@@ -392,3 +392,24 @@ async def inject_gateway_panel(request: Request, call_next):
 
 
 __all__ = ["app"]
+
+
+# Personal linking uses the established enrollment/cursor contract. Nothing is
+# uploaded until the dashboard's explicit final sharing confirmation.
+def _personal_link_available() -> None:
+    if _demo_mode():
+        raise HTTPException(409, 'Personal linking is disabled in demo mode')
+    value = gateway_status(CONFIG_PATH)
+    if value.get('enrolled') or value.get('gateway_enabled'):
+        raise HTTPException(409, 'Disconnect the existing Gateway before linking a personal account')
+
+
+def _personal_link_enroll(grant: str) -> None:
+    from .chatgpt_link import GATEWAY
+    enroll_endpoint(CONFIG_PATH, gateway_url=GATEWAY, organization_id='', actor_id='',
+                    enrollment_token=grant, verify_tls=True, allow_insecure_http=False)
+    restart_sync_worker(CONFIG_PATH)
+
+
+from .chatgpt_link import create_router as _personal_link_router
+app.include_router(_personal_link_router(ensure_available=_personal_link_available, enroll=_personal_link_enroll))

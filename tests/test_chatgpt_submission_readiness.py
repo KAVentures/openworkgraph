@@ -305,7 +305,8 @@ def test_personal_enrollment_does_not_require_model_or_local_tenant_selection():
 def test_public_vercel_runtime_is_stateless_and_local_runtime_is_not_rewritten():
     public = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
     local = Path("mcp_server/compact_http_app.py").read_text(encoding="utf-8")
-    assert "streamable_http_app(stateless_http=True, json_response=True)" in public
+    assert "stateless_http=True, json_response=True" in public
+    assert "transport_security=TransportSecuritySettings(" in public
     assert "stateless_http=True" not in local
 
 

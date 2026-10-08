@@ -74,3 +74,37 @@ The Gateway hostname is not the ChatGPT MCP URL.
 10. Review Vercel and Gateway audit logs for identity leakage or unexpected writes.
 
 Do not submit publicly until the real OAuth/device-link/sync/read path passes end-to-end.
+
+## Personal desktop linking
+
+In the local desktop dashboard, choose **Connect ChatGPT → Sign in to OWG**.
+Use the same account that will authorize ChatGPT. The desktop registers a public
+OAuth client and uses authorization-code flow with PKCE S256 and a single-use
+state. The browser returns to the desktop's loopback callback. OAuth tokens and
+the short-lived device-link grant stay in desktop process memory; the dashboard
+never receives them.
+
+Sign-in does not enroll or upload evidence. Choose **Link and share new evidence**
+to enroll through the existing Gateway connector. The connector begins at the
+current local evidence boundary; earlier history stays local. Observe, AI access,
+and agent-sharing preferences are unchanged. Existing Gateway connections must
+be disconnected explicitly first. Demo mode cannot link. Cancel or restart the
+flow after a denial, timeout, process restart, or failed enrollment.
+
+Add `https://mcp.owg.kinvectum.com/mcp` as an OAuth app in ChatGPT and sign in with
+the same account. This requires both public service domains to resolve and both
+services to use the configured private Postgres database.
+
+## DNS and token trust
+
+Vercel domain ownership verification does not create DNS records at an external
+DNS provider. If `kinvectum.com` uses Hostinger nameservers, add CNAME records
+there for `mcp.owg` and `gateway.owg`, using each project's target from Vercel
+**Settings → Domains**. Preserve the existing `owg` record and nameservers.
+Check public DNS and HTTPS before attempting the live verification steps above.
+
+The dedicated Supabase issuer is the plugin's trust boundary. Tokens from other
+OAuth clients on that same project can be accepted when they have the configured
+audience and scope. Do not reuse this project for unrelated applications. The
+plugin accepts only the configured asymmetric algorithms, regardless of wider
+algorithms advertised in discovery. Desktop linking always requests PKCE S256.

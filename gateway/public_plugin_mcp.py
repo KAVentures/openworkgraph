@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 import jwt
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -20,6 +21,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.types import ToolAnnotations
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp_server.security import protect_observed_payload
 
 from shared.evidence import rich_evidence_row
@@ -47,9 +49,12 @@ class Profile(BaseModel):
 
 
 class OIDCJWTVerifier(TokenVerifier):
-    def __init__(self, *, issuer: str, audience: str, jwks_url: str, algorithms: list[str], required_scope: str = "work:read"):
+    def __init__(self, *, issuer: str, audience: str, jwks_url: str, algorithms: list[str], required_scope: str = "work:read", resource: str | None = None):
         self.issuer = issuer.rstrip("/")
         self.audience = audience
+        # Supabase validates aud=authenticated; MCP separately checks its URL.
+        # Assign this resource only after signature, issuer, audience and scope pass.
+        self.resource = resource or audience
         self.algorithms = algorithms
         self.required_scope = required_scope
         self.jwks = jwt.PyJWKClient(jwks_url)
@@ -79,7 +84,7 @@ class OIDCJWTVerifier(TokenVerifier):
             client_id=str(claims.get("azp") or claims.get("client_id") or "chatgpt"),
             scopes=scopes,
             expires_at=int(claims["exp"]),
-            resource=self.audience,
+            resource=self.resource,
             subject=subject,
             claims=dict(claims),
         )
@@ -154,7 +159,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     db = db or GatewayDB(settings.database_url)
     db.init()
     init_enrollment_schema(db)
-    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
+    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope, resource=resource)
     oauth_meta = _oauth_meta(required_scope)
     server = MCPServer(
         "OpenWorkGraph",
@@ -210,7 +215,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 "recent_canonical_evidence_available": bool(rich),
                 "repeated_work_candidates_available": "not_checked",
                 "nearby_agent_runs_available": any(
-                    str(row.get("actor_kind") or row.get("metadata", {}).get("actor_kind") or "").lower() == "agent"
+                    row.get("source") == "agent" or str(row.get("event_type") or "").startswith("agent_")
                     for row in rich if isinstance(row, dict)
                 ),
                 "hints_are_navigation_not_ground_truth": True,
@@ -444,11 +449,18 @@ def create_app():
     db = GatewayDB(settings.database_url)
     db.init()
     init_enrollment_schema(db)
-    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope)
+    verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope, resource=resource)
     server = create_public_mcp(db=db)
     # Public deployments must be stateless: a follow-up MCP request may execute
     # in a different Vercel instance. Local compact MCP remains stateful.
-    inner = server.streamable_http_app(stateless_http=True, json_response=True)
+    origin = urlsplit(resource)
+    inner = server.streamable_http_app(
+        stateless_http=True, json_response=True,
+        transport_security=TransportSecuritySettings(
+            allowed_hosts=[origin.netloc],
+            allowed_origins=[f"{origin.scheme}://{origin.netloc}"],
+        ),
+    )
     linked = PersonalLinkEndpoint(inner, db=db, verifier=verifier)
     limit = int(os.getenv("OWG_PLUGIN_RATE_LIMIT_PER_MINUTE", "120"))
     limited = PublicPluginRateLimit(linked, verifier=verifier, db=db, limit_per_minute=limit)

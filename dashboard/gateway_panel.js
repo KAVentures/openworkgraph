@@ -228,6 +228,61 @@
     catch(err) { alert(err.message); }
   };
 
+  let personalLinkGeneration = 0;
+  window.openChatGPTPersonalLink = function() {
+    const generation = ++personalLinkGeneration;
+    openModal('Connect ChatGPT','Personal account',`<p>Sign in with the <strong>same OWG account</strong> you will use in ChatGPT. Sign-in alone does not upload evidence.</p><div class="note">After sign-in, you can explicitly share privacy-hardened <strong>new evidence</strong> with the OWG cloud Gateway. Earlier history stays local. Typed text, clipboard values, passwords and screenshots are never sent through this path. Your Observe and AI-access preferences remain unchanged.</div><div id="personalLinkMessage" role="status"></div><div class="modal-actions"><button id="personalLinkStart">Sign in to OWG</button><button id="personalLinkCancel" class="secondary">Cancel</button><button class="secondary" onclick="showAdvancedHttp('Local endpoint for a secure tunnel')">Advanced: local tunnel</button></div>`);
+    const message = document.querySelector('#personalLinkMessage');
+    const start = document.querySelector('#personalLinkStart');
+    document.querySelector('#personalLinkCancel').onclick = async () => {
+      ++personalLinkGeneration;
+      try { await gwCall('/v1/chatgpt-link/cancel', {method:'POST'}); } catch (_) {}
+      closeModal();
+    };
+    start.onclick = async () => {
+      const popup = window.open('about:blank', '_blank');
+      if (popup) popup.opener = null;
+      start.disabled = true;
+      try {
+        const result = await gwCall('/v1/chatgpt-link/start', {method:'POST'});
+        if (popup) popup.location = result.authorization_url;
+        else {
+          const anchor = document.createElement('a');
+          anchor.href = result.authorization_url; anchor.target = '_blank'; anchor.rel = 'noreferrer';
+          anchor.textContent = 'Open OWG sign-in'; message.replaceChildren(anchor);
+        }
+        start.textContent = 'Waiting for sign-in…';
+        const deadline = Date.now() + result.expires_in * 1000;
+        async function poll() {
+          if (generation !== personalLinkGeneration || !message.isConnected) return;
+          try {
+            const status = await gwCall('/v1/chatgpt-link/status');
+            if (status.status === 'ready') {
+              message.textContent = 'Signed in. Confirm below to begin sharing new evidence.';
+              start.disabled = false; start.textContent = 'Link and share new evidence';
+              start.onclick = async () => {
+                start.disabled = true;
+                try {
+                  const connected = await gwCall('/v1/chatgpt-link/complete', {method:'POST'});
+                  ++personalLinkGeneration;
+                  openModal('OWG linked','Add OWG in ChatGPT',`<p>New privacy-hardened evidence can now sync. In ChatGPT Settings, open Apps → Advanced settings → Developer mode, then create an app using this MCP URL:</p><div class="codebox">${e(connected.mcp_url)}</div><p>Choose OAuth and sign in with the same OWG account. You can pause sharing or disconnect in the Gateway panel.</p><div class="modal-actions"><button onclick="closeModal()">Done</button></div>`);
+                  await refreshGatewayPanel();
+                } catch (err) { message.textContent = err.message; start.textContent = 'Restart linking'; start.disabled = false; start.onclick = window.openChatGPTPersonalLink; }
+              };
+              return;
+            }
+            if (status.status === 'error' || Date.now() > deadline) throw new Error('Sign-in did not complete. Cancel and try again.');
+            setTimeout(poll, 1500);
+          } catch (err) { message.textContent = err.message; start.textContent = 'Sign-in stopped'; }
+        }
+        poll();
+      } catch (err) {
+        if (popup) popup.close();
+        message.textContent = err.message; start.disabled = false; start.textContent = 'Sign in to OWG';
+      }
+    };
+  };
+
   document.addEventListener('DOMContentLoaded', () => {
     let panel=document.querySelector('#gatewayPanel');
     if (!panel) {
