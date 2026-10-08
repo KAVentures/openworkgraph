@@ -120,25 +120,34 @@ async def test_untrusted_gateway_rejected(flow, monkeypatch):
     assert manager.pending['grant'] is None
 
 
-def test_local_routes_require_capability_and_preserve_connection(monkeypatch):
-    from starlette.testclient import TestClient
-    from server import enterprise_app
-    from server.local_auth import create_dashboard_session
-    monkeypatch.setenv('WORKFLOW_OBSERVER_MODE', 'observe')
-    monkeypatch.setattr(enterprise_app, 'gateway_status', lambda path: {'enrolled': True})
-    token = create_dashboard_session()
-    headers = {'Authorization': 'OWG-Session ' + token}
-    client = TestClient(enterprise_app.app, base_url='http://127.0.0.1:8787')
-    for path, method in [('start', 'post'), ('complete', 'post'), ('cancel', 'post'), ('status', 'get')]:
-        response = getattr(client, method)('/v1/chatgpt-link/' + path)
-        assert response.status_code == 401
-    assert client.post('/v1/chatgpt-link/start', headers=headers).status_code == 409
-    assert client.post('/v1/chatgpt-link/complete', headers=headers).status_code == 409
-    monkeypatch.setattr(enterprise_app, 'gateway_status', lambda path: {'enrolled': False})
-    monkeypatch.setenv('WORKFLOW_OBSERVER_MODE', 'demo')
-    assert client.post('/v1/chatgpt-link/start', headers=headers).status_code == 409
-    assert client.get('/chatgpt/callback?state=invalid&code=not-a-secret').status_code == 400
-    assert client.get('/chatgpt/callback', headers={'Host': 'attacker.example'}).status_code == 400
+def test_local_routes_require_capability_and_preserve_connection():
+    # enterprise_app hardens the shared main.app at import time. Exercise it in
+    # its own process so legacy base-app tests keep their intended composition.
+    import os
+    import subprocess
+    import sys
+    script = """
+from starlette.testclient import TestClient
+from server import enterprise_app
+from server.local_auth import create_dashboard_session
+import os
+os.environ['WORKFLOW_OBSERVER_MODE'] = 'observe'
+enterprise_app.gateway_status = lambda path: {'enrolled': True}
+headers = {'Authorization': 'OWG-Session ' + create_dashboard_session()}
+client = TestClient(enterprise_app.app, base_url='http://127.0.0.1:8787')
+for path, method in [('start', 'post'), ('complete', 'post'), ('cancel', 'post'), ('status', 'get')]:
+    assert getattr(client, method)('/v1/chatgpt-link/' + path).status_code == 401
+assert client.post('/v1/chatgpt-link/start', headers=headers).status_code == 409
+assert client.post('/v1/chatgpt-link/complete', headers=headers).status_code == 409
+enterprise_app.gateway_status = lambda path: {'enrolled': False}
+os.environ['WORKFLOW_OBSERVER_MODE'] = 'demo'
+assert client.post('/v1/chatgpt-link/start', headers=headers).status_code == 409
+assert client.get('/chatgpt/callback?state=invalid&code=not-a-secret').status_code == 400
+assert client.get('/chatgpt/callback', headers={'Host': 'attacker.example'}).status_code == 400
+"""
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True,
+                            timeout=30, env=dict(os.environ))
+    assert result.returncode == 0, result.stderr
 
 
 def test_callback_headers_and_ready_status_never_expose_credentials(monkeypatch):
