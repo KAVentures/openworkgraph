@@ -246,6 +246,8 @@ def test_install_helper_launches_official_installer_automatically(tmp_path, monk
 
 def test_self_diagnostic_is_read_only_and_refuses_to_guess_environment(home, monkeypatch):
     monkeypatch.setattr(connections, "_find_installed_runtime", lambda: None)
+    # The real Codex host can exist outside OWG_CONNECTIONS_HOME.
+    monkeypatch.setattr(connections.writer, "codex_config_path", lambda: home / "absent-codex" / "config.toml")
 
     result = connections.setup_self(name="grok")
 
