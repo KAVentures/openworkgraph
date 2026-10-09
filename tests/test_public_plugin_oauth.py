@@ -396,6 +396,125 @@ def test_continuity_graph_and_raw_trace_respect_gateway_retention(public_client)
 
 
 
+
+def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
+    """A paired device may send richer agent metadata; none must reach the AI."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    secret_prompt = 'Internal agent prompt: answer using undisclosed patient billing information.'
+    person = 'Anna Svensson'
+    email = 'anna.svensson@customer.example'
+    db = _insert_personal_events([{
+        'event_id': 'poison-agent-1',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'source': 'agent', 'event_type': 'agent_tool_call',
+        'session_id': 'agent-run-secret',
+        'app': 'Agent', 'window_title': f'Email to {person} <{email}>',
+        'metadata': {
+            'prompt': secret_prompt, 'input': secret_prompt,
+            'tool_output': secret_prompt, 'customer_email': email,
+            'person_name': person,
+            'action': 'open', 'observation_level': 'structured',
+            'target': {'role': 'button', 'label': f'Email {person} at {email}'},
+            'page': {'hostname': 'example.com', 'pathname': '/customer/anna-svensson'},
+            'resource_reference': {
+                'resource_ref': 'owg:r:account-safe', 'provider': 'example',
+                'resource_kind': 'record', 'resolver_locator': f'https://example.com/{email}',
+            },
+        },
+    }])
+    # The canonical Gateway store remains unchanged; only AI-facing copies
+    # are sanitized. This also guards against rich metadata ingested in the past.
+    stored = db.trace_rows(organization_id='oauth-sub:test-person', actor_id='oauth-sub:test-person')
+    assert stored[0]['metadata_json'].find(secret_prompt) != -1
+
+    calls = [
+        ('get_current_work_context', {}),
+        ('get_current_work_context', {'detail': 'rich'}),
+        ('search_work', {'query': 'Email to'}),
+        ('get_workflow_trace', {'detail': 'rich'}),
+        ('get_agent_runs', {}),
+        ('find_repeated_workflows', {}),
+        ('get_workflow_evidence', {'detail': 'rich'}),
+    ]
+    for tool, args in calls:
+        response = rpc(client, mint(), 'tools/call', {'name': tool, 'arguments': args})
+        assert response.status_code == 200, (tool, response.text)
+        assert not response.json()['result'].get('isError'), (tool, response.text)
+        assert secret_prompt not in response.text, tool
+        assert email not in response.text, tool
+        assert person not in response.text, tool
+        assert 'anna-svensson' not in response.text, tool
+
+    rich = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {'detail': 'rich'},
+    }).json()['result']['structuredContent']
+    row = rich['rows'][0]
+    assert row['event_id'] == 'poison-agent-1'
+    assert row['metadata']['target']['role'] == 'button'
+    assert row['metadata']['resource_reference']['resource_ref'] == 'owg:r:account-safe'
+    assert 'prompt' not in row['metadata']
+    assert 'resolver_locator' not in row['metadata']['resource_reference']
+    assert 'pathname' not in row['metadata']['page']
+    assert 'EMAIL_' in row['window_title']
+    assert rich['privacy_representation']['level'] == 'hosted_redacted'
+    assert rich['evidence_contract']['metadata_preserved'] is False
+
+
+def test_default_compact_hosted_response_bounded_with_rich_opt_in(public_client):
+    from datetime import datetime, timedelta, timezone
+    client, mint = public_client
+    base = datetime.now(timezone.utc) - timedelta(minutes=14)
+    events = [{
+        'event_id': f'compact-{i:03d}',
+        'observed_at': (base + timedelta(seconds=i)).isoformat(),
+        'source': 'browser', 'event_type': 'click',
+        'app': 'Browser', 'window_title': 'Gmail compose customer quote',
+        'session_id': 'compact-session',
+        'metadata': {
+            'action': 'open', 'target': {'role': 'button', 'label': 'Open quote'},
+            'page': {'hostname': 'example.com', 'pathname': '/long/path'},
+            'irrelevant_blob': 'c' * 2000,
+            'click_count': 0, 'keypress_count': 0, 'scroll_count': 0,
+        },
+    } for i in range(114)]
+    _insert_personal_events(events)
+    compact = rpc(client, mint(), 'tools/call', {
+        'name': 'get_current_work_context', 'arguments': {},
+    })
+    assert compact.status_code == 200, compact.text
+    data = compact.json()['result']['structuredContent']
+    assert data['returned'] == 15
+    assert len(data['rows']) == 15
+    assert all('metadata' not in x for x in data['rows'])
+    assert all('irrelevant_blob' not in str(x) for x in data['rows'])
+    assert all('click_count' not in str(x) for x in data['rows'])
+    assert data['continuity_context']['coverage']['recent_rows_scanned'] == 114
+    assert len(__import__('json').dumps(data)) < 18000
+
+    compact_trace = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {},
+    })
+    trace_data = compact_trace.json()['result']['structuredContent']
+    assert trace_data['returned'] == 25
+    assert 'metadata' not in trace_data['rows'][0]
+    rich_trace = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {'detail': 'rich', 'limit': 25},
+    })
+    assert rich_trace.status_code == 200
+    rich_data = rich_trace.json()['result']['structuredContent']
+    assert rich_data['rows'][0]['metadata']['target']['label'] == 'Open quote'
+    assert 'irrelevant_blob' not in rich_trace.text
+    assert 'pathname' not in rich_trace.text
+    assert len(__import__('json').dumps(trace_data)) < len(__import__('json').dumps(rich_data))
+    # Tool names, pagination and canonical event identity are unchanged.
+    assert trace_data['has_more'] and trace_data['next_cursor']
+    assert [row['event_id'] for row in trace_data['rows']] == [
+        row['event_id'] for row in rich_data['rows']
+    ]
+
+
+
 def test_invalid_signature_and_symmetric_tokens_rejected(public_client):
     client, mint = public_client
     token = mint()
