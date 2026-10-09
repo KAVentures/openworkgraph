@@ -1,0 +1,319 @@
+{
+  "schema": "owg.hosted-routing-eval.v1",
+  "description": "Synthetic held-out intents. Prompts intentionally do not instruct a tool by name; raw tool invocation is measured separately.",
+  "cases": [
+    {
+      "id": "recent-continuity",
+      "family": "recent",
+      "prompt": "What work was I doing before lunch on October 9, 2026?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context"
+      ],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": [
+        "evt-recent-001"
+      ]
+    },
+    {
+      "id": "ambiguous-resume",
+      "family": "recent",
+      "prompt": "Can you pick up where I left off?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context"
+      ],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": [
+        "evt-recent-002"
+      ]
+    },
+    {
+      "id": "named-renewal",
+      "family": "named",
+      "prompt": "Continue the Acme renewal from October 8, 2026, using evidence to identify the live records.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "search_work",
+        "get_current_work_context"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-renewal-001"
+      ]
+    },
+    {
+      "id": "raw-without-task",
+      "family": "false_negative",
+      "prompt": "There is no inferred task for my procurement review. Reconstruct what actually happened.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_workflow_trace"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-untagged-004"
+      ]
+    },
+    {
+      "id": "no-lexical-match",
+      "family": "false_negative",
+      "prompt": "The search for the special request returned no matches. What did I do around 10 AM UTC on October 9, 2026?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_workflow_trace"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-unmatched-003"
+      ]
+    },
+    {
+      "id": "misleading-adjacency",
+      "family": "false_positive",
+      "prompt": "Two different records were open together. Were they definitely the same task?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context",
+        "get_workflow_trace"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-unrelated-001",
+        "evt-unrelated-002"
+      ]
+    },
+    {
+      "id": "older-history",
+      "family": "coverage",
+      "prompt": "Investigate the customer onboarding work from August 27, 2026, well beyond recent events.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_workflow_trace",
+        "search_work"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-old-001"
+      ]
+    },
+    {
+      "id": "many-events",
+      "family": "coverage",
+      "prompt": "Review all captured activity on Tuesday, October 6, 2026 and tell me if any steps were omitted.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_workflow_trace"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-tuesday-001",
+        "evt-tuesday-044"
+      ]
+    },
+    {
+      "id": "workflow-automation",
+      "family": "automation",
+      "prompt": "Which repeated quotation process should we automate first, using observed examples?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "find_repeated_workflows"
+      ],
+      "must_call": [
+        "find_repeated_workflows",
+        "get_workflow_evidence",
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-quote-a",
+        "evt-quote-b"
+      ]
+    },
+    {
+      "id": "workflow-repeated-empty",
+      "family": "false_negative",
+      "prompt": "The repeated-work candidates are empty, but I know I handled ten invoices. Investigate.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_workflow_trace"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-invoice-006"
+      ]
+    },
+    {
+      "id": "agent-retry",
+      "family": "agent",
+      "prompt": "What happened during my last coding agent attempt, and what should it retry?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_agent_runs"
+      ],
+      "must_call": [
+        "get_agent_runs"
+      ],
+      "raw_fallback_required": false,
+      "target_event_ids": [
+        "evt-agent-001"
+      ]
+    },
+    {
+      "id": "handoff",
+      "family": "continuity",
+      "prompt": "Prepare a grounded handoff for the interrupted Jira-to-Salesforce workflow.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context",
+        "search_work"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-jira-001"
+      ]
+    },
+    {
+      "id": "resource-pointer-only",
+      "family": "pointer",
+      "prompt": "Which Drive file did I use for Acme pricing? Do not invent file contents.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "search_work",
+        "get_current_work_context"
+      ],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": [
+        "evt-price-001"
+      ]
+    },
+    {
+      "id": "unavailable-current-state",
+      "family": "source_truth",
+      "prompt": "Was the saved record approved now? Check my prior workflow, but distinguish current system status.",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "search_work",
+        "get_current_work_context"
+      ],
+      "must_call": [
+        "get_workflow_trace"
+      ],
+      "raw_fallback_required": true,
+      "target_event_ids": [
+        "evt-approval-001"
+      ]
+    },
+    {
+      "id": "empty-gateway",
+      "family": "onboarding",
+      "prompt": "I connected OWG but haven't shared anything. Can you retrieve my work?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context"
+      ],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "local-only",
+      "family": "onboarding",
+      "prompt": "My work is only on the local device; can ChatGPT see it already?",
+      "requires_owg": true,
+      "initial_tool_any": [
+        "get_current_work_context"
+      ],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "generic-arithmetic",
+      "family": "negative",
+      "prompt": "What is 17 times 19?",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "generic-literature",
+      "family": "negative",
+      "prompt": "Explain the plot structure of Hamlet.",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "prospective-planning",
+      "family": "negative",
+      "prompt": "Help me write a generic project kickoff agenda; do not use my previous work.",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "general-coding",
+      "family": "negative",
+      "prompt": "Explain how to reverse a list in Python.",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "no-work-request",
+      "family": "negative",
+      "prompt": "Translate 'good morning' into Swedish.",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    },
+    {
+      "id": "medical-factual",
+      "family": "negative",
+      "prompt": "What is the typical adult resting heart rate?",
+      "requires_owg": false,
+      "initial_tool_any": [],
+      "must_call": [],
+      "raw_fallback_required": false,
+      "target_event_ids": []
+    }
+  ]
+}
