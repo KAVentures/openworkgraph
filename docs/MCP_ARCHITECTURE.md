@@ -128,6 +128,49 @@ See [Experimental governance surfaces](EXPERIMENTAL_GOVERNANCE.md).
 
 For clients that cannot start a local stdio server, OpenWorkGraph can explicitly start an authenticated loopback HTTP MCP endpoint on demand. New HTTP bridges expose the same compact MCP tool surface. The endpoint is not the company Gateway and should not be exposed directly to the public internet.
 
+## Hosted ChatGPT: evidence-first continuity, not inference-only retrieval
+
+The optional OAuth-protected public MCP at `https://mcp.owg.kinvectum.com/mcp`
+has a smaller read-only tool surface than local MCP. It can see **only**
+evidence that was explicitly synchronized to the Gateway, within the authenticated
+actor/tenant and current retention policy. Nothing here installs an observer or
+changes a desktop privacy setting, export, capture, or local MCP contract.
+
+`get_current_work_context(limit=50)` retains its existing response shape:
+`rows` and `returned` still include only the requested latest canonical
+privacy-hardened rows. It additionally examines at most the latest **200**
+authorized rows to construct `continuity_context`: stable resource pointers,
+non-transitive candidate associations, observed provenance and explicit coverage
+limits. These are **not** inferred task identities; the module never promotes
+same-time or same-tab occurrence into a confirmed shared task.
+
+**Raw-evidence fallback is mandatory when relevance matters.**
+- `search_work` is lexical and misses events that have no matching words.
+- `find_repeated_workflows` can miss real workflows, and a candidate can be wrong.
+- Use `get_workflow_trace` with `since` / `until` and **without `query`**
+  to reconstruct surrounding canonical events. It supports stable cursors up to
+  500 rows per request: follow `next_cursor` until `has_more` is false.
+- For precise checks, `get_workflow_trace(query=...)` can identify an anchor,
+  but call it again without a query for the time window around that anchor.
+- Empty recent context, zero inferred candidates, or no lexical match are *not*
+  evidence that the user never performed the work. Explore authorized prior date
+  ranges and explain any retention, observation or synchronization gaps.
+- Do not send the entire work history to an AI on every turn. Retrieve a small
+  navigation view first, then use bounded raw evidence windows to substantiate
+  each material conclusion. This is relevance-first **without** trusting
+  inferences as a completeness filter.
+
+The word “raw” here means the original **persisted, privacy-hardened** evidence
+events, retaining their metadata; it never means typing, clipboard values or
+pre-privacy OS observations. The remote Gateway may contain less information than
+the local SQLite store.
+
+A connected AI decides whether to call the tool; MCP does not proactively push
+work context into every conversation. Instructions and skill descriptions explain
+when to call it, but usage reliability should be measured with real AI prompts
+(including false-negative/irrelevant-task examples), not assumed from tool
+registration alone.
+
 ## The canonical local evidence tool
 
 The central evidence tool remains:
