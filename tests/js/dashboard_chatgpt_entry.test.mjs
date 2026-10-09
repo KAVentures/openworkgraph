@@ -32,7 +32,7 @@ test('explicit setup deep link opens the Connect AI tab, not any OAuth or sync',
   const x=initialize('?setup=chatgpt','evidence');
   assert.deepEqual(x.activated,['connect']);
   assert.deepEqual(x.events,[]);
-  assert.equal(x.tabs.find(t=>t.dataset.tab==='connect').onclick instanceof Function,false);
+  assert.equal(typeof x.tabs.find(t=>t.dataset.tab==='connect').onclick,'function');
   x.tabs.find(t=>t.dataset.tab==='overview').onclick();
   assert.deepEqual(x.activated,['connect','overview']);
 });
