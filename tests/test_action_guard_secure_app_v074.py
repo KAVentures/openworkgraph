@@ -145,7 +145,11 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
         monkeypatch.delenv("OWG_POLICY_GUARD_TOKEN", raising=False)
         monkeypatch.delenv("OWG_AGENT_INGEST_TOKEN", raising=False)
 
-        client = ActionPolicyClient(timeout=2)
+        # This is a real loopback subprocess integration test: Windows CI can
+        # occasionally pause the uvicorn worker while flushing agent events.
+        # Give each policy recheck the same headroom as the HTTP probes above.
+        # Never relax approval_gate's fail-closed policy on unavailability.
+        client = ActionPolicyClient(timeout=10)
         initial = client.advisory(family_key=FAMILY, proposed_step=DEPLOY)
         assert initial.approval_prerequisite_missing is True
         assert initial.policy_id == "change-control"
@@ -171,7 +175,7 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
             family_key=FAMILY,
             proposed_step=DEPLOY,
         )
-        assert result.executed is True
+        assert result.executed is True, result.decision.as_dict()
         assert result.decision.status == "approval_granted"
         assert result.decision.rechecked_advisory is not None
         assert result.decision.rechecked_advisory.approval_prerequisite_missing is False
