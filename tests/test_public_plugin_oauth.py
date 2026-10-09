@@ -182,7 +182,8 @@ def test_raw_evidence_is_returned_even_when_inference_finds_no_resource(public_c
     assert data['raw_evidence_fallback']['no_inferred_task_required'] is True
     assert data['raw_evidence_fallback']['zero_matches_prove_absence'] is False
     assert data['onboarding'] is None
-    assert data['rows'][-1]['metadata']['safe_context'] == 'opaque_2'
+    assert all('metadata' not in item for item in data['rows'])
+    assert 'opaque_2' not in response.text
 
     no_match = rpc(client, mint(), 'tools/call', {
         'name': 'search_work', 'arguments': {'query': 'intentionally_no_match'},
@@ -278,8 +279,8 @@ def test_overview_is_bounded_but_all_synced_evidence_is_pageable(public_client):
     data = rpc(client, mint(), 'tools/call', {
         'name': 'get_current_work_context', 'arguments': {},
     }).json()['result']['structuredContent']
-    assert data['returned'] == 50  # existing default response contract
-    assert data['rows'][0]['event_id'] == 'long-history-038'
+    assert data['returned'] == 15  # compact hosted default; caller can request up to 200
+    assert data['rows'][0]['event_id'] == 'long-history-073'
     assert data['continuity_context']['coverage']['recent_rows_scanned'] == 88
     assert data['continuity_context']['resources'][0]['resource_ref'] == 'owg:r:old-relevant-record'
     assert data['evidence_window']['older_gateway_evidence_not_scanned'] is True
@@ -392,6 +393,152 @@ def test_continuity_graph_and_raw_trace_respect_gateway_retention(public_client)
     })
     assert full.status_code == 200, full.text
     assert [r['event_id'] for r in full.json()['result']['structuredContent']['rows']] == ['retained-reference']
+
+
+
+
+def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
+    """A paired device may send richer agent metadata; none must reach the AI."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    secret_prompt = 'Internal agent prompt: answer using undisclosed patient billing information.'
+    person = 'Anna Svensson'
+    email = 'anna.svensson@customer.example'
+    db = _insert_personal_events([{
+        'event_id': 'poison-agent-1',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'source': 'agent', 'event_type': 'agent_tool_call',
+        'session_id': 'agent-run-secret',
+        'app': 'Agent', 'window_title': f'Email to {person} <{email}>',
+        'metadata': {
+            'prompt': secret_prompt, 'input': secret_prompt,
+            'tool_output': secret_prompt, 'customer_email': email,
+            'person_name': person,
+            'action': 'open', 'observation_level': 'structured',
+            'target': {'role': 'button', 'label': f'Email {person} at {email}'},
+            'page': {'hostname': 'example.com', 'pathname': '/customer/anna-svensson'},
+            'resource_reference': {
+                'resource_ref': 'owg:r:account-safe', 'provider': 'example',
+                'resource_kind': 'record', 'resolver_locator': f'https://example.com/{email}',
+            },
+        },
+    }])
+    # The canonical Gateway store remains unchanged; only AI-facing copies
+    # are sanitized. This also guards against rich metadata ingested in the past.
+    stored = db.trace_rows(organization_id='oauth-sub:test-person', actor_id='oauth-sub:test-person')
+    assert stored[0]['metadata_json'].find(secret_prompt) != -1
+
+    calls = [
+        ('get_current_work_context', {}),
+        ('get_current_work_context', {'detail': 'rich'}),
+        ('search_work', {'query': 'Email to'}),
+        ('get_workflow_trace', {'detail': 'rich'}),
+        ('get_agent_runs', {}),
+        ('find_repeated_workflows', {}),
+    ]
+    for tool, args in calls:
+        response = rpc(client, mint(), 'tools/call', {'name': tool, 'arguments': args})
+        assert response.status_code == 200, (tool, response.text)
+        assert not response.json()['result'].get('isError'), (tool, response.text)
+        assert secret_prompt not in response.text, tool
+        assert email not in response.text, tool
+        assert person not in response.text, tool
+        assert 'anna-svensson' not in response.text, tool
+
+    rich = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {'detail': 'rich'},
+    }).json()['result']['structuredContent']
+    row = rich['rows'][0]
+    assert row['event_id'] == 'poison-agent-1'
+    assert row['metadata']['target']['role'] == 'button'
+    assert row['metadata']['resource_reference']['resource_ref'] == 'owg:r:account-safe'
+    assert 'prompt' not in row['metadata']
+    assert 'resolver_locator' not in row['metadata']['resource_reference']
+    assert 'pathname' not in row['metadata']['page']
+    assert 'EMAIL_' in row['window_title']
+    assert rich['privacy_representation']['level'] == 'hosted_redacted'
+    assert rich['evidence_contract']['metadata_preserved'] is False
+
+
+
+def test_workflow_evidence_projection_cannot_reveal_nested_poison_content():
+    from gateway.plugin_redaction import project
+    raw = {
+        'selector': {'family_key': 'human:test', 'selected_execution_count': 1},
+        'canonical_evidence': [{
+            'execution_id': 'execution:abc123def4567890',
+            'events': [{
+                'event_id': 'nested-1', 'observed_at': '2026-10-09T10:00:00+00:00',
+                'event_type': 'click', 'app': 'Browser',
+                'window_title': 'Email Anna Svensson <anna.svensson@customer.example>',
+                'metadata': {
+                    'prompt': 'my sensitive private agent prompt',
+                    'target': {'role': 'button', 'label': 'Open quote'},
+                },
+            }],
+        }],
+    }
+    for detail in ('compact', 'rich'):
+        projected = project(raw, secret='test-server-only-key', principal='user-a', detail=detail)
+        serialized = __import__('json').dumps(projected)
+        assert 'my sensitive private agent prompt' not in serialized
+        assert 'anna.svensson@customer.example' not in serialized
+        assert 'Anna Svensson' not in serialized
+        assert projected['canonical_evidence'][0]['events'][0]['event_id'] == 'nested-1'
+
+
+
+def test_default_compact_hosted_response_bounded_with_rich_opt_in(public_client):
+    from datetime import datetime, timedelta, timezone
+    client, mint = public_client
+    base = datetime.now(timezone.utc) - timedelta(minutes=14)
+    events = [{
+        'event_id': f'compact-{i:03d}',
+        'observed_at': (base + timedelta(seconds=i)).isoformat(),
+        'source': 'browser', 'event_type': 'click',
+        'app': 'Browser', 'window_title': 'Gmail compose customer quote',
+        'session_id': 'compact-session',
+        'metadata': {
+            'action': 'open', 'target': {'role': 'button', 'label': 'Open quote'},
+            'page': {'hostname': 'example.com', 'pathname': '/long/path'},
+            'irrelevant_blob': 'c' * 2000,
+            'click_count': 0, 'keypress_count': 0, 'scroll_count': 0,
+        },
+    } for i in range(114)]
+    _insert_personal_events(events)
+    compact = rpc(client, mint(), 'tools/call', {
+        'name': 'get_current_work_context', 'arguments': {},
+    })
+    assert compact.status_code == 200, compact.text
+    data = compact.json()['result']['structuredContent']
+    assert data['returned'] == 15
+    assert len(data['rows']) == 15
+    assert all('metadata' not in x for x in data['rows'])
+    assert all('irrelevant_blob' not in str(x) for x in data['rows'])
+    assert all('click_count' not in str(x) for x in data['rows'])
+    assert data['continuity_context']['coverage']['recent_rows_scanned'] == 114
+    assert len(__import__('json').dumps(data)) < 18000
+
+    compact_trace = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {},
+    })
+    trace_data = compact_trace.json()['result']['structuredContent']
+    assert trace_data['returned'] == 25
+    assert 'metadata' not in trace_data['rows'][0]
+    rich_trace = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {'detail': 'rich', 'limit': 25},
+    })
+    assert rich_trace.status_code == 200
+    rich_data = rich_trace.json()['result']['structuredContent']
+    assert rich_data['rows'][0]['metadata']['target']['label'] == 'Open quote'
+    assert 'irrelevant_blob' not in rich_trace.text
+    assert 'pathname' not in rich_trace.text
+    assert len(__import__('json').dumps(trace_data)) < len(__import__('json').dumps(rich_data))
+    # Tool names, pagination and canonical event identity are unchanged.
+    assert trace_data['has_more'] and trace_data['next_cursor']
+    assert [row['event_id'] for row in trace_data['rows']] == [
+        row['event_id'] for row in rich_data['rows']
+    ]
 
 
 

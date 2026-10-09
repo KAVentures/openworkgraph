@@ -28,7 +28,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait(url: str, process: subprocess.Popen) -> None:
+def _wait(url: str, process: subprocess.Popen, log_path: Path | None = None) -> None:
     deadline = time.time() + 15
     while time.time() < deadline:
         if process.poll() is not None:
@@ -39,7 +39,8 @@ def _wait(url: str, process: subprocess.Popen) -> None:
         except Exception:
             time.sleep(0.1)
     stdout, stderr = process.communicate(timeout=2) if process.poll() is not None else ("", "")
-    raise AssertionError(f"secure server did not become ready; stdout={stdout!r} stderr={stderr!r}")
+    logs = log_path.read_text(encoding="utf-8", errors="replace")[-2000:] if log_path and log_path.exists() else ""
+    raise AssertionError(f"secure server did not become ready; stdout={stdout!r} stderr={stderr!r} logs={logs!r}")
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -91,16 +92,21 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
         "WORKFLOW_OBSERVER_RUN_STARTED_AT": "2026-09-25T00:00:00+00:00",
         "PYTHONPATH": str(ROOT),
     })
+    # Uvicorn can fill an undrained Windows subprocess PIPE while an agent
+    # event sink issues additional HTTP calls. Redirect access logs to a file
+    # rather than blocking policy advisory/recheck requests mid-test.
+    server_log_path = tmp_path / "guard-uvicorn.log"
+    server_log = server_log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.secure_app:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
         text=True,
     )
     base = f"http://127.0.0.1:{port}"
-    _wait(base + "/health", process)
+    _wait(base + "/health", process, server_log_path)
 
     api_headers = {"Authorization": f"Bearer {api_token}"}
     agent_headers = {"Authorization": f"Bearer {agent_token}"}
@@ -145,7 +151,11 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
         monkeypatch.delenv("OWG_POLICY_GUARD_TOKEN", raising=False)
         monkeypatch.delenv("OWG_AGENT_INGEST_TOKEN", raising=False)
 
-        client = ActionPolicyClient(timeout=2)
+        # This is a real loopback subprocess integration test: Windows CI can
+        # occasionally pause the uvicorn worker while flushing agent events.
+        # Give each policy recheck the same headroom as the HTTP probes above.
+        # Never relax approval_gate's fail-closed policy on unavailability.
+        client = ActionPolicyClient(timeout=10)
         initial = client.advisory(family_key=FAMILY, proposed_step=DEPLOY)
         assert initial.approval_prerequisite_missing is True
         assert initial.policy_id == "change-control"
@@ -171,7 +181,7 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
             family_key=FAMILY,
             proposed_step=DEPLOY,
         )
-        assert result.executed is True
+        assert result.executed is True, result.decision.as_dict()
         assert result.decision.status == "approval_granted"
         assert result.decision.rechecked_advisory is not None
         assert result.decision.rechecked_advisory.approval_prerequisite_missing is False
@@ -201,3 +211,4 @@ def test_real_policy_guard_token_is_narrow_and_approval_gate_executes_only_after
         assert policy_file.read_bytes() == original_policy
     finally:
         _stop(process)
+        server_log.close()
