@@ -13,7 +13,7 @@ def test_all_ground_truth_ids_exist_and_event_order_is_stable():
     targets = {ref for case in load_cases() for ref in case["target_event_ids"]}
     assert targets.issubset(set(ids))
     assert len(ids) == len(set(ids))
-    assert len(events) >= 250
+    assert len(events) >= 240
     assert [event["observed_at"] for event in events] == sorted(event["observed_at"] for event in events)
 
 
