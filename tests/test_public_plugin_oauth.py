@@ -350,6 +350,51 @@ def test_evidence_graph_and_raw_trace_remain_actor_scoped(public_client):
 
 
 
+
+def test_continuity_graph_and_raw_trace_respect_gateway_retention(public_client):
+    from datetime import datetime, timedelta, timezone
+    from gateway.lifecycle import set_retention_policy
+    client, mint = public_client
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=5)
+    db = _insert_personal_events([
+        {
+            'event_id': 'expired-reference',
+            'observed_at': old.isoformat(), 'source': 'browser',
+            'event_type': 'navigate',
+            'metadata': {'resource_reference': {
+                'resource_ref': 'owg:r:retention-expired', 'provider': 'test',
+                'resource_kind': 'record',
+            }},
+        },
+        {
+            'event_id': 'retained-reference',
+            'observed_at': (now - timedelta(minutes=2)).isoformat(),
+            'source': 'browser', 'event_type': 'navigate',
+            'metadata': {'resource_reference': {
+                'resource_ref': 'owg:r:retention-visible', 'provider': 'test',
+                'resource_kind': 'record',
+            }},
+        },
+    ])
+    set_retention_policy(db, 'oauth-sub:test-person', 1)
+    current = rpc(client, mint(), 'tools/call', {
+        'name': 'get_current_work_context', 'arguments': {'limit': 10},
+    })
+    assert current.status_code == 200, current.text
+    data = current.json()['result']['structuredContent']
+    assert data['returned'] == 1
+    assert data['rows'][0]['event_id'] == 'retained-reference'
+    assert {r['resource_ref'] for r in data['continuity_context']['resources']} == {'owg:r:retention-visible'}
+    assert 'retention-expired' not in current.text
+    full = rpc(client, mint(), 'tools/call', {
+        'name': 'get_workflow_trace', 'arguments': {'limit': 10},
+    })
+    assert full.status_code == 200, full.text
+    assert [r['event_id'] for r in full.json()['result']['structuredContent']['rows']] == ['retained-reference']
+
+
+
 def test_invalid_signature_and_symmetric_tokens_rejected(public_client):
     client, mint = public_client
     token = mint()
