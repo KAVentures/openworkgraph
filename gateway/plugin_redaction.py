@@ -32,6 +32,9 @@ _META_PAGE = frozenset({"hostname"})
 _META_REFERENCE = frozenset({"resource_ref", "file_ref", "provider", "resource_kind", "host", "resolution"})
 _DROP_FIELDS = frozenset({
     "prompt", "prompt_text", "raw_prompt", "user_prompt", "system_prompt",
+    "raw_text", "raw_data", "raw_message", "message_body", "message_content",
+    "customer_email", "person_name", "user_input", "assistant_output",
+    "shared_context_terms",
     "messages", "message", "message_text", "content", "raw_content",
     "input", "input_text", "output", "output_text", "completion",
     "transcript", "tool_input", "tool_output", "tool_arguments",
@@ -121,7 +124,12 @@ class PublicRedactor:
             if value in (None, "", 0, False, [], {}):
                 continue
             result[key] = value if isinstance(value, (bool, int, float)) else (
-                str(value) if key in _IDS or key == "observed_at" else self.text(str(value))
+                self.text(str(value))
+                if key in {"event_id", "session_id"} and (
+                    len(str(value)) > 160 or "@" in str(value) or "/" in str(value)
+                )
+                else str(value) if key in _IDS or key == "observed_at"
+                else self.text(str(value))
             )
         meta = self.metadata(raw.get("metadata"))
         if detail == "rich":
