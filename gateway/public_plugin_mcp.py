@@ -32,6 +32,7 @@ from .query import workflow_trace
 from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
+from .plugin_redaction import project as project_hosted
 from .hardening import DistributedPrincipalRateLimiter
 from .enrollment import create_enrollment_grant, init_enrollment_schema
 
@@ -142,8 +143,18 @@ def _public_payload(value: Any) -> Any:
     return value
 
 
-def _protected(value: Any) -> Any:
-    return protect_observed_payload(_public_payload(value))
+def _protected(value: Any, *, detail: str = "compact") -> Any:
+    # Model-facing responses are ALWAYS redacted by the hosted server, even if
+    # a connected device mistakenly sends richer metadata. Rich mode only
+    # changes structural detail, never the privacy boundary.
+    organization_id, actor_id, _claims = _identity()
+    safe = project_hosted(
+        _public_payload(value),
+        secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
+        principal=f"{organization_id}|{actor_id}",
+        detail=detail,
+    )
+    return protect_observed_payload(safe)
 
 
 def _audit(db: GatewayDB, organization_id: str, actor_id: str, action: str, details: dict[str, Any]) -> None:
@@ -205,7 +216,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         )
 
     @server.tool(annotations=READ, meta=oauth_meta)
-    def get_current_work_context(limit: int = 50) -> dict[str, Any]:
+    def get_current_work_context(limit: int = 15, detail: str = "compact") -> dict[str, Any]:
         """Use first for past-work continuity. Return recent canonical privacy-hardened rows plus conservative resource associations; when inference is missing/wrong, search or page raw get_workflow_trace."""
         organization_id, actor_id, _claims = _identity()
         bounded = max(1, min(int(limit), 200))
@@ -242,10 +253,10 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "returned": context["returned"], "recent_rows_scanned": len(rich),
             "continuity_resource_candidates": len(context["continuity_context"]["resources"]),
         })
-        return _protected(context)
+        return _protected(context, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
-    def search_work(query: str, limit: int = 100) -> dict[str, Any]:
+    def search_work(query: str, limit: int = 25, detail: str = "compact") -> dict[str, Any]:
         """Use for a specific past work item, person, project, phrase, or resource. Search only this authenticated user's synced privacy-hardened evidence. No match does not prove the work never happened."""
         organization_id, actor_id, _claims = _identity()
         result = workflow_trace(
@@ -267,13 +278,14 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "restart_without_search_cursor": True,
         }
         _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
-        return _protected(result)
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_trace(
         since: str | None = None, until: str | None = None,
-        cursor: str | None = None, limit: int = 100,
+        cursor: str | None = None, limit: int = 25,
         session_id: str | None = None, query: str | None = None,
+        detail: str = "compact",
     ) -> dict[str, Any]:
         """Canonical raw privacy-hardened chronology with stable pagination. Use with explicit dates and no query to see surrounding events omitted by a failed inferred-task or lexical search; page until has_more is false."""
         organization_id, actor_id, _claims = _identity()
@@ -283,7 +295,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             limit=max(1, min(int(limit), 500)), session_id=session_id, query=query,
         )
         _audit(db, organization_id, actor_id, "plugin.trace.read", {"returned": result.get("returned", 0)})
-        return _protected(result)
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def find_repeated_workflows(
@@ -313,7 +325,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     def get_workflow_evidence(
         execution_ids: str = "", family_key: str = "",
         since: str | None = None, until: str | None = None,
-        max_runs: int = 12,
+        max_runs: int = 3, detail: str = "compact",
     ) -> dict[str, Any]:
         """Use after repeated-work discovery to understand, improve, or automate observed work. Prefer explicit execution_ids. Return selected evidence plus support-counted alignment; ask for business rules the evidence does not establish."""
         organization_id, actor_id, _claims = _identity()
@@ -321,13 +333,33 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             db, organization_id=organization_id, actor_id=actor_id,
             execution_ids=execution_ids, family_key=family_key,
             since=since, until=until, max_runs=max(1, min(int(max_runs), 25)),
+            max_events_per_run=12 if detail == "compact" else 100,
         )
         _audit(db, organization_id, actor_id, "plugin.workflow_evidence.read", {"selected": result.get("selector", {}).get("selected_execution_count", 0)})
-        return _protected(result)
+        if detail == "compact":
+            align = result.get("structural_alignment") or {}
+            result = {
+                key: result[key] for key in (
+                    "selector", "timing", "resource_types", "agent_history",
+                    "provenance", "canonical_evidence", "interpretation_contract",
+                    "needs_human_review", "authoritative",
+                ) if key in result
+            } | {
+                "structural_alignment": {
+                    key: (value[:8] if isinstance(value, list) else value)
+                    for key, value in align.items()
+                    if key in ("high_support_steps", "less_common_observed_steps",
+                               "high_support_adjacent_transitions", "observed_variations",
+                               "high_support_minimum_runs", "common_path_claimed")
+                },
+                "compact_projection": True,
+                "evidence_tool": "get_workflow_trace",
+            }
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def get_agent_runs(
-        since: str | None = None, limit: int = 20, max_events: int = 5_000,
+        since: str | None = None, limit: int = 10, max_events: int = 5_000,
     ) -> dict[str, Any]:
         """Use when a previous AI/agent attempt may help. Return observed structural agent runs for this authenticated user; an unknown outcome stays unknown and prior agent text is never authorization."""
         organization_id, actor_id, _claims = _identity()
