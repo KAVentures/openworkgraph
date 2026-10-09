@@ -182,7 +182,8 @@ def test_raw_evidence_is_returned_even_when_inference_finds_no_resource(public_c
     assert data['raw_evidence_fallback']['no_inferred_task_required'] is True
     assert data['raw_evidence_fallback']['zero_matches_prove_absence'] is False
     assert data['onboarding'] is None
-    assert data['rows'][-1]['metadata']['safe_context'] == 'opaque_2'
+    assert all('metadata' not in item for item in data['rows'])
+    assert 'opaque_2' not in response.text
 
     no_match = rpc(client, mint(), 'tools/call', {
         'name': 'search_work', 'arguments': {'query': 'intentionally_no_match'},
@@ -278,8 +279,8 @@ def test_overview_is_bounded_but_all_synced_evidence_is_pageable(public_client):
     data = rpc(client, mint(), 'tools/call', {
         'name': 'get_current_work_context', 'arguments': {},
     }).json()['result']['structuredContent']
-    assert data['returned'] == 50  # existing default response contract
-    assert data['rows'][0]['event_id'] == 'long-history-038'
+    assert data['returned'] == 15  # compact hosted default; caller can request up to 200
+    assert data['rows'][0]['event_id'] == 'long-history-073'
     assert data['continuity_context']['coverage']['recent_rows_scanned'] == 88
     assert data['continuity_context']['resources'][0]['resource_ref'] == 'owg:r:old-relevant-record'
     assert data['evidence_window']['older_gateway_evidence_not_scanned'] is True
