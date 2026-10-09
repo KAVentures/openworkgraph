@@ -189,6 +189,12 @@ def test_raw_evidence_is_returned_even_when_inference_finds_no_resource(public_c
     })
     assert no_match.status_code == 200
     assert no_match.json()['result']['structuredContent']['returned'] == 0
+    assert no_match.json()['result']['structuredContent']['raw_evidence_fallback']['omit_query_to_include_unmatched_events'] is True
+    repeated = rpc(client, mint(), 'tools/call', {
+        'name': 'find_repeated_workflows', 'arguments': {},
+    })
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()['result']['structuredContent']['raw_evidence_fallback']['no_inferred_family_required'] is True
 
     trace = rpc(client, mint(), 'tools/call', {
         'name': 'get_workflow_trace', 'arguments': {'limit': 10},
