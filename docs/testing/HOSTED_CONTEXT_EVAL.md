@@ -80,6 +80,29 @@ not a measured result):
 {"case_id":"named-renewal","client":"client-label","model":"model-version","trial":"1","harness_recorded":true,"tool_calls":[{"name":"search_work","arguments":{"query":"Acme renewal"},"event_ids":["evt-renewal-001"],"response_chars":1350},{"name":"get_workflow_trace","arguments":{"since":"2026-10-08T00:00:00Z","until":"2026-10-09T00:00:00Z"},"event_ids":["evt-renewal-001"],"response_chars":3500}]}
 ```
 
+An optional portable capture wrapper is included in
+`evals/hosted_context/instrumentation.py`. After a real client invokes MCP,
+record the returned tool payload (do not simulate the call) and append
+a JSONL row:
+
+```python
+from pathlib import Path
+from evals.hosted_context.instrumentation import MCPTraceRecorder
+
+rec = MCPTraceRecorder(case_id="named-renewal", client="ChatGPT",
+                       model="exact-observed-model-version", trial="1")
+# actual_tool_result comes from a real client MCP invocation on test data.
+rec.record(name="search_work", arguments={"query": "Acme renewal"},
+           response=actual_tool_result)
+rec.append_jsonl(Path("/tmp/owg-agent-eval-traces.jsonl"))
+```
+
+The recorder extracts event IDs only from **event-shaped rows**, strips the
+search phrase, cursor, URLs and arbitrary tool arguments, and saves only tool
+names, safe argument-presence flags, event IDs and response character counts.
+Do not persist raw MCP responses or personal user data as evaluation artifacts.
+The recorder cannot itself cause a model to call MCP; it observes a real call.
+
 Use **synthetic events with those exact event IDs**, not any actual customer's
 history, to construct each test tenant. Each `event_ids` list must be
 extracted from the actual MCP response by the independent harness, not
