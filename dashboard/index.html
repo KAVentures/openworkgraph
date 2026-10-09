@@ -146,10 +146,15 @@
 
     <section class="tabpanel" role="tabpanel" id="panel-connect" aria-labelledby="tab-connect" data-panel="connect" hidden>
       <div id="aiAccessPanel" class="card"><h2>AI access</h2><div class="muted">Checking secure local AI access…</div></div>
+      <div id="chatgptPersonalConnect" class="card">
+        <h2>Connect ChatGPT</h2>
+        <p class="muted">Sign in to your OWG account, then choose whether to share new privacy-hardened evidence with ChatGPT. Earlier history stays on this computer.</p>
+        <button type="button" onclick="openChatGPTPersonalLink()">Connect ChatGPT → Sign in to OWG</button>
+      </div>
       <div class="connect-grid">
         <div class="connect-card"><div class="tag">Local stdio MCP</div><h3>Cursor</h3><p>Add the running OpenWorkGraph connector through Cursor's native confirmation flow.</p><button onclick="connectCursor()">Add to Cursor</button></div>
         <div class="connect-card"><div class="tag">Local stdio MCP</div><h3>Claude Desktop</h3><p>Use Claude Desktop's local MCP support. AI access remains checked live on every tool call.</p><button class="secondary" onclick="openConnect('claude')">Connect Claude</button></div>
-        <div class="connect-card"><div class="tag">On-demand HTTP MCP</div><h3>ChatGPT</h3><p>Start a temporary authenticated HTTP bridge only when your ChatGPT setup requires it.</p><button class="secondary" onclick="openConnect('chatgpt')">Set up ChatGPT</button></div>
+        <div class="connect-card"><div class="tag">Advanced</div><h3>Local HTTP bridge</h3><p>Use a temporary authenticated bridge for a compatible client that requires HTTP MCP.</p><button class="secondary" onclick="openConnect('chatgpt')">Bridge details</button></div>
         <div class="connect-card"><div class="tag">Any compatible client</div><h3>Other MCP app</h3><p>Prefer stdio for local clients; use the authenticated HTTP bridge only when necessary.</p><button class="secondary" onclick="openConnect('other')">Connection details</button></div>
       </div>
     </section>
