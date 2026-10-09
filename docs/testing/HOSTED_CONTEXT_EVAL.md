@@ -46,7 +46,24 @@ tokens or private event payloads. A correct unauthenticated `401` is
 ## Model-in-the-loop benchmark
 
 The source of truth is `evals/hosted_context/cases.json` (22 synthetic
-intent scenarios, including six negative controls). These prompts must be
+intent scenarios, including six negative controls) together with
+`evals/hosted_context/fixtures.py` (a deterministic, PII-free synthetic
+chronology with an older relevant event, more than 200 later distractions,
+interleaved unrelated records and repeated-work examples).
+Generate fixture events with:
+
+```bash
+python -m evals.hosted_context.fixtures --out /tmp/owg-synthetic-evidence.jsonl
+```
+
+Load those events into a **disposable, isolated Gateway** test tenant, through
+its normal authenticated enrollment/ingestion path. Do NOT seed the actual
+production customer tenant, and do NOT bypass Gateway organization policy
+to share agent runs. If an agent run is needed in the test, enable structural
+agent sharing only for an explicitly consenting **test** identity and turn
+it back off after the test. An empty-Gateway scenario needs a separate test
+tenant with no events.
+The model prompts must be
 presented **without naming the expected tools**. Test at least two distinct
 MCP-capable clients/models and ideally multiple independent trials each.
 Record exact product/model versions, app visibility, system tool catalog,
