@@ -147,9 +147,9 @@
     <section class="tabpanel" role="tabpanel" id="panel-connect" aria-labelledby="tab-connect" data-panel="connect" hidden>
       <div id="aiAccessPanel" class="card"><h2>AI access</h2><div class="muted">Checking secure local AI access…</div></div>
       <div id="chatgptPersonalConnect" class="card">
-        <h2>Connect ChatGPT</h2>
-        <p class="muted">Sign in to your OWG account, then choose whether to share new privacy-hardened evidence with ChatGPT. Earlier history stays on this computer.</p>
-        <button type="button" onclick="openChatGPTPersonalLink()">Connect ChatGPT → Sign in to OWG</button>
+        <h2>ChatGPT cloud sharing <span class="muted">(optional)</span></h2>
+        <p class="muted">OpenWorkGraph works locally without an account. If you connected the ChatGPT plugin first, link this computer using the same OWG account. Sharing starts only after you approve it and includes new privacy-hardened evidence; earlier history remains local. Other AI connections and exports work independently below.</p>
+        <button type="button" onclick="openChatGPTPersonalLink()">Link this computer to ChatGPT →</button>
       </div>
       <div class="connect-grid">
         <div class="connect-card"><div class="tag">Local stdio MCP</div><h3>Cursor</h3><p>Add the running OpenWorkGraph connector through Cursor's native confirmation flow.</p><button onclick="connectCursor()">Add to Cursor</button></div>
