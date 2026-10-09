@@ -37,11 +37,11 @@ def config_snippet(*, token: str, base_url: str | None = None) -> str:
     exporter = _exporter(endpoint, authorization)
     return "\n".join([
         "[otel]",
-        # Keep every Codex content-bearing opt-in disabled. Structural business
-        # events still export and are then strict-allowlisted again server-side.
+        # These keys are supported by older Codex desktop builds too. Newer
+        # response/Guardian content opt-ins default to false; emitting even false
+        # values for them causes unrecognized-setting warnings on older builds.
+        # Structural events are strict-allowlisted again server-side.
         "log_user_prompt = false",
-        "log_agent_responses = false",
-        "log_guardian_assessments = false",
         f"exporter = {exporter}",
         f"trace_exporter = {exporter}",
     ])

@@ -203,7 +203,7 @@ Some Codex builds have emitted tracing call-site names in `event.name` rather th
 
 **Connect → Codex** appends a clearly marked managed `[otel]` block to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) after writing a backup. If the file already has its own `[otel]` settings or invalid TOML, OWG changes nothing and requests manual merge. Disconnect removes only the managed block.
 
-The generated configuration explicitly keeps prompt, agent-response and guardian-rationale logging disabled while pointing both the structural log exporter and trace exporter at the same local write-only endpoint:
+The generated configuration explicitly sets `log_user_prompt = false` and points both the structural log exporter and trace exporter at the same local write-only endpoint. It omits `log_agent_responses` and `log_guardian_assessments`: those optional settings default to false in newer Codex releases, while older desktop builds reject them as unrecognized. Existing OWG blocks containing those keys are detected as needing repair; reconnecting Codex backs up and replaces only the managed block, preserving unrelated user configuration:
 
 ```text
 POST /agent-ingest/v1/codex-otel

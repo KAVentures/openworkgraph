@@ -111,8 +111,8 @@ def test_codex_fragment_exports_structural_logs_and_traces_but_no_content_opt_in
     assert parsed["exporter"]["otlp-http"]["endpoint"].endswith("/agent-ingest/v1/codex-otel")
     assert parsed["trace_exporter"]["otlp-http"]["endpoint"].endswith("/agent-ingest/v1/codex-otel")
     assert parsed["log_user_prompt"] is False
-    assert parsed["log_agent_responses"] is False
-    assert parsed["log_guardian_assessments"] is False
+    assert "log_agent_responses" not in parsed
+    assert "log_guardian_assessments" not in parsed
 
 
 def test_codex_trace_only_owg_block_is_detected_as_partial_and_upgraded(codex_file):
@@ -140,3 +140,27 @@ def test_codex_trace_only_owg_block_is_detected_as_partial_and_upgraded(codex_fi
     assert after["partial_configured"] is False
     parsed = tomllib.loads(codex_file.read_text())["otel"]
     assert "exporter" in parsed and "trace_exporter" in parsed
+
+
+def test_codex_reconnect_repairs_unsupported_keys_and_preserves_user_config(codex_file):
+    original = 'model = "existing-model"\n# Keep my custom configuration\n[mcp_servers.other]\ncommand = "existing-command"\n'
+    snippet = config_snippet(token="test-token", base_url="http://127.0.0.1:8787")
+    legacy = snippet.replace('log_user_prompt = false',
+                             'log_user_prompt = false\nlog_agent_responses = false\nlog_guardian_assessments = false')
+    codex_file.parent.mkdir(parents=True)
+    before = original + '\n' + writer.CODEX_BLOCK_START + '\n' + legacy + '\n' + writer.CODEX_BLOCK_END + '\n'
+    codex_file.write_text(before)
+    codex_file.chmod(0o600)
+    assert writer.codex_status()["partial_configured"] is True
+    result = writer.codex_connect(snippet)
+    assert Path(result['backup']).read_text() == before
+    after = codex_file.read_text()
+    assert after.startswith(original)
+    parsed = tomllib.loads(after)
+    assert parsed['model'] == 'existing-model'
+    assert parsed['mcp_servers']['other']['command'] == 'existing-command'
+    assert set(parsed['otel']) == {'log_user_prompt', 'exporter', 'trace_exporter'}
+    assert parsed['otel']['log_user_prompt'] is False
+    assert writer.codex_status()["configured"] is True
+    writer.codex_disconnect()
+    assert codex_file.read_text() == original

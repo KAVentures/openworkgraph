@@ -411,8 +411,9 @@ def codex_status() -> dict[str, Any]:
         and "exporter" in otel
         and "trace_exporter" in otel
         and otel.get("log_user_prompt") is False
-        and otel.get("log_agent_responses") is False
-        and otel.get("log_guardian_assessments") is False
+        # Reconnect upgrades old OWG blocks that caused warnings in Codex.
+        and "log_agent_responses" not in otel
+        and "log_guardian_assessments" not in otel
     )
     return {"configured": bool(rich), "partial_configured": not bool(rich), "path": str(path)}
 
