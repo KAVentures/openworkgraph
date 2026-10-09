@@ -60,8 +60,8 @@ codex=payload['integrations']['codex']['config']
 assert '/agent-ingest/v1/codex-otel' in codex
 assert f'Bearer {token}' in codex
 assert 'log_user_prompt = false' in codex
-assert 'log_agent_responses = false' in codex
-assert 'log_guardian_assessments = false' in codex
+assert 'log_agent_responses' not in codex
+assert 'log_guardian_assessments' not in codex
 assert 'log_exporter' not in codex
 
 otel=payload['integrations']['otel']
