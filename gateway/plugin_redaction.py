@@ -163,7 +163,13 @@ class PublicRedactor:
                         result[name] = child
                     continue
                 safe = self.visit(child, detail=detail, key=name)
-                if safe not in (None, "", [], {}):
+                if safe not in (None, "", [], {}) or name in {
+                    "onboarding", "rows", "next_cursor", "resources",
+                    "agent_runs", "resource_relations", "resource_agent_relations",
+                    "candidates", "executions", "canonical_evidence",
+                }:
+                    # Public MCP compatibility: an empty array / null cursor
+                    # is meaningful and must never disappear on projection.
                     result[name] = safe
             return result
         if isinstance(value, list):
