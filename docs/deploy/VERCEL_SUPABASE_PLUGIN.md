@@ -72,8 +72,54 @@ The Gateway hostname is not the ChatGPT MCP URL.
 8. Verify only post-enrollment privacy-hardened evidence syncs by default.
 9. Ask ChatGPT continuity, search, chronology, repeated-work, and previous-agent prompts against real synced evidence.
 10. Review Vercel and Gateway audit logs for identity leakage or unexpected writes.
+11. Verify refresh-token renewal after the first access token expires; `offline_access` support depends on the deployed Supabase OAuth release and discovery metadata. Do not advertise unsupported scopes or bypass token checks to fix expiry.
+12. Retest standalone desktop, local-only storage, local MCP/stdin, export, demo mode, automatic startup and packaged launch after any hosted plugin changes.
 
 Do not submit publicly until the real OAuth/device-link/sync/read path passes end-to-end.
+
+## Distribution channels (independent, additive)
+
+**The desktop OpenWorkGraph product is not a ChatGPT plugin dependency.**
+These are independent supported entry points:
+
+- **Standalone macOS/Windows:** the packaged, eventually signed/notarized native
+  application starts and observes locally, with its own UI, local SQLite, exports,
+  local MCP/agent integrations and optional browser extension. It needs neither an
+  OWG cloud account nor ChatGPT. Existing install/start-at-login/update behavior,
+  AI access defaults, and consent settings must not change for plugin support.
+- **Bring-your-own AI/agent:** existing local MCP stdio, direct supported client
+  connections, REST and file export stay available. A future simplified handoff
+  should reuse these established interfaces rather than routing all users through
+  the public plugin or requiring cloud data upload.
+- **ChatGPT hosted app:** an *optional* read-only remote consumer of selectively
+  synchronized Gateway evidence. A user can authenticate in ChatGPT first,
+  before installing a recorder, and receive an explicit no-evidence onboarding
+  hint. Signing in never starts recording, uploads local history, or enrolls a
+  device. The desktop Connect ChatGPT action is an optional pairing method, not a
+  prerequisite to a standalone installation.
+
+For the hosted app, only the HTTPS MCP endpoint is needed by ChatGPT; the desktop
+installer is a separate user-approved OS operation. The remote MCP service cannot
+silently install macOS/Windows software or grant Accessibility/Input Monitoring.
+If the user chooses to link a recorder, explicitly confirm forward-only evidence
+sharing and use the existing enrollment boundary. Previously recorded evidence
+remains local unless the user takes another explicitly authorized action.
+
+**Regression scope for every hosted-integration change:** verify installers,
+autostart, local-only use with no account/network, local stdio MCP, exports,
+AI-access/Observe separation, demo mode, existing enterprise Gateway enrollment,
+and the optional personal OAuth flow. Public MCP changes should be isolated to
+`gateway/public_plugin_mcp.py` and should not alter local collectors or local
+MCP auth/transport defaults.
+
+## Public OAuth metadata compatibility
+
+Expose the same canonical protected-resource metadata at both
+`/.well-known/oauth-protected-resource/mcp` (RFC 9728 for the `/mcp` resource)
+and `/.well-known/oauth-protected-resource` (host-root fallback for clients).
+Both report `https://mcp.owg.kinvectum.com/mcp` as the **same** resource ID and
+the same Supabase issuer. The additional endpoint is read-only discovery, not
+a second OAuth service, token issuer, data store, or access bypass.
 
 ## Personal desktop linking
 

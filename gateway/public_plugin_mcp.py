@@ -226,6 +226,19 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "data_layer": "gateway_synced_privacy_hardened_evidence",
             "local_evidence_may_be_richer": True,
             "authoritative": False,
+            "onboarding": ({
+                "status": "no_synced_evidence",
+                "desktop_recorder_optional": True,
+                "desktop_install_url": "https://owg.kinvectum.com/#install",
+                "standalone_local_use_available": True,
+                "history_shared_automatically": False,
+                "note": (
+                    "ChatGPT is connected but no OpenWorkGraph evidence has been synced. "
+                    "Installing the local recorder is optional, and standalone local AI/export "
+                    "use remains available. Device linking and sharing new evidence require "
+                    "separate, explicit user approval."
+                ),
+            } if not rich else None),
         })
 
     @server.tool(annotations=READ, meta=oauth_meta)
@@ -381,6 +394,27 @@ class PersonalLinkEndpoint:
         })(scope, receive, send)
 
 
+class ProtectedResourceMetadataAlias:
+    """Offer the host-root discovery alias without changing the MCP resource ID.
+
+    RFC 9728 defines /mcp-specific discovery, while some clients also probe the
+    host-root location. Forward only GET to the SDK's existing authenticated
+    resource-metadata route so both publish the same canonical document.
+    This wrapper is exclusively part of the public plugin ASGI stack.
+    """
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if (scope.get("type") == "http" and scope.get("method") == "GET"
+                and scope.get("path") == "/.well-known/oauth-protected-resource"):
+            scope = dict(scope)
+            scope["path"] = "/.well-known/oauth-protected-resource/mcp"
+            scope["raw_path"] = b"/.well-known/oauth-protected-resource/mcp"
+        await self.app(scope, receive, send)
+
+
 class DomainChallenge:
     def __init__(self, app: Any, token: str):
         self.app = app
@@ -464,7 +498,7 @@ def create_app():
     linked = PersonalLinkEndpoint(inner, db=db, verifier=verifier)
     limit = int(os.getenv("OWG_PLUGIN_RATE_LIMIT_PER_MINUTE", "120"))
     limited = PublicPluginRateLimit(linked, verifier=verifier, db=db, limit_per_minute=limit)
-    return DomainChallenge(limited, os.getenv("OWG_PLUGIN_DOMAIN_CHALLENGE", "").strip())
+    return DomainChallenge(ProtectedResourceMetadataAlias(limited), os.getenv("OWG_PLUGIN_DOMAIN_CHALLENGE", "").strip())
 
 
 if __name__ == "__main__":
