@@ -422,6 +422,13 @@ jobs:
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
 
+          ### v0.123: personal ChatGPT connection
+
+          - **Find it under Connect AI:** the desktop dashboard provides a direct ChatGPT sign-in action.
+          - **Explicit local approval:** signing in does not share evidence; the user separately confirms forward-only sharing of privacy-hardened new evidence.
+          - **Read-only remote MCP:** the OAuth-protected service reads only evidence available to the signed-in OWG identity, while local MCP connections remain available.
+          - **Other changes since v0.122:** this release also includes the repository's continuity and integration improvements accumulated since the previous downloadable package.
+
           ### v0.122: enterprise productization and simpler browser setup
 
           - **Enterprise Deployment Kit:** release assets now include repeatable Jamf/Intune scripts, managed enrollment templates, browser policy templates, fleet acceptance checks and Gateway health tooling.

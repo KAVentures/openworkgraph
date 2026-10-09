@@ -1,5 +1,16 @@
 # OpenWorkGraph changelog
 
+# OpenWorkGraph v0.123.0
+
+This release makes the personal ChatGPT connection available in the downloadable desktop app.
+
+- **Visible ChatGPT setup:** Connect AI shows a direct sign-in action instead of hiding ChatGPT under advanced connection options.
+- **Separate sharing approval:** OWG signs the desktop app in using OAuth, then asks the user to explicitly start sharing privacy-hardened new evidence. Earlier local history is not uploaded by this flow.
+- **Remote evidence connection:** the OAuth-protected, read-only MCP service exposes evidence already available to the signed-in OWG identity. Local MCP clients continue to use the local connection.
+- **Continuity and integration work:** this package also includes the repository changes since v0.122.0, including work-continuity tools and agent connection updates.
+
+---
+
 # OpenWorkGraph v0.122.0
 
 This release focuses on making OpenWorkGraph deployable and supportable rather than adding new workflow analytics.
