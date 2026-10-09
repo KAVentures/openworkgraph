@@ -5,7 +5,7 @@
     {
       "id": "recent-continuity",
       "family": "recent",
-      "prompt": "What work was I doing before lunch?",
+      "prompt": "What work was I doing before lunch on October 9, 2026?",
       "requires_owg": true,
       "initial_tool_any": [
         "get_current_work_context"
@@ -33,7 +33,7 @@
     {
       "id": "named-renewal",
       "family": "named",
-      "prompt": "Continue the Acme renewal from yesterday, using evidence to identify the live records.",
+      "prompt": "Continue the Acme renewal from October 8, 2026, using evidence to identify the live records.",
       "requires_owg": true,
       "initial_tool_any": [
         "search_work",
@@ -66,7 +66,7 @@
     {
       "id": "no-lexical-match",
       "family": "false_negative",
-      "prompt": "The search for the special request returned no matches. What did I do around 10 AM?",
+      "prompt": "The search for the special request returned no matches. What did I do around 10 AM UTC on October 9, 2026?",
       "requires_owg": true,
       "initial_tool_any": [
         "get_workflow_trace"
@@ -100,7 +100,7 @@
     {
       "id": "older-history",
       "family": "coverage",
-      "prompt": "Investigate the customer onboarding work from six weeks ago, beyond recent events.",
+      "prompt": "Investigate the customer onboarding work from August 27, 2026, well beyond recent events.",
       "requires_owg": true,
       "initial_tool_any": [
         "get_workflow_trace",
@@ -117,7 +117,7 @@
     {
       "id": "many-events",
       "family": "coverage",
-      "prompt": "Review all captured activity for last Tuesday and tell me if any steps were omitted.",
+      "prompt": "Review all captured activity on Tuesday, October 6, 2026 and tell me if any steps were omitted.",
       "requires_owg": true,
       "initial_tool_any": [
         "get_workflow_trace"
