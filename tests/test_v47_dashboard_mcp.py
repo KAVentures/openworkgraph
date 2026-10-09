@@ -100,7 +100,10 @@ def test_dashboard_data_first_layout_keeps_required_observer_controls():
     assert "Connect AI" in html
     assert "Add to Cursor" in html
     assert "Connect Claude" in html
-    assert "Set up ChatGPT" in html
+    assert 'id="chatgptPersonalConnect"' in html
+    assert 'onclick="openChatGPTPersonalLink()"' in html
+    assert html.index('id="chatgptPersonalConnect"') < html.index('class="connect-grid"')
+    assert "window.openChatGPTPersonalLink = function()" in _read("dashboard/gateway_panel.js")
     assert "Other MCP app" in html
     assert "See how work actually happens" not in html
 
