@@ -30,6 +30,8 @@ test('personal sign-in requires a separate sharing click', async () => {
   const d = dashboard();
   d.window.openChatGPTPersonalLink();
   assert.equal(d.requests.length, 0);
+  assert.match(d.modals[0][2], /Sign-in alone does not upload evidence/);
+  assert.match(d.modals[0][2], /standalone AI use/);
   await d.nodes.get('#personalLinkStart').onclick();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(d.popup.opener, null);
@@ -39,6 +41,7 @@ test('personal sign-in requires a separate sharing click', async () => {
   await d.nodes.get('#personalLinkStart').onclick();
   assert.ok(d.requests.some(r => r[0] === '/v1/chatgpt-link/complete'));
   assert.match(d.modals.at(-1)[2], /https:\/\/mcp\.owg\.kinvectum\.com\/mcp/);
+  assert.match(d.modals.at(-1)[2], /If you already connected the OpenWorkGraph plugin in ChatGPT/);
 });
 
 test('cancel does not enroll or change capture preferences', async () => {

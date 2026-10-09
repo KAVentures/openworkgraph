@@ -107,7 +107,7 @@ def test_disconnected_chatgpt_has_optional_onboarding_without_device_enrollment(
     assert result['onboarding']['desktop_recorder_optional'] is True
     assert result['onboarding']['standalone_local_use_available'] is True
     assert result['onboarding']['history_shared_automatically'] is False
-    assert result['onboarding']['desktop_install_url'].startswith('https://')
+    assert result['onboarding']['desktop_install_url'] == 'https://owg.kinvectum.com/connect'
     assert 'enrollment_token' not in response.text
 
 

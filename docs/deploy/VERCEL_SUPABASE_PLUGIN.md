@@ -112,6 +112,38 @@ and the optional personal OAuth flow. Public MCP changes should be isolated to
 `gateway/public_plugin_mcp.py` and should not alter local collectors or local
 MCP auth/transport defaults.
 
+## Optional hosted setup page
+
+The public MCP `get_current_work_context` tool can return a *no-evidence*
+onboarding link to `https://owg.kinvectum.com/connect`. This page is an
+ordinary public informational page (no tokens, no client-side access to
+`localhost`, no automatic installation). It offers the normal macOS/Windows
+signed-installer targets and an independent local-only/bring-your-own-AI path.
+It **must** be deployed from the website repository before relying on the
+new URL in the MCP response.
+
+For an installed desktop app that was launched through its own authenticated
+dashboard, `/?setup=chatgpt` selects the **Connect AI** tab. The query string
+is a navigation hint only; it must not start OAuth, enable Observe, grant local
+AI access, pair a device, or share data. A public website cannot mint the
+dashboard's local session capability, so do not implement direct cross-origin
+localhost auth or promise that clicking a website link can launch an unsigned
+native installer. Keep the existing native launcher/dashboard bootstrap intact.
+
+Suggested rollout checks:
+1. Standalone home and both desktop download buttons still work without login.
+2. `/connect` is reachable over HTTPS on the public website and clearly
+   labels ChatGPT cloud sharing as optional.
+3. A normal local dashboard launch still opens the last-used tab; using
+   `?setup=chatgpt` only selects Connect AI, with no network enrollment.
+4. With zero Gateway evidence, ChatGPT can return the onboarding link, while
+   an authenticated tool request still cannot enroll or read other users.
+5. Existing local-only installs, exports, local MCP clients, browser sensor,
+   organization Gateway, and desktop session bootstrap remain unchanged.
+6. Do not claim a full ChatGPT-to-device end-to-end success until a human
+   tests the ChatGPT OAuth flow and a consentful device enrollment against
+   deployed production services.
+
 ## Public OAuth metadata compatibility
 
 Expose the same canonical protected-resource metadata at both

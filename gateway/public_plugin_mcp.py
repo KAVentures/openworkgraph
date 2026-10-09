@@ -229,7 +229,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "onboarding": ({
                 "status": "no_synced_evidence",
                 "desktop_recorder_optional": True,
-                "desktop_install_url": "https://owg.kinvectum.com/#install",
+                "desktop_install_url": "https://owg.kinvectum.com/connect",
                 "standalone_local_use_available": True,
                 "history_shared_automatically": False,
                 "note": (
