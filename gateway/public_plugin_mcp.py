@@ -254,6 +254,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         )
         result["query"] = query
         result["local_evidence_may_be_richer"] = True
+        result["retrieval_notice"] = (
+            "This is a lexical match over synced privacy-hardened evidence, not "
+            "a complete semantic search. Zero matches do not prove absence; "
+            "matched rows omit surrounding events. For relevant dates, use "
+            "get_workflow_trace without query and page the canonical chronology."
+        )
+        result["raw_evidence_fallback"] = {
+            "tool": "get_workflow_trace",
+            "use_since_until": True,
+            "omit_query_to_include_unmatched_events": True,
+            "restart_without_search_cursor": True,
+        }
         _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
         return _protected(result)
 
@@ -285,6 +297,15 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             since=since, until=until, min_runs=max(2, min(int(min_runs), 25)),
             limit=max(1, min(int(limit), 100)),
         )
+        result["raw_evidence_fallback"] = {
+            "tool": "get_workflow_trace",
+            "reason": (
+                "Derived workflow candidates are incomplete navigation hints. "
+                "Zero clusters never prove no repeated or relevant work occurred. "
+                "Inspect unfiltered, paginated canonical evidence for the requested date window."
+            ),
+            "no_inferred_family_required": True,
+        }
         _audit(db, organization_id, actor_id, "plugin.repeated_work.read", {"returned": len(result.get("candidate_clusters") or [])})
         return _protected(result)
 
