@@ -128,6 +128,40 @@ See [Experimental governance surfaces](EXPERIMENTAL_GOVERNANCE.md).
 
 For clients that cannot start a local stdio server, OpenWorkGraph can explicitly start an authenticated loopback HTTP MCP endpoint on demand. New HTTP bridges expose the same compact MCP tool surface. The endpoint is not the company Gateway and should not be exposed directly to the public internet.
 
+## Hosted MCP PII boundary and compact delivery
+
+The public OAuth-protected MCP is a separate **redacted projection** of the
+stored Gateway evidence. Prompt-injection suppression alone is not a PII
+filter. The server projects every work tool output through a typed person,
+email, phone, Swedish ID and credential redactor and only exposes known
+structural metadata fields. Unknown metadata, arbitrary agent prompts, tool
+input/output, raw URLs/pathnames and resolver locators are withheld even for
+`detail=rich`. No model-visible tool can request the original unrestricted
+stored metadata. These protections also apply to evidence already ingested
+before the fix; they do not alter the local database or the Gateway database.
+
+The projection is deliberately conservative and **not a guarantee of perfect
+PII detection**. Privacy-sensitive deployments should validate additional
+payload shapes and enforce upload-side policy, especially when enabling
+optional agent-event sharing. Users wanting sensitive source content should
+access it through its separately authorized source connector rather than
+expanding OWG's public event metadata.
+
+Defaults for the hosted tools favor bounded orientation over massive dumps:
+`get_current_work_context(limit=15, detail="compact")`,
+`get_workflow_trace(limit=25, detail="compact")` and
+`search_work(query, limit=25, detail="compact")`. Explicit
+`detail="rich"` returns more *structural, redacted* context, not raw
+customer/agent text; `get_workflow_trace` retains full date-scoped pagination
+of recorded **events** regardless of inferred task identity. The workflow
+evidence tool defaults to three runs and 12 structural events per run; rich
+mode restores its larger structural bundle under the same redaction.
+
+Stable event IDs, timestamps, observed app/activity and opaque resource
+references remain available, so AI can inspect the actual chronology and
+resolve current business content through source connectors. Compact rows omit
+repeated zero counters and duplicate target/page metadata.
+
 ## Hosted ChatGPT: evidence-first continuity, not inference-only retrieval
 
 The optional OAuth-protected public MCP at `https://mcp.owg.kinvectum.com/mcp`
