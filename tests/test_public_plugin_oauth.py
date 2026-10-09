@@ -73,6 +73,44 @@ def test_unauthenticated_requests_rejected(public_client):
     assert 'oauth-protected-resource' in response.headers['www-authenticate']
 
 
+
+def test_both_public_metadata_discovery_locations_return_same_document(public_client):
+    client, _mint = public_client
+    canonical = client.get('/.well-known/oauth-protected-resource/mcp')
+    root_alias = client.get('/.well-known/oauth-protected-resource')
+    assert canonical.status_code == 200, canonical.text
+    assert root_alias.status_code == 200, root_alias.text
+    assert canonical.headers['content-type'].startswith('application/json')
+    assert root_alias.json() == canonical.json()
+    metadata = root_alias.json()
+    assert metadata['resource'] == 'https://mcp.owg.kinvectum.com/mcp'
+    assert metadata['authorization_servers'] == ['https://example.supabase.co/auth/v1']
+    assert 'openid' in metadata['scopes_supported']
+    challenge = rpc(client, None, 'tools/list')
+    assert challenge.status_code == 401
+    assert 'resource_metadata=' in challenge.headers['www-authenticate']
+    # Metadata is public; credentials and history remain behind OAuth.
+    assert 'test-person' not in root_alias.text
+    assert client.post('/.well-known/oauth-protected-resource').status_code != 200
+
+
+def test_disconnected_chatgpt_has_optional_onboarding_without_device_enrollment(public_client):
+    client, mint = public_client
+    response = rpc(client, mint(), 'tools/call', {
+        'name': 'get_current_work_context', 'arguments': {},
+    })
+    assert response.status_code == 200, response.text
+    result = response.json()['result']['structuredContent']
+    assert result['returned'] == 0
+    assert result['orientation']['recent_canonical_evidence_available'] is False
+    assert result['onboarding']['status'] == 'no_synced_evidence'
+    assert result['onboarding']['desktop_recorder_optional'] is True
+    assert result['onboarding']['standalone_local_use_available'] is True
+    assert result['onboarding']['history_shared_automatically'] is False
+    assert result['onboarding']['desktop_install_url'].startswith('https://')
+    assert 'enrollment_token' not in response.text
+
+
 def test_public_host_guard_remains_enabled(public_client):
     client, mint = public_client
     response = client.post('/mcp', headers={
@@ -98,6 +136,7 @@ def test_agent_orientation_uses_canonical_fields(public_client, source, event_ty
     response = rpc(client, mint(), 'tools/call', {'name': 'get_current_work_context', 'arguments': {}})
     assert response.status_code == 200, response.text
     assert response.json()['result']['structuredContent']['orientation']['nearby_agent_runs_available'] is expected
+    assert response.json()['result']['structuredContent']['onboarding'] is None
 
 
 def test_invalid_signature_and_symmetric_tokens_rejected(public_client):
