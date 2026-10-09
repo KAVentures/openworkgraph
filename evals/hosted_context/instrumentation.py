@@ -21,7 +21,9 @@ def _ids_from(value: Any) -> set[str]:
     def visit(item: Any) -> None:
         if isinstance(item, dict):
             for key, child in item.items():
-                if key == "event_id" and isinstance(child, str):
+                if key == "event_id" and isinstance(child, str) and "observed_at" in item and "event_type" in item:
+                    # A string under arbitrary metadata is not evidence. Only
+                    # event-shaped rows actually returned by MCP count.
                     found.add(child)
                 elif key in ("rows", "canonical_evidence", "events", "result", "structuredContent", "content"):
                     visit(child)
