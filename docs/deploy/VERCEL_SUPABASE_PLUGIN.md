@@ -72,6 +72,8 @@ The Gateway hostname is not the ChatGPT MCP URL.
 8. Verify only post-enrollment privacy-hardened evidence syncs by default.
 9. Ask ChatGPT continuity, search, chronology, repeated-work, and previous-agent prompts against real synced evidence.
 10. Review Vercel and Gateway audit logs for identity leakage or unexpected writes.
+11. Verify refresh-token renewal after the first access token expires; `offline_access` support depends on the deployed Supabase OAuth release and discovery metadata. Do not advertise unsupported scopes or bypass token checks to fix expiry.
+12. Retest standalone desktop, local-only storage, local MCP/stdin, export, demo mode, automatic startup and packaged launch after any hosted plugin changes.
 
 Do not submit publicly until the real OAuth/device-link/sync/read path passes end-to-end.
 
