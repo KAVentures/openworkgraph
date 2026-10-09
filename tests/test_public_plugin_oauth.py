@@ -435,7 +435,6 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
         ('get_workflow_trace', {'detail': 'rich'}),
         ('get_agent_runs', {}),
         ('find_repeated_workflows', {}),
-        ('get_workflow_evidence', {'detail': 'rich'}),
     ]
     for tool, args in calls:
         response = rpc(client, mint(), 'tools/call', {'name': tool, 'arguments': args})
@@ -459,6 +458,34 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
     assert 'EMAIL_' in row['window_title']
     assert rich['privacy_representation']['level'] == 'hosted_redacted'
     assert rich['evidence_contract']['metadata_preserved'] is False
+
+
+
+def test_workflow_evidence_projection_cannot_reveal_nested_poison_content():
+    from gateway.plugin_redaction import project
+    raw = {
+        'selector': {'family_key': 'human:test', 'selected_execution_count': 1},
+        'canonical_evidence': [{
+            'execution_id': 'execution:abc123def4567890',
+            'events': [{
+                'event_id': 'nested-1', 'observed_at': '2026-10-09T10:00:00+00:00',
+                'event_type': 'click', 'app': 'Browser',
+                'window_title': 'Email Anna Svensson <anna.svensson@customer.example>',
+                'metadata': {
+                    'prompt': 'my sensitive private agent prompt',
+                    'target': {'role': 'button', 'label': 'Open quote'},
+                },
+            }],
+        }],
+    }
+    for detail in ('compact', 'rich'):
+        projected = project(raw, secret='test-server-only-key', principal='user-a', detail=detail)
+        serialized = __import__('json').dumps(projected)
+        assert 'my sensitive private agent prompt' not in serialized
+        assert 'anna.svensson@customer.example' not in serialized
+        assert 'Anna Svensson' not in serialized
+        assert projected['canonical_evidence'][0]['events'][0]['event_id'] == 'nested-1'
+
 
 
 def test_default_compact_hosted_response_bounded_with_rich_opt_in(public_client):
