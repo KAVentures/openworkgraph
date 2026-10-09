@@ -265,7 +265,7 @@
                 try {
                   const connected = await gwCall('/v1/chatgpt-link/complete', {method:'POST'});
                   ++personalLinkGeneration;
-                  openModal('OWG linked','Add OWG in ChatGPT',`<p>New privacy-hardened evidence can now sync. In ChatGPT Settings, open Apps → Advanced settings → Developer mode, then create an app using this MCP URL:</p><div class="codebox">${e(connected.mcp_url)}</div><p>Choose OAuth and sign in with the same OWG account. You can pause sharing or disconnect in the Gateway panel.</p><div class="modal-actions"><button onclick="closeModal()">Done</button></div>`);
+                  openModal('OWG linked','Add OWG in ChatGPT',`<p>New privacy-hardened evidence can now sync. Open the OpenWorkGraph plugin in ChatGPT and sign in with the same OWG account. If you are setting up your own MCP app, use this URL:</p><div class="codebox">${e(connected.mcp_url)}</div><p>Choose OAuth and sign in with the same OWG account. You can pause sharing or disconnect in the Gateway panel.</p><div class="modal-actions"><button onclick="closeModal()">Done</button></div>`);
                   await refreshGatewayPanel();
                 } catch (err) { message.textContent = err.message; start.textContent = 'Restart linking'; start.disabled = false; start.onclick = window.openChatGPTPersonalLink; }
               };
