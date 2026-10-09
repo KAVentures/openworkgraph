@@ -148,6 +148,12 @@ class PublicRedactor:
                     "organization_id", "actor_id", "device_id", "sensor_id",
                 }:
                     continue
+                if name == "desktop_install_url":
+                    # Trusted server-authored onboarding constant, not observed
+                    # page content; retain the link for first-time connections.
+                    if child == "https://owg.kinvectum.com/connect":
+                        result[name] = child
+                    continue
                 safe = self.visit(child, detail=detail, key=name)
                 if safe not in (None, "", [], {}):
                     result[name] = safe
@@ -167,6 +173,13 @@ def project(value: dict[str, Any], *, secret: str, principal: str, detail: str =
     safe = PublicRedactor(secret=secret, principal=principal).visit(value, detail=detail)
     if not isinstance(safe, dict):
         raise ValueError("hosted projection requires an object")
+    if safe.get("data_layer") == "privacy_hardened_raw_rich_evidence":
+        safe["data_layer"] = "hosted_redacted_evidence_projection"
+    evidence_contract = safe.get("evidence_contract")
+    if isinstance(evidence_contract, dict):
+        evidence_contract["metadata_preserved"] = False
+        evidence_contract["source_metadata_may_be_present_in_gateway"] = True
+        evidence_contract["hosted_redaction_applied"] = True
     safe["privacy_representation"] = {
         "level": "hosted_redacted",
         "detail": detail,
