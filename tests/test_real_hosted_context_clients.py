@@ -67,7 +67,17 @@ def gateway(tmp_path_factory):
             deadline = time.monotonic() + 20
             while True:
                 if p.poll() is not None or time.monotonic() > deadline:
-                    pytest.fail("disposable Gateway failed")
+                    try:
+                        diagnostics = (temp / "server.log").read_text(
+                            encoding="utf-8", errors="replace"
+                        )[-8000:]
+                    except OSError as exc:
+                        diagnostics = f"server.log unavailable: {exc}"
+                    pytest.fail(
+                        f"disposable Gateway failed (exit_code={p.poll()}, "
+                        f"port={port}, state_exists={state.exists()}):\n"
+                        f"{diagnostics}"
+                    )
                 if (state / "connection.json").exists():
                     try:
                         with socket.create_connection(("127.0.0.1", port), timeout=0.2):
