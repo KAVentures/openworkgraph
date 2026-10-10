@@ -1,0 +1,33 @@
+{
+  "schema": "owg.real-cli-attempts.v1",
+  "source_commit": "ef3ad4004155a92a3d54ce05dca0e5c8c86746cd",
+  "cli_versions": {
+    "codex": "codex-cli 0.159.2",
+    "claude": "2.1.296 (Claude Code)"
+  },
+  "attempts": 88,
+  "completed": 0,
+  "trials": 1,
+  "model_settings": {
+    "effort": "medium",
+    "provider_default_sampling": true
+  },
+  "permitted_other_tools": "no filesystem, shell, browser, source-system connectors or subagents",
+  "installed_skill_condition": "hosted MCP instructions/descriptions only; no local desktop skills",
+  "order_seed": 20261010,
+  "cost_basis": "CLI-reported USD only; null means unknown",
+  "exact_backend_snapshots": "not inferred from requested model aliases",
+  "controller_separation": "fresh empty cwd; no resume; no controller prompt; built-in data access tools disabled",
+  "limitations": [
+    "No ChatGPT-web or Claude-web claim",
+    "Claim and task completion review is independent and pending for completed answers",
+    "Single trial is not a reliability estimate",
+    "CLI native prompts differ between clients"
+  ],
+  "evaluation_stage": "validated transport, final original-corpus matrix",
+  "source_files_sha256": {
+    "evals/hosted_context/cases.json": "906cd32316253abe4e89cb3b01d80b4ed0e926f838176ff71f8887e51938fe6d",
+    "evals/hosted_context/fixtures.py": "61a36d13f5468dc7102903e6d4e40fd99872f4eff5a41a4ea64e9ae4a639045a",
+    "gateway/public_plugin_mcp.py": "e36dcd361024f45f92e4db6cf3b5473e44806d14853a51a3cb5d339fb086aaa9"
+  }
+}
