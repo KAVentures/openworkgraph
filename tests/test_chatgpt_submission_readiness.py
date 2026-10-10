@@ -375,7 +375,7 @@ def test_public_tool_metadata_uses_configured_oauth_scope(monkeypatch, tmp_path)
         monkeypatch.setenv(key, value)
 
     tools = asyncio.run(create_public_mcp().list_tools())
-    assert len(tools) == 7
+    assert len(tools) == 9
     assert "get_profile" in {tool.name for tool in tools}
     for tool in tools:
         assert tool.meta["securitySchemes"] == [{"type": "oauth2", "scopes": ["openid"]}]
