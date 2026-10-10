@@ -77,6 +77,45 @@ The keyboard sensor reports counts/timing only.
 
 Native accessibility/UI Automation code deliberately avoids value/text patterns that would expose field contents.
 
+## Experimental browser work-text capture (PR #180, opt-in only)
+
+**This experimental feature is disabled by default and has not passed a full
+privacy/security review. Do not enable it in production until the draft PR is
+completed and tested.** Existing structural activity recording is unchanged.
+
+The Privacy tab has two independent switches:
+
+- **Capture visible work text for AI**: when enabled, the paired browser sensor
+  observes bounded, currently visible page text and certain editable drafts.
+  New snapshots are sent over the paired localhost channel, independently of
+  the structural event queue. It is not a keylogger; raw keystroke events,
+  clipboard payloads, form-password fields and file bodies are excluded.
+- **Allow local AI apps to read saved work text**: a separate grant, which also
+  requires the existing master AI-access switch. The local retrieval interface
+  is unfinished while this is a draft. This setting does **not** grant the
+  hosted ChatGPT Gateway plugin access to work-text data.
+
+Text filtering runs locally before the separate work-text SQLite store is
+written. Authentication/banking/payment/health-oriented pages and the existing
+Never record website/title filters are blocked; these controls are necessarily
+heuristic and **cannot guarantee** removal of every secret, private message,
+medical detail or regulated data. Browser private mode is disabled by the
+extension manifest. Never use the experimental capture on applications or data
+for which you lack authorization to record content.
+
+Only active top-level pages are sampled, at most 4,000 characters per snapshot,
+so this does not represent comprehensive retrieval of everything on a webpage.
+When capture is disabled, future snapshots are rejected and saved work-text
+rows are deleted using SQLite secure deletion and VACUUM, subject to normal
+filesystem backup and snapshot limitations. The default retention is 7 days
+(maximum 30 days and 500 rows); setting a shorter retention prunes the store.
+The recorder's Pause/Stop state also blocks new text snapshots.
+
+There is no automatic text upload through the Gateway or existing MCP tools.
+This branch does not implement native-app accessibility text capture, permitted
+enterprise sharing, or a verified content-inclusive remote retrieval path.
+Those require additional privacy review and separate user-facing permissions.
+
 ## Browser-context privacy profiles (v0.114)
 
 Business-object references are a separate optional browser-context layer. They do not turn typed text, clipboard contents, page contents or arbitrary full URLs into capture inputs.

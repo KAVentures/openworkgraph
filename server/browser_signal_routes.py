@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 
 from . import main as core
 from .browser_signal_settings import SETTING_KEYS, apply_profile, public_settings, save_settings
 from .main import ROOT
+from . import work_text_capture as work_text
 from .secure_app import app
 
 
@@ -33,6 +34,8 @@ def browser_context_with_signal_settings() -> dict[str, Any]:
         "device_id": str(core.COLLECTOR_STATUS.get("device_id") or ""),
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
+        # Separate explicit, off-by-default content collection permission.
+        "work_text_capture": work_text.get_policy()["capture_enabled"],
         # These local patterns are supplied to the paired extension only so it can
         # fail closed before an optional rich locator enters its retry queue. The
         # server applies the same policy again at ingest.
@@ -98,8 +101,51 @@ async def _inject_script(request: Request, call_next):
     return HTMLResponse(text, status_code=response.status_code, headers=headers)
 
 
+
+# Additive local work-text endpoints belong to the existing browser registrar:
+# no new HTTP application, import-time plugin, or route replacement layer.
+def get_work_text_policy() -> dict[str, Any]:
+    return {
+        **work_text.get_policy(),
+        "gateway_shared": False,
+        "browser_only": True,
+        "content_capture_is_separate_from_ai_access": True,
+    }
+
+
+async def update_work_text_policy(request: Request):
+    if str(request.headers.get("X-OpenWorkGraph-Context") or "").lower() == "ai":
+        return JSONResponse({"detail": "AI cannot grant itself text access."}, status_code=403)
+    try:
+        value = work_text.set_policy(await request.json())
+        return {**value, "gateway_shared": False}
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+async def ingest_work_text(request: Request):
+    try:
+        return work_text.ingest(await request.json())
+    except PermissionError:
+        return JSONResponse({"detail": "Work-content capture declined."}, status_code=403)
+    except (ValueError, TypeError):
+        return JSONResponse({"detail": "Invalid work-content snapshot."}, status_code=400)
+
+
+def read_work_text(request: Request, limit: int = 20):
+    if str(request.headers.get("X-OpenWorkGraph-Context") or "").lower() != "ai":
+        return JSONResponse({"detail": "Local AI context required"}, status_code=403)
+    try:
+        return work_text.recent_for_ai(limit=limit)
+    except PermissionError:
+        return JSONResponse({"detail": "Work-text AI access is disabled"}, status_code=403)
+
 if not getattr(app.state, "owg_v058_browser_signal_routes_installed", False):
     _replace_route("/v1/browser-context", "GET", browser_context_with_signal_settings)
+    app.add_api_route("/v1/work-text/policy", get_work_text_policy, methods=["GET"])
+    app.add_api_route("/v1/work-text/policy", update_work_text_policy, methods=["POST"])
+    app.add_api_route("/v1/work-text/ingest", ingest_work_text, methods=["POST"])
+    app.add_api_route("/v1/work-text/ai", read_work_text, methods=["GET"])
     app.add_api_route("/v1/browser-signal-settings", get_browser_signal_settings, methods=["GET"])
     app.add_api_route("/v1/browser-signal-settings", update_browser_signal_settings, methods=["POST"])
     app.add_api_route("/browser-signals.js", browser_signal_ui_script, methods=["GET"])

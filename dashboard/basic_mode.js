@@ -184,6 +184,14 @@
           <div><h3>Hide names and contact details from AI apps</h3><div class="muted" id="pvRedactText">Recommended. Titles keep their meaning: "Re: Contract for PERSON_1A2B3C - Gmail".</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvRedactSwitch" aria-checked="true" aria-label="Hide names and contact details from AI apps"></button></div>
         </div>
+        <div class="pv-row" id="pvWorkTextRow">
+          <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer, never on the Gateway.</div></div>
+          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
+        </div>
+        <div class="pv-row pv-sub" id="pvWorkTextAiRow">
+          <div><h3>Allow local AI apps to read saved work text</h3><div class="muted">A separate permission requiring AI access. The remote ChatGPT Gateway plugin cannot read this local text store.</div></div>
+          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextAiSwitch" aria-checked="false" aria-label="Allow local AI apps to read captured work text"></button></div>
+        </div>
         <div class="pv-row" id="pvBrowserRow">
           <div><h3>Browser detail</h3><div class="muted" id="pvBrowserText">How much the browser sensor keeps about the pages you use.</div></div>
           <div class="pv-control"><div class="seg" role="radiogroup" aria-label="Browser detail">
@@ -217,7 +225,7 @@
     bindPrivacy(panel);
   }
 
-  const privacy = {capture: null, policy: null, access: null, history: null, detail: null, browser: null, lists: null};
+  const privacy = {capture: null, policy: null, access: null, history: null, detail: null, browser: null, lists: null, workText: null};
 
   function retentionValue(value) {
     if (!value) return 'ephemeral';
@@ -276,6 +284,11 @@
         : redacted ? 'Recommended. Titles keep their meaning: "Re: Contract for PERSON_1A2B3C - Gmail".'
         : 'Off: AI apps get titles exactly as stored. Names are already tokenized before storage, but anything the detector missed is shown.';
     }
+    // Separate work-text capture and AI read grants; both default OFF.
+    setSwitch('#pvWorkTextSwitch', !!p.workText?.capture_enabled);
+    setSwitch('#pvWorkTextAiSwitch', !!p.workText?.ai_read_enabled);
+    const aiWorkText = $('#pvWorkTextAiSwitch');
+    if (aiWorkText) aiWorkText.disabled = !p.workText?.capture_enabled;
     // Browser detail
     const profile = String(p.browser?.profile || '');
     document.querySelectorAll('#pvBrowserRow [data-profile]').forEach(button => button.setAttribute('aria-checked', button.dataset.profile === profile ? 'true' : 'false'));
@@ -395,6 +408,26 @@
       window.refreshAiContextDetail?.();
       renderPrivacy();
     };
+    panel.querySelector('#pvWorkTextSwitch').onclick = async () => {
+      const enabled = !!privacy.workText?.capture_enabled;
+      if (!enabled && !confirm('Enable automatic browser work-text capture? Email/page text and drafts may contain sensitive information that filters cannot always detect. Content stays local, is never shared with Gateway, and is retained for up to 7 days. Turning capture off deletes saved text.')) return;
+      if (enabled && !confirm('Turn off work-text capture and delete all previously saved browser work text?')) return;
+      try {
+        privacy.workText = await api('/v1/work-text/policy', send('POST', {capture_enabled: !enabled}));
+        toast(enabled ? 'Work-text capture disabled; saved text deleted.' : 'Local work-text capture enabled.');
+      } catch (error) { toast(error.message || 'Could not change work-text capture.'); }
+      renderPrivacy();
+    };
+    panel.querySelector('#pvWorkTextAiSwitch').onclick = async () => {
+      if (!privacy.workText?.capture_enabled) return;
+      const enabled = !!privacy.workText.ai_read_enabled;
+      if (!enabled && !confirm('Allow connected local AI apps to read saved redacted browser page and draft text? This does not share text with the Gateway.')) return;
+      try {
+        privacy.workText = await api('/v1/work-text/policy', send('POST', {ai_read_enabled: !enabled}));
+        toast(enabled ? 'Local AI text reads disabled.' : 'Local AI text reads enabled.');
+      } catch (error) { toast(error.message || 'Could not change AI text access.'); }
+      renderPrivacy();
+    };
     panel.querySelectorAll('#pvBrowserRow [data-profile]').forEach(button => button.onclick = async () => {
       try { privacy.browser = await api('/v1/browser-signal-settings', send('POST', {profile: button.dataset.profile})); toast('Browser detail saved.'); }
       catch (error) { toast(error.message || 'Could not save.'); }
@@ -445,12 +478,13 @@
     if (privacyLoading) return;
     privacyLoading = true;
     try {
-      const [capture, policy, access, history, detail, browser, lists] = await Promise.all([
+      const [capture, policy, access, history, detail, browser, lists, workText] = await Promise.all([
         api('/v1/capture/status').catch(() => null), api('/v1/history-policy').catch(() => null), api('/v1/ai-access').catch(() => null),
         api('/v1/history/ai-access').catch(() => null), api('/v1/ai-context').catch(() => null),
         api('/v1/browser-signal-settings').catch(() => null), api('/v1/capture-exclusions').catch(() => null),
+        api('/v1/work-text/policy').catch(() => null),
       ]);
-      Object.assign(privacy, {capture, policy, access, history: history?.access || null, detail, browser, lists});
+      Object.assign(privacy, {capture, policy, access, history: history?.access || null, detail, browser, lists, workText});
       renderPrivacy();
       renderHero();
     } finally { privacyLoading = false; }

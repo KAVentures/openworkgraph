@@ -111,7 +111,20 @@ async function getJson(path) {
 
 async function refreshWorkContext() {
   const fresh = await getJson("/v1/browser-context");
-  if (!fresh) return null;
+  if (!fresh) {
+    try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: false}); } catch (_) {}
+    return null;
+  }
+  // Never persist rich text in browser storage; only the server's live opt-in flag.
+  try {
+    await ext.storage.local.set({
+      openworkgraph_work_text_capture_v1: fresh.work_text_capture === true,
+      openworkgraph_work_text_exclusions_v1: {
+        hosts: Array.isArray(fresh.excluded_browser_host_patterns) ? fresh.excluded_browser_host_patterns.slice(0, 100) : [],
+        titles: Array.isArray(fresh.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0, 100) : []
+      }
+    });
+  } catch (_) {}
   const context = {
     organization_id: String(fresh.organization_id || ""),
     actor_id: String(fresh.actor_id || ""),
@@ -262,7 +275,59 @@ function shouldEmitNav(tabId, url, kind) {
   return true;
 }
 
+// Apply the latest Never record lists again in the background before sending
+// untrusted browser text over loopback. Cached content-script policy may lag.
+function workTextAllowedByLiveContext(fresh, page, title) {
+  if (fresh?.work_text_capture !== true || !page?.hostname) return false;
+  const host = String(page.hostname).toLowerCase();
+  const titleLower = String(title || "").toLowerCase();
+  const blocked = Array.isArray(fresh.excluded_browser_host_patterns)
+    ? fresh.excluded_browser_host_patterns : [];
+  const terms = Array.isArray(fresh.excluded_title_patterns)
+    ? fresh.excluded_title_patterns : [];
+  if (blocked.some(item => {
+    const value = String(item || "").toLowerCase().trim();
+    const pattern = value.startsWith("*.") ? value.slice(2) : value;
+    return pattern && (host === pattern || host.endsWith("." + pattern));
+  })) return false;
+  if (terms.some(item => String(item || "").trim() &&
+      titleLower.includes(String(item).toLowerCase()))) return false;
+  return true;
+}
+
+// A distinct non-queued channel for optional work text; structural telemetry
+// never transports page bodies or draft values. The server rechecks consent.
+async function deliverWorkTextSnapshot(message, sender) {
+  if (sender?.frameId !== 0 || !sender?.tab?.active) return;
+  const source = safeUrl(sender.tab.url || "");
+  if (!source || source.hostname !== String(message.hostname || "").toLowerCase()) return;
+  if (sanitizePathname(String(message.pathname || "")) !== source.pathname) return;
+  if (!["page", "draft"].includes(message.kind) ||
+      typeof message.text !== "string" || !message.text.length || message.text.length > 4000) return;
+  const fresh = await getJson("/v1/browser-context"); // live opt-in, never cached on send
+  const on = workTextAllowedByLiveContext(fresh, source, sender.tab.title);
+  try { await ext.storage.local.set({
+    openworkgraph_work_text_capture_v1: fresh?.work_text_capture === true,
+    openworkgraph_work_text_exclusions_v1: {
+      hosts: Array.isArray(fresh?.excluded_browser_host_patterns) ? fresh.excluded_browser_host_patterns.slice(0,100) : [],
+      titles: Array.isArray(fresh?.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0,100) : []
+    }
+  }); } catch (_) {}
+  if (!on) return;
+  await postDirect("/v1/work-text/ingest", {
+    hostname: source.hostname,
+    pathname: source.pathname,
+    title: String(sender.tab.title || "").slice(0, 240),
+    kind: message.kind,
+    text: message.text,
+  });
+}
+
 ext.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "owg_work_text_snapshot") {
+    deliverWorkTextSnapshot(message, sender).catch(() => {});
+    return;
+  }
   if (!message || message.type !== "workflow_observer_event") return;
   const topFrame = message.metadata?.top_frame !== false;
   const pageSource = topFrame ? (message.page?.url || sender.tab?.url || "") : (sender.tab?.url || "");
