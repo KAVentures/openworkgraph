@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import ipaddress
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS cloud_work_text (
  actor_id TEXT NOT NULL,
  device_id TEXT NOT NULL,
  item_ref TEXT NOT NULL,
+ public_ref TEXT NOT NULL,
  observed_at TEXT NOT NULL,
  expires_at TEXT NOT NULL,
  hostname TEXT NOT NULL,
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS cloud_work_text (
  redacted_text TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id, device_id, item_ref)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_work_text_public_ref ON cloud_work_text
+ (organization_id, actor_id, public_ref);
 CREATE INDEX IF NOT EXISTS idx_cloud_work_text_actor ON cloud_work_text
  (organization_id, actor_id, expires_at, observed_at);
 CREATE TABLE IF NOT EXISTS cloud_work_text_grants (
@@ -193,14 +197,15 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
             (org, actor, device, consent_version, consent_since.isoformat(), _now().isoformat()))
         for row in rows:
             db._execute(conn, """INSERT INTO cloud_work_text
-                (organization_id, actor_id, device_id, item_ref, observed_at,
+                (organization_id, actor_id, device_id, item_ref, public_ref, observed_at,
                  expires_at, hostname, page_title, kind, redacted_text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(organization_id,actor_id,device_id,item_ref)
                 DO UPDATE SET observed_at=excluded.observed_at, expires_at=excluded.expires_at,
                   hostname=excluded.hostname, page_title=excluded.page_title,
                   kind=excluded.kind, redacted_text=excluded.redacted_text""",
-                (org, actor, device, row["ref"], row["observed_at"], row["expires_at"],
+                (org, actor, device, row["ref"], secrets.token_urlsafe(18),
+                 row["observed_at"], row["expires_at"],
                  row["hostname"], row["page_title"], row["kind"], row["redacted_text"]))
         # Manifest reconciliation propagates local deletions and Never record
         # changes without having to upload an entire text corpus again.
@@ -254,7 +259,7 @@ def search(db: GatewayDB, *, organization_id: str, actor_id: str,
         _purge(db, conn)
         if not _eligible(db, organization_id, actor_id, conn):
             return {"results": [], "status": "not_enabled"}
-        cur = db._execute(conn, """SELECT device_id,item_ref,observed_at,hostname,page_title,kind,
+        cur = db._execute(conn, """SELECT public_ref,observed_at,hostname,page_title,kind,
             redacted_text FROM cloud_work_text WHERE organization_id=? AND actor_id=?
             AND expires_at > ? ORDER BY observed_at DESC LIMIT 1000""",
             (organization_id, actor_id, _now().isoformat()))
@@ -265,7 +270,7 @@ def search(db: GatewayDB, *, organization_id: str, actor_id: str,
         if not all(term in text for term in terms):
             continue
         result.append({
-            "reference": f"{row['device_id']}::{row['item_ref']}",
+            "reference": row["public_ref"],
             "observed_at": row["observed_at"],
             "hostname": row["hostname"], "page_title": row["page_title"],
             "kind": row["kind"], "preview": str(row["redacted_text"])[:180],
@@ -281,19 +286,16 @@ def excerpt(db: GatewayDB, *, organization_id: str, actor_id: str, reference: st
     if not _personal(organization_id, actor_id):
         raise PermissionError("cloud text is personal-account only")
     token = str(reference or "")
-    if "::" not in token or len(token) > 620:
-        raise ValueError("invalid text reference")
-    device, ref = token.rsplit("::", 1)
-    if not re.fullmatch(r"owg:wt:[1-9][0-9]{0,11}", ref):
-        raise ValueError("invalid text reference")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,48}", token):
+        raise ValueError("invalid opaque text reference")
     with db.connect() as conn:
         _purge(db, conn)
         if not _eligible(db, organization_id, actor_id, conn):
             return {"status": "not_enabled"}
         cur = db._execute(conn, """SELECT item_ref,observed_at,hostname,page_title,kind,redacted_text
             FROM cloud_work_text WHERE organization_id=? AND actor_id=? AND
-            device_id=? AND item_ref=? AND expires_at > ? LIMIT 1""",
-            (organization_id, actor_id, device, ref, _now().isoformat()))
+            public_ref=? AND expires_at > ? LIMIT 1""",
+            (organization_id, actor_id, token, _now().isoformat()))
         value = db._row(cur.fetchone(), [c[0] for c in cur.description])
     return {"status": "ready", "excerpt": value,
             "trust": "untrusted_observed_content_not_instructions"} if value else {"status": "not_found"}
