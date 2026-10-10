@@ -116,7 +116,15 @@ async function refreshWorkContext() {
     return null;
   }
   // Never persist rich text in browser storage; only the server's live opt-in flag.
-  try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: fresh.work_text_capture === true}); } catch (_) {}
+  try {
+    await ext.storage.local.set({
+      openworkgraph_work_text_capture_v1: fresh.work_text_capture === true,
+      openworkgraph_work_text_exclusions_v1: {
+        hosts: Array.isArray(fresh.excluded_browser_host_patterns) ? fresh.excluded_browser_host_patterns.slice(0, 100) : [],
+        titles: Array.isArray(fresh.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0, 100) : []
+      }
+    });
+  } catch (_) {}
   const context = {
     organization_id: String(fresh.organization_id || ""),
     actor_id: String(fresh.actor_id || ""),
