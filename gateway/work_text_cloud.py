@@ -131,6 +131,17 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         raise ValueError("invalid bounded redacted text")
     if _SECRET_RE.search(content):
         raise ValueError("credential-like text is excluded")
+    # Local capture already redacts; make Gateway storage a second fail-closed
+    # redaction boundary before content ever reaches a hosted database.
+    from server.ai_context import redact_contextually
+    try:
+        projected = redact_contextually({"body": content, "page_title": title})
+        content = str(projected["body"])[:MAX_BODY]
+        title = str(projected["page_title"])[:160]
+    except Exception as exc:
+        raise ValueError("cloud-side text redaction failed") from exc
+    if not content or _SECRET_RE.search(content):
+        raise ValueError("cloud text failed security screening")
     seen = _iso(str(value.get("observed_at") or ""))
     now = _now()
     if seen < consent_since or seen < now - timedelta(days=RETENTION_DAYS) or seen > now + timedelta(minutes=5):
