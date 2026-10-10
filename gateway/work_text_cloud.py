@@ -127,7 +127,7 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         pass
     else:
         raise ValueError("IP-host content is excluded")
-    if re.search(r"(?i)\\b(?:password|patient.record|medical.record|banking)\\b", title):
+    if re.search(r"(?i)\b(?:password|patient.record|medical.record|banking)\b", title):
         raise ValueError("sensitive page title is excluded")
     if any(host == h or host.endswith("." + h) for h in _BAD_HOSTS):
         raise ValueError("sensitive host is excluded")
