@@ -2,15 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-const root = path.resolve(import.meta.dirname || new URL('../..', import.meta.url).pathname);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = p => fs.readFileSync(path.join(root,p), 'utf8');
 const manifest = JSON.parse(read('browser_extension/manifest.json'));
 const workText = read('browser_extension/work_text_capture.js');
 const background = read('browser_extension/background.js');
 const serverGuard = read('server/secure_app.py');
 const privacyUi = read('dashboard/basic_mode.js');
-const route = read('server/work_text_routes.py');
+const route = read('server/browser_signal_routes.py');
 
 test('browser extension contains the separate work-text script and both scripts parse', () => {
   assert.ok(manifest.content_scripts[0].js.includes('work_text_capture.js'));
