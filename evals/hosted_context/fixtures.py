@@ -38,7 +38,7 @@ def fixture_events() -> list[dict[str, Any]]:
         event("evt-renewal-001", now - timedelta(days=1, minutes=10), title="Acme renewal review", session="renewal",
               metadata={"resource_reference": {"provider": "salesforce", "resource_ref": "owg:r:fixture-acme", "resource_kind": "record"}}),
         event("evt-untagged-004", now + timedelta(minutes=3), title="Procurement review: navigate", session="procure"),
-        event("evt-unmatched-003", now + timedelta(minutes=4), title="Special request control: review", session="special"),
+        event("evt-unmatched-003", now + timedelta(minutes=4), title="Uncatalogued exception control: review", session="special"),
         event("evt-unrelated-001", now + timedelta(minutes=5), title="Jira issue alpha", session="adjacent",
               metadata={"tab_context_id": "tab-fixture", "resource_reference": {"provider": "jira", "resource_ref": "owg:r:fixture-issue", "resource_kind": "issue"}}),
         event("evt-unrelated-002", now + timedelta(minutes=5, seconds=10), title="Salesforce opportunity beta", session="adjacent",
@@ -47,12 +47,21 @@ def fixture_events() -> list[dict[str, Any]]:
         event("evt-tuesday-044", datetime(2026, 10, 6, 17, 0, tzinfo=timezone.utc), title="Tuesday task completed", session="tuesday"),
         event("evt-agent-001", now + timedelta(minutes=7), title="Agent attempted issue refactor", app="Agent",
               source="agent", event_type="agent_tool_call", session="agent-fixture",
-              metadata={"action": "edit", "observation_level": "structural", "trace": {"run_id": "synthetic-run"}}),
+              metadata={"action": "edit", "operation": "tool_call", "status": "unknown",
+                        "tool": {"category": "write", "name": "synthetic_edit"},
+                        "observation_level": "structural", "trace": {"run_id": "synthetic-run"}}),
         event("evt-jira-001", now + timedelta(minutes=8), title="Jira task for CRM handoff", session="handoff"),
-        event("evt-price-001", now + timedelta(minutes=9), title="Spreadsheet pricing sheet", app="Sheets", session="pricing",
+        event("evt-price-001", now + timedelta(minutes=9), title="Acme pricing sheet", app="Sheets", session="pricing",
               metadata={"resource_reference": {"provider": "google_drive", "resource_ref": "owg:r:fixture-pricing", "resource_kind": "spreadsheet"}}),
         event("evt-approval-001", now + timedelta(minutes=10), title="Historical approval requested; state unknown", session="approval"),
     ]
+    # Exercise date-bounded pagination rather than only labeling two endpoints
+    # as a 44-step day. Preserve the original target IDs and timestamps.
+    tuesday = datetime(2026, 10, 6, 9, 0, tzinfo=timezone.utc)
+    for i in range(2, 44):
+        rows.append(event(f"evt-tuesday-{i:03d}",
+                          tuesday + timedelta(seconds=(i - 1) * 8 * 3600 / 43),
+                          title="Tuesday task reviewed", session="tuesday"))
     for i in range(10):
         rows.append(event(f"evt-invoice-{i:03d}", now + timedelta(minutes=12, seconds=i),
                           title="Invoice review step", session=f"invoice-{i // 2}",

@@ -1,0 +1,8 @@
+{
+  "schema": "owg.hosted-routing-report.v1",
+  "model_results_are_observed": false,
+  "model_count": 0,
+  "trial_count": 0,
+  "groups": [],
+  "warning": "Evidence IDs prove retrieval, NOT factual entailment. Grounding/permissions require independent manual review. Do not treat synthetic examples as model runs."
+}

@@ -90,7 +90,7 @@ def test_real_oauth_rejects_missing_bearer_and_does_not_merge_empty_accounts(gat
             "jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         assert response.status_code == 401
     counts = json.loads((state / "seed.json").read_text())["inserted"]
-    assert counts == {"populated": 246, "empty": 0, "local-only": 0}
+    assert counts == {"populated": 288, "empty": 0, "local-only": 0}
 
 
 def test_proxy_preserves_catalog_and_pages_actual_canonical_rows(gateway):
@@ -126,15 +126,51 @@ def test_proxy_preserves_catalog_and_pages_actual_canonical_rows(gateway):
                     if not payload["has_more"]:
                         break
                     cursor = payload["next_cursor"]
-                assert len(found) == 246 and pages == 10
+                assert len(found) == 288 and pages == 12
                 targets = {event for case in load_cases() for event in case["target_event_ids"]}
                 assert targets.issubset(found)
         recorded = transport_calls(temp / "calls.jsonl")
-        assert len(recorded) == 10
+        assert len(recorded) == 12
         assert set.union(*(set(r["event_ids"]) for r in recorded)) == found
         assert all(r["transport_response_observed"] for r in recorded)
         # The recorder contains IDs and structural summaries, no raw payloads.
         assert "window_title" not in (temp / "calls.jsonl").read_text()
+
+    asyncio.run(check())
+
+
+def test_corrected_fixtures_exercise_advertised_failure_and_retrieval_conditions(gateway):
+    state, _ = gateway
+
+    async def check():
+        connection = json.loads((state / "connection.json").read_text())
+        async with httpx2.AsyncClient(headers={"Authorization": "Bearer " +
+                connection["tokens"]["populated"]}, trust_env=False) as http:
+            async with streamable_http_client(connection["url"], http_client=http) as (r, w):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    miss = await s.call_tool("search_work", {"query": "special request"})
+                    assert not miss.is_error and miss.structured_content["returned"] == 0
+                    fallback = await s.call_tool("get_workflow_trace", {
+                        "since": "2026-10-09T10:04:00Z", "until": "2026-10-09T10:04:01Z"})
+                    assert _ids_from(fallback.model_dump()) == {"evt-unmatched-003"}
+                    pricing = await s.call_tool("search_work", {"query": "Acme pricing"})
+                    assert _ids_from(pricing.model_dump()) == {"evt-price-001"}
+                    day = await s.call_tool("get_workflow_trace", {
+                        "since": "2026-10-06T00:00:00Z", "until": "2026-10-07T00:00:00Z"})
+                    assert day.structured_content["returned"] == 25
+                    assert day.structured_content["has_more"] is True
+                    tail = await s.call_tool("get_workflow_trace", {
+                        "since": "2026-10-06T00:00:00Z", "until": "2026-10-07T00:00:00Z",
+                        "cursor": day.structured_content["next_cursor"]})
+                    assert tail.structured_content["returned"] == 19
+                    assert tail.structured_content["has_more"] is False
+                    assert "evt-tuesday-044" in _ids_from(tail.model_dump())
+                    agent = await s.call_tool("get_agent_runs", {})
+                    assert agent.structured_content["returned"] == 1
+                    run = agent.structured_content["executions"][0]
+                    assert run["outcome_status"] == "unknown"
+                    assert run["outcome_basis"] == "no_terminal_outcome_observed"
 
     asyncio.run(check())
 
