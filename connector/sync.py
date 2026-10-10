@@ -18,6 +18,7 @@ from .config import load_device_token, load_gateway_settings
 from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
 from .state import SyncState
+from .work_text_relay import process_pending as process_work_text_relay
 
 STOP = False
 
@@ -378,6 +379,12 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 shared_messages = _sync_agent_session_messages(
                     client, url=settings.url, db_path=db_path, state=state,
                     policy=policy, batch_size=settings.batch_size,
+                )
+
+                # Independently opt-in, query-driven content channel. Failures
+                # are isolated and must never delay or block structural sync.
+                process_work_text_relay(
+                    client, url=settings.url, state=state, now=time.monotonic(),
                 )
 
                 cursor = state.get_int("last_local_event_id", 0)
