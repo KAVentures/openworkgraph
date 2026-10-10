@@ -140,3 +140,29 @@ def test_delete_recorded_activity_range_also_erases_text(isolated):
     assert deleted == 1
     assert isolated.recent_for_ai()["items"] == []
     assert isolated.ingest(example())["status"] == "recorded_locally"
+
+
+def test_cloud_relay_opt_in_is_independent_and_revocable(isolated):
+    assert isolated.get_policy()["cloud_read_enabled"] is False
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
+    isolated.ingest(example())
+    with pytest.raises(PermissionError):
+        isolated.search_for_cloud("Project rollout")
+    granted = isolated.set_policy({"cloud_read_enabled": True})
+    assert granted["cloud_read_enabled"] is True
+    rows = isolated.search_for_cloud("Project rollout")["items"]
+    assert len(rows) == 1
+    assert "Project rollout" in rows[0]["redacted_text"]
+    assert rows[0]["ref"].startswith("owg:wt:")
+    assert isolated.search_for_cloud("missing term")["items"] == []
+
+    # Revoking the local read grant automatically revokes cloud read, too.
+    revoked = isolated.set_policy({"ai_read_enabled": False})
+    assert revoked["cloud_read_enabled"] is False
+    with pytest.raises(PermissionError):
+        isolated.search_for_cloud("Project rollout")
+    isolated.set_policy({"ai_read_enabled": True, "cloud_read_enabled": True})
+    isolated.set_policy({"capture_enabled": False})
+    assert isolated.get_policy()["cloud_read_enabled"] is False
+    assert isolated.get_policy()["ai_read_enabled"] is False
+    with isolated._conn() as db:\n        assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 0
