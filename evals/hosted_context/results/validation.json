@@ -1,0 +1,16 @@
+{
+  "kind": "infrastructure regression; not model evaluation",
+  "command": ".venv/bin/pytest -q tests/test_real_hosted_context_clients.py tests/test_hosted_context_routing_score.py",
+  "passed": 17,
+  "failed": 0,
+  "verified": [
+    "unchanged prompts",
+    "auth failures not scored",
+    "catalog forwarded unchanged",
+    "genuine OAuth 401 on missing bearer",
+    "all 246 events retrieved across 10 pages",
+    "all golden target event IDs present in actual returns",
+    "empty and local-only accounts isolated"
+  ],
+  "model_results_are_observed": false
+}
