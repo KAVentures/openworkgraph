@@ -322,7 +322,9 @@ def cloud_sync_snapshot() -> dict[str, Any]:
                 and read_state().get("state") == "recording"):
             raise PermissionError("Cloud work-text synchronization is disabled")
         granted_at = datetime.fromisoformat(policy["cloud_granted_at"]).astimezone(timezone.utc)
-        _prune(days=min(policy["retention_days"], 7))
+        cloud_floor = max(granted_at, _now() - timedelta(days=7))
+        # Cloud retention must never shorten the user-chosen LOCAL retention.
+        _prune(days=policy["retention_days"])
         if not _DB.exists():
             return {"items": [], "consent_version": CLOUD_ACK_VERSION,
                     "granted_at": granted_at.isoformat()}
@@ -331,7 +333,7 @@ def cloud_sync_snapshot() -> dict[str, Any]:
                 """SELECT row_id, observed_at, hostname, page_title, kind,
                           redacted_text FROM work_text
                    WHERE observed_at >= ? ORDER BY row_id DESC LIMIT ?""",
-                (granted_at.isoformat(), MAX_STORED_ROWS),
+                (cloud_floor.isoformat(), MAX_STORED_ROWS),
             ).fetchall()
         items = []
         for row in rows:
