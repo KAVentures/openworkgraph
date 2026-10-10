@@ -292,7 +292,7 @@ def excerpt(db: GatewayDB, *, organization_id: str, actor_id: str, reference: st
         _purge(db, conn)
         if not _eligible(db, organization_id, actor_id, conn):
             return {"status": "not_enabled"}
-        cur = db._execute(conn, """SELECT item_ref,observed_at,hostname,page_title,kind,redacted_text
+        cur = db._execute(conn, """SELECT observed_at,hostname,page_title,kind,redacted_text
             FROM cloud_work_text WHERE organization_id=? AND actor_id=? AND
             public_ref=? AND expires_at > ? LIMIT 1""",
             (organization_id, actor_id, token, _now().isoformat()))
