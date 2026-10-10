@@ -64,7 +64,9 @@ def gateway(tmp_path_factory):
         p = subprocess.Popen([sys.executable, "-m", "evals.hosted_context.disposable",
             "--state", str(state), "--port", str(port)], cwd=ROOT, stdout=log, stderr=log)
         try:
-            deadline = time.monotonic() + 20
+            # Synthetic enrollment, 288 inserts and crypto/MCP startup can take
+            # longer on macOS CI; 20 seconds caused false startup failures.
+            deadline = time.monotonic() + 90
             while True:
                 if p.poll() is not None or time.monotonic() > deadline:
                     # The child writes its startup traceback to server.log.
@@ -76,9 +78,13 @@ def gateway(tmp_path_factory):
                         )[-8000:]
                     except OSError as exc:
                         diagnostics = f"server.log unavailable: {exc}"
+                    try:
+                        stage = (state / "startup-stage.txt").read_text().strip()
+                    except OSError:
+                        stage = "not yet initialized"
                     pytest.fail(
                         f"disposable Gateway failed (exit_code={p.poll()}, "
-                        f"port={port}, state_exists={state.exists()}):\n"
+                        f"port={port}, stage={stage}, state_exists={state.exists()}):\n"
                         f"{diagnostics}"
                     )
                 if (state / "connection.json").exists():
