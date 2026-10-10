@@ -125,6 +125,7 @@ def mode_environment(mode: str) -> dict[str, str]:
     # Create local capabilities before child processes start so collector/API and
     # any later MCP process converge on the same installation credentials.
     ensure_api_token(directory=auth_dir)
+    ensure_dashboard_reopen_token(directory=auth_dir)
     ensure_mcp_token(directory=auth_dir)
     ensure_browser_secret(directory=auth_dir)
     write_browser_pairing_bundle(ROOT / "browser_extension", directory=auth_dir)
