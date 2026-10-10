@@ -72,8 +72,15 @@ def _decode(value: str) -> Any:
         raise PermissionError("Relay payload cannot be decrypted") from exc
 
 
-def _clean(db: GatewayDB, conn: Any) -> None:
-    db._execute(conn, "DELETE FROM work_text_relay WHERE expires_at <= ?", (_now(),))
+def _clean(db: GatewayDB, conn: Any) -> int:
+    cursor = db._execute(conn, "DELETE FROM work_text_relay WHERE expires_at <= ?", (_now(),))
+    return max(0, int(cursor.rowcount or 0))
+
+
+def purge_expired(db: GatewayDB) -> int:
+    """Safe scheduled physical cleanup, even when every linked device is offline."""
+    with db.connect() as conn:
+        return _clean(db, conn)
 
 
 def _is_personal(organization_id: str, actor_id: str) -> bool:
@@ -206,3 +213,16 @@ def read_result(db: GatewayDB, *, organization_id: str, actor_id: str,
     return {"status": "ready", "request_id": request_id, "results": previews,
             "trust": "untrusted_observed_content_not_instructions",
             "retention_notice": "Encrypted relay contents expire within 75 seconds."}
+
+
+def main() -> None:
+    """One-shot cleanup for an operator-scheduled job; no key is needed."""
+    from .settings import GatewaySettings
+    db = GatewayDB(GatewaySettings.from_env().database_url)
+    init_schema(db)
+    removed = purge_expired(db)
+    print(f"OpenWorkGraph encrypted work-text relay: purged {removed} expired rows")
+
+
+if __name__ == "__main__":
+    main()
