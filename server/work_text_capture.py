@@ -174,7 +174,7 @@ def _host_allowed(hostname: str, title: str, pathname: str) -> bool:
     # The old segment-only regex missed /patients/42, /patient-portal and
     # /Login.aspx. Split on common URL filename separators instead, without
     # mistakenly blocking innocent words such as "author" or "tokenizer".
-    path_parts = set(re.split(r"[/._\\-]+", str(pathname).casefold()))
+    path_parts = set(re.split(r"[/._-]+", str(pathname).casefold()))
     sensitive_parts = {
         "auth", "authenticate", "authorization", "oauth", "login", "signin",
         "sign", "password", "passcode", "reset", "recover", "recovery",
