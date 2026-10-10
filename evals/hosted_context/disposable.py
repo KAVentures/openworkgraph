@@ -60,6 +60,8 @@ def seed(db: GatewayDB, settings: GatewaySettings) -> dict:
 
 def serve(state: Path, port: int) -> None:
     state.mkdir(mode=0o700, parents=True, exist_ok=False)
+    stage_file = state / "startup-stage.txt"
+    stage_file.write_text("generating-test-keys")
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
     jwk.update(kid="disposable", use="sig", alg="RS256")
@@ -99,7 +101,9 @@ def serve(state: Path, port: int) -> None:
     os.environ.update(values)
     db = GatewayDB(values["OWG_GATEWAY_DATABASE_URL"])
     settings = GatewaySettings.from_env()
+    stage_file.write_text("seeding-288-synthetic-events")
     counts = seed(db, settings)
+    stage_file.write_text("starting-oauth-mcp")
     from gateway.public_plugin_mcp import create_public_mcp
     server = create_public_mcp(db=db)
     inner = server.streamable_http_app(stateless_http=True, json_response=True,
@@ -118,6 +122,7 @@ def serve(state: Path, port: int) -> None:
         "client_id": "disposable-eval",
     }, key, algorithm="RS256", headers={"kid": "disposable"})
         for person in counts}
+    stage_file.write_text("mcp-created-writing-connection")
     credential = state / "connection.json"
     credential.write_text(json.dumps({"url": transport + "/mcp", "tokens": tokens}))
     credential.chmod(0o600)
@@ -125,6 +130,7 @@ def serve(state: Path, port: int) -> None:
         "structural_agent_sharing": "explicit synthetic opt-in, disabled after ingestion",
         "gateway_scope": "disposable loopback SQLite only"}, indent=2))
     try:
+        stage_file.write_text("uvicorn-binding-listener")
         uvicorn.run(app, host="127.0.0.1", port=port, access_log=False, log_level="warning")
     finally:
         key_server.shutdown()
