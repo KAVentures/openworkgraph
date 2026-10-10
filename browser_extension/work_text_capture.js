@@ -67,8 +67,12 @@
       const value = normal(node.nodeValue, 500);
       if (!value) continue;
       try {
+        // A styled child can appear "display:inline" beneath a hidden parent.
+        // getClientRects() is empty if any ancestor prevents rendering.
+        if (!el.getClientRects?.().length) continue;
         const style = getComputedStyle(el);
-        if (style?.display === 'none' || style?.visibility === 'hidden') continue;
+        if (style?.display === 'none' || style?.visibility === 'hidden' ||
+            style?.visibility === 'collapse' || style?.opacity === '0') continue;
       } catch (_) { continue; }
       parts.push(value);
       size += value.length + 1;
