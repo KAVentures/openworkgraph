@@ -182,17 +182,18 @@ def test_routes_gate_mcp_and_observation_per_client(tmp_path):
     (tmp_path / "home").mkdir()
     code = r'''
 from fastapi.testclient import TestClient
-from server.local_auth import ensure_api_token
+from server.local_auth import ensure_api_token, create_dashboard_session
 from server.agent_auth import ensure_agent_ingest_token
 import server.agent_dashboard_control_plane
 from server.secure_app import app
 
 auth={'Authorization':f'Bearer {ensure_api_token()}'}
+dashboard={'Authorization':f'OWG-Session {create_dashboard_session()}'}
 agent={'Authorization':f'Bearer {ensure_agent_ingest_token()}'}
 with TestClient(app) as client:
     assert client.get('/v1/connections').status_code==401
     assert client.post('/v1/connections',json={'client':'cursor','kind':'mcp','action':'on'}).status_code==401
-    assert client.post('/v1/ai-access',headers=auth,json={'enabled':True}).json()['enabled'] is True
+    assert client.post('/v1/ai-access',headers=dashboard,json={'enabled':True}).json()['enabled'] is True
 
     r=client.post('/v1/connections',headers=auth,json={'client':'cursor','kind':'mcp','action':'on'})
     assert r.status_code==200 and r.json()['mcp']['on'] is True, r.text
