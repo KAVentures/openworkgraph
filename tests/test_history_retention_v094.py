@@ -90,6 +90,15 @@ from shared.history_policy import initialize_policy,set_ai_history_access,active
 initialize_policy(has_existing_evidence=False);assert active_ai_history_access()['mode']=='off'
 start=datetime.now(timezone.utc)-timedelta(days=5);end=start+timedelta(days=2)
 a=set_ai_history_access(mode='selected_range',since=start.isoformat(),until=end.isoformat(),expires_minutes=60);assert a['mode']=='selected_range';assert a['since'] and a['until'];set_ai_history_access(mode='off',expires_minutes=None);assert active_ai_history_access()['mode']=='off'
+standing=set_ai_history_access(mode='all_saved',expires_minutes=None)
+assert standing['mode']=='all_saved' and standing['expires_at'] is None
+assert active_ai_history_access()['mode']=='all_saved'
+limited=set_ai_history_access(mode='all_saved',expires_minutes=1440)
+assert limited['expires_at'] is not None
+standing=set_ai_history_access(mode='all_saved',expires_minutes=None)
+assert standing['expires_at'] is None
+set_ai_history_access(mode='off',expires_minutes=None)
+assert active_ai_history_access()['mode']=='off'
 ''',tmp_path)
 
 
