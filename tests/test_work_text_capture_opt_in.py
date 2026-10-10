@@ -108,3 +108,35 @@ def test_no_gateway_sync_or_event_queue_in_work_text_route_source():
     src = (Path(__file__).resolve().parents[1] / "server" / "browser_signal_routes.py").read_text()
     assert "from gateway" not in src and "import gateway" not in src
     assert "event_queue" not in src and "sync_upload" not in src
+
+
+def test_sensitive_routes_and_ip_hosts_are_denied_without_blocking_author_docs(isolated):
+    isolated.set_policy({"capture_enabled": True})
+    blocked = (
+        {"pathname": "/patients/12"},
+        {"pathname": "/patient-portal/view"},
+        {"pathname": "/medical-records/abc"},
+        {"pathname": "/Login.aspx"},
+        {"hostname": "10.1.2.3"},
+        {"hostname": "8.8.8.8"},
+        {"hostname": "192.168.1.10"},
+    )
+    for variation in blocked:
+        with pytest.raises(PermissionError):
+            isolated.ingest(example(**variation))
+    assert not isolated._DB.exists()
+    assert isolated.ingest(example(pathname="/author-guidelines"))["status"] == "recorded_locally"
+
+
+def test_delete_recorded_activity_range_also_erases_text(isolated):
+    from datetime import datetime, timedelta, timezone
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
+    isolated.ingest(example())
+    now = datetime.now(timezone.utc)
+    deleted = isolated.delete_range(
+        (now - timedelta(minutes=1)).isoformat(),
+        (now + timedelta(minutes=1)).isoformat(),
+    )
+    assert deleted == 1
+    assert isolated.recent_for_ai()["items"] == []
+    assert isolated.ingest(example())["status"] == "recorded_locally"
