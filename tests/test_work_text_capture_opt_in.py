@@ -165,4 +165,5 @@ def test_cloud_relay_opt_in_is_independent_and_revocable(isolated):
     isolated.set_policy({"capture_enabled": False})
     assert isolated.get_policy()["cloud_read_enabled"] is False
     assert isolated.get_policy()["ai_read_enabled"] is False
-    with isolated._conn() as db:\n        assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 0
+    with isolated._conn() as db:
+        assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 0
