@@ -516,6 +516,15 @@ async def local_capability_guard(request: Request, call_next):
         from .mcp_connection import stdio_connection_config
         return JSONResponse(stdio_connection_config())
 
+    # The local MCP/API bearer is a read capability, never permission to
+    # enable ambient recording or widen AI access. These changes require
+    # a real dashboard session. Ignoring the "ai" header is insufficient:
+    # non-browser callers can simply omit it.
+    if method == "POST" and path in {"/v1/work-text/policy", "/v1/ai-access"}:
+        if not _dashboard_authenticated(request):
+            return _json_error("dashboard session required for privacy grants", 403)
+        return await call_next(request)
+
     if (method, path) in BROWSER_ROUTES:
         body = await request.body()
         if not verify_browser_authorization(request.headers.get("authorization"), method=method, path=path, body=body):
