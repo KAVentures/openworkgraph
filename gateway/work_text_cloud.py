@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -116,6 +117,14 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         raise ValueError("invalid local text reference")
     if not re.fullmatch(r"[a-z0-9.-]{1,255}", host) or ".." in host:
         raise ValueError("invalid page host")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("IP-host content is excluded")
+    if re.search(r"(?i)\\b(?:password|patient.record|medical.record|banking)\\b", title):
+        raise ValueError("sensitive page title is excluded")
     if any(host == h or host.endswith("." + h) for h in _BAD_HOSTS):
         raise ValueError("sensitive host is excluded")
     if len(title) > 160 or kind not in {"page", "draft"} or not content or len(content) > MAX_BODY:
@@ -147,7 +156,7 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
     if len(set(refs)) != len(refs) or any(not re.fullmatch(r"owg:wt:[1-9][0-9]{0,11}", x) for x in refs):
         raise ValueError("invalid text reference manifest")
     consent_since = _iso(granted_at)
-    if consent_since > _now() + timedelta(minutes=5) or consent_since < _now() - timedelta(days=RETENTION_DAYS):
+    if consent_since > _now() + timedelta(minutes=5) or consent_since.year < 2020:
         raise ValueError("consent date out of range")
     rows = [_item(x, consent_since=consent_since) for x in items]
     if any(row["ref"] not in refs for row in rows):
