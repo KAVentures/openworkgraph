@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "OpenWorkGraph Browser Sensor",
-  "version": "1.15.0",
-  "version_name": "1.15.0-one-click-pairing",
-  "description": "Local-first structural browser telemetry for OpenWorkGraph. Pairing requires explicit local approval; typed values, clipboard contents, password values, URL query strings/fragments, filenames, file contents, prompts and model responses are not collected.",
+  "version": "1.16.0",
+  "version_name": "1.16.0-opt-in-work-text",
+  "description": "Local-first structural browser telemetry. Optional work text capture requires a separate explicit local privacy setting; sensitive fields and sites are excluded. No Gateway text sync.",
   "incognito": "not_allowed",
   "permissions": [
     "tabs",
@@ -37,7 +37,8 @@
         "content.js",
         "content_enrichment.js",
         "browser_signals.js",
-        "agent_surface_adapters.js"
+        "agent_surface_adapters.js",
+        "work_text_capture.js"
       ],
       "run_at": "document_start",
       "all_frames": true,
