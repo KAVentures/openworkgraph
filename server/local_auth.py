@@ -87,6 +87,11 @@ def ensure_mcp_token(*, directory: Path | None = None) -> str:
     return _read_or_create_secret(".mcp_token", directory=directory)
 
 
+def ensure_dashboard_reopen_token(*, directory: Path | None = None) -> str:
+    """Privileged desktop-only credential; never included in MCP config."""
+    return _read_or_create_secret(".dashboard_reopen_token", directory=directory)
+
+
 def ensure_browser_secret(*, directory: Path | None = None) -> str:
     return _read_or_create_secret(".browser_pairing_secret", directory=directory)
 
