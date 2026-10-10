@@ -34,7 +34,10 @@ requests per day per enabled device; costs should be monitored before scaling.
 
 ## No standing cloud document corpus
 
-- The Gateway holds encrypted queries/results only for **75 seconds**.
+- Queries and excerpts are **readable only for 75 seconds**. SQL ciphertext
+  is physically removed at the next relay operation, or by the operator's
+  scheduled purge job. If every client goes offline and cleanup is not
+  scheduled, expired ciphertext can remain in database storage and backups.
 - Result encryption uses Fernet (`cryptography`), with a shared operator-owned
   key. There is no fallback to plaintext when the key is absent.
 - Neither SQL rows nor audit entries contain readable text. Audit records store
@@ -47,7 +50,8 @@ requests per day per enabled device; costs should be monitored before scaling.
   or sensitive detail is detected.
 - Revoking cloud access triggers deletion of that device's pending and answered
   relay rows at the next outgoing sync iteration. If the device is offline,
-  undelivered rows expire automatically within 75 seconds. Revocation cannot
+  its rows become unreadable after 75 seconds but may remain encrypted at rest
+  until the next relay request or scheduled purge. Revocation cannot
   erase information already supplied to a model/conversation.
 - The existing **Never record** host/title exclusions are applied before local
   content is stored and again during local retrieval.
@@ -66,6 +70,14 @@ never put it in Git, logs, browser storage, a QR code, or the device.
 Both services must point to the same Gateway database. Without the key, text
 retrieval stays unavailable and all other OWG functionality works normally.
 Rotate the key only after outstanding 75-second requests have expired.
+
+**Required before production:** schedule `python -m gateway.work_text_relay`
+against the shared Gateway database at least once per minute to physically
+purge expired relay rows even when all devices and model clients are offline.
+This cleanup does not need the encryption key. Verify the job is running and
+consider SQL backup/WAL retention separately. Without this maintenance,
+the 75-second expiry is an application-read boundary, not a guarantee of
+physical deletion.
 
 The desktop worker already uses its existing paired device credential.
 The hosted plugin uses the current OAuth identity to resolve that person's
