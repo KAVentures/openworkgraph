@@ -16,6 +16,7 @@ from . import analytics
 from .db import DATA_DIR
 from .evidence_delete import delete_database_range, remove_local_screenshots, rewrite_jsonl_range
 from .main import CONFIG_PATH, ROOT
+from .work_text_capture import delete_range as delete_work_text_range
 from .secure_app import app
 
 _DELETE_LOCK = threading.RLock()
@@ -52,6 +53,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
         skipped_gateway = 0
         screenshots_removed = 0
         jsonl_removed = 0
+        deleted_work_text = 0
         gateway_cursor = 0
         history_generation = 0
         try:
@@ -65,6 +67,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             local_ids = [int(value) for value in result.get("local_ids") or []]
             skipped_gateway = sync_state.add_skip_ids(local_ids, "local_evidence_deleted")
             screenshots_removed = remove_local_screenshots(list(result.get("screenshot_paths") or []))
+            deleted_work_text = delete_work_text_range(since, until)
             analytics.clear_summary_cache()
             history_generation = bump_history_generation(reason="manual_range_deletion")
 
@@ -97,6 +100,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             "since": since,
             "until": until,
             "deleted_events": int((result or {}).get("deleted_events") or 0),
+            "deleted_work_text_snapshots": int(deleted_work_text),
             "jsonl_events_removed": int(jsonl_removed),
             "collector_outbox_events_removed": int(pruned_outbox),
             "gateway_local_rows_marked_never_share": int(skipped_gateway),
@@ -107,7 +111,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             "gateway_recall_performed": False,
             "rows_at_or_before_gateway_cursor": int(at_or_before_cursor),
             "notice": (
-                "This deletes the selected evidence from this computer and prevents unsent/late local copies "
+                "This deletes the selected evidence (including opted-in browser work-text snapshots) "
+                "from this computer and prevents unsent/late local copies "
                 "from being shared later. Evidence already synchronized to an organization Gateway is not "
                 "automatically recalled."
             ),

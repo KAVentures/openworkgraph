@@ -29,6 +29,7 @@ DEFAULT_TOOLS = {
     "get_playbooks",
     "get_automation_capabilities",
     "read_evidence_file",
+    "get_opted_in_work_text",
 }
 EXPERIMENTAL_GOVERNANCE_TOOLS = {
     "get_action_policy_advisory",

@@ -152,7 +152,7 @@
     panel.innerHTML = `
       <div class="card pv-intro">
         <div class="pv-shield" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2.5 4.5 5.5v5.7c0 4.6 3.1 8.7 7.5 10.3 4.4-1.6 7.5-5.7 7.5-10.3V5.5L12 2.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.6 12.1 2.3 2.3 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div><h2>Your privacy</h2><div class="muted">Your evidence is stored locally by default and is never sent to OpenWorkGraph. If you connect an organization, only evidence allowed by your sharing settings can be sent to that organization's Gateway. Names, email addresses, phone numbers and personal numbers are replaced with tokens before anything is saved. Typed text, passwords and clipboard contents are never captured.</div></div>
+        <div><h2>Your privacy</h2><div class="muted">Your evidence is stored locally by default and is never sent to OpenWorkGraph. If you connect an organization, only evidence allowed by your sharing settings can be sent to that organization's Gateway. Names, email addresses, phone numbers and personal numbers are filtered before storage. Typing is not captured by default; optional browser work-text capture can save visible drafts after you turn it on below. Password fields and clipboard contents are excluded.</div></div>
       </div>
 
       <div class="card">
@@ -464,7 +464,7 @@
       try {
         const result = await api('/v1/evidence/delete', send('POST', {since: since.toISOString(), until: until.toISOString()}));
         window.closeModal?.();
-        toast(`${Number(result.deleted_events || 0)} recorded event${Number(result.deleted_events || 0) === 1 ? '' : 's'} deleted.`);
+        toast(`${Number(result.deleted_events || 0)} activity events and ${Number(result.deleted_work_text_snapshots || 0)} browser text snapshots deleted.`);
         window.load?.(); window.refreshHistory?.();
       } catch (error) {
         button.disabled = false; button.textContent = 'Delete';

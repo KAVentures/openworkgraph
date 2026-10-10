@@ -79,9 +79,11 @@ Native accessibility/UI Automation code deliberately avoids value/text patterns 
 
 ## Experimental browser work-text capture (PR #180, opt-in only)
 
-**This experimental feature is disabled by default and has not passed a full
-privacy/security review. Do not enable it in production until the draft PR is
-completed and tested.** Existing structural activity recording is unchanged.
+**This optional feature is disabled by default and remains experimental
+until real-browser cross-site privacy and coverage testing is complete.
+Do not turn it on for confidential or regulated work without an appropriate
+organizational authorization and a security review.** Existing structural
+activity recording remains unchanged.
 
 The Privacy tab has two independent switches:
 
@@ -107,7 +109,11 @@ Only active top-level pages are sampled, at most 4,000 characters per snapshot,
 so this does not represent comprehensive retrieval of everything on a webpage.
 When capture is disabled, future snapshots are rejected and saved work-text
 rows are deleted using SQLite secure deletion and VACUUM, subject to normal
-filesystem backup and snapshot limitations. The default retention is 7 days
+filesystem backup and snapshot limitations. The dashboard's Delete recorded
+activity action also deletes work-text snapshots inside the selected time range.
+The separate work-text retention setting still defaults to 7 days and does not
+follow the main history-retention selector; this should be surfaced more clearly
+before general availability. The default retention is 7 days
 (maximum 30 days and 500 rows); setting a shorter retention prunes the store.
 The recorder's Pause/Stop state also blocks new text snapshots.
 
@@ -386,3 +392,16 @@ Structural projection remains content-free. The parser recognizes and discards t
 Visible user/assistant messages are a separate opt-in channel and never enter the canonical `events` table. Before insertion, OpenWorkGraph applies its high-confidence identity learner and contextual presentation redaction; failure drops the message rather than storing an unprocessed fallback. Name detection remains best effort, so message content should still be treated as sensitive.
 
 AI read access, retention and Gateway sharing are separately controlled. Gateway sharing requires endpoint opt-in **and** organization policy, uses dedicated `agent-sessions:write` / `agent-sessions:read` scopes, and does not retrospectively upload messages captured before opt-in or during a sharing pause. Existing device credentials are not silently granted `agent-sessions:write` after upgrade; endpoints enrolled before v0.109 must be explicitly re-enrolled/rotated before transcript upload is possible.
+### Consent and privileged dashboard sessions
+
+The ordinary local API/MCP bearer can read only within its permitted AI context;
+it cannot enable the master AI switch or work-text recording. These grants
+require the current, process-bound dashboard session. The native dashboard
+reopen endpoint uses a **separate**, installation-local credential, which must
+never be included in generated MCP connection settings or browser-extension
+packages. Existing client configurations using the ordinary API bearer to
+mint dashboard sessions must migrate to the privileged local desktop caller.
+
+This is a same-user application control, **not** a defense against malware or
+agents that can read arbitrary files under the user's OS identity. A separately
+authorized Gateway text-sharing flow is not implemented.

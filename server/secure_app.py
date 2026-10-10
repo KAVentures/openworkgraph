@@ -19,6 +19,7 @@ from .local_auth import (
     create_dashboard_session,
     dashboard_session_valid,
     ensure_browser_secret,
+    ensure_dashboard_reopen_token,
     exchange_dashboard_bootstrap,
     issue_export_ticket,
     local_security_note,
@@ -444,8 +445,8 @@ async def local_capability_guard(request: Request, call_next):
         # restarting the observer. The stable same-user API capability authorizes
         # minting a fresh process-scoped dashboard session; the token is returned
         # only to the local caller and is carried to the browser in a URL fragment.
-        if not bearer_matches(request.headers.get("authorization")):
-            return _json_error("API authentication required", 401)
+        if not bearer_matches(request.headers.get("authorization"), expected=ensure_dashboard_reopen_token()):
+            return _json_error("native dashboard reopen capability required", 401)
         return JSONResponse({
             "status": "ok",
             "session": create_dashboard_session(),
@@ -515,6 +516,18 @@ async def local_capability_guard(request: Request, call_next):
             return _json_error("authentication required", 401)
         from .mcp_connection import stdio_connection_config
         return JSONResponse(stdio_connection_config())
+
+    # The local MCP/API bearer is a read capability, never permission to
+    # enable ambient recording or widen AI access. These changes require
+    # a real dashboard session. Ignoring the "ai" header is insufficient:
+    # non-browser callers can simply omit it.
+    if method == "POST" and path in {"/v1/work-text/policy", "/v1/ai-access"}:
+        if not _dashboard_authenticated(request):
+            # Preserve 401 for anonymous/cookie-only callers, while making it
+            # explicit that an API/MCP bearer lacks this privilege.
+            status = 403 if bearer_matches(request.headers.get("authorization")) else 401
+            return _json_error("dashboard session required for privacy grants", status)
+        return await call_next(request)
 
     if (method, path) in BROWSER_ROUTES:
         body = await request.body()

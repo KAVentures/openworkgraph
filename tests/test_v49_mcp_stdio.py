@@ -65,6 +65,9 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
         cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
     )
     _wait(base + "/health", api)
+    login = httpx.post(base + "/v1/dashboard-session", json={"bootstrap": "stdio-test"})
+    assert login.status_code == 200, login.text
+    dashboard_headers = {"Authorization": f"OWG-Session {login.json()['session']}"}
     headers = {"Authorization": f"Bearer {token}"}
     retention = httpx.put(
         base + "/v1/history-policy",
@@ -83,7 +86,7 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
     assert httpx.post(base + "/v1/events", json={"events": [event]}, headers=headers).status_code == 200
     # New installs default AI access ON. This test exercises the explicit user
     # opt-out path before verifying that MCP is denied and can be re-enabled.
-    disabled = httpx.post(base + "/v1/ai-access", json={"enabled": False}, headers=headers)
+    disabled = httpx.post(base + "/v1/ai-access", json={"enabled": False}, headers=dashboard_headers)
     assert disabled.status_code == 200 and disabled.json()["enabled"] is False
 
     async def exercise() -> None:
@@ -131,7 +134,7 @@ def test_real_stdio_mcp_lists_tools_denies_then_reads_when_enabled(tmp_path):
                 assert denied.is_error is True
                 assert "AI access is OFF" in " ".join(getattr(x, "text", "") for x in denied.content)
 
-                enabled = httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=headers)
+                enabled = httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=dashboard_headers)
                 assert enabled.status_code == 200 and enabled.json()["enabled"] is True
                 lease = httpx.post(
                     base + "/v1/history/ai-access",

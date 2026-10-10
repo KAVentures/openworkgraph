@@ -8,6 +8,7 @@ reads require a second grant and the existing master AI access switch.
 """
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -134,6 +135,33 @@ def _erase() -> None:
 
 
 
+
+def delete_range(since: str, until: str) -> int:
+    """Delete opted-in browser text in a dashboard-requested UTC time range.
+
+    Called by the existing Delete recorded activity control. Does not create a
+    new text database merely to process a deletion, and never affects Gateway.
+    """
+    from shared.evidence_deletion import normalize_range
+    start, end = normalize_range(since, until)
+    # SQLite stores UTC timestamps. Normalize offsets before text comparison.
+    start = datetime.fromisoformat(start).astimezone(timezone.utc).isoformat()
+    end = datetime.fromisoformat(end).astimezone(timezone.utc).isoformat()
+    with _LOCK:
+        if not _DB.exists():
+            return 0
+        with _conn() as db:
+            cursor = db.execute(
+                "DELETE FROM work_text WHERE observed_at >= ? AND observed_at < ?",
+                (start, end),
+            )
+            count = max(0, int(cursor.rowcount or 0))
+            if count:
+                db.commit()
+                db.execute("VACUUM")
+            return count
+
+
 def set_policy(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Expected policy object")
@@ -158,11 +186,31 @@ def _host_allowed(hostname: str, title: str, pathname: str) -> bool:
     host = str(hostname).strip().lower().rstrip(".")
     if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]", host, re.I):
         return False
-    if ".." in host or host.endswith(".local") or host in {"localhost", "127.0.0.1"}:
+    if ".." in host or host.endswith(".local") or host == "localhost":
+        return False
+    # A DNS-looking IP (including public, private, link-local, loopback) is
+    # not a trusted work domain. IP-host capture needs a separate allowlist.
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
         return False
     if any(host == bad or host.endswith("." + bad) for bad in _SENSITIVE_HOST_PARTS):
         return False
-    if _SENSITIVE_PATH.search(str(pathname)) or _SENSITIVE_TITLE.search(str(title)):
+    # The old segment-only regex missed /patients/42, /patient-portal and
+    # /Login.aspx. Split on common URL filename separators instead, without
+    # mistakenly blocking innocent words such as "author" or "tokenizer".
+    path_parts = set(re.split(r"[/._-]+", str(pathname).casefold()))
+    sensitive_parts = {
+        "auth", "authenticate", "authorization", "oauth", "login", "signin",
+        "sign", "password", "passcode", "reset", "recover", "recovery",
+        "mfa", "2fa", "verification", "verify", "callback", "token",
+        "billing", "payment", "payments", "checkout", "banking",
+        "patient", "patients", "medical", "health", "ehr", "emr",
+        "journal", "journals",
+    }
+    if path_parts & sensitive_parts or _SENSITIVE_PATH.search(str(pathname)) or _SENSITIVE_TITLE.search(str(title)):
         return False
     exclusions = current()
     if any(host == (pattern or "").lower().lstrip("*.") or
@@ -263,4 +311,4 @@ def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     }
 
 
-__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai"]
+__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range"]

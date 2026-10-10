@@ -66,8 +66,11 @@ def v49_api(tmp_path):
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     _wait(base + "/health", process)
+    login = httpx.post(base + "/v1/dashboard-session", json={"bootstrap": "v49-bootstrap"})
+    assert login.status_code == 200, login.text
+    dashboard_headers = {"Authorization": f"OWG-Session {login.json()['session']}"}
     try:
-        yield {"base": base, "env": env, "auth": auth, "token": token, "headers": {"Authorization": f"Bearer {token}"}}
+        yield {"base": base, "env": env, "auth": auth, "token": token, "headers": {"Authorization": f"Bearer {token}"}, "dashboard_headers": dashboard_headers}
     finally:
         _stop(process)
 
@@ -150,7 +153,7 @@ def test_ai_access_defaults_on_and_secure_runtime_honours_explicit_off(v49_api):
     disabled = httpx.post(
         v49_api["base"] + "/v1/ai-access",
         json={"enabled": False},
-        headers=v49_api["headers"],
+        headers=v49_api["dashboard_headers"],
     )
     assert disabled.status_code == 200 and disabled.json()["enabled"] is False
 
@@ -161,7 +164,7 @@ def test_ai_access_defaults_on_and_secure_runtime_honours_explicit_off(v49_api):
     activity = httpx.get(v49_api["base"] + "/v1/mcp-activity", headers=v49_api["headers"]).json()["items"]
     assert activity and activity[0]["tool"] == "get_workflow_trace" and activity[0]["status"] == "denied"
 
-    enabled = httpx.post(v49_api["base"] + "/v1/ai-access", json={"enabled": True}, headers=v49_api["headers"])
+    enabled = httpx.post(v49_api["base"] + "/v1/ai-access", json={"enabled": True}, headers=v49_api["dashboard_headers"])
     assert enabled.json()["enabled"] is True
     allowed = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=v49_api["env"], capture_output=True, text=True)
     assert allowed.returncode == 0, allowed.stderr
