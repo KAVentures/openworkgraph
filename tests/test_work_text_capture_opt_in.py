@@ -185,3 +185,21 @@ def test_cloud_snapshot_respects_never_record_after_initial_capture(isolated, mo
         "hosts": ["docs.example.org"], "title_words": [], "apps": [], "defaults": {},
     })
     assert isolated.cloud_sync_snapshot()["items"] == []
+
+
+def test_cloud_seven_day_cap_does_not_prune_longer_local_retention(isolated):
+    from datetime import datetime, timedelta, timezone
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True, "retention_days": 30})
+    isolated.set_policy({
+        "cloud_read_enabled": True, "cloud_ack_version": isolated.CLOUD_ACK_VERSION,
+    })
+    old = datetime.now(timezone.utc) - timedelta(days=10)
+    with isolated._conn() as db:
+        db.execute("""INSERT INTO work_text
+            (observed_at,expires_at,hostname,page_title,kind,redacted_text,digest)
+            VALUES (?,?,?,?,?,?,?)""",
+            (old.isoformat(), (old+timedelta(days=30)).isoformat(),
+             "docs.example.org", "Old local note", "page", "Keep this local note", "digest"))
+    assert isolated.cloud_sync_snapshot()["items"] == []
+    with isolated._conn() as db:
+        assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 1
