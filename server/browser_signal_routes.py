@@ -33,6 +33,8 @@ def browser_context_with_signal_settings() -> dict[str, Any]:
         "device_id": str(core.COLLECTOR_STATUS.get("device_id") or ""),
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
+        # Separate explicit, off-by-default content collection permission.
+        "work_text_capture": __import__("server.work_text_capture", fromlist=["get_policy"]).get_policy()["capture_enabled"],
         # These local patterns are supplied to the paired extension only so it can
         # fail closed before an optional rich locator enters its retry queue. The
         # server applies the same policy again at ingest.
