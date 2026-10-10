@@ -111,7 +111,12 @@ async function getJson(path) {
 
 async function refreshWorkContext() {
   const fresh = await getJson("/v1/browser-context");
-  if (!fresh) return null;
+  if (!fresh) {
+    try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: false}); } catch (_) {}
+    return null;
+  }
+  // Never persist rich text in browser storage; only the server's live opt-in flag.
+  try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: fresh.work_text_capture === true}); } catch (_) {}
   const context = {
     organization_id: String(fresh.organization_id || ""),
     actor_id: String(fresh.actor_id || ""),
@@ -262,7 +267,33 @@ function shouldEmitNav(tabId, url, kind) {
   return true;
 }
 
+// A distinct non-queued channel for optional work text; structural telemetry
+// never transports page bodies or draft values. The server rechecks consent.
+async function deliverWorkTextSnapshot(message, sender) {
+  if (sender?.frameId !== 0 || !sender?.tab?.active) return;
+  const source = safeUrl(sender.tab.url || "");
+  if (!source || source.hostname !== String(message.hostname || "").toLowerCase()) return;
+  if (sanitizePathname(String(message.pathname || "")) !== source.pathname) return;
+  if (!["page", "draft"].includes(message.kind) ||
+      typeof message.text !== "string" || !message.text.length || message.text.length > 4000) return;
+  const fresh = await getJson("/v1/browser-context"); // live opt-in, never cached on send
+  const on = fresh?.work_text_capture === true;
+  try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: on}); } catch (_) {}
+  if (!on) return;
+  await postDirect("/v1/work-text/ingest", {
+    hostname: source.hostname,
+    pathname: source.pathname,
+    title: String(sender.tab.title || "").slice(0, 240),
+    kind: message.kind,
+    text: message.text,
+  });
+}
+
 ext.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "owg_work_text_snapshot") {
+    deliverWorkTextSnapshot(message, sender).catch(() => {});
+    return;
+  }
   if (!message || message.type !== "workflow_observer_event") return;
   const topFrame = message.metadata?.top_frame !== false;
   const pageSource = topFrame ? (message.page?.url || sender.tab?.url || "") : (sender.tab?.url || "");
