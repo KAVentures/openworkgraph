@@ -12,6 +12,16 @@
   <p id="intro">Checking local pairing…</p>
   <button id="connect">Connect to OpenWorkGraph</button>
   <div class="status" id="status">Keep OpenWorkGraph running on this computer.</div>
+  <section style="margin-top:13px;padding:10px;background:white;border:1px solid #dfe2dc;border-radius:8px">
+    <strong>Share selected page text with local AI</strong>
+    <p>Optional, one-time permission. Highlight up to 4,000 characters on a normal web page, then click Preview. The selected text is never added to the regular recording or synced to the Gateway. A local AI can read the redacted excerpt once within five minutes.</p>
+    <button class="secondary" id="previewSelection">Preview selection</button>
+    <div id="selectionReview" hidden>
+      <p>Review carefully: text may contain private information that automated filters can miss. This is for local AI connections only, not ChatGPT Work's remote Gateway.</p>
+      <textarea readonly id="selectionText" aria-label="Selected text preview" style="box-sizing:border-box;width:100%;height:100px;font:12px/1.4 system-ui;border:1px solid #cfd3cc;border-radius:7px"></textarea>
+      <div class="row"><button id="approveSelection">Share once</button><button id="cancelSelection" class="secondary">Cancel</button></div>
+    </div>
+  </section>
   <div class="fallback">
     <details>
       <summary>Pair with a code instead</summary>
@@ -19,6 +29,6 @@
       <div class="row"><input id="code" inputmode="numeric" maxlength="8" placeholder="8-digit code"><button class="secondary" id="pair">Pair</button></div>
     </details>
   </div>
-  <script src="popup.js"></script>
+  <script src="browser_auth.js"></script>\n  <script src="popup.js"></script>
 </body>
 </html>
