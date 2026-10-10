@@ -198,3 +198,29 @@ addEventListener("popstate", () => sendNavigation("popstate"));
 addEventListener("hashchange", () => sendNavigation("hashchange"));
 addEventListener("DOMContentLoaded", () => sendNavigation("dom_ready"), {once: true});
 addEventListener("pageshow", () => sendNavigation("pageshow"));
+
+// User-initiated ONLY: selected non-editable page text is never part of
+// background telemetry, the durable retry queue, or clipboard capture.
+ext.runtime.onMessage.addListener((message, _sender, respond) => {
+  if (message?.type !== "owg_get_selected_text_once" || !isTopFrame()) return;
+  try {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    const parent = node?.nodeType === 1 ? node : node?.parentElement;
+    const focus = selection?.focusNode;
+    const focusParent = focus?.nodeType === 1 ? focus : focus?.parentElement;
+    const editable = el => !!el?.closest?.('input, textarea, select, [contenteditable], [role="textbox"], [role="searchbox"]');
+    if (!selection || selection.isCollapsed || editable(parent) || editable(focusParent)) {
+      respond({ok: false, detail: "Select non-editable page text first."});
+      return;
+    }
+    const text = String(selection.toString() || "").trim();
+    if (!text || text.length > 4000) {
+      respond({ok: false, detail: "Select between 1 and 4000 characters."});
+      return;
+    }
+    respond({ok: true, text, hostname: location.hostname, page_url: location.origin + location.pathname, title: document.title});
+  } catch (_) {
+    respond({ok: false, detail: "This page does not allow text selection capture."});
+  }
+});
