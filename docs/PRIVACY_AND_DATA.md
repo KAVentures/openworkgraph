@@ -309,7 +309,7 @@ Browser evidence removes query strings and fragments. Token-like or identifier-l
 
 ## AI access switch
 
-AI access is the single gate for every MCP read. It is **off on a new install**, and every MCP tool call checks it live. Since v0.118 the person's choice is remembered across restarts (stored as `ai_access.json` in the local auth directory with owner-only permissions). **Turn AI access off every time OpenWorkGraph starts** (Privacy tab, Advanced view) restores the earlier per-run behavior. If the state file is missing or unreadable, access stays off. Saved-history access is a separate grant that always expires (at most 24 hours).
+AI access is the single gate for every MCP read. It is **off on a new install**, and every MCP tool call checks it live. Since v0.118 the person's choice is remembered across restarts (stored as `ai_access.json` in the local auth directory with owner-only permissions). **Turn AI access off every time OpenWorkGraph starts** (Privacy tab, Advanced view) restores the earlier per-run behavior. If the state file is missing or unreadable, access stays off. Saved-history access is a separate grant: it may expire within 24 hours, or remain active until explicitly revoked when the user selects that option. Turning off AI access revokes saved-history access as well.
 
 ## MCP trust boundary
 
