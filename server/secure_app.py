@@ -19,6 +19,7 @@ from .local_auth import (
     create_dashboard_session,
     dashboard_session_valid,
     ensure_browser_secret,
+    ensure_dashboard_reopen_token,
     exchange_dashboard_bootstrap,
     issue_export_ticket,
     local_security_note,
@@ -444,8 +445,8 @@ async def local_capability_guard(request: Request, call_next):
         # restarting the observer. The stable same-user API capability authorizes
         # minting a fresh process-scoped dashboard session; the token is returned
         # only to the local caller and is carried to the browser in a URL fragment.
-        if not bearer_matches(request.headers.get("authorization")):
-            return _json_error("API authentication required", 401)
+        if not bearer_matches(request.headers.get("authorization"), expected=ensure_dashboard_reopen_token()):
+            return _json_error("native dashboard reopen capability required", 401)
         return JSONResponse({
             "status": "ok",
             "session": create_dashboard_session(),
