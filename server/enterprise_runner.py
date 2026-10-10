@@ -22,6 +22,7 @@ def main() -> None:
     import server.work_profile_routes  # noqa: F401
     import server.context_pulse_routes  # noqa: F401
     import server.browser_signal_routes  # noqa: F401
+    import server.ephemeral_page_routes  # noqa: F401
     import server.browser_agent_projection  # noqa: F401
     import server.agent_dashboard_control_plane  # noqa: F401
     import server.custom_harness_control_plane  # noqa: F401
