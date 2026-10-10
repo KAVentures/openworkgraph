@@ -158,3 +158,17 @@ def test_device_worker_answers_only_during_local_cloud_opt_in(relay_setup, monke
         assert worker.process_pending(client, url="http://testserver", state=state, now=200.0) == 0
         assert relay.read_result(db, organization_id=actor, actor_id=actor,
                                  request_id=second["request_id"])["status"] == "pending"
+
+
+def test_scheduled_cleanup_erases_expired_encrypted_rows_without_key(relay_setup, monkeypatch):
+    db, actor, _ = relay_setup
+    rid = relay.queue_search(db, organization_id=actor, actor_id=actor, query="cleanup")
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE work_text_relay SET expires_at=? WHERE request_id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), rid["request_id"])
+        )
+    monkeypatch.delenv("OWG_WORK_TEXT_RELAY_KEY")
+    assert relay.purge_expired(db) == 1
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM work_text_relay").fetchone()[0] == 0
