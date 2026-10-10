@@ -51,6 +51,25 @@ with TestClient(app) as client:
     assert enabled.json()["ai_read_enabled"] is False
     enabled = client.post("/v1/work-text/policy", json={"ai_read_enabled": True}, headers=dashboard)
     assert enabled.status_code == 200 and enabled.json()["ai_read_enabled"] is True, enabled.text
+    # Cloud content access additionally needs the explicit versioned notice.
+    missing = client.post(
+        "/v1/work-text/policy", json={"cloud_read_enabled": True}, headers=dashboard
+    )
+    assert missing.status_code == 403, missing.text
+    assert wt.get_policy()["cloud_read_enabled"] is False
+    granted = client.post(
+        "/v1/work-text/policy",
+        json={"cloud_read_enabled": True, "cloud_ack_version": wt.CLOUD_ACK_VERSION},
+        headers=dashboard,
+    )
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["cloud_read_enabled"] is True
+    assert granted.json()["cloud_granted_at"]
+    # Even after user opt-in, an API bearer cannot modify cloud consent.
+    assert client.post(
+        "/v1/work-text/policy", json={"cloud_read_enabled": False}, headers=bearer
+    ).status_code == 403
+
     disabled = client.post("/v1/work-text/policy", json={"capture_enabled": False}, headers=dashboard)
     assert disabled.status_code == 200 and disabled.json()["ai_read_enabled"] is False, disabled.text
 '''
