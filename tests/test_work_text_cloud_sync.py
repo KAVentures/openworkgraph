@@ -92,10 +92,11 @@ def test_cloud_sync_search_revoke_and_actor_isolation(setup_cloud):
 def test_cloud_manifest_deletions_and_new_grant_clear_old_corpus(setup_cloud):
     db, app, actor, _ = setup_cloud
     p = db.authenticate("alice-device")
-    first = _payload(items=[_entry()], refs=["owg:wt:10"])
+    epoch = _time(-1)
+    first = {**_payload(items=[_entry()], refs=["owg:wt:10"]), "granted_at": epoch}
     cloud.sync(db, p, **first)
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"]
-    cloud.sync(db, p, **_payload(items=[], refs=[]))
+    cloud.sync(db, p, **{**_payload(items=[], refs=[]), "granted_at": epoch})
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"] == []
     cloud.sync(db, p, **first)
     # A new explicit consent epoch cannot silently resurrect old cloud content.
