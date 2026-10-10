@@ -142,28 +142,46 @@ def test_delete_recorded_activity_range_also_erases_text(isolated):
     assert isolated.ingest(example())["status"] == "recorded_locally"
 
 
-def test_cloud_relay_opt_in_is_independent_and_revocable(isolated):
+def test_cloud_upload_requires_explicit_versioned_ack_and_exports_only_new_rows(isolated):
     assert isolated.get_policy()["cloud_read_enabled"] is False
     isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
-    isolated.ingest(example())
-    with pytest.raises(PermissionError):
-        isolated.search_for_cloud("Project rollout")
-    granted = isolated.set_policy({"cloud_read_enabled": True})
-    assert granted["cloud_read_enabled"] is True
-    rows = isolated.search_for_cloud("Project rollout")["items"]
-    assert len(rows) == 1
-    assert "Project rollout" in rows[0]["redacted_text"]
-    assert rows[0]["ref"].startswith("owg:wt:")
-    assert isolated.search_for_cloud("missing term")["items"] == []
-
-    # Revoking the local read grant automatically revokes cloud read, too.
-    revoked = isolated.set_policy({"ai_read_enabled": False})
-    assert revoked["cloud_read_enabled"] is False
-    with pytest.raises(PermissionError):
-        isolated.search_for_cloud("Project rollout")
-    isolated.set_policy({"ai_read_enabled": True, "cloud_read_enabled": True})
-    isolated.set_policy({"capture_enabled": False})
+    isolated.ingest(example(text="Old private local note."))
+    with pytest.raises(PermissionError, match="acknowledged"):
+        isolated.set_policy({"cloud_read_enabled": True})
     assert isolated.get_policy()["cloud_read_enabled"] is False
-    assert isolated.get_policy()["ai_read_enabled"] is False
-    with isolated._conn() as db:
-        assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 0
+    with pytest.raises(PermissionError):
+        isolated.cloud_sync_snapshot()
+
+    granted = isolated.set_policy({
+        "cloud_read_enabled": True, "cloud_ack_version": isolated.CLOUD_ACK_VERSION,
+    })
+    assert granted["cloud_read_enabled"] is True
+    assert granted["cloud_granted_at"]
+    assert isolated.cloud_sync_snapshot()["items"] == []  # No retroactive upload.
+
+    isolated.ingest(example(text="New project document after explicit cloud consent."))
+    items = isolated.cloud_sync_snapshot()["items"]
+    assert len(items) == 1
+    assert items[0]["ref"].startswith("owg:wt:")
+    assert "after explicit" in items[0]["redacted_text"]
+    assert "Old private" not in str(items)
+    assert "pathname" not in items[0]
+
+    isolated.set_policy({"ai_read_enabled": False})
+    assert isolated.get_policy()["cloud_read_enabled"] is False
+    with pytest.raises(PermissionError):
+        isolated.cloud_sync_snapshot()
+    with pytest.raises(PermissionError, match="acknowledged"):
+        isolated.set_policy({"ai_read_enabled": True, "cloud_read_enabled": True})
+
+
+def test_cloud_snapshot_respects_never_record_after_initial_capture(isolated, monkeypatch):
+    from server import capture_exclusions
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
+    isolated.set_policy({"cloud_read_enabled": True, "cloud_ack_version": isolated.CLOUD_ACK_VERSION})
+    isolated.ingest(example(text="Allowed content after consent."))
+    assert len(isolated.cloud_sync_snapshot()["items"]) == 1
+    monkeypatch.setattr(capture_exclusions, "current", lambda: {
+        "hosts": ["docs.example.org"], "title_words": [], "apps": [], "defaults": {},
+    })
+    assert isolated.cloud_sync_snapshot()["items"] == []
