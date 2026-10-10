@@ -18,6 +18,7 @@ from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
 from .settings import PRODUCT_VERSION, GatewaySettings
+from . import work_text_relay
 
 
 class EnrollmentRequest(BaseModel):
@@ -53,6 +54,11 @@ class EvidenceBatch(BaseModel):
 
 class AgentSessionMessageBatch(BaseModel):
     messages: list[dict[str, Any]]
+
+
+class WorkTextRelayReply(BaseModel):
+    request_id: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):
@@ -102,6 +108,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         db.init()
         init_enrollment_schema(db)
         init_lifecycle_schema(db)
+        work_text_relay.init_schema(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -386,6 +393,42 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     def audit_log(organization_id: str, limit: int = 100, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         return {"items": db.audit_rows(organization_id, limit)}
+
+    # Sensitive content is never part of ordinary evidence batch sync.
+    # These endpoints require a linked personal device, while every retrieval
+    # has a separate persistent user opt-in enforced by the local worker.
+    @app.get("/v1/device/work-text-requests")
+    def device_work_text_requests(p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            return work_text_relay.pending_for_device(db, p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="work text relay unavailable")
+
+    @app.post("/v1/device/work-text-response")
+    def device_work_text_response(request: WorkTextRelayReply, p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            response = work_text_relay.answer_from_device(db, p, request.request_id, request.items)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="work text relay unavailable")
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.relay_answered", details={"request_id": request.request_id, "count": len(request.items)})
+        return response
+
+    @app.post("/v1/device/work-text-revoke")
+    def device_work_text_revoke(p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            result = work_text_relay.revoke_device(db, p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.relay_revoked", details={"count": result["requests_deleted"]})
+        return result
 
     @app.get("/v1/device-policy")
     def device_policy(p: Principal = Depends(principal)) -> dict[str, Any]:
