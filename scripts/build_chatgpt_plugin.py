@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 from urllib.parse import urlparse
@@ -22,7 +23,7 @@ def _https(value: str, label: str) -> str:
     return value.rstrip("/")
 
 
-def build(*, mcp_url: str, homepage: str, privacy_url: str, company_url: str, support_url: str, terms_url: str, demo_recording_url: str, logo: Path, countries: list[str], developer_name: str, version: str, output: Path) -> Path:
+def build(*, mcp_url: str, homepage: str, privacy_url: str, company_url: str, support_url: str, terms_url: str, demo_recording_url: str, logo: Path, countries: list[str], developer_name: str, version: str, output: Path, registered_app_id: str | None = None) -> Path:
     mcp_url = _https(mcp_url, "mcp_url")
     homepage = _https(homepage, "homepage")
     privacy_url = _https(privacy_url, "privacy_url")
@@ -111,8 +112,22 @@ def build(*, mcp_url: str, homepage: str, privacy_url: str, company_url: str, su
             }
         }
     }
+    # A registered ChatGPT app is an alternative to a bundled MCP server.
+    # Keep the existing portable/direct-MCP output as the default. A mapping
+    # must reference a *real* app registered for this exact OAuth endpoint in
+    # the target workspace; never synthesize its identity from the MCP URL.
+    if registered_app_id:
+        raw = str(registered_app_id).strip()
+        if not re.fullmatch(r"(?:plugin_)?asdk_app_[0-9a-fA-F]{32}", raw):
+            raise SystemExit("registered_app_id must be a real plugin_asdk_app_/asdk_app_ technical ID")
+        canonical_id = raw.removeprefix("plugin_")
+        manifest["extensions"]["com.openai"]["apps"] = "./.app.json"
+        registered = {"apps": {"openworkgraph": {"id": canonical_id, "required": True}}}
+        (package / ".app.json").write_text(json.dumps(registered, indent=2) + "\n", encoding="utf-8")
+    else:
+        # Portable MCP package for existing Codex / ChatGPT Work connections.
+        (package / "mcp.json").write_text(json.dumps(mcp, indent=2) + "\n", encoding="utf-8")
     (package / "plugin.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    (package / "mcp.json").write_text(json.dumps(mcp, indent=2) + "\n", encoding="utf-8")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -136,6 +151,7 @@ def main() -> None:
     parser.add_argument("--developer-name", required=True, help="Must match the verified publisher identity")
     parser.add_argument("--version", default="1.0.0")
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "openworkgraph-chatgpt-plugin.zip")
+    parser.add_argument("--registered-app-id", help="Optional real ChatGPT registered-app ID (plugin_asdk_app_...); emits a separate .app.json variant without bundled MCP")
     args = parser.parse_args()
     print(build(
         mcp_url=args.mcp_url,
@@ -150,6 +166,7 @@ def main() -> None:
         developer_name=args.developer_name,
         version=args.version,
         output=args.output,
+        registered_app_id=args.registered_app_id,
     ))
 
 

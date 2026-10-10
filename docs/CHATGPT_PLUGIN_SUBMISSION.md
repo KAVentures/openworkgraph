@@ -193,3 +193,50 @@ Before pressing Submit:
 
 Do not submit the Tunnel endpoint, a localhost URL, a placeholder domain, or the
 internal fixed-service-token Gateway MCP.
+
+
+## Optional registered ChatGPT app packaging (personal/workspace experiment)
+
+**Do not replace a working direct-MCP plugin simply to try this variant.** OpenAI's
+plugin quickstart specifically tests in ChatGPT Work. Availability in ordinary
+Chat is a separate product-surface question and is **not guaranteed** by this
+packaging change. Record results for Chat, Work and Codex independently.
+
+A private remote MCP app may be registered separately through ChatGPT Plugins
+→ **+** → **Add custom MCP server**, using the already deployed, OAuth-protected
+`https://mcp.owg.kinvectum.com/mcp` endpoint. Complete real sign-in and verify
+the tool list before packaging anything. Do not re-link or revoke a working
+OpenWorkGraph Gateway device as part of this experiment.
+
+A successful registration has a technical ID in the browser URL beginning
+`plugin_asdk_app_`. The app mapping uses the same ID **without only the leading
+`plugin_`**, leaving `asdk_app_...`. The build script accepts either form,
+rejects placeholders/malformed IDs, and generates `.app.json`:
+
+```json
+{
+  "apps": {
+    "openworkgraph": {
+      "id": "asdk_app_<actual registered app ID>",
+      "required": true
+    }
+  }
+}
+```
+
+To create a **separate** package, repeat the normal production build command
+above with an actual `--registered-app-id` and a different `--output` path.
+That variant sets `extensions.com.openai.apps` to `./.app.json` and deliberately
+**omits** `mcp.json` so the remote MCP is not registered twice. The default build,
+without the extra flag, retains the original portable `mcp.json` unchanged.
+
+Check that the registered app belongs to the intended ChatGPT workspace and
+really points to the same OAuth issuer, audience, tenant and endpoint. Then
+install/test the generated private package independently in fresh **Chat**,
+**Work**, and **Codex** conversations. Test both explicit mention and indirect
+selection; log OAuth prompts and tool calls. If Chat does not expose it, do
+**not** claim a packaging fix: that may be a product-surface restriction. Keep
+the existing Work/Codex plugin installed until the new variant is proven.
+
+No IDs, bearer credentials, OAuth client secrets, or test-user work evidence
+belong in the repository.
