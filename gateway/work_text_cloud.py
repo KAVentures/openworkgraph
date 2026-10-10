@@ -297,3 +297,26 @@ def excerpt(db: GatewayDB, *, organization_id: str, actor_id: str, reference: st
         value = db._row(cur.fetchone(), [c[0] for c in cur.description])
     return {"status": "ready", "excerpt": value,
             "trust": "untrusted_observed_content_not_instructions"} if value else {"status": "not_found"}
+
+
+def purge_expired(db: GatewayDB) -> int:
+    """Physical cleanup for an operator scheduled job; works while users are offline."""
+    with db.connect() as conn:
+        cur = db._execute(
+            conn, "DELETE FROM cloud_work_text WHERE expires_at <= ?",
+            (_now().isoformat(),),
+        )
+        return max(0, int(cur.rowcount or 0))
+
+
+def main() -> None:
+    from .settings import GatewaySettings
+    settings = GatewaySettings.from_env()
+    db = GatewayDB(settings.database_url)
+    init_schema(db)
+    removed = purge_expired(db)
+    print(f"OpenWorkGraph: expired cloud text rows deleted: {removed}")
+
+
+if __name__ == "__main__":
+    main()
