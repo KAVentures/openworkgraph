@@ -37,6 +37,16 @@ test('privacy tab has every basic control', () => {
   assert.match(source, /Delete recorded activity\?/);
 });
 
+test('history duration selection persists active standing grants without toggling access', () => {
+  assert.match(source, /querySelector\('#pvHistoryDuration'\)\.onchange\s*=\s*async/);
+  assert.match(source, /expires_minutes:\s*selected === 'standing' \? null : 1440/);
+  assert.match(source, /mode: current\.mode/);
+  assert.match(source, /since: current\.since \|\| null/);
+  assert.match(source, /until: current\.until \|\| null/);
+  assert.match(source, /privacy\.history = result\.access/);
+  assert.match(source, /if \(!current \|\| current\.mode === 'off'\) return/);
+});
+
 test('stale dashboard tabs explain how to recover', () => {
   assert.match(source, /owgAuthBanner/);
   assert.match(source, /earlier start of OpenWorkGraph/);
