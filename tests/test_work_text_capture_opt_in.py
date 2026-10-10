@@ -105,6 +105,6 @@ def test_local_text_db_uses_owner_only_permissions(isolated):
 
 def test_no_gateway_sync_or_event_queue_in_work_text_route_source():
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "server" / "work_text_routes.py").read_text()
+    src = (Path(__file__).resolve().parents[1] / "server" / "browser_signal_routes.py").read_text()
     assert "from gateway" not in src and "import gateway" not in src
     assert "event_queue" not in src and "sync_upload" not in src
