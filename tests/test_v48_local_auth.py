@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from server.local_auth import ensure_api_token, ensure_browser_secret, ensure_mcp_token
+from server.local_auth import ensure_api_token, ensure_browser_secret, ensure_mcp_token, ensure_dashboard_reopen_token
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -98,6 +98,7 @@ def secured_api(tmp_path):
     api_token = ensure_api_token(directory=auth_dir)
     browser_secret = ensure_browser_secret(directory=auth_dir)
     mcp_token = ensure_mcp_token(directory=auth_dir)
+    native_reopen_token = ensure_dashboard_reopen_token(directory=auth_dir)
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.secure_app:app", "--host", "127.0.0.1", "--port", str(api_port)],
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -105,7 +106,7 @@ def secured_api(tmp_path):
     base = f"http://127.0.0.1:{api_port}"
     _wait_http(base + "/health", process)
     try:
-        yield {"base": base, "process": process, "env": env, "api_token": api_token, "browser_secret": browser_secret, "mcp_token": mcp_token, "bootstrap": bootstrap, "auth_dir": auth_dir}
+        yield {"base": base, "process": process, "env": env, "api_token": api_token, "browser_secret": browser_secret, "mcp_token": mcp_token, "native_reopen_token": native_reopen_token, "bootstrap": bootstrap, "auth_dir": auth_dir}
     finally:
         _stop(process)
 
@@ -149,7 +150,7 @@ def test_dashboard_bootstrap_uses_port_scoped_session_not_master_token(secured_a
         assert client.post("/v1/dashboard-session/reopen").status_code == 401
         reopened = client.post(
             "/v1/dashboard-session/reopen",
-            headers={"Authorization": f"Bearer {secured_api['api_token']}"},
+            headers={"Authorization": f"Bearer {secured_api['native_reopen_token']}"},
         )
         assert reopened.status_code == 200
         reopened_session = reopened.json()["session"]
