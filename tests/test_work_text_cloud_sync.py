@@ -77,9 +77,11 @@ def test_cloud_sync_search_revoke_and_actor_isolation(setup_cloud):
         assert "redacted_text" not in result["results"][0]
         assert "Synthetic" in result["results"][0]["preview"]
         assert "owg:wt:" not in result["results"][0]["reference"]
-        assert "Synthetic planning" in cloud.excerpt(
+        full = cloud.excerpt(
             db, organization_id=actor, actor_id=actor, reference=ref
-        )["excerpt"]["redacted_text"]
+        )["excerpt"]
+        assert "Synthetic planning" in full["redacted_text"]
+        assert "item_ref" not in full  # Never reveal local SQLite row identifiers.
         assert cloud.search(db, organization_id=other, actor_id=other,
                             query="quarterly")["results"] == []
         assert cloud.excerpt(db, organization_id=other, actor_id=other,
