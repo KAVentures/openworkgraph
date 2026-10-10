@@ -64,7 +64,7 @@ def test_packaged_chatgpt_skill_matches_source_and_stays_on_public_tool_surface(
     packaged = Path("integrations/chatgpt/skills/openworkgraph/SKILL.md").read_text(encoding="utf-8")
     assert source == packaged
     assert "get_information_transfers" not in source
-    assert r"\\n\\n" not in source
+    assert r"\n\n" not in source
     assert "Do not browse OWG speculatively" in source
     assert "The user should not need to name OpenWorkGraph" in source
 
