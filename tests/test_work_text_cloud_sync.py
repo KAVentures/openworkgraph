@@ -72,7 +72,11 @@ def test_cloud_sync_search_revoke_and_actor_isolation(setup_cloud):
         result = cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")
         assert result["status"] == "ready" and len(result["results"]) == 1
         ref = result["results"][0]["reference"]
-        assert "Synthetic" not in str(result)
+        # Search intentionally includes a bounded preview. It must not
+        # expose the raw storage field or the device/local SQLite identity.
+        assert "redacted_text" not in result["results"][0]
+        assert "Synthetic" in result["results"][0]["preview"]
+        assert "owg:wt:" not in result["results"][0]["reference"]
         assert "Synthetic planning" in cloud.excerpt(
             db, organization_id=actor, actor_id=actor, reference=ref
         )["excerpt"]["redacted_text"]
