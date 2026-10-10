@@ -149,5 +149,15 @@
   addEventListener('pageshow', schedulePage);
   addEventListener('click', schedulePage, true);
   addEventListener('input', event => scheduleDraft(event.target), true);
-  new MutationObserver(schedulePage).observe(document.documentElement, {subtree:true, childList:true});
+  // At document_start some browsers have not created documentElement yet.
+  // Do not crash the entire sensor on those pages.
+  const observer = new MutationObserver(schedulePage);
+  function observeDocument() {
+    if (document.documentElement) {
+      observer.observe(document.documentElement, {subtree:true, childList:true});
+      schedulePage();
+    }
+  }
+  if (document.documentElement) observeDocument();
+  else addEventListener('DOMContentLoaded', observeDocument, {once: true});
 })();
