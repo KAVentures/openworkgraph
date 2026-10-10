@@ -445,7 +445,7 @@
       if (!enabled && !confirm('Enable cloud synchronization of new, redacted browser work text to your personal OWG account? Data remains available to connected AI for up to 7 days even when this computer is off. Your content may include third-party personal data. Changes cannot recall content already shown in an AI chat.')) return;
       try {
         privacy.workText = await api('/v1/work-text/policy', send('POST', {cloud_read_enabled: !enabled, ...(!enabled ? {cloud_ack_version: 'cloud-work-text-v1'} : {})}));
-        toast(enabled ? 'Cloud sharing disabled; Gateway deletion will be requested.' : 'Cloud content sharing enabled for new captured text.');
+        toast(enabled ? 'Cloud sharing disabled; Gateway deletion will be requested.' : 'Cloud sharing permission saved. Upload starts only when this device is linked and cloud sharing is available.');
       } catch (error) { toast(error.message || 'Could not change cloud text access.'); }
       if (enabled && panel.querySelector('#pvCloudAck')) panel.querySelector('#pvCloudAck').checked = false;
       renderPrivacy();
