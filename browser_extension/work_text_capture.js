@@ -5,6 +5,8 @@
 (() => {
   const ext = globalThis.browser ?? globalThis.chrome;
   const KEY = "openworkgraph_work_text_capture_v1";
+  const EXCLUSIONS_KEY = "openworkgraph_work_text_exclusions_v1";
+  let exclusions = {hosts: [], titles: []};
   let enabled = false;
   let pageTimer = null;
   let draftTimer = null;
@@ -24,6 +26,14 @@
   }
 
   function sensitiveSurface() {
+    const host = location.hostname.toLowerCase();
+    const title = String(document.title || "").toLowerCase();
+    if (exclusions.hosts.some(raw => {
+      const pattern = String(raw || "").toLowerCase().replace(/^\\*\\./, "");
+      return pattern && (host === pattern || host.endsWith("." + pattern));
+    })) return true;
+    if (exclusions.titles.some(raw => String(raw || "").trim() &&
+        title.includes(String(raw).toLowerCase()))) return true;
     if (DENY.test(location.hostname)) return true;
     if (/(?:^|\/)(?:login|signin|sign-in|oauth|authorize|password|reset|recovery|mfa|2fa|payment|checkout|health|patient|medical)(?:\/|$)/i.test(location.pathname)) return true;
     return DENY.test(document.title);
@@ -141,9 +151,24 @@
   }
 
   if (!isTop()) return;
-  ext.storage.local.get(KEY).then(result => setEnabled(result?.[KEY] === true)).catch(() => setEnabled(false));
+  ext.storage.local.get([KEY, EXCLUSIONS_KEY]).then(result => {
+    const value = result?.[EXCLUSIONS_KEY] || {};
+    exclusions = {
+      hosts: Array.isArray(value.hosts) ? value.hosts : [],
+      titles: Array.isArray(value.titles) ? value.titles : []
+    };
+    setEnabled(result?.[KEY] === true);
+  }).catch(() => setEnabled(false));
   ext.storage.onChanged?.addListener((changes, area) => {
-    if (area === 'local' && changes?.[KEY]) setEnabled(changes[KEY].newValue === true);
+    if (area !== 'local') return;
+    if (changes?.[EXCLUSIONS_KEY]) {
+      const value = changes[EXCLUSIONS_KEY].newValue || {};
+      exclusions = {
+        hosts: Array.isArray(value.hosts) ? value.hosts : [],
+        titles: Array.isArray(value.titles) ? value.titles : []
+      };
+    }
+    if (changes?.[KEY]) setEnabled(changes[KEY].newValue === true);
   });
   addEventListener('DOMContentLoaded', schedulePage);
   addEventListener('pageshow', schedulePage);
