@@ -363,6 +363,30 @@
       } catch (error) { toast(error.message || 'Could not change history access.'); }
       refreshPrivacy();
     };
+    // Changing the duration of an active history grant must persist immediately;
+    // otherwise the next privacy refresh silently restores the previous 24h value.
+    panel.querySelector('#pvHistoryDuration').onchange = async (event) => {
+      const current = privacy.history;
+      // When access is off, this is just a preference for the next grant.
+      if (!current || current.mode === 'off') return;
+      const selected = event.currentTarget.value;
+      try {
+        const result = await api('/v1/history/ai-access', send('POST', {
+          mode: current.mode,
+          since: current.since || null,
+          until: current.until || null,
+          expires_minutes: selected === 'standing' ? null : 1440,
+        }));
+        privacy.history = result.access;
+        toast(selected === 'standing'
+          ? 'AI apps can read older history until you revoke access.'
+          : 'AI apps can read older history for the next 24 hours.');
+        window.refreshHistory?.();
+      } catch (error) {
+        toast(error.message || 'Could not change history access duration.');
+      }
+      renderPrivacy();
+    };
     panel.querySelector('#pvRedactSwitch').onclick = async () => {
       const redacted = privacy.detail?.detail_level !== 'full';
       if (redacted && !confirm('Show AI apps titles exactly as stored? Names are already tokenized before storage, but anything the detector missed would be visible.')) return;
