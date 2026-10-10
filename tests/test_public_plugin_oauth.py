@@ -49,7 +49,7 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     response = rpc(client, mint(), 'tools/list')
     assert response.status_code == 200, response.text
     tools = response.json()['result']['tools']
-    assert len(tools) == 7
+    assert len(tools) == 9
     assert all(tool['annotations']['readOnlyHint'] for tool in tools)
     profile = rpc(client, mint(), 'tools/call', {'name': 'get_profile', 'arguments': {}})
     assert profile.status_code == 200, profile.text
