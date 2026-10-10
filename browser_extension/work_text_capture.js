@@ -13,7 +13,7 @@
   let lastPage = 0;
   let lastDraft = 0;
   let latestDraft = null;
-  const DENY = /(password|passcode|one.time|security.code|api.key|secret|token|auth|login|sign.in|mfa|2fa|bank|payment|credit.card|patient|medical)/i;
+  const DENY = /(?:password|passcode|one.time|security.code|api.key|secret|credential|login|sign.in|mfa|2fa|bank|payment|credit.card|patient|medical)/i;
   const DENY_SELECTOR = 'script,style,noscript,template,svg,iframe,input,textarea,select,option,[hidden],[aria-hidden="true"],[data-private],[data-sensitive],[contenteditable]';
   const MAX_TEXT = 4000;
 
@@ -36,7 +36,12 @@
     if (exclusions.titles.some(raw => String(raw || "").trim() &&
         title.includes(String(raw).toLowerCase()))) return true;
     if (DENY.test(location.hostname)) return true;
-    if (/(?:^|\/)(?:login|signin|sign-in|oauth|authorize|password|reset|recovery|mfa|2fa|payment|checkout|health|patient|medical)(?:\/|$)/i.test(location.pathname)) return true;
+    const components = location.pathname.toLowerCase().split(/[/._-]+/);
+    if (components.some(part => [
+      'auth','authenticate','oauth','authorize','login','signin','password','reset',
+      'recover','recovery','mfa','2fa','payment','checkout','token','patient',
+      'patients','medical','health','ehr','emr','journal','banking'
+    ].includes(part))) return true;
     return DENY.test(document.title);
   }
 
@@ -133,13 +138,17 @@
     if (!text) return;
     latestDraft = text;
     if (draftTimer) clearTimeout(draftTimer);
+    // Debounce until typing stops, then respect the cooldown without
+    // discarding the final draft when no further input event follows.
+    const cooldown = Math.max(0, 4500 - (Date.now() - lastDraft));
     draftTimer = setTimeout(() => {
       draftTimer = null;
-      if (!enabled || !latestDraft || Date.now() - lastDraft < 4500) return;
-      lastDraft = Date.now();
-      emit('draft', latestDraft);
+      if (!enabled || !latestDraft) return;
+      const finalText = latestDraft;
       latestDraft = null;
-    }, 2200);
+      lastDraft = Date.now();
+      emit('draft', finalText);
+    }, Math.max(2200, cooldown));
   }
 
   function setEnabled(value) {
