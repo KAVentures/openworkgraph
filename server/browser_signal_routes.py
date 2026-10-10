@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, Response
 from . import main as core
 from .browser_signal_settings import SETTING_KEYS, apply_profile, public_settings, save_settings
 from .main import ROOT
+from .work_text_capture import get_policy as work_text_policy
 from .secure_app import app
 
 
@@ -34,7 +35,7 @@ def browser_context_with_signal_settings() -> dict[str, Any]:
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
         # Separate explicit, off-by-default content collection permission.
-        "work_text_capture": __import__("server.work_text_capture", fromlist=["get_policy"]).get_policy()["capture_enabled"],
+        "work_text_capture": work_text_policy()["capture_enabled"],
         # These local patterns are supplied to the paired extension only so it can
         # fail closed before an optional rich locator enters its retry queue. The
         # server applies the same policy again at ingest.
