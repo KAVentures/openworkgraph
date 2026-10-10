@@ -135,6 +135,33 @@ def _erase() -> None:
 
 
 
+
+def delete_range(since: str, until: str) -> int:
+    """Delete opted-in browser text in a dashboard-requested UTC time range.
+
+    Called by the existing Delete recorded activity control. Does not create a
+    new text database merely to process a deletion, and never affects Gateway.
+    """
+    from shared.evidence_deletion import normalize_range
+    start, end = normalize_range(since, until)
+    # SQLite stores UTC timestamps. Normalize offsets before text comparison.
+    start = datetime.fromisoformat(start).astimezone(timezone.utc).isoformat()
+    end = datetime.fromisoformat(end).astimezone(timezone.utc).isoformat()
+    with _LOCK:
+        if not _DB.exists():
+            return 0
+        with _conn() as db:
+            cursor = db.execute(
+                "DELETE FROM work_text WHERE observed_at >= ? AND observed_at < ?",
+                (start, end),
+            )
+            count = max(0, int(cursor.rowcount or 0))
+            if count:
+                db.commit()
+                db.execute("VACUUM")
+            return count
+
+
 def set_policy(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Expected policy object")
@@ -284,4 +311,4 @@ def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     }
 
 
-__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai"]
+__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range"]
