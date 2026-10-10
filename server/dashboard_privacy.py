@@ -47,7 +47,7 @@ DASHBOARD_PRIVACY_JS = r"""
   window.load=privacySafeLoad;
 
   const privacyLine=document.querySelector('.privacy-line');
-  if(privacyLine) privacyLine.textContent='Stays on this computer · detected names and contact details shown as tokens · typed text is never captured';
+  if(privacyLine) privacyLine.textContent='Stays on this computer · names shown as tokens · optional work-text recording is off by default';
   const searchLabel=document.querySelector('label[for="evidenceSearch"]');
   if(searchLabel) searchLabel.textContent='Search titles, tools or actions';
 
