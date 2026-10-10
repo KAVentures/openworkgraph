@@ -184,6 +184,7 @@ def test_public_plugin_surface_is_focused_read_only_and_verifiable():
     expected = {
         "get_profile", "get_current_work_context", "search_work", "get_workflow_trace",
         "find_repeated_workflows", "get_workflow_evidence", "get_agent_runs",
+        "search_work_text", "get_work_text_excerpt",
     }
     registered = set()
     lines = source.splitlines()
