@@ -522,7 +522,10 @@ async def local_capability_guard(request: Request, call_next):
     # non-browser callers can simply omit it.
     if method == "POST" and path in {"/v1/work-text/policy", "/v1/ai-access"}:
         if not _dashboard_authenticated(request):
-            return _json_error("dashboard session required for privacy grants", 403)
+            # Preserve 401 for anonymous/cookie-only callers, while making it
+            # explicit that an API/MCP bearer lacks this privilege.
+            status = 403 if bearer_matches(request.headers.get("authorization")) else 401
+            return _json_error("dashboard session required for privacy grants", status)
         return await call_next(request)
 
     if (method, path) in BROWSER_ROUTES:
