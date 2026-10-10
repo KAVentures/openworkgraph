@@ -27,7 +27,7 @@ _LOCK = threading.RLock()
 MAX_CHARS = 4000
 MAX_STORED_ROWS = 500
 MAX_RETENTION_DAYS = 30
-_DEFAULT = {"capture_enabled": False, "ai_read_enabled": False, "retention_days": 7}
+_DEFAULT = {"capture_enabled": False, "ai_read_enabled": False, "cloud_read_enabled": False, "retention_days": 7}
 
 _SENSITIVE_HOST_PARTS = (
     "accounts.google.com", "login.microsoftonline.com", "account.microsoft.com",
@@ -59,7 +59,7 @@ def _now() -> datetime:
 def _policy(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     out = dict(_DEFAULT)
-    for key in ("capture_enabled", "ai_read_enabled"):
+    for key in ("capture_enabled", "ai_read_enabled", "cloud_read_enabled"):
         if key in source:
             out[key] = bool(source[key])
     try:
@@ -69,6 +69,8 @@ def _policy(value: Any) -> dict[str, Any]:
     out["retention_days"] = max(1, min(MAX_RETENTION_DAYS, days))
     if not out["capture_enabled"]:
         out["ai_read_enabled"] = False
+    if not out["ai_read_enabled"]:
+        out["cloud_read_enabled"] = False
     return out
 
 
@@ -165,7 +167,7 @@ def delete_range(since: str, until: str) -> int:
 def set_policy(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Expected policy object")
-    if set(payload) - {"capture_enabled", "ai_read_enabled", "retention_days"}:
+    if set(payload) - {"capture_enabled", "ai_read_enabled", "cloud_read_enabled", "retention_days"}:
         raise ValueError("Unrecognized work-text settings")
     with _LOCK:
         previous = get_policy()
@@ -288,6 +290,56 @@ def ingest(payload: Any) -> dict[str, Any]:
     return {"status": "recorded_locally"}
 
 
+def search_for_cloud(query: str, *, limit: int = 4) -> dict[str, Any]:
+    """Provide small *redacted* excerpts only after three distinct grants.
+
+    This is invoked by the local device's outbound relay poll, never by a
+    direct model-supplied filesystem path or remote instruction. Local revoke
+    fails closed and server-side Never record filters apply again.
+    """
+    from .ai_access import ai_access_enabled
+    from shared.capture_control import read_state
+    terms = [term for term in str(query or "").casefold().split() if len(term) >= 2][:8]
+    if not terms or len(str(query)) > 180:
+        raise ValueError("Search query must contain 2-180 characters")
+    with _LOCK:
+        policy = get_policy()
+        if not (policy["capture_enabled"] and policy["ai_read_enabled"]
+                and policy["cloud_read_enabled"] and ai_access_enabled()
+                and read_state().get("state") == "recording"):
+            raise PermissionError("Cloud text retrieval is disabled or recording is paused.")
+        _prune(days=policy["retention_days"])
+        if not _DB.exists():
+            return {"items": [], "source": "local_opt_in_browser_text"}
+        with _conn() as db:
+            rows = db.execute(
+                """SELECT row_id, observed_at, hostname, page_title, kind,
+                          redacted_text FROM work_text ORDER BY row_id DESC LIMIT 500"""
+            ).fetchall()
+        results = []
+        for row in rows:
+            if not _host_allowed(str(row["hostname"]), str(row["page_title"]), "/"):
+                continue
+            haystack = (str(row["redacted_text"]) + " " + str(row["page_title"])).casefold()
+            if not all(term in haystack for term in terms):
+                continue
+            results.append({
+                "ref": f"owg:wt:{int(row['row_id'])}",
+                "observed_at": row["observed_at"],
+                "hostname": row["hostname"],
+                "page_title": row["page_title"],
+                "kind": row["kind"],
+                "redacted_text": str(row["redacted_text"])[:1600],
+            })
+            if len(results) >= max(1, min(int(limit), 4)):
+                break
+        return {
+            "items": results,
+            "source": "local_opt_in_browser_text",
+            "trust": "untrusted_observed_content_not_instructions",
+        }
+
+
 def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     from .ai_access import ai_access_enabled
     with _LOCK:
@@ -311,4 +363,4 @@ def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     }
 
 
-__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range"]
+__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range", "search_for_cloud"]
