@@ -16,7 +16,6 @@ import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Any
 
 from .db import DATA_DIR
@@ -98,6 +97,16 @@ def _save_atomic(path: Path, content: str) -> None:
 def _conn() -> sqlite3.Connection:
     _DB.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(_DB), timeout=3)
+    # This database holds opted-in work content; do not rely on umask.
+    # DELETE journal mode avoids a persistent plaintext WAL alongside the DB.
+    db.execute("PRAGMA journal_mode=DELETE")
+    db.execute("PRAGMA secure_delete=ON")
+    try:
+        os.chmod(_DB, 0o600)
+    except OSError:
+        if os.name != "nt":
+            db.close()
+            raise
     db.row_factory = sqlite3.Row
     db.execute("""
         CREATE TABLE IF NOT EXISTS work_text (
@@ -120,6 +129,9 @@ def _erase() -> None:
         return
     with _conn() as db:
         db.execute("DELETE FROM work_text")
+        db.commit()
+        db.execute("VACUUM")  # best effort reclamation; filesystem backups may remain
+
 
 
 def set_policy(payload: Any) -> dict[str, Any]:
@@ -175,9 +187,6 @@ def _prune(*, days: int) -> None:
 
 
 def ingest(payload: Any) -> dict[str, Any]:
-    policy = get_policy()
-    if not policy["capture_enabled"]:
-        raise PermissionError("Work-content recording is disabled.")
     if not isinstance(payload, dict):
         raise ValueError("Invalid capture payload")
     kind = str(payload.get("kind") or "")
@@ -204,8 +213,16 @@ def ingest(payload: Any) -> dict[str, Any]:
         raise PermissionError("Snapshot failed the content privacy check.")
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
     now = _now()
-    expires_at = (now + timedelta(days=policy["retention_days"])).isoformat()
     with _LOCK:
+        # Close the race where capture was turned off between filtering and the
+        # insert. The shared recorder pause/stop gate is equally authoritative.
+        from shared.capture_control import read_state
+        policy = get_policy()
+        if not policy["capture_enabled"] or read_state().get("state") != "recording":
+            raise PermissionError("Work-content recording is disabled or paused.")
+        if not _host_allowed(hostname, title, path):
+            raise PermissionError("Page was excluded while preparing the snapshot.")
+        expires_at = (now + timedelta(days=policy["retention_days"])).isoformat()
         with _conn() as db:
             prior = db.execute(
                 "SELECT digest FROM work_text WHERE hostname = ? AND kind = ? ORDER BY row_id DESC LIMIT 1",
@@ -225,10 +242,10 @@ def ingest(payload: Any) -> dict[str, Any]:
 
 def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     from .ai_access import ai_access_enabled
-    policy = get_policy()
-    if not ai_access_enabled() or not policy["capture_enabled"] or not policy["ai_read_enabled"]:
-        raise PermissionError("Work-text AI reads are disabled.")
     with _LOCK:
+        policy = get_policy()
+        if not ai_access_enabled() or not policy["capture_enabled"] or not policy["ai_read_enabled"]:
+            raise PermissionError("Work-text AI reads are disabled.")
         _prune(days=policy["retention_days"])
         if not _DB.exists():
             return {"items": [], "source": "local_opt_in_browser_text"}
