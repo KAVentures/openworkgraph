@@ -152,7 +152,7 @@
     panel.innerHTML = `
       <div class="card pv-intro">
         <div class="pv-shield" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2.5 4.5 5.5v5.7c0 4.6 3.1 8.7 7.5 10.3 4.4-1.6 7.5-5.7 7.5-10.3V5.5L12 2.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.6 12.1 2.3 2.3 4.6-4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div><h2>Your privacy</h2><div class="muted">Your evidence is stored locally by default and is never sent to OpenWorkGraph. If you connect an organization, only evidence allowed by your sharing settings can be sent to that organization's Gateway. Names, email addresses, phone numbers and personal numbers are filtered before storage. Typing is not captured by default; optional browser work-text capture can save visible drafts after you turn it on below. Password fields and clipboard contents are excluded.</div></div>
+        <div><h2>Your privacy</h2><div class="muted">Your evidence is stored locally by default. If you connect an organization, permitted structural evidence can be shared with its Gateway. Optional cloud work-text sharing below is a separate personal-account choice that uploads redacted excerpts. Names, email addresses, phone numbers and personal numbers are filtered before storage. Typing is not captured by default; optional browser work-text capture can save visible drafts after you turn it on below. Password fields and clipboard contents are excluded.</div></div>
       </div>
 
       <div class="card">
@@ -185,12 +185,16 @@
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvRedactSwitch" aria-checked="true" aria-label="Hide names and contact details from AI apps"></button></div>
         </div>
         <div class="pv-row" id="pvWorkTextRow">
-          <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer, never on the Gateway.</div></div>
+          <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
         </div>
         <div class="pv-row pv-sub" id="pvWorkTextAiRow">
-          <div><h3>Allow local AI apps to read saved work text</h3><div class="muted">A separate permission requiring AI access. The remote ChatGPT Gateway plugin cannot read this local text store.</div></div>
+          <div><h3>Allow local AI apps to read saved work text</h3><div class="muted">A separate permission requiring AI access. Cloud apps require a separate cloud-sharing opt-in.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextAiSwitch" aria-checked="false" aria-label="Allow local AI apps to read captured work text"></button></div>
+        </div>
+        <div class="pv-row pv-sub" id="pvWorkTextCloudRow">
+          <div><h3>Share redacted work content with my cloud AI apps</h3><div class="muted">Off by default. After you give permission, only new redacted browser page text and drafts from permitted sites are synchronized to your personal OWG Gateway account. Stored for up to 7 days; connected AI can search while your computer is off. Cloud sharing can involve third-party personal or confidential information; filters are not perfect. You can revoke access and delete the cloud copies.</div><label class="muted" style="display:block;margin-top:9px"><input type="checkbox" id="pvCloudAck" /> I understand content will be uploaded and may contain third-party information. I confirm I am authorized to share it.</label></div>
+          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextCloudSwitch" aria-checked="false" aria-label="Allow cloud AI to retrieve captured work text"></button></div>
         </div>
         <div class="pv-row" id="pvBrowserRow">
           <div><h3>Browser detail</h3><div class="muted" id="pvBrowserText">How much the browser sensor keeps about the pages you use.</div></div>
@@ -287,8 +291,11 @@
     // Separate work-text capture and AI read grants; both default OFF.
     setSwitch('#pvWorkTextSwitch', !!p.workText?.capture_enabled);
     setSwitch('#pvWorkTextAiSwitch', !!p.workText?.ai_read_enabled);
+    setSwitch('#pvWorkTextCloudSwitch', !!p.workText?.cloud_read_enabled);
     const aiWorkText = $('#pvWorkTextAiSwitch');
     if (aiWorkText) aiWorkText.disabled = !p.workText?.capture_enabled;
+    const cloudText = $('#pvWorkTextCloudSwitch');
+    if (cloudText) cloudText.disabled = !p.workText?.capture_enabled || !p.workText?.ai_read_enabled;
     // Browser detail
     const profile = String(p.browser?.profile || '');
     document.querySelectorAll('#pvBrowserRow [data-profile]').forEach(button => button.setAttribute('aria-checked', button.dataset.profile === profile ? 'true' : 'false'));
@@ -410,7 +417,7 @@
     };
     panel.querySelector('#pvWorkTextSwitch').onclick = async () => {
       const enabled = !!privacy.workText?.capture_enabled;
-      if (!enabled && !confirm('Enable automatic browser work-text capture? Email/page text and drafts may contain sensitive information that filters cannot always detect. Content stays local, is never shared with Gateway, and is retained for up to 7 days. Turning capture off deletes saved text.')) return;
+      if (!enabled && !confirm('Enable automatic browser work-text capture? Email/page text and drafts may contain sensitive information that filters cannot always detect. Content stays local unless you separately opt into cloud synchronization below. Local retention defaults to 7 days. Turning capture off deletes saved text.')) return;
       if (enabled && !confirm('Turn off work-text capture and delete all previously saved browser work text?')) return;
       try {
         privacy.workText = await api('/v1/work-text/policy', send('POST', {capture_enabled: !enabled}));
@@ -421,11 +428,26 @@
     panel.querySelector('#pvWorkTextAiSwitch').onclick = async () => {
       if (!privacy.workText?.capture_enabled) return;
       const enabled = !!privacy.workText.ai_read_enabled;
-      if (!enabled && !confirm('Allow connected local AI apps to read saved redacted browser page and draft text? This does not share text with the Gateway.')) return;
+      if (!enabled && !confirm('Allow connected local AI apps to read saved redacted browser page and draft text? A separate cloud permission is required for Gateway-assisted retrieval.')) return;
       try {
         privacy.workText = await api('/v1/work-text/policy', send('POST', {ai_read_enabled: !enabled}));
         toast(enabled ? 'Local AI text reads disabled.' : 'Local AI text reads enabled.');
       } catch (error) { toast(error.message || 'Could not change AI text access.'); }
+      renderPrivacy();
+    };
+    panel.querySelector('#pvWorkTextCloudSwitch').onclick = async () => {
+      if (!privacy.workText?.capture_enabled || !privacy.workText?.ai_read_enabled) return;
+      const enabled = !!privacy.workText.cloud_read_enabled;
+      if (!enabled && !panel.querySelector('#pvCloudAck')?.checked) {
+        toast('Please confirm your authorization and cloud-sharing acknowledgement first.');
+        return;
+      }
+      if (!enabled && !confirm('Enable cloud synchronization of new, redacted browser work text to your personal OWG account? Data remains available to connected AI for up to 7 days even when this computer is off. Your content may include third-party personal data. Changes cannot recall content already shown in an AI chat.')) return;
+      try {
+        privacy.workText = await api('/v1/work-text/policy', send('POST', {cloud_read_enabled: !enabled, ...(!enabled ? {cloud_ack_version: 'cloud-work-text-v1'} : {})}));
+        toast(enabled ? 'Cloud sharing disabled; Gateway deletion will be requested.' : 'Cloud sharing permission saved. Upload starts only when this device is linked and cloud sharing is available.');
+      } catch (error) { toast(error.message || 'Could not change cloud text access.'); }
+      if (enabled && panel.querySelector('#pvCloudAck')) panel.querySelector('#pvCloudAck').checked = false;
       renderPrivacy();
     };
     panel.querySelectorAll('#pvBrowserRow [data-profile]').forEach(button => button.onclick = async () => {

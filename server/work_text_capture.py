@@ -27,7 +27,12 @@ _LOCK = threading.RLock()
 MAX_CHARS = 4000
 MAX_STORED_ROWS = 500
 MAX_RETENTION_DAYS = 30
-_DEFAULT = {"capture_enabled": False, "ai_read_enabled": False, "retention_days": 7}
+CLOUD_ACK_VERSION = "cloud-work-text-v1"
+_DEFAULT = {
+    "capture_enabled": False, "ai_read_enabled": False,
+    "cloud_read_enabled": False, "retention_days": 7,
+    "cloud_ack_version": "", "cloud_granted_at": "",
+}
 
 _SENSITIVE_HOST_PARTS = (
     "accounts.google.com", "login.microsoftonline.com", "account.microsoft.com",
@@ -59,7 +64,7 @@ def _now() -> datetime:
 def _policy(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     out = dict(_DEFAULT)
-    for key in ("capture_enabled", "ai_read_enabled"):
+    for key in ("capture_enabled", "ai_read_enabled", "cloud_read_enabled"):
         if key in source:
             out[key] = bool(source[key])
     try:
@@ -67,8 +72,14 @@ def _policy(value: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         days = 7
     out["retention_days"] = max(1, min(MAX_RETENTION_DAYS, days))
+    out["cloud_ack_version"] = str(source.get("cloud_ack_version") or "")[:80]
+    out["cloud_granted_at"] = str(source.get("cloud_granted_at") or "")[:60]
+    if out["cloud_ack_version"] != CLOUD_ACK_VERSION or not out["cloud_granted_at"]:
+        out["cloud_read_enabled"] = False
     if not out["capture_enabled"]:
         out["ai_read_enabled"] = False
+    if not out["ai_read_enabled"]:
+        out["cloud_read_enabled"] = False
     return out
 
 
@@ -165,11 +176,18 @@ def delete_range(since: str, until: str) -> int:
 def set_policy(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Expected policy object")
-    if set(payload) - {"capture_enabled", "ai_read_enabled", "retention_days"}:
+    if set(payload) - {"capture_enabled", "ai_read_enabled", "cloud_read_enabled", "cloud_ack_version", "retention_days"}:
         raise ValueError("Unrecognized work-text settings")
     with _LOCK:
         previous = get_policy()
-        next_policy = _policy({**previous, **payload})
+        merged = {**previous, **payload}
+        if payload.get("cloud_read_enabled") is True and not previous["cloud_read_enabled"]:
+            if payload.get("cloud_ack_version") != CLOUD_ACK_VERSION:
+                raise PermissionError("Current cloud sharing notice must be acknowledged")
+            if not previous["capture_enabled"] or not previous["ai_read_enabled"]:
+                raise PermissionError("Enable capture and local AI access first")
+            merged["cloud_granted_at"] = _now().isoformat()
+        next_policy = _policy(merged)
         # Revocation always deletes old content; opting in never retroactively
         # scans existing pages or data from the disabled interval.
         _save_atomic(_POLICY, json.dumps(next_policy, indent=2) + "\n")
@@ -288,6 +306,51 @@ def ingest(payload: Any) -> dict[str, Any]:
     return {"status": "recorded_locally"}
 
 
+def cloud_sync_snapshot() -> dict[str, Any]:
+    """Snapshot ONLY permitted, redacted, post-consent browser text.
+
+    Called by the existing linked-device sync worker. Consent is checked again
+    immediately before upload. Includes stable local refs so the Gateway can
+    reconcile deletion/exclusion changes without reuploading every old item.
+    """
+    from .ai_access import ai_access_enabled
+    from shared.capture_control import read_state
+    with _LOCK:
+        policy = get_policy()
+        if not (policy["capture_enabled"] and policy["ai_read_enabled"]
+                and policy["cloud_read_enabled"] and ai_access_enabled()
+                and read_state().get("state") == "recording"):
+            raise PermissionError("Cloud work-text synchronization is disabled")
+        granted_at = datetime.fromisoformat(policy["cloud_granted_at"]).astimezone(timezone.utc)
+        cloud_floor = max(granted_at, _now() - timedelta(days=7))
+        # Cloud retention must never shorten the user-chosen LOCAL retention.
+        _prune(days=policy["retention_days"])
+        if not _DB.exists():
+            return {"items": [], "consent_version": CLOUD_ACK_VERSION,
+                    "granted_at": granted_at.isoformat()}
+        with _conn() as db:
+            rows = db.execute(
+                """SELECT row_id, observed_at, hostname, page_title, kind,
+                          redacted_text FROM work_text
+                   WHERE observed_at >= ? ORDER BY row_id DESC LIMIT ?""",
+                (cloud_floor.isoformat(), MAX_STORED_ROWS),
+            ).fetchall()
+        items = []
+        for row in rows:
+            if not _host_allowed(str(row["hostname"]), str(row["page_title"]), "/"):
+                continue
+            items.append({
+                "ref": f"owg:wt:{int(row['row_id'])}",
+                "observed_at": row["observed_at"],
+                "hostname": row["hostname"],
+                "page_title": row["page_title"],
+                "kind": row["kind"],
+                "redacted_text": str(row["redacted_text"])[:1600],
+            })
+        return {"items": items, "consent_version": CLOUD_ACK_VERSION,
+                "granted_at": granted_at.isoformat()}
+
+
 def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     from .ai_access import ai_access_enabled
     with _LOCK:
@@ -311,4 +374,4 @@ def recent_for_ai(*, limit: int = 20) -> dict[str, Any]:
     }
 
 
-__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range"]
+__all__ = ["get_policy", "set_policy", "ingest", "recent_for_ai", "delete_range", "cloud_sync_snapshot"]

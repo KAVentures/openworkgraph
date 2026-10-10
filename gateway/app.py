@@ -18,6 +18,7 @@ from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
 from .settings import PRODUCT_VERSION, GatewaySettings
+from . import work_text_cloud
 
 
 class EnrollmentRequest(BaseModel):
@@ -53,6 +54,13 @@ class EvidenceBatch(BaseModel):
 
 class AgentSessionMessageBatch(BaseModel):
     messages: list[dict[str, Any]]
+
+
+class WorkTextCloudBatch(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    active_refs: list[str] = Field(default_factory=list)
+    consent_version: str
+    granted_at: str
 
 
 class SearchRequest(BaseModel):
@@ -102,6 +110,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         db.init()
         init_enrollment_schema(db)
         init_lifecycle_schema(db)
+        work_text_cloud.init_schema(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -386,6 +395,35 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     def audit_log(organization_id: str, limit: int = 100, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         return {"items": db.audit_rows(organization_id, limit)}
+
+    # The device can sync only after local dashboard consent; hosted reads
+    # are independently OAuth-identity-scoped. Enterprise actors are denied.
+    @app.post("/v1/device/work-text-sync")
+    def device_cloud_text_sync(request: WorkTextCloudBatch, p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            result = work_text_cloud.sync(
+                db, p, items=request.items, active_refs=request.active_refs,
+                consent_version=request.consent_version, granted_at=request.granted_at,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="Cloud text sharing is disabled")
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.cloud_synced", details={"count": result["uploaded"]})
+        return result
+
+    @app.post("/v1/device/work-text-revoke")
+    def device_cloud_text_revoke(p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            result = work_text_cloud.revoke(db, p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.cloud_revoked", details={"count": result["deleted"]})
+        return result
 
     @app.get("/v1/device-policy")
     def device_policy(p: Principal = Depends(principal)) -> dict[str, Any]:
