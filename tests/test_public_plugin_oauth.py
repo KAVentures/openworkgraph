@@ -57,6 +57,30 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     assert profile.json()['result']['structuredContent']['id'].startswith('prf_')
 
 
+
+def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_boundary(public_client):
+    client, mint = public_client
+    response = rpc(client, mint(), 'tools/list')
+    assert response.status_code == 200, response.text
+    tools = {item['name']: item for item in response.json()['result']['tools']}
+    assert set(tools) == {
+        'get_profile', 'get_current_work_context', 'search_work',
+        'get_workflow_trace', 'find_repeated_workflows',
+        'get_workflow_evidence', 'get_agent_runs',
+    }
+    for tool in tools.values():
+        assert tool['annotations']['readOnlyHint'] is True
+        assert tool['annotations']['destructiveHint'] is False
+        assert tool['annotations']['openWorldHint'] is False
+        assert tool['description'].strip()
+
+    assert 'resume what I was doing' in tools['get_current_work_context']['description']
+    assert 'without naming OpenWorkGraph' in tools['search_work']['description']
+    assert 'usual or repeated real work' in tools['find_repeated_workflows']['description']
+    assert 'not a verified task or completion status' in tools['get_current_work_context']['description']
+
+
+
 @pytest.mark.parametrize('changes', [
     {'aud': 'another-project'}, {'iss': 'https://untrusted.example'},
     {'scope': 'email'}, {'exp': 1}, {'sub': ''},
