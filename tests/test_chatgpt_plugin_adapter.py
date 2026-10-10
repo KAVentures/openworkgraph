@@ -57,3 +57,23 @@ def test_chatgpt_personal_path_preserves_local_bearer_guard():
     compact_http = Path("mcp_server/compact_http_app.py").read_text(encoding="utf-8")
     assert "MCPBearerGuard" in compact_http
     assert "mcp_bearer_matches" in compact_http
+
+
+def test_packaged_chatgpt_skill_matches_source_and_stays_on_public_tool_surface():
+    source = Path("integrations/chatgpt/SKILL.md").read_text(encoding="utf-8")
+    packaged = Path("integrations/chatgpt/skills/openworkgraph/SKILL.md").read_text(encoding="utf-8")
+    assert source == packaged
+    assert "get_information_transfers" not in source
+    assert r"\\n\\n" not in source
+    assert "Do not browse OWG speculatively" in source
+    assert "The user should not need to name OpenWorkGraph" in source
+
+
+def test_claude_local_skill_remains_optional_and_remote_integration_is_documented():
+    skill = Path("integrations/plugins/openworkgraph/skills/owg/SKILL.md").read_text(encoding="utf-8")
+    guide = Path("docs/CLAUDE_REMOTE_CONNECTOR.md").read_text(encoding="utf-8")
+    assert "when the user does not name OWG" in skill
+    assert "Only call optional tools" in skill
+    assert "https://mcp.owg.kinvectum.com/mcp" in guide
+    assert "single MCP connector" in guide.lower()
+    assert "does not automatically gain access" in guide
