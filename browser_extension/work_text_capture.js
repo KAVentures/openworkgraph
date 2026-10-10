@@ -16,7 +16,7 @@
   const MAX_TEXT = 4000;
 
   function normal(value, max=MAX_TEXT) {
-    return String(value || '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, max);
+    return String(value || '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
   }
 
   function isTop() {
@@ -25,7 +25,7 @@
 
   function sensitiveSurface() {
     if (DENY.test(location.hostname)) return true;
-    if (/(?:^|\\/)(?:login|signin|sign-in|oauth|authorize|password|reset|recovery|mfa|2fa|payment|checkout|health|patient|medical)(?:\\/|$)/i.test(location.pathname)) return true;
+    if (/(?:^|\/)(?:login|signin|sign-in|oauth|authorize|password|reset|recovery|mfa|2fa|payment|checkout|health|patient|medical)(?:\/|$)/i.test(location.pathname)) return true;
     return DENY.test(document.title);
   }
 
