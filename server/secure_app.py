@@ -33,6 +33,7 @@ BROWSER_ROUTES = {
     ("GET", "/v1/browser-context"),
     ("POST", "/v1/browser-events"),
     ("POST", "/v1/browser-heartbeat"),
+    ("POST", "/v1/browser-selection/submit"),
 }
 BROWSER_PATHS = {path for _, path in BROWSER_ROUTES}
 PUBLIC_PATHS = {"/health"}
