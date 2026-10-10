@@ -44,7 +44,7 @@ _SENSITIVE_TITLE = re.compile(
 )
 _SECRETS = re.compile(
     r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
-    r"\\b(?:sk-[A-Za-z0-9_-]{18,}|(?:sk|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,})\\b|"
+    r"\b(?:sk-[A-Za-z0-9_-]{18,}|(?:sk|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,})\b|"
     r"\b(?:api[_ -]?key|access[_ -]?token|secret[_ -]?key|"
     r"password|passwd|passcode|otp|verification[_ -]?code)"
     r"\s*[:=]\s*\S{5,})", re.I
