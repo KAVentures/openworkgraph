@@ -29,7 +29,8 @@
     const host = location.hostname.toLowerCase();
     const title = String(document.title || "").toLowerCase();
     if (exclusions.hosts.some(raw => {
-      const pattern = String(raw || "").toLowerCase().replace(/^\\*\\./, "");
+      const input = String(raw || "").toLowerCase().trim();
+      const pattern = input.startsWith("*.") ? input.slice(2) : input;
       return pattern && (host === pattern || host.endsWith("." + pattern));
     })) return true;
     if (exclusions.titles.some(raw => String(raw || "").trim() &&
