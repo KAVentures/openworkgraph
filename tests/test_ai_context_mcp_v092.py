@@ -125,6 +125,9 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
     headers = {"Authorization": f"Bearer {token}"}
     try:
         _wait(base + "/health", api)
+        login = httpx.post(base + "/v1/dashboard-session", json={"bootstrap": "ai-context-test"})
+        assert login.status_code == 200, login.text
+        dashboard_headers = {"Authorization": f"OWG-Session {login.json()['session']}"}
         retention = httpx.put(
             base + "/v1/history-policy",
             json={"human_mode": "forever", "agent_mode": "forever", "onboarding_complete": True},
@@ -132,7 +135,7 @@ def test_every_context_mcp_tool_respects_detail_level(tmp_path):
         )
         assert retention.status_code == 200, retention.text
         assert httpx.post(base + "/v1/events", json={"events": _events(now)}, headers=headers).status_code == 200
-        assert httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=headers).json()["enabled"] is True
+        assert httpx.post(base + "/v1/ai-access", json={"enabled": True}, headers=dashboard_headers).json()["enabled"] is True
         lease = httpx.post(
             base + "/v1/history/ai-access",
             json={"mode": "all_saved", "expires_minutes": 60},
