@@ -115,3 +115,46 @@ def test_real_gateway_http_route_rejects_unsigned_and_wrong_device(relay_setup):
         assert relay.read_result(db, organization_id=actor, actor_id=actor, request_id=rid)["status"] == "ready"
         assert client.post("/v1/device/work-text-revoke", headers=d1).status_code == 200
         assert relay.read_result(db, organization_id=actor, actor_id=actor, request_id=rid)["status"] == "not_found_or_expired"
+
+
+def test_device_worker_answers_only_during_local_cloud_opt_in(relay_setup, monkeypatch):
+    from connector import work_text_relay as worker
+    from server import work_text_capture as local, ai_access
+
+    db, actor, _ = relay_setup
+    settings = GatewaySettings(database_url=db.database_url, admin_token="", enrollment_token="")
+    app = create_app(settings=settings, db=db)
+    permissions = {"capture_enabled": True, "ai_read_enabled": True, "cloud_read_enabled": True}
+    monkeypatch.setattr(local, "get_policy", lambda: dict(permissions))
+    monkeypatch.setattr(local, "search_for_cloud",
+        lambda query, limit=4: {"items": [_row()], "source": "local_opt_in_browser_text"})
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(worker, "_NEXT_CHECK", 0.0)
+
+    class State:
+        def __init__(self):
+            self.data = {}
+        def get_bool(self, name, default=False):
+            return bool(self.data.get(name, default))
+        def set_bool(self, name, value):
+            self.data[name] = value
+        def set(self, name, value):
+            self.data[name] = value
+
+    state = State()
+    with TestClient(app, headers={"Authorization": "Bearer device-one"}) as client:
+        requested = relay.queue_search(db, organization_id=actor, actor_id=actor, query="rollout")
+        assert worker.process_pending(client, url="http://testserver", state=state, now=100.0) == 1
+        assert relay.read_result(db, organization_id=actor, actor_id=actor,
+                                 request_id=requested["request_id"])["status"] == "ready"
+        assert state.get_bool("cloud_work_text_was_permitted")
+        permissions["cloud_read_enabled"] = False
+        assert worker.process_pending(client, url="http://testserver", state=state, now=101.0) == 0
+        assert not state.get_bool("cloud_work_text_was_permitted")
+        assert relay.read_result(db, organization_id=actor, actor_id=actor,
+                                 request_id=requested["request_id"])["status"] == "not_found_or_expired"
+        # No new text response or remote polling once the user revokes.
+        second = relay.queue_search(db, organization_id=actor, actor_id=actor, query="rollout")
+        assert worker.process_pending(client, url="http://testserver", state=state, now=200.0) == 0
+        assert relay.read_result(db, organization_id=actor, actor_id=actor,
+                                 request_id=second["request_id"])["status"] == "pending"
