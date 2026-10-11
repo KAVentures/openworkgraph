@@ -126,3 +126,45 @@ def test_account_delete_revokes_local_cloud_toggle_and_never_retries_stale_batch
         assert not state.get_bool("cloud_text_remote_granted")
         assert "fresh account and local approval" in state.get("cloud_text_last_error")
         assert worker.process_cloud_text(client, url="http://testserver", state=state, now=60.0) == 0
+
+
+def test_disabled_cloud_grant_revokes_even_if_worker_sync_state_was_reset(tmp_path, monkeypatch):
+    """Do not strand a readable cloud corpus after reinstall or state DB loss."""
+    from server import work_text_capture, ai_access
+    from shared import capture_control
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    actor = "oauth-sub:restore-test"
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    db.init()
+    db.put_token(token_id="device", token="valid-device", token_type="device",
+                 organization_id=actor, actor_id=actor, device_id="linked-one",
+                 scopes=set(DEVICE_SCOPES))
+    app = create_app(settings=GatewaySettings(database_url=db.database_url,
+                     admin_token="", enrollment_token=""), db=db)
+    start = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    item = {
+        "ref": "owg:wt:5", "observed_at": datetime.now(timezone.utc).isoformat(),
+        "hostname": "docs.example.org", "page_title": "Planning",
+        "kind": "page", "redacted_text": "Synthetic quarterly business plan.",
+    }
+    cloud.sync(db, db.authenticate("valid-device"), items=[item], active_refs=["owg:wt:5"],
+               consent_version=cloud.CONSENT_VERSION, granted_at=start)
+    assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"]
+    # The user's local privacy policy survives; the optional sync-state DB did not.
+    policy = {
+        "capture_enabled": True, "ai_read_enabled": True, "cloud_read_enabled": False,
+        "cloud_ack_version": cloud.CONSENT_VERSION, "cloud_granted_at": start,
+    }
+    monkeypatch.setattr(work_text_capture, "get_policy", lambda: dict(policy))
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(capture_control, "read_state", lambda: {"state": "recording"})
+    reset_state = SyncState(tmp_path / "fresh-worker-state.db")
+    with TestClient(app, headers={"Authorization": "Bearer valid-device"}) as client:
+        assert worker.process_cloud_text(client, url="http://testserver", state=reset_state) == 0
+        assert reset_state.get("cloud_text_last_revoked_grant") == start
+        assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["status"] == "not_enabled"
+
+        class NoRequest:
+            def post(self, *_args, **_kwargs):
+                raise AssertionError("already confirmed revocation must not repeat")
+        assert worker.process_cloud_text(NoRequest(), url="http://testserver", state=reset_state) == 0
