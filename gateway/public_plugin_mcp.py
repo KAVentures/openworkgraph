@@ -475,7 +475,8 @@ class PersonalLinkEndpoint:
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if (scope.get("type") != "http" or scope.get("method") != "POST" or
-                scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete", "/v1/plugin/work-text-reauthorize"}):
+                scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete",
+                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -517,7 +518,7 @@ class PersonalLinkEndpoint:
                    {"deleted": result["deleted"]})
             await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
-        if scope.get("path") == "/v1/plugin/work-text-reauthorize":
+        if scope.get("path") in {"/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize"}:
             organization_id = f"oauth-sub:{subject}"
             try:
                 result = work_text_cloud.reauthorize_account(
