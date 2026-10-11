@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS cloud_work_text_account_revocations (
  revoked_at TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id)
 );
+CREATE TABLE IF NOT EXISTS cloud_work_text_account_reapprovals (
+ organization_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ approved_at TEXT NOT NULL,
+ consent_version TEXT NOT NULL,
+ PRIMARY KEY (organization_id, actor_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_work_text_actor_mutex (
+ organization_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ PRIMARY KEY (organization_id, actor_id)
+);
 """
 _SECRET_RE = re.compile(
     r"(?i)(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
@@ -114,6 +126,21 @@ def init_schema(db: GatewayDB) -> None:
     with db.connect() as conn:
         for sql in (p.strip() for p in SQL_SCHEMA.split(";") if p.strip()):
             db._execute(conn, sql)
+
+
+def _lock_actor(db: GatewayDB, conn: Any, org: str, actor: str) -> None:
+    """Serialize content writes, deletions and approvals across deployments.
+
+    A PostgreSQL row lock protects against a concurrent device upload racing
+    an OAuth account deletion. SQLite's insert/upsert obtains a writer lock.
+    No other Gateway data plane is modified or serialized by this mechanism.
+    """
+    db._execute(conn, """INSERT INTO cloud_work_text_actor_mutex
+        (organization_id, actor_id) VALUES (?,?)
+        ON CONFLICT(organization_id,actor_id) DO NOTHING""", (org, actor))
+    if db.is_postgres:
+        db._execute(conn, """SELECT actor_id FROM cloud_work_text_actor_mutex
+            WHERE organization_id=? AND actor_id=? FOR UPDATE""", (org, actor))
 
 
 def _purge(db: GatewayDB, conn: Any) -> None:
@@ -194,6 +221,7 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         raise ValueError("uploaded item not in manifest")
     org, actor, device = p.organization_id, p.actor_id, p.device_id
     with db.connect() as conn:
+        _lock_actor(db, conn, org, actor)
         _purge(db, conn)
         # Cloud account deletion must be effective even when all desktop
         # recorders are offline. Old device uploads cannot resurrect the corpus.
@@ -201,10 +229,20 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
             WHERE organization_id=? AND actor_id=?""", (org, actor))
         account_revocation = cur.fetchone()
         if account_revocation:
-            # Never let a device-supplied timestamp unlock an account deletion:
-            # its clock may be ahead or its queue may contain stale requests.
-            # Only a NEW, authenticated OAuth-side approval can lift this lock.
-            raise PermissionError("Cloud text was deleted from this account; OAuth reauthorization required")
+            # A durable deletion tombstone survives account reauthorization.
+            # Never restore pre-deletion device grants or queued snapshots.
+            revoked_at = _iso(str(account_revocation[0]))
+            cur = db._execute(conn, """SELECT approved_at, consent_version
+                FROM cloud_work_text_account_reapprovals
+                WHERE organization_id=? AND actor_id=?""", (org, actor))
+            approval = cur.fetchone()
+            if (not approval or str(approval[1]) != CONSENT_VERSION
+                    or _iso(str(approval[0])) <= revoked_at
+                    or consent_since <= revoked_at):
+                raise PermissionError(
+                    "Cloud text was deleted from this account; OAuth reauthorization "
+                    "and fresh local grant required"
+                )
         # Revocation is durable: delayed/retried requests must not resurrect
         # data after a successful device revoke.
         cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_revocations
@@ -264,6 +302,7 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
 def revoke(db: GatewayDB, p: Principal) -> dict[str, Any]:
     _device(p)
     with db.connect() as conn:
+        _lock_actor(db, conn, p.organization_id, p.actor_id)
         cur = db._execute(conn, """DELETE FROM cloud_work_text WHERE
             organization_id=? AND actor_id=? AND device_id=?""",
             (p.organization_id, p.actor_id, p.device_id))
@@ -292,6 +331,7 @@ def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dic
         raise PermissionError("only personal OAuth actors may delete their cloud work text")
     now = _now().isoformat()
     with db.connect() as conn:
+        _lock_actor(db, conn, organization_id, actor_id)
         cur = db._execute(conn, """DELETE FROM cloud_work_text
             WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
         deleted = max(0, int(cur.rowcount or 0))
@@ -301,6 +341,8 @@ def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dic
             (organization_id, actor_id, revoked_at) VALUES (?,?,?)
             ON CONFLICT(organization_id,actor_id) DO UPDATE SET revoked_at=excluded.revoked_at""",
             (organization_id, actor_id, now))
+        db._execute(conn, """DELETE FROM cloud_work_text_account_reapprovals
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
     return {"status": "deleted", "deleted": deleted,
             "reconsent_required": True, "active_copies": 0}
 
@@ -318,8 +360,12 @@ def reauthorize_account(db: GatewayDB, *, organization_id: str, actor_id: str,
     if consent_version != CONSENT_VERSION:
         raise PermissionError("current cloud sharing notice acknowledgment required")
     with db.connect() as conn:
-        db._execute(conn, """DELETE FROM cloud_work_text_account_revocations
-            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+        _lock_actor(db, conn, organization_id, actor_id)
+        db._execute(conn, """INSERT INTO cloud_work_text_account_reapprovals
+            (organization_id, actor_id, approved_at, consent_version) VALUES (?,?,?,?)
+            ON CONFLICT(organization_id,actor_id) DO UPDATE SET
+            approved_at=excluded.approved_at, consent_version=excluded.consent_version""",
+            (organization_id, actor_id, _now().isoformat(), CONSENT_VERSION))
     return {"status": "reauthorized", "notice_version": CONSENT_VERSION}
 
 
