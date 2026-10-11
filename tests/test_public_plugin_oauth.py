@@ -623,7 +623,15 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
 
     with pytest.raises(PermissionError, match="deleted"):
         cloud.sync(db, credential, **payload)
-    # A later user-confirmed grant creates a new, initially empty corpus.
+    # Even a future-skewed device clock cannot bypass the account lock.
     later = {**payload, "items": [], "active_refs": [],
              "granted_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()}
+    with pytest.raises(PermissionError, match="OAuth reauthorization"):
+        cloud.sync(db, credential, **later)
+    reauth = "/v1/plugin/work-text-reauthorize"
+    headers = {"Authorization": f"Bearer {mint()}"}
+    assert client.post(reauth, headers=headers).status_code == 403
+    headers["X-OWG-Consent-Version"] = cloud.CONSENT_VERSION
+    assert client.post(reauth, headers=headers).json()["status"] == "reauthorized"
+    # Backend grants still require a new separate local desktop grant.
     assert cloud.sync(db, credential, **later)["status"] == "synced"
