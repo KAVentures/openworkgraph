@@ -193,7 +193,7 @@
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextAiSwitch" aria-checked="false" aria-label="Allow local AI apps to read captured work text"></button></div>
         </div>
         <div class="pv-row pv-sub" id="pvWorkTextCloudRow">
-          <div><h3>Share redacted work content with my cloud AI apps</h3><div class="muted">Off by default. After you give permission, only new redacted browser page text and drafts from permitted sites are synchronized to your personal OWG Gateway account. Stored for up to 7 days; connected AI can search while your computer is off. Cloud sharing can involve third-party personal or confidential information; filters are not perfect. You can revoke access and delete the cloud copies.</div><label class="muted" style="display:block;margin-top:9px"><input type="checkbox" id="pvCloudAck" /> I understand content will be uploaded and may contain third-party information. I confirm I am authorized to share it.</label></div>
+          <div><h3>Share redacted work content with my cloud AI apps</h3><div class="muted">Off by default. After you give permission, only new redacted browser page text and drafts from permitted sites are synchronized to your personal OWG Gateway account. Stored for up to 7 days; connected AI can search while your computer is off. Cloud sharing can involve third-party personal or confidential information; filters are not perfect. Disabling stops new sharing immediately; removal of already uploaded copies is requested when this desktop reconnects. If it stays offline, existing copies remain accessible until their seven-day expiry.</div><label class="muted" style="display:block;margin-top:9px"><input type="checkbox" id="pvCloudAck" /> I understand content will be uploaded and may contain third-party information. I confirm I am authorized to share it.</label></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextCloudSwitch" aria-checked="false" aria-label="Allow cloud AI to retrieve captured work text"></button></div>
         </div>
         <div class="pv-row" id="pvBrowserRow">
@@ -216,7 +216,7 @@
 
       <div class="card" id="pvDelete">
         <h2>Delete recorded activity</h2>
-        <div class="muted">Removes activity from this computer. It cannot be undone. Anything already shared with an organization is not recalled.</div>
+        <div class="muted">Removes activity from this computer. It cannot be undone. Anything shared with an organization is not recalled. If cloud work-text sharing was enabled, corresponding uploaded copies are removed on the next successful synchronization; while this computer is offline, they may remain available for up to seven days.</div>
         <div class="pv-delete">
           <button type="button" class="danger-quiet" data-delete="15">Last 15 minutes</button>
           <button type="button" class="danger-quiet" data-delete="60">Last hour</button>
@@ -445,7 +445,7 @@
       if (!enabled && !confirm('Enable cloud synchronization of new, redacted browser work text to your personal OWG account? Data remains available to connected AI for up to 7 days even when this computer is off. Your content may include third-party personal data. Changes cannot recall content already shown in an AI chat.')) return;
       try {
         privacy.workText = await api('/v1/work-text/policy', send('POST', {cloud_read_enabled: !enabled, ...(!enabled ? {cloud_ack_version: 'cloud-work-text-v1'} : {})}));
-        toast(enabled ? 'Cloud sharing disabled; Gateway deletion will be requested.' : 'Cloud sharing permission saved. Upload starts only when this device is linked and cloud sharing is available.');
+        toast(enabled ? 'Cloud uploads stopped. Deletion of already shared content will be requested when this computer connects to Gateway.' : 'Cloud sharing permission saved. Upload starts only when this device is linked and cloud sharing is available.');
       } catch (error) { toast(error.message || 'Could not change cloud text access.'); }
       if (enabled && panel.querySelector('#pvCloudAck')) panel.querySelector('#pvCloudAck').checked = false;
       renderPrivacy();
