@@ -159,6 +159,12 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
                       "of this particular linked device.")
             _NEXT_SCAN = current + 300.0
             return 0
+        if (getattr(response, "status_code", None) == 503
+                and "Cloud text sharing is disabled" in str(getattr(response, "text", ""))):
+            state.set("cloud_text_last_error",
+                      "Cloud work-text sharing is not available on this Gateway yet.")
+            _NEXT_SCAN = current + 1800.0
+            return 0
         state.set("cloud_text_last_error", str(exc)[:180])
         _NEXT_SCAN = current + 30.0
         return 0
