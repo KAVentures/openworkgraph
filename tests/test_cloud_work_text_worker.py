@@ -177,3 +177,46 @@ def test_disabled_cloud_grant_revokes_even_if_worker_sync_state_was_reset(tmp_pa
             def post(self, *_args, **_kwargs):
                 raise AssertionError("already confirmed revocation must not repeat")
         assert worker.process_cloud_text(NoRequest(), url="http://testserver", state=reset_state) == 0
+
+
+def test_missing_oauth_account_approval_does_not_spam_gateway_or_disable_local_choice(tmp_path, monkeypatch):
+    """Missing account approval is informative, bounded and non-destructive."""
+    from server import work_text_capture, ai_access
+    from shared import capture_control
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    actor = "oauth-sub:needs-approval"
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    db.init()
+    db.put_token(token_id="needs-approval", token="needs-token", token_type="device",
+                 organization_id=actor, actor_id=actor, device_id="desktop",
+                 scopes=set(DEVICE_SCOPES))
+    app = create_app(settings=GatewaySettings(database_url=db.database_url,
+                     admin_token="", enrollment_token=""), db=db)
+    epoch = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    settings = {"capture_enabled": True, "ai_read_enabled": True,
+                "cloud_read_enabled": True, "cloud_ack_version": cloud.CONSENT_VERSION,
+                "cloud_granted_at": epoch}
+    monkeypatch.setattr(work_text_capture, "get_policy", lambda: dict(settings))
+    monkeypatch.setattr(work_text_capture, "cloud_sync_snapshot", lambda: {
+        "items": [], "granted_at": epoch, "consent_version": cloud.CONSENT_VERSION
+    })
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(capture_control, "read_state", lambda: {"state": "recording"})
+    state = SyncState(tmp_path / "worker.db")
+    monkeypatch.setattr(worker, "_NEXT_SCAN", 0.0)
+    with TestClient(app, headers={"Authorization": "Bearer needs-token"}) as client:
+        assert worker.process_cloud_text(client, url="http://testserver", state=state, now=10) == 0
+        assert "signed-in account approval" in state.get("cloud_text_last_error")
+        assert settings["cloud_read_enabled"] is True
+        assert worker._NEXT_SCAN == 310.0
+
+        class NoNetwork:
+            def post(self, *_args, **_kwargs):
+                raise AssertionError("approval-denied retry must be throttled")
+        assert worker.process_cloud_text(NoNetwork(), url="http://testserver",
+                                         state=state, now=12) == 0
+        cloud.reauthorize_account(db, organization_id=actor, actor_id=actor,
+                                  consent_version=cloud.CONSENT_VERSION)
+        assert worker.process_cloud_text(client, url="http://testserver",
+                                         state=state, now=311) == 0
+        assert state.get_bool("cloud_text_remote_granted") is True
