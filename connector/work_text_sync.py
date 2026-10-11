@@ -54,6 +54,17 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
                              "cloud_text_last_check", "cloud_text_consent"):
                     state.delete(name)
                 state.set("cloud_text_last_error", "")
+                # A successful cloud revoke creates a durable Gateway consent
+                # boundary. If it came from Pause/Stop or the master AI switch,
+                # leave cloud sharing OFF locally so Resume cannot replay an
+                # older consent epoch and silently attempt re-sharing.
+                fresh_policy = wt.get_policy()
+                if (fresh_policy.get("cloud_read_enabled")
+                        and fresh_policy.get("cloud_granted_at") == grant_epoch):
+                    wt.set_policy({"cloud_read_enabled": False})
+                    state.set("cloud_text_last_error",
+                              "Cloud sharing was revoked. A fresh local cloud "
+                              "opt-in is required before sharing resumes.")
             except Exception as exc:
                 # Retry on the next normal worker iteration; do not resurrect
                 # data nor interrupt structural evidence synchronization.
