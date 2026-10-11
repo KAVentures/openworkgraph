@@ -277,3 +277,40 @@ def test_pausing_cloud_sharing_revokes_and_requires_fresh_local_opt_in(tmp_path,
         assert worker.process_cloud_text(NoNetwork(), url="http://testserver",
                                          state=state, now=15) == 0
         assert policy["cloud_read_enabled"] is False
+
+
+def test_operator_disabled_cloud_sync_backs_off_without_affecting_local_choice(tmp_path, monkeypatch):
+    from server import work_text_capture, ai_access
+    from shared import capture_control
+    monkeypatch.delenv("OWG_CLOUD_WORK_TEXT_ENABLED", raising=False)
+    actor = "oauth-sub:operator-off"
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    db.init()
+    db.put_token(token_id="operator-off", token="operator-off",
+                 token_type="device", organization_id=actor, actor_id=actor,
+                 device_id="desktop", scopes=set(DEVICE_SCOPES))
+    app = create_app(settings=GatewaySettings(database_url=db.database_url,
+                     admin_token="", enrollment_token=""), db=db)
+    grant = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    policy = {"capture_enabled": True, "ai_read_enabled": True,
+              "cloud_read_enabled": True, "cloud_ack_version": cloud.CONSENT_VERSION,
+              "cloud_granted_at": grant}
+    monkeypatch.setattr(work_text_capture, "get_policy", lambda: dict(policy))
+    monkeypatch.setattr(work_text_capture, "cloud_sync_snapshot", lambda: {
+        "items": [], "consent_version": cloud.CONSENT_VERSION, "granted_at": grant
+    })
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(capture_control, "read_state", lambda: {"state": "recording"})
+    monkeypatch.setattr(worker, "_NEXT_SCAN", 0.0)
+    state = SyncState(tmp_path / "worker.db")
+    with TestClient(app, headers={"Authorization": "Bearer operator-off"}) as client:
+        assert worker.process_cloud_text(client, url="http://testserver",
+                                         state=state, now=10) == 0
+        assert "not available" in state.get("cloud_text_last_error")
+        assert worker._NEXT_SCAN == 1810.0
+        assert policy["cloud_read_enabled"] is True
+        class NoRequest:
+            def post(self, *_args, **_kwargs):
+                raise AssertionError("operator disabled upload must back off")
+        assert worker.process_cloud_text(NoRequest(), url="http://testserver",
+                                         state=state, now=12) == 0
