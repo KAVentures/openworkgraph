@@ -167,7 +167,7 @@ class PublicRedactor:
                 if safe not in (None, "", [], {}) or name in {
                     "onboarding", "rows", "next_cursor", "resources",
                     "agent_runs", "resource_relations", "resource_agent_relations",
-                    "candidates", "executions", "canonical_evidence",
+                    "candidates", "executions", "canonical_evidence", "examples",
                 }:
                     # Public MCP compatibility: an empty array / null cursor
                     # is meaningful and must never disappear on projection.
