@@ -604,6 +604,16 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
         "active_refs": ["owg:wt:1"], "granted_at": grant,
         "consent_version": cloud.CONSENT_VERSION,
     }
+    # A linked device token cannot invent account consent by supplying the
+    # expected version or an arbitrary timestamp. OAuth action is separate.
+    with pytest.raises(PermissionError, match="OAuth cloud work-text approval required"):
+        cloud.sync(db, credential, **payload)
+    approved = client.post(
+        "/v1/plugin/work-text-reauthorize",
+        headers={"Authorization": f"Bearer {mint()}",
+                 "X-OWG-Consent-Version": cloud.CONSENT_VERSION},
+    )
+    assert approved.status_code == 200, approved.text
     assert cloud.sync(db, credential, **payload)["uploaded"] == 1
     assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
 
@@ -633,5 +643,9 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
     assert client.post(reauth, headers=headers).status_code == 403
     headers["X-OWG-Consent-Version"] = cloud.CONSENT_VERSION
     assert client.post(reauth, headers=headers).json()["status"] == "reauthorized"
-    # Backend grants still require a new separate local desktop grant.
+    # An OAuth approval does not erase the hard deletion tombstone. Replaying
+    # the pre-deletion desktop grant after reapproval must still fail.
+    with pytest.raises(PermissionError, match="fresh local grant"):
+        cloud.sync(db, credential, **payload)
+    # A new local grant, with its own distinct epoch, is required.
     assert cloud.sync(db, credential, **later)["status"] == "synced"
