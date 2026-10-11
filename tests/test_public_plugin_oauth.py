@@ -608,12 +608,24 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
     # expected version or an arbitrary timestamp. OAuth action is separate.
     with pytest.raises(PermissionError, match="OAuth cloud work-text approval required"):
         cloud.sync(db, credential, **payload)
+    # The OAuth account cannot approve all linked devices implicitly.
+    assert client.post("/v1/plugin/work-text-approve", headers={
+        "Authorization": f"Bearer {mint()}",
+        "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+    }).status_code == 400
+    assert client.post("/v1/plugin/work-text-approve", headers={
+        "Authorization": f"Bearer {mint(sub='other-user')}",
+        "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+        "X-OWG-Device-ID": device_id,
+    }).status_code == 403
     approved = client.post(
         "/v1/plugin/work-text-approve",
         headers={"Authorization": f"Bearer {mint()}",
-                 "X-OWG-Consent-Version": cloud.CONSENT_VERSION},
+                 "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+                 "X-OWG-Device-ID": device_id},
     )
     assert approved.status_code == 200, approved.text
+    assert approved.json()["device_id"] == device_id
     assert cloud.sync(db, credential, **payload)["uploaded"] == 1
     assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
 
@@ -639,10 +651,10 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
     with pytest.raises(PermissionError, match="OAuth reauthorization"):
         cloud.sync(db, credential, **later)
     reauth = "/v1/plugin/work-text-reauthorize"
-    headers = {"Authorization": f"Bearer {mint()}"}
+    headers = {"Authorization": f"Bearer {mint()}", "X-OWG-Device-ID": device_id}
     assert client.post(reauth, headers=headers).status_code == 403
     headers["X-OWG-Consent-Version"] = cloud.CONSENT_VERSION
-    assert client.post(reauth, headers=headers).json()["status"] == "reauthorized"
+    assert client.post(reauth, headers=headers).json()["status"] == "device_approved"
     # An OAuth approval does not erase the hard deletion tombstone. Replaying
     # the pre-deletion desktop grant after reapproval must still fail.
     with pytest.raises(PermissionError, match="fresh local grant"):
