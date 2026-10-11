@@ -39,8 +39,11 @@ clipboard contents, full web documents, or ordinary structural activity history.
   transmits only when the snapshot manifest changes or a reconciliation
   is due, and performs an occasional lightweight reconciliation.
 - Server-side approval is independent of local consent: upload requests are
-  rejected until the signed-in account has approved the current cloud notice.
-  The upload endpoints remain inoperable without the explicit operator flag.
+  rejected until the signed-in OAuth account has explicitly approved the
+  **specific enrolled device** and the current cloud notice. A device token,
+  forged local timestamp or generic account-level approval cannot authorize
+  cloud-content uploads. The upload endpoints remain inoperable without the
+  explicit operator flag.
 - The OAuth-protected public MCP provides `search_work_text(query)`
   and `get_work_text_excerpt(reference)`. Searches filter by authenticated
   actor, do not accept model-supplied account IDs, and apply a second
@@ -73,11 +76,11 @@ security assessment.
   bearer. It deletes cloud snapshots and grants across all devices of that
   personal actor. A durable **account lock**, independent of the device clock,
   prevents offline retries from restoring any deleted content.
-  Reauthorization requires a new authenticated OAuth action
+  Reauthorization requires a new authenticated device-specific OAuth action
   (`POST /v1/plugin/work-text-reauthorize` with the current
-  `X-OWG-Consent-Version` notice) **and a new local consent**. These are
-  backend primitives only: a reviewed legal notice and authenticated web
-  approval/deletion UI still need to be built.
+  `X-OWG-Consent-Version` notice **and `X-OWG-Device-ID`**) **and a new local
+  consent**. These are backend primitives only: a reviewed legal notice and
+  authenticated web approval/deletion UI still need to be built.
 - Previously delivered AI content cannot be recalled, and deleted SQL records
   may remain in backups according to the provider's retention schedule.
 - Deleting a time range locally changes the manifest; existing synced
@@ -86,7 +89,8 @@ security assessment.
   master AI access also stops the optional cloud content channel. After a
   successful remote revocation, the desktop cloud toggle is switched OFF;
   resuming ordinary recording does not silently reauthorize old cloud text.
-  Explicit fresh local consent is needed to start sharing again.
+  Both fresh local consent and fresh OAuth approval of that enrolled device
+  are needed to start sharing again.
 - User-facing deletion does not recall content already supplied to an AI
   conversation or downstream system. Source content is never an instruction
   or execution authorization.
@@ -94,18 +98,23 @@ security assessment.
 ## Independent consent and account-deletion release gates
 
 The desktop UI records versioned affirmative cloud permission. The Gateway
-now **also requires a separate OAuth-authenticated personal-account approval**
-(`POST /v1/plugin/work-text-approve` with the current
-`X-OWG-Consent-Version`). A linked device cannot authorize its own cloud
-uploads merely by asserting consent or a future timestamp. Account-level
-deletion preserves its tombstone even after OAuth reauthorization; a fresh
-local consent epoch is still required. Concurrent sync/deletion/approval
-writes are serialized per actor to prevent stale uploads restoring deleted
-content.
+now **also requires a separate OAuth-authenticated approval of the specific
+enrolled device** (`POST /v1/plugin/work-text-approve` with both
+`X-OWG-Consent-Version: cloud-work-text-v1` and `X-OWG-Device-ID: <device-id>`).
+The backend confirms that the device is actively enrolled to that OAuth
+subject; device write credentials cannot authorize themselves, and approving
+one device does not approve all devices. Account-level deletion invalidates
+all device approvals until new signed-in authorization. Device revoke likewise
+invalidates its own approval. A fresh local consent epoch is additionally
+required after revocation. Concurrent sync/deletion/approval writes are
+serialized per actor to prevent stale uploads restoring deleted content.
+This is not hardware attestation: a compromised client can still falsify
+local timestamps, so users must not approve an unrecognized device.
 
 **Still missing before public enablement:** an intuitive signed-in web
-consent screen with the published notice and a clear approval action, plus
-a signed-in account Delete Cloud Text control. The API endpoints exist, but
+consent screen identifying the enrolled device, showing the published
+notice and confirming device-specific approval, plus a signed-in account
+Delete Cloud Text control. The API endpoints exist, but
 an undocumented HTTP header is not a user-facing consent experience.
 A general TOS checkbox alone is not enough.
 
@@ -137,6 +146,14 @@ legal/security tests are complete.
 5. Test with synthetic browser pages, drafts, excluded hosts, deletion,
    consent/revocation while online/offline, and two separate linked users
    in the *actual* production architecture before rollout.
+6. Enforce cloud-only request limits (30 uploads/minute per device, 90 per
+   actor), at most 10 approved devices per personal actor, 500 active rows
+   and 600,000 characters of page titles/hosts/excerpts across the actor's
+   devices. Quota violations roll back their database transaction. Reverse
+   proxy abuse controls and service monitoring are still required.
+7. Verify the GitHub Actions PostgreSQL concurrency job: simultaneous actor
+   uploads, quotas, account deletion and durable tombstones. This does not
+   replace production OAuth, browser, backup or retention tests.
 
 ## Scope limitations
 
