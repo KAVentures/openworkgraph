@@ -132,6 +132,7 @@ def test_cloud_rejects_secrets_bad_hosts_and_preconsent_items(setup_cloud):
     p = db.authenticate("alice-device")
     for bad in (
         _entry("api_key = secretabc12345"),
+        {**_entry(), "page_title": "API_KEY=secretvalue123456"},
         {**_entry(), "hostname": "accounts.google.com"},
         {**_entry(), "hostname": "192.168.1.1"},
         {**_entry(), "observed_at": _time(-30)},
