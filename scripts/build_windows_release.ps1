@@ -22,7 +22,7 @@ $robocopyArgs = @(
     "/NJH",
     "/NJS",
     "/NP",
-    "/XD", ".git", ".github", ".venv", ".runtime", ".pytest_cache", "__pycache__", "data", "dist", "tests", "scripts",
+    "/XD", ".git", ".github", ".venv", ".runtime", ".pytest_cache", "__pycache__", "data", "dist", "tests", "evals", "scripts",
     "/XF", "config.json"
 )
 & robocopy @robocopyArgs | Out-Host

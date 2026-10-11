@@ -1,5 +1,9 @@
 # Observed real-client evaluation — 2026-10-10
 
+> Historical report. Per-attempt artifacts are in Git history, indexed by
+> [HISTORY.md](HISTORY.md); no model inference completed.
+
+
 **Verdict: inconclusive. Automatic invocation and material work-continuity improvement were not demonstrated or disproved. Neither provider accepted a model inference request.** This report does not claim verified ChatGPT-web or Claude-web behavior.
 
 ## What actually executed

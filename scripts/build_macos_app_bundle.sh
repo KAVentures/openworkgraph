@@ -22,7 +22,7 @@ command -v swiftc >/dev/null 2>&1 || {
 rm -rf "$APP"
 mkdir -p "$MACOS" "$PAYLOAD"
 
-rsync -a   --exclude '.git/'   --exclude '.github/'   --exclude '.venv/'   --exclude '.runtime/'   --exclude '.pytest_cache/'   --exclude '__pycache__/'   --exclude 'data/'   --exclude 'dist/'   --exclude 'tests/'   --exclude 'config.json'   "$ROOT/" "$PAYLOAD/"
+rsync -a   --exclude '.git/'   --exclude '.github/'   --exclude '.venv/'   --exclude '.runtime/'   --exclude '.pytest_cache/'   --exclude '__pycache__/'   --exclude 'data/'   --exclude 'dist/'   --exclude 'tests/'   --exclude 'evals/'   --exclude 'config.json'   "$ROOT/" "$PAYLOAD/"
 
 # Materialize the same historical payload-root compatibility surface as the
 # tester ZIP builders.

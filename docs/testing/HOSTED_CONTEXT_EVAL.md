@@ -1,5 +1,10 @@
 # Hosted OpenWorkGraph multi-client retrieval evaluation
 
+> Historical protocol/snapshot; current primary product-value protocol:
+> [../../evals/README.md](../../evals/README.md). Archived model-attempt
+> artifacts: [HISTORY.md](../../evals/hosted_context/results/HISTORY.md).
+
+
 This is an **evaluation protocol and scorer**, not a claim that any ChatGPT,
 Claude, Codex, or other AI has actually retrieved a user's OWG evidence. It
 measures *when* agents use MCP, whether the right tools were invoked, whether

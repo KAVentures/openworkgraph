@@ -26,6 +26,7 @@ rsync -a \
   --exclude 'data/' \
   --exclude 'dist/' \
   --exclude 'tests/' \
+  --exclude 'evals/' \
   --exclude 'scripts/' \
   --exclude 'config.json' \
   "$ROOT/" "$STAGE/"
