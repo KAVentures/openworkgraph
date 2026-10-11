@@ -82,8 +82,11 @@ security assessment.
   may remain in backups according to the provider's retention schedule.
 - Deleting a time range locally changes the manifest; existing synced
   cloud rows disappear at the next successful reconciliation.
-- Pausing organization sharing also suspends/revokes the optional cloud
-  content channel when connectivity permits.
+- Pausing organization sharing, pausing the recorder, or turning off
+  master AI access also stops the optional cloud content channel. After a
+  successful remote revocation, the desktop cloud toggle is switched OFF;
+  resuming ordinary recording does not silently reauthorize old cloud text.
+  Explicit fresh local consent is needed to start sharing again.
 - User-facing deletion does not recall content already supplied to an AI
   conversation or downstream system. Source content is never an instruction
   or execution authorization.
