@@ -6,6 +6,7 @@ must precede any managed-device content sharing.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import ipaddress
@@ -21,6 +22,9 @@ MAX_BATCH = 50
 MAX_MANIFEST = 500
 MAX_BODY = 1600
 RETENTION_DAYS = 7
+MAX_ACCOUNT_ROWS = 500
+MAX_ACCOUNT_TEXT_CHARS = 600_000
+MAX_APPROVED_DEVICES = 10
 SQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_work_text (
  organization_id TEXT NOT NULL,
@@ -40,6 +44,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_work_text_public_ref ON cloud_work_t
  (organization_id, actor_id, public_ref);
 CREATE INDEX IF NOT EXISTS idx_cloud_work_text_actor ON cloud_work_text
  (organization_id, actor_id, expires_at, observed_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_work_text_expiry ON cloud_work_text (expires_at);
 CREATE TABLE IF NOT EXISTS cloud_work_text_grants (
  organization_id TEXT NOT NULL,
  actor_id TEXT NOT NULL,
@@ -68,6 +73,14 @@ CREATE TABLE IF NOT EXISTS cloud_work_text_account_reapprovals (
  approved_at TEXT NOT NULL,
  consent_version TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id)
+);
+CREATE TABLE IF NOT EXISTS cloud_work_text_device_approvals (
+ organization_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ consent_version TEXT NOT NULL,
+ approved_at TEXT NOT NULL,
+ PRIMARY KEY (organization_id, actor_id, device_id)
 );
 CREATE TABLE IF NOT EXISTS cloud_work_text_actor_mutex (
  organization_id TEXT NOT NULL,
@@ -200,6 +213,54 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
     }
 
 
+def approve_device(db: GatewayDB, *, organization_id: str, actor_id: str,
+                   device_id: str, consent_version: str) -> dict[str, Any]:
+    """Authorize one enrolled device from an independent signed-in OAuth action.
+
+    A device bearer and client-supplied consent timestamp cannot mint this grant.
+    Account deletion and device revocation erase it, including across offline
+    devices. Fresh OAuth approval is required to enable that device again.
+    """
+    _guard()
+    if not _personal(organization_id, actor_id) or consent_version != CONSENT_VERSION:
+        raise PermissionError("personal OAuth approval with current notice required")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", device_id):
+        raise ValueError("invalid enrolled device ID")
+    with db.connect() as conn:
+        _lock_actor(db, conn, organization_id, actor_id)
+        cur = db._execute(conn, """SELECT approved_at,consent_version
+            FROM cloud_work_text_account_reapprovals
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+        account_approval = cur.fetchone()
+        if not account_approval or str(account_approval[1]) != CONSENT_VERSION:
+            raise PermissionError("OAuth account cloud-text approval is required")
+        cur = db._execute(conn, """SELECT scopes_json FROM access_tokens
+            WHERE organization_id=? AND actor_id=? AND device_id=?
+            AND token_type='device' AND revoked_at IS NULL LIMIT 1""",
+            (organization_id, actor_id, device_id))
+        enrolled = cur.fetchone()
+        if not enrolled or "evidence:write" not in json.loads(str(enrolled[0])):
+            raise PermissionError("device must be actively enrolled to this OAuth account")
+        cur = db._execute(conn, """SELECT 1 FROM cloud_work_text_device_approvals
+            WHERE organization_id=? AND actor_id=? AND device_id=?""",
+            (organization_id, actor_id, device_id))
+        existing = cur.fetchone()
+        if not existing:
+            cur = db._execute(conn, """SELECT COUNT(*) FROM cloud_work_text_device_approvals
+                WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+            if int(cur.fetchone()[0]) >= MAX_APPROVED_DEVICES:
+                raise ValueError("maximum number of approved cloud-text devices reached")
+        now = _now().isoformat()
+        db._execute(conn, """INSERT INTO cloud_work_text_device_approvals
+            (organization_id,actor_id,device_id,consent_version,approved_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(organization_id,actor_id,device_id) DO UPDATE SET
+            consent_version=excluded.consent_version,approved_at=excluded.approved_at""",
+            (organization_id, actor_id, device_id, CONSENT_VERSION, now))
+    return {"status": "device_approved", "device_id": device_id,
+            "notice_version": CONSENT_VERSION}
+
+
 def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
          consent_version: str, granted_at: str) -> dict[str, Any]:
     _guard()
@@ -241,11 +302,19 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
                     "Cloud text was deleted from this account; OAuth reauthorization required"
                 )
             raise PermissionError("OAuth cloud work-text approval required before upload")
+        cur = db._execute(conn, """SELECT approved_at,consent_version
+            FROM cloud_work_text_device_approvals
+            WHERE organization_id=? AND actor_id=? AND device_id=?""",
+            (org, actor, device))
+        device_approval = cur.fetchone()
+        if not device_approval or str(device_approval[1]) != CONSENT_VERSION:
+            raise PermissionError("OAuth device-specific cloud-text approval required")
         if account_revocation:
             # A durable deletion tombstone survives account reauthorization.
             # Both the OAuth approval and desktop grant must be newer than it.
             revoked_at = _iso(str(account_revocation[0]))
             if (_iso(str(approval[0])) <= revoked_at
+                    or _iso(str(device_approval[0])) <= revoked_at
                     or consent_since <= revoked_at):
                 raise PermissionError(
                     "Cloud text was deleted from this account; OAuth reauthorization required; "
@@ -298,6 +367,16 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         else:
             db._execute(conn, """DELETE FROM cloud_work_text WHERE
                 organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
+        # All devices of this actor share the same bounded storage budget.
+        # The actor row lock ensures concurrent writers cannot both pass the cap.
+        # A quota failure rolls back this transaction (including new rows).
+        cur = db._execute(conn, """SELECT COUNT(*),
+            COALESCE(SUM(LENGTH(redacted_text) + LENGTH(page_title) + LENGTH(hostname)),0)
+            FROM cloud_work_text WHERE organization_id=? AND actor_id=?""",
+            (org, actor))
+        count, text_chars = cur.fetchone()
+        if int(count) > MAX_ACCOUNT_ROWS or int(text_chars) > MAX_ACCOUNT_TEXT_CHARS:
+            raise ValueError("account cloud-text storage quota exceeded")
         cur = db._execute(conn, """SELECT item_ref FROM cloud_work_text WHERE
             organization_id=? AND actor_id=? AND device_id=? AND expires_at > ?""",
             (org, actor, device, _now().isoformat()))
@@ -316,6 +395,9 @@ def revoke(db: GatewayDB, p: Principal) -> dict[str, Any]:
             (p.organization_id, p.actor_id, p.device_id))
         count = max(0, int(cur.rowcount or 0))
         db._execute(conn, """DELETE FROM cloud_work_text_grants WHERE
+            organization_id=? AND actor_id=? AND device_id=?""",
+            (p.organization_id, p.actor_id, p.device_id))
+        db._execute(conn, """DELETE FROM cloud_work_text_device_approvals WHERE
             organization_id=? AND actor_id=? AND device_id=?""",
             (p.organization_id, p.actor_id, p.device_id))
         # Remember a server-generated revocation boundary instead of dropping
@@ -350,6 +432,8 @@ def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dic
             ON CONFLICT(organization_id,actor_id) DO UPDATE SET revoked_at=excluded.revoked_at""",
             (organization_id, actor_id, now))
         db._execute(conn, """DELETE FROM cloud_work_text_account_reapprovals
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+        db._execute(conn, """DELETE FROM cloud_work_text_device_approvals
             WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
     return {"status": "deleted", "deleted": deleted,
             "reconsent_required": True, "active_copies": 0}
