@@ -61,12 +61,18 @@ security assessment.
 - Disable cloud sharing in the local Privacy view: no new uploads. On
   the next successful Gateway connection, the device sends a delete/revoke
   request and all its existing cloud rows/grant are removed.
-- If the desktop cannot reach the Gateway when cloud sharing is disabled,
-  remote deletion cannot happen instantly. Previously synchronized rows
-  can remain readable to the signed-in cloud user until a successful
-  revocation or their seven-day expiry. This limitation must be fixed or
-  clearly accepted before general availability. Deleted records may remain
-  in managed-database backups according to the provider's retention terms.
+- Disabling sharing **locally** while the desktop is offline cannot
+  immediately revoke earlier uploads: they remain readable until the next
+  successful device deletion or their seven-day expiry.
+- The hosted backend also offers **immediate OAuth-authenticated personal
+  account deletion**, even while every desktop is offline:
+  `POST /v1/plugin/work-text-delete` using the signed-in account's OAuth
+  bearer. It deletes cloud snapshots and grants across all devices of that
+  personal actor. A durable revocation boundary prevents delayed desktop
+  requests with older consent timestamps from restoring the deleted content.
+  An authenticated user-facing web deletion control still needs to be built.
+- Previously delivered AI content cannot be recalled, and deleted SQL records
+  may remain in backups according to the provider's retention schedule.
 - Deleting a time range locally changes the manifest; existing synced
   cloud rows disappear at the next successful reconciliation.
 - Pausing organization sharing also suspends/revokes the optional cloud
@@ -74,6 +80,25 @@ security assessment.
 - User-facing deletion does not recall content already supplied to an AI
   conversation or downstream system. Source content is never an instruction
   or execution authorization.
+
+## Independent consent and account-deletion release gates
+
+The desktop UI records versioned affirmative cloud permission. **The cloud
+server currently trusts a device token's assertion of that version/timestamp.**
+This is not independent confirmation that the signed-in user has approved a
+published privacy notice. Before public activation, add an OAuth-confirmed
+server-side permission record per personal actor/device and require it on
+content uploads. A general TOS checkbox alone is not enough.
+
+The account-deletion endpoint is available on the authenticated backend, but
+must be exposed in an intuitive signed-in web account screen, with clear
+success/failure status. After account deletion, the desktop must clearly
+explain that fresh consent is required rather than quietly retrying uploads.
+Retest the workflow with a desktop that is offline and later reconnects.
+
+**Merging code behind a disabled operator flag is not the same as activating
+content sharing.** The feature must remain disabled until these gates and the
+legal/security tests are complete.
 
 ## Operator steps before activation
 
