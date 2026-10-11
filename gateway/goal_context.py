@@ -75,7 +75,8 @@ def _safe_event(row: dict[str, Any]) -> dict[str, Any]:
     target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
     resource = meta.get("resource_reference") if isinstance(meta.get("resource_reference"), dict) else {}
     result = {k: row.get(k) for k in (
-        "event_id", "observed_at", "app", "event_type", "window_title", "page_host",
+        "event_id", "observed_at", "app", "event_type", "source", "session_id",
+        "window_title", "page_host", "duration_seconds",
     ) if row.get(k) not in ("", None)}
     if target.get("title"):
         result["target_label"] = str(target["title"])[:180]
