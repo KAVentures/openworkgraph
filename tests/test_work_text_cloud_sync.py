@@ -304,3 +304,36 @@ def test_reenrolled_device_token_cannot_inherit_old_cloud_approval(setup_cloud):
     # Reapproval for the new token simultaneously invalidates the older token.
     with pytest.raises(PermissionError, match="device-specific"):
         cloud.sync(db, db.authenticate("alice-device"), **_payload(items=[], refs=[]))
+
+
+def test_prerelease_device_grants_migrate_without_trusting_old_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    db = GatewayDB("sqlite:///" + str(tmp_path / "legacy.db"))
+    db.init()
+    actor = "oauth-sub:legacy-person"
+    device_id = "old-desktop"
+    with db.connect() as conn:
+        db._execute(conn, """CREATE TABLE cloud_work_text_device_approvals (
+            organization_id TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            consent_version TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            PRIMARY KEY(organization_id,actor_id,device_id)
+        )""")
+        db._execute(conn, """INSERT INTO cloud_work_text_device_approvals
+            (organization_id,actor_id,device_id,consent_version,approved_at)
+            VALUES (?,?,?,?,?)""",
+            (actor, actor, device_id, cloud.CONSENT_VERSION, _time(-5)))
+    cloud.init_schema(db)
+    with db.connect() as conn:
+        token_id = db._execute(conn, """SELECT token_id FROM cloud_work_text_device_approvals
+            WHERE organization_id=?""", (actor,)).fetchone()[0]
+    assert token_id == ""  # Historical grants require a new signed-in device approval.
+    db.put_token(token_id="new-enrolled-token", token="new-enrolled-token",
+                 token_type="device", organization_id=actor, actor_id=actor,
+                 device_id=device_id, scopes=set(DEVICE_SCOPES))
+    cloud.reauthorize_account(db, organization_id=actor, actor_id=actor,
+                              consent_version=cloud.CONSENT_VERSION)
+    with pytest.raises(PermissionError, match="device-specific"):
+        cloud.sync(db, db.authenticate("new-enrolled-token"), **_payload(items=[], refs=[]))
