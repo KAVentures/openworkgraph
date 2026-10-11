@@ -107,7 +107,7 @@ async def _inject_script(request: Request, call_next):
 def get_work_text_policy() -> dict[str, Any]:
     return {
         **work_text.get_policy(),
-        "gateway_shared": False,
+        "gateway_content_sync_opted_in": bool(work_text.get_policy().get("cloud_read_enabled")),
         "browser_only": True,
         "content_capture_is_separate_from_ai_access": True,
     }
@@ -118,7 +118,9 @@ async def update_work_text_policy(request: Request):
         return JSONResponse({"detail": "AI cannot grant itself text access."}, status_code=403)
     try:
         value = work_text.set_policy(await request.json())
-        return {**value, "gateway_shared": False}
+        return {**value, "gateway_content_sync_opted_in": bool(value.get("cloud_read_enabled"))}
+    except PermissionError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=403)
     except (ValueError, TypeError) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 

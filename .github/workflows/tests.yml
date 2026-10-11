@@ -214,6 +214,11 @@ jobs:
           assert trace["derived_task_inference_authoritative"] is False
           print(f"Gateway/PostgreSQL {EXPECTED_VERSION} compatibility test passed")
           PY
+      - name: Test cloud-text PostgreSQL concurrency and revocation
+        run: |
+          docker compose -f platform/deploy/docker-compose.yml exec -T \
+            -e OWG_CLOUD_WORK_TEXT_ENABLED=1 gateway \
+            python scripts/test_cloud_work_text_postgres.py
       - name: Show Gateway logs on failure
         if: failure()
         run: docker compose -f platform/deploy/docker-compose.yml logs

@@ -49,13 +49,12 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     response = rpc(client, mint(), 'tools/list')
     assert response.status_code == 200, response.text
     tools = response.json()['result']['tools']
-    assert len(tools) == 7
+    assert len(tools) == 9
     assert all(tool['annotations']['readOnlyHint'] for tool in tools)
     profile = rpc(client, mint(), 'tools/call', {'name': 'get_profile', 'arguments': {}})
     assert profile.status_code == 200, profile.text
     assert not profile.json()['result'].get('isError')
     assert profile.json()['result']['structuredContent']['id'].startswith('prf_')
-
 
 
 def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_boundary(public_client):
@@ -67,18 +66,17 @@ def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_bound
         'get_profile', 'get_current_work_context', 'search_work',
         'get_workflow_trace', 'find_repeated_workflows',
         'get_workflow_evidence', 'get_agent_runs',
+        'search_work_text', 'get_work_text_excerpt',
     }
     for tool in tools.values():
         assert tool['annotations']['readOnlyHint'] is True
         assert tool['annotations']['destructiveHint'] is False
         assert tool['annotations']['openWorldHint'] is False
         assert tool['description'].strip()
-
     assert 'resume what I was doing' in tools['get_current_work_context']['description']
     assert 'without naming OpenWorkGraph' in tools['search_work']['description']
     assert 'usual or repeated real work' in tools['find_repeated_workflows']['description']
     assert 'not a verified task or completion status' in tools['get_current_work_context']['description']
-
 
 
 @pytest.mark.parametrize('changes', [
@@ -576,3 +574,90 @@ def test_invalid_signature_and_symmetric_tokens_rejected(public_client):
                             'scope': 'openid', 'sub': 'test-person', 'exp': int(time.time()) + 600},
                            'test-only-symmetric-signing-key-32-bytes', algorithm='HS256')
     assert rpc(client, symmetric, 'tools/list').status_code == 401
+
+
+def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uploads(public_client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from gateway.db import GatewayDB
+    from gateway import work_text_cloud as cloud
+    import os
+
+    client, mint = public_client
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    db = GatewayDB(os.environ["OWG_GATEWAY_DATABASE_URL"])
+    db.init()
+    cloud.init_schema(db)
+    org = "oauth-sub:test-person"
+    device_id = "this-person-desktop"
+    db.put_token(token_id="text-device", token="cloud-test-device", token_type="device",
+                 organization_id=org, actor_id=org, device_id=device_id,
+                 scopes={"evidence:write"})
+    credential = db.authenticate("cloud-test-device")
+    now = datetime.now(timezone.utc)
+    grant = (now - timedelta(minutes=2)).isoformat()
+    payload = {
+        "items": [{
+            "ref": "owg:wt:1", "observed_at": now.isoformat(),
+            "hostname": "docs.example.org", "page_title": "Planning",
+            "kind": "page", "redacted_text": "Synthetic project planning meeting",
+        }],
+        "active_refs": ["owg:wt:1"], "granted_at": grant,
+        "consent_version": cloud.CONSENT_VERSION,
+    }
+    # A linked device token cannot invent account consent by supplying the
+    # expected version or an arbitrary timestamp. OAuth action is separate.
+    with pytest.raises(PermissionError, match="OAuth cloud work-text approval required"):
+        cloud.sync(db, credential, **payload)
+    # The OAuth account cannot approve all linked devices implicitly.
+    assert client.post("/v1/plugin/work-text-approve", headers={
+        "Authorization": f"Bearer {mint()}",
+        "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+    }).status_code == 400
+    assert client.post("/v1/plugin/work-text-approve", headers={
+        "Authorization": f"Bearer {mint(sub='other-user')}",
+        "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+        "X-OWG-Device-ID": device_id,
+    }).status_code == 403
+    approved = client.post(
+        "/v1/plugin/work-text-approve",
+        headers={"Authorization": f"Bearer {mint()}",
+                 "X-OWG-Consent-Version": cloud.CONSENT_VERSION,
+                 "X-OWG-Device-ID": device_id},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["device_id"] == device_id
+    assert cloud.sync(db, credential, **payload)["uploaded"] == 1
+    assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
+
+    url = "/v1/plugin/work-text-delete"
+    assert client.post(url).status_code == 401
+    assert client.post(url, headers={"Authorization": f"Bearer {mint(scope='email')}"}).status_code == 401
+    assert client.post(url, headers={"Authorization": f"Bearer {mint(sub='different-person')}"}).json()["deleted"] == 0
+    assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
+    mapped = mint(owg_org_id="company", owg_actor_id="employee")
+    assert client.post(url, headers={"Authorization": f"Bearer {mapped}"}).status_code == 409
+
+    deleted = client.post(url, headers={"Authorization": f"Bearer {mint()}"})
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] == 1
+    assert deleted.json()["reconsent_required"] is True
+    assert cloud.search(db, organization_id=org, actor_id=org, query="planning")["status"] == "not_enabled"
+
+    with pytest.raises(PermissionError, match="deleted"):
+        cloud.sync(db, credential, **payload)
+    # Even a future-skewed device clock cannot bypass the account lock.
+    later = {**payload, "items": [], "active_refs": [],
+             "granted_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()}
+    with pytest.raises(PermissionError, match="OAuth reauthorization"):
+        cloud.sync(db, credential, **later)
+    reauth = "/v1/plugin/work-text-reauthorize"
+    headers = {"Authorization": f"Bearer {mint()}", "X-OWG-Device-ID": device_id}
+    assert client.post(reauth, headers=headers).status_code == 403
+    headers["X-OWG-Consent-Version"] = cloud.CONSENT_VERSION
+    assert client.post(reauth, headers=headers).json()["status"] == "device_approved"
+    # An OAuth approval does not erase the hard deletion tombstone. Replaying
+    # the pre-deletion desktop grant after reapproval must still fail.
+    with pytest.raises(PermissionError, match="fresh local grant"):
+        cloud.sync(db, credential, **payload)
+    # A new local grant, with its own distinct epoch, is required.
+    assert cloud.sync(db, credential, **later)["status"] == "synced"

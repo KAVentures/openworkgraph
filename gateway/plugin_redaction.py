@@ -18,7 +18,7 @@ from server.contextual_redaction import Detector
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
 _PHONE = re.compile(r"(?<![\w])(?:\+\d{1,3}[\s.()-]*)?(?:\d[\s.()-]*){9,15}(?![\w])")
-_CREDENTIAL = re.compile(r"\b(?:Bearer\s+[A-Za-z0-9._~-]{10,}|(?:sk|ghp|gho|github_pat|glpat)_[A-Za-z0-9_-]{15,})", re.I)
+_CREDENTIAL = re.compile(r"\b(?:Bearer\s+[A-Za-z0-9._~-]{10,}|sk-[A-Za-z0-9_-]{18,}|(?:sk|ghp|gho|github_pat|glpat)_[A-Za-z0-9_-]{15,})", re.I)
 _URL = re.compile(r"https?://[^\s<>]+", re.I)
 _META_SIMPLE = frozenset({
     "action", "semantic_action", "semantic_action_confidence",
@@ -69,7 +69,7 @@ class PublicRedactor:
         digest = hmac.new(self.key, value.casefold().strip().encode(), hashlib.sha256).hexdigest()[:10].upper()
         return f"{kind}_{digest}"
 
-    def text(self, value: str) -> str:
+    def text(self, value: str, *, max_chars: int = _MAX_TEXT) -> str:
         text = str(value)
         text = _CREDENTIAL.sub(lambda m: self._token("SECRET", m.group(0)), text)
         text = _EMAIL.sub(lambda m: self._token("EMAIL", m.group(0)), text)
@@ -86,7 +86,8 @@ class PublicRedactor:
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
         text = self.person_detector.redact(text)
-        return text[:_MAX_TEXT] + "…[truncated]" if len(text) > _MAX_TEXT else text
+        max_chars = max(40, min(int(max_chars), 1200))
+        return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
     def metadata(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):

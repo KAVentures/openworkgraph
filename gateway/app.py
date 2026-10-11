@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
@@ -18,6 +18,8 @@ from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
 from .settings import PRODUCT_VERSION, GatewaySettings
+from . import work_text_cloud
+from .hardening import DistributedPrincipalRateLimiter
 
 
 class EnrollmentRequest(BaseModel):
@@ -53,6 +55,13 @@ class EvidenceBatch(BaseModel):
 
 class AgentSessionMessageBatch(BaseModel):
     messages: list[dict[str, Any]]
+
+
+class WorkTextCloudBatch(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    active_refs: list[str] = Field(default_factory=list)
+    consent_version: str
+    granted_at: str
 
 
 class SearchRequest(BaseModel):
@@ -102,6 +111,10 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         db.init()
         init_enrollment_schema(db)
         init_lifecycle_schema(db)
+        work_text_cloud.init_schema(db)
+        # Cloud-only throttle. Existing structural evidence requests and
+        # Gateway rate-limit settings are not changed.
+        app.state.cloud_text_limiter = DistributedPrincipalRateLimiter(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -386,6 +399,62 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     def audit_log(organization_id: str, limit: int = 100, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         return {"items": db.audit_rows(organization_id, limit)}
+
+    # The device can sync only after local dashboard consent; hosted reads
+    # are independently OAuth-identity-scoped. Enterprise actors are denied.
+    @app.post("/v1/device/work-text-sync")
+    async def device_cloud_text_sync(http_request: Request, p: Principal = Depends(principal)) -> dict[str, Any]:
+        # Apply a size limit while STREAMING, before Pydantic constructs a
+        # possibly huge untrusted JSON body. The ordinary evidence ingestion
+        # request and its existing limit remain untouched.
+        if not work_text_cloud.available():
+            raise HTTPException(status_code=503, detail="Cloud text sharing is disabled")
+        try:
+            work_text_cloud._device(p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        limiter = app.state.cloud_text_limiter
+        for key, limit in (
+            (f"cloud-work-text:device:{p.organization_id}:{p.actor_id}:{p.device_id}", 30),
+            (f"cloud-work-text:actor:{p.organization_id}:{p.actor_id}", 90),
+        ):
+            allowed, retry_after = limiter.check(key, limit)
+            if not allowed:
+                raise HTTPException(status_code=429, detail="cloud text upload rate limit",
+                                    headers={"Retry-After": str(retry_after)})
+        body = bytearray()
+        async for chunk in http_request.stream():
+            if len(chunk) > 196_608 - len(body):
+                raise HTTPException(status_code=413, detail="cloud text upload exceeds 192 KiB")
+            body.extend(chunk)
+        try:
+            request = WorkTextCloudBatch.model_validate_json(bytes(body))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid cloud work-text payload")
+        try:
+            result = work_text_cloud.sync(
+                db, p, items=request.items, active_refs=request.active_refs,
+                consent_version=request.consent_version, granted_at=request.granted_at,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="Cloud text sharing is disabled")
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.cloud_synced", details={"count": result["uploaded"]})
+        return result
+
+    @app.post("/v1/device/work-text-revoke")
+    def device_cloud_text_revoke(p: Principal = Depends(principal)) -> dict[str, Any]:
+        try:
+            result = work_text_cloud.revoke(db, p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="work_text.cloud_revoked", details={"count": result["deleted"]})
+        return result
 
     @app.get("/v1/device-policy")
     def device_policy(p: Principal = Depends(principal)) -> dict[str, Any]:

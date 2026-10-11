@@ -85,7 +85,7 @@ Do not turn it on for confidential or regulated work without an appropriate
 organizational authorization and a security review.** Existing structural
 activity recording remains unchanged.
 
-The Privacy tab has two independent switches:
+The Privacy tab has separate, individually controlled permissions:
 
 - **Capture visible work text for AI**: when enabled, the paired browser sensor
   observes bounded, currently visible page text and certain editable drafts.
@@ -94,8 +94,13 @@ The Privacy tab has two independent switches:
   clipboard payloads, form-password fields and file bodies are excluded.
 - **Allow local AI apps to read saved work text**: a separate grant, which also
   requires the existing master AI-access switch. The local retrieval interface
-  is unfinished while this is a draft. This setting does **not** grant the
+  is available to local MCP only. It does **not** by itself grant the
   hosted ChatGPT Gateway plugin access to work-text data.
+- **Share redacted work content with cloud AI apps**: an additional OFF-by-default
+  choice requiring affirmative, versioned acknowledgement. Only browser work text
+  captured **after** the opt-in may synchronize to the linked personal account.
+  The user must be authorized to share data; accepting OWG's terms does not grant
+  that authority. See `docs/CLOUD_WORK_TEXT_SYNC.md`.
 
 Text filtering runs locally before the separate work-text SQLite store is
 written. Authentication/banking/payment/health-oriented pages and the existing
@@ -117,10 +122,15 @@ before general availability. The default retention is 7 days
 (maximum 30 days and 500 rows); setting a shorter retention prunes the store.
 The recorder's Pause/Stop state also blocks new text snapshots.
 
-There is no automatic text upload through the Gateway or existing MCP tools.
-This branch does not implement native-app accessibility text capture, permitted
-enterprise sharing, or a verified content-inclusive remote retrieval path.
-Those require additional privacy review and separate user-facing permissions.
+Automatic Gateway text synchronization is **disabled by default** on both the
+device and the hosted operator. Only after independent cloud opt-in and operator
+enablement does the existing authenticated device worker transmit newly captured,
+bounded, locally redacted snapshots through a separate content endpoint. The
+Gateway enforces personal-actor boundaries, applies another redaction pass,
+and retains active cloud content for up to seven days. There is no native-app
+text capture or permitted enterprise cloud-content sharing. Offline revocation
+has unavoidable network latency; previously delivered model context cannot be
+recalled. Cloud storage and legal notices require separate production review.
 
 ## Browser-context privacy profiles (v0.114)
 

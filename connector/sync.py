@@ -18,6 +18,7 @@ from .config import load_device_token, load_gateway_settings
 from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
 from .state import SyncState
+from .work_text_sync import process_cloud_text
 
 STOP = False
 
@@ -346,6 +347,8 @@ def run(config_path: Path, *, once: bool = False) -> int:
             )
 
             if state.get_bool("sharing_paused", False):
+                # Pause also revokes any previously cloud-synced work text.
+                process_cloud_text(client, url=settings.url, state=state, sharing_paused=True)
                 state.set("status", "paused")
                 state.set("last_error", "")
                 if once:
@@ -379,6 +382,10 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     client, url=settings.url, db_path=db_path, state=state,
                     policy=policy, batch_size=settings.batch_size,
                 )
+
+                # Independently opted-in cloud text channel. Reuses the same
+                # authenticated client, but never the ordinary event queue.
+                process_cloud_text(client, url=settings.url, state=state, now=time.monotonic())
 
                 cursor = state.get_int("last_local_event_id", 0)
                 rows = _read_local_rows(db_path, cursor, settings.batch_size)
