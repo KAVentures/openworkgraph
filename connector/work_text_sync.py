@@ -151,9 +151,12 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
         # requests all day while the user has only enabled the local switch.
         # Keep the preference intact but use a restrained retry interval.
         if (getattr(response, "status_code", None) == 403
-                and "OAuth cloud work-text approval required" in str(getattr(response, "text", ""))):
+                and ("OAuth cloud work-text approval required" in str(getattr(response, "text", ""))
+                     or "OAuth device-specific cloud-text approval required"
+                     in str(getattr(response, "text", "")))):
             state.set("cloud_text_last_error",
-                      "Cloud sync requires separate signed-in account approval.")
+                      "Cloud sync requires separate signed-in account approval "
+                      "of this particular linked device.")
             _NEXT_SCAN = current + 300.0
             return 0
         state.set("cloud_text_last_error", str(exc)[:180])
