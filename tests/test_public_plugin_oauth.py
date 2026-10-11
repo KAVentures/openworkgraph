@@ -574,3 +574,56 @@ def test_invalid_signature_and_symmetric_tokens_rejected(public_client):
                             'scope': 'openid', 'sub': 'test-person', 'exp': int(time.time()) + 600},
                            'test-only-symmetric-signing-key-32-bytes', algorithm='HS256')
     assert rpc(client, symmetric, 'tools/list').status_code == 401
+
+
+def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uploads(public_client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from gateway.db import GatewayDB
+    from gateway import work_text_cloud as cloud
+    import os
+
+    client, mint = public_client
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    db = GatewayDB(os.environ["OWG_GATEWAY_DATABASE_URL"])
+    db.init()
+    cloud.init_schema(db)
+    org = "oauth-sub:test-person"
+    device_id = "this-person-desktop"
+    db.put_token(token_id="text-device", token="cloud-test-device", token_type="device",
+                 organization_id=org, actor_id=org, device_id=device_id,
+                 scopes={"evidence:write"})
+    credential = db.authenticate("cloud-test-device")
+    now = datetime.now(timezone.utc)
+    grant = (now - timedelta(minutes=2)).isoformat()
+    payload = {
+        "items": [{
+            "ref": "owg:wt:1", "observed_at": now.isoformat(),
+            "hostname": "docs.example.org", "page_title": "Planning",
+            "kind": "page", "redacted_text": "Synthetic project planning meeting",
+        }],
+        "active_refs": ["owg:wt:1"], "granted_at": grant,
+        "consent_version": cloud.CONSENT_VERSION,
+    }
+    assert cloud.sync(db, credential, **payload)["uploaded"] == 1
+    assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
+
+    url = "/v1/plugin/work-text-delete"
+    assert client.post(url).status_code == 401
+    assert client.post(url, headers={"Authorization": f"Bearer {mint(scope='email')}"}).status_code == 401
+    assert client.post(url, headers={"Authorization": f"Bearer {mint(sub='different-person')}"}).json()["deleted"] == 0
+    assert len(cloud.search(db, organization_id=org, actor_id=org, query="planning")["results"]) == 1
+    mapped = mint(owg_org_id="company", owg_actor_id="employee")
+    assert client.post(url, headers={"Authorization": f"Bearer {mapped}"}).status_code == 409
+
+    deleted = client.post(url, headers={"Authorization": f"Bearer {mint()}"})
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] == 1
+    assert deleted.json()["reconsent_required"] is True
+    assert cloud.search(db, organization_id=org, actor_id=org, query="planning")["status"] == "not_enabled"
+
+    with pytest.raises(PermissionError, match="deleted"):
+        cloud.sync(db, credential, **payload)
+    # A later user-confirmed grant creates a new, initially empty corpus.
+    later = {**payload, "items": [], "active_refs": [],
+             "granted_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()}
+    assert cloud.sync(db, credential, **later)["status"] == "synced"
