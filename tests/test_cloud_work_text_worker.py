@@ -18,6 +18,9 @@ def test_device_sync_and_revocation_use_existing_gateway_credentials(tmp_path, m
     org = "oauth-sub:person"
     db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
     db.init()
+    cloud.init_schema(db)
+    cloud.reauthorize_account(db, organization_id=org, actor_id=org,
+                              consent_version=cloud.CONSENT_VERSION)
     db.put_token(token_id="desktop", token="desktop-token", token_type="device",
                  organization_id=org, actor_id=org, device_id="desktop-one",
                  scopes=set(DEVICE_SCOPES))
@@ -87,6 +90,9 @@ def test_account_delete_revokes_local_cloud_toggle_and_never_retries_stale_batch
     org = "oauth-sub:delete-test"
     db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
     db.init()
+    cloud.init_schema(db)
+    cloud.reauthorize_account(db, organization_id=org, actor_id=org,
+                              consent_version=cloud.CONSENT_VERSION)
     db.put_token(token_id="del-device", token="del-token", token_type="device",
                  organization_id=org, actor_id=org, device_id="local-device",
                  scopes=set(DEVICE_SCOPES))
@@ -136,6 +142,9 @@ def test_disabled_cloud_grant_revokes_even_if_worker_sync_state_was_reset(tmp_pa
     actor = "oauth-sub:restore-test"
     db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
     db.init()
+    cloud.init_schema(db)
+    cloud.reauthorize_account(db, organization_id=actor, actor_id=actor,
+                              consent_version=cloud.CONSENT_VERSION)
     db.put_token(token_id="device", token="valid-device", token_type="device",
                  organization_id=actor, actor_id=actor, device_id="linked-one",
                  scopes=set(DEVICE_SCOPES))
