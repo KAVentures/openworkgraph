@@ -140,6 +140,19 @@ def init_schema(db: GatewayDB) -> None:
     with db.connect() as conn:
         for sql in (p.strip() for p in SQL_SCHEMA.split(";") if p.strip()):
             db._execute(conn, sql)
+        # Upgrade any prerelease database created before OAuth grants were
+        # tied to a specific enrolled token. Old grants remain invalid (empty
+        # token_id) until the user approves the device again.
+        if db.is_postgres:
+            db._execute(conn, """ALTER TABLE cloud_work_text_device_approvals
+                ADD COLUMN IF NOT EXISTS token_id TEXT NOT NULL DEFAULT ''""")
+        else:
+            columns = {str(row[1]) for row in db._execute(
+                conn, "PRAGMA table_info(cloud_work_text_device_approvals)"
+            ).fetchall()}
+            if "token_id" not in columns:
+                db._execute(conn, """ALTER TABLE cloud_work_text_device_approvals
+                    ADD COLUMN token_id TEXT NOT NULL DEFAULT ''""")
 
 
 def _lock_actor(db: GatewayDB, conn: Any, org: str, actor: str) -> None:
