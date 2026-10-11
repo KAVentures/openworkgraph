@@ -104,7 +104,7 @@ def build_goal_context(
     terms = _terms(goal)
     rows = sorted(
         (row for row in raw_events if isinstance(row, dict) and _iso(row.get("observed_at"))),
-        key=lambda row: (str(row["observed_at"]), str(row.get("event_id") or "")),
+        key=lambda row: (_iso(row["observed_at"]), str(row.get("event_id") or "")),
     )
     latest = max((_iso(row["observed_at"]) for row in rows), default=None)
     earliest = min((_iso(row["observed_at"]) for row in rows), default=None)
@@ -215,9 +215,10 @@ def gateway_goal_context(
         raise ValueError("goal must be 4-500 characters")
     since = normalize_optional_timestamp(since)
     until = normalize_optional_timestamp(until)
-    if since and until and since >= until:
+    if since and until and _iso(since) >= _iso(until):
         raise ValueError("until must be after since")
     policy_cutoff = get_retention_policy(db, organization_id).get("cutoff")
+    start_at, end_at, retention_at = _iso(since), _iso(until), _iso(policy_cutoff)
     rows_by_id: dict[str, dict[str, Any]] = {}
     source_limit_reached = False
 
@@ -229,10 +230,12 @@ def gateway_goal_context(
     )
     source_limit_reached |= len(recent) == 500
     for source in recent:
-        when = str(source.get("observed_at") or "")
-        if (since and when < since) or (until and when > until):
+        when = _iso(source.get("observed_at"))
+        if when is None:
             continue
-        if policy_cutoff and when < str(policy_cutoff):
+        if (start_at and when < start_at) or (end_at and when > end_at):
+            continue
+        if retention_at and when < retention_at:
             continue
         row = rich_evidence_row(source, include_identity=False)
         if row.get("event_id"):
