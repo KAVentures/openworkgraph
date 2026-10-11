@@ -135,13 +135,16 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         raise ValueError("invalid bounded redacted text")
     if _SECRET_RE.search(content):
         raise ValueError("credential-like text is excluded")
-    # Local capture already redacts; make Gateway storage a second fail-closed
-    # redaction boundary before content ever reaches a hosted database.
-    from server.ai_context import redact_contextually
+    # Cloud redaction must never consult desktop-only settings, identity
+    # registries, local privacy keys or a shared on-disk profile. The public
+    # projector already works in isolated hosted MCP deployments. Give this
+    # ingestion pass an ephemeral secret: tokens cannot become cross-tenant
+    # stable identity links, and no key is persisted or operator-managed.
+    from .plugin_redaction import PublicRedactor
     try:
-        projected = redact_contextually({"body": content, "page_title": title})
-        content = str(projected["body"])[:MAX_BODY]
-        title = str(projected["page_title"])[:160]
+        cleaner = PublicRedactor(secret=secrets.token_urlsafe(32), principal="cloud-ingest")
+        content = cleaner.text(content, max_chars=MAX_BODY)
+        title = cleaner.text(title, max_chars=160)
     except Exception as exc:
         raise ValueError("cloud-side text redaction failed") from exc
     if not content or _SECRET_RE.search(content):
