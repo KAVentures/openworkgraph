@@ -220,3 +220,50 @@ def test_missing_oauth_account_approval_does_not_spam_gateway_or_disable_local_c
         assert worker.process_cloud_text(client, url="http://testserver",
                                          state=state, now=311) == 0
         assert state.get_bool("cloud_text_remote_granted") is True
+
+
+def test_pausing_cloud_sharing_revokes_and_requires_fresh_local_opt_in(tmp_path, monkeypatch):
+    """Do not silently resume with a server-revoked consent epoch."""
+    from server import work_text_capture as wt, ai_access
+    from shared import capture_control
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    actor = "oauth-sub:pause-example"
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    db.init()
+    cloud.init_schema(db)
+    cloud.reauthorize_account(db, organization_id=actor, actor_id=actor,
+                              consent_version=cloud.CONSENT_VERSION)
+    db.put_token(token_id="pause-device", token="pause-token", token_type="device",
+                 organization_id=actor, actor_id=actor, device_id="desktop",
+                 scopes=set(DEVICE_SCOPES))
+    app = create_app(settings=GatewaySettings(database_url=db.database_url,
+                     admin_token="", enrollment_token=""), db=db)
+    epoch = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    policy = {"capture_enabled": True, "ai_read_enabled": True,
+              "cloud_read_enabled": True, "cloud_granted_at": epoch,
+              "cloud_ack_version": cloud.CONSENT_VERSION}
+    monkeypatch.setattr(wt, "get_policy", lambda: dict(policy))
+    monkeypatch.setattr(wt, "set_policy", lambda change: policy.update(change) or dict(policy))
+    monkeypatch.setattr(wt, "cloud_sync_snapshot", lambda: {
+        "items": [], "granted_at": epoch, "consent_version": cloud.CONSENT_VERSION
+    })
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(capture_control, "read_state", lambda: {"state": "recording"})
+    monkeypatch.setattr(worker, "_NEXT_SCAN", 0.0)
+    state = SyncState(tmp_path / "worker.db")
+    with TestClient(app, headers={"Authorization": "Bearer pause-token"}) as client:
+        assert worker.process_cloud_text(client, url="http://testserver", state=state, now=5) == 0
+        assert state.get_bool("cloud_text_remote_granted")
+        assert policy["cloud_read_enabled"] is True
+        assert worker.process_cloud_text(client, url="http://testserver",
+                                         state=state, sharing_paused=True, now=6) == 0
+        assert policy["cloud_read_enabled"] is False
+        assert not state.get_bool("cloud_text_remote_granted")
+        assert "fresh local cloud opt-in" in state.get("cloud_text_last_error")
+        # Resume must not undo local revocation or send another batch.
+        class NoNetwork:
+            def post(self, *_args, **_kwargs):
+                raise AssertionError("resume may not automatically re-share old content")
+        assert worker.process_cloud_text(NoNetwork(), url="http://testserver",
+                                         state=state, now=15) == 0
+        assert policy["cloud_read_enabled"] is False
