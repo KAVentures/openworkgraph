@@ -144,8 +144,14 @@ def init_schema(db: GatewayDB) -> None:
         # tied to a specific enrolled token. Old grants remain invalid (empty
         # token_id) until the user approves the device again.
         if db.is_postgres:
-            db._execute(conn, """ALTER TABLE cloud_work_text_device_approvals
-                ADD COLUMN IF NOT EXISTS token_id TEXT NOT NULL DEFAULT ''""")
+            # Avoid an unconditional ALTER on each serverless cold start.
+            exists = db._execute(conn, """SELECT 1 FROM information_schema.columns
+                WHERE table_schema=current_schema()
+                AND table_name='cloud_work_text_device_approvals'
+                AND column_name='token_id'""").fetchone()
+            if not exists:
+                db._execute(conn, """ALTER TABLE cloud_work_text_device_approvals
+                    ADD COLUMN IF NOT EXISTS token_id TEXT NOT NULL DEFAULT ''""")
         else:
             columns = {str(row[1]) for row in db._execute(
                 conn, "PRAGMA table_info(cloud_work_text_device_approvals)"
