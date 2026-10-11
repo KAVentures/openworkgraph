@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
@@ -399,7 +399,19 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
     # The device can sync only after local dashboard consent; hosted reads
     # are independently OAuth-identity-scoped. Enterprise actors are denied.
     @app.post("/v1/device/work-text-sync")
-    def device_cloud_text_sync(request: WorkTextCloudBatch, p: Principal = Depends(principal)) -> dict[str, Any]:
+    async def device_cloud_text_sync(http_request: Request, p: Principal = Depends(principal)) -> dict[str, Any]:
+        # Apply a size limit while STREAMING, before Pydantic constructs a
+        # possibly huge untrusted JSON body. The ordinary evidence ingestion
+        # request and its existing limit remain untouched.
+        body = bytearray()
+        async for chunk in http_request.stream():
+            body.extend(chunk)
+            if len(body) > 196_608:
+                raise HTTPException(status_code=413, detail="cloud text upload exceeds 192 KiB")
+        try:
+            request = WorkTextCloudBatch.model_validate_json(bytes(body))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid cloud work-text payload")
         try:
             result = work_text_cloud.sync(
                 db, p, items=request.items, active_refs=request.active_refs,
