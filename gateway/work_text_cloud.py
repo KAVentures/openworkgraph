@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS cloud_work_text_revocations (
  revoked_at TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS cloud_work_text_account_revocations (
+ organization_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ revoked_at TEXT NOT NULL,
+ PRIMARY KEY (organization_id, actor_id)
+);
 """
 _SECRET_RE = re.compile(
     r"(?i)(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
@@ -189,9 +195,15 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
     org, actor, device = p.organization_id, p.actor_id, p.device_id
     with db.connect() as conn:
         _purge(db, conn)
-        # Revocation is durable: an old delayed/retried request must not
-        # resurrect data after a successful revoke. Only a fresh consent epoch
-        # later than the server-side revoke timestamp may enable uploads again.
+        # Cloud account deletion must be effective even when all desktop
+        # recorders are offline. Old device uploads cannot resurrect the corpus.
+        cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_account_revocations
+            WHERE organization_id=? AND actor_id=?""", (org, actor))
+        account_revocation = cur.fetchone()
+        if account_revocation and consent_since <= _iso(str(account_revocation[0])):
+            raise PermissionError("Cloud text was deleted from this account; give new consent locally")
+        # Revocation is durable: delayed/retried requests must not resurrect
+        # data after a successful device revoke.
         cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_revocations
             WHERE organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
         revocation = cur.fetchone()
@@ -264,6 +276,30 @@ def revoke(db: GatewayDB, p: Principal) -> dict[str, Any]:
             revoked_at=excluded.revoked_at""",
             (p.organization_id, p.actor_id, p.device_id, _now().isoformat()))
     return {"status": "revoked", "deleted": count}
+
+
+def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dict[str, Any]:
+    """Delete an OAuth-authenticated personal account's cloud work text now.
+
+    Also creates a server-side consent boundary. A desktop still holding an
+    older grant must not restore cloud data while the user is offline.
+    Only a *new* separately confirmed desktop grant can resume sharing.
+    """
+    if not _personal(organization_id, actor_id):
+        raise PermissionError("only personal OAuth actors may delete their cloud work text")
+    now = _now().isoformat()
+    with db.connect() as conn:
+        cur = db._execute(conn, """DELETE FROM cloud_work_text
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+        deleted = max(0, int(cur.rowcount or 0))
+        db._execute(conn, """DELETE FROM cloud_work_text_grants
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+        db._execute(conn, """INSERT INTO cloud_work_text_account_revocations
+            (organization_id, actor_id, revoked_at) VALUES (?,?,?)
+            ON CONFLICT(organization_id,actor_id) DO UPDATE SET revoked_at=excluded.revoked_at""",
+            (organization_id, actor_id, now))
+    return {"status": "deleted", "deleted": deleted,
+            "reconsent_required": True, "active_copies": 0}
 
 
 def _eligible(db: GatewayDB, org: str, actor: str, conn: Any) -> bool:
