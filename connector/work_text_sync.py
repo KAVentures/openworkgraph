@@ -136,6 +136,15 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
             except Exception:
                 # Failure to update the local policy never authorizes upload.
                 pass
+        # Without independent account approval, repeated attempts can burn
+        # requests all day while the user has only enabled the local switch.
+        # Keep the preference intact but use a restrained retry interval.
+        if (getattr(response, "status_code", None) == 403
+                and "OAuth cloud work-text approval required" in str(getattr(response, "text", ""))):
+            state.set("cloud_text_last_error",
+                      "Cloud sync requires separate signed-in account approval.")
+            _NEXT_SCAN = current + 300.0
+            return 0
         state.set("cloud_text_last_error", str(exc)[:180])
         _NEXT_SCAN = current + 30.0
         return 0
