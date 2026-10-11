@@ -49,7 +49,7 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     response = rpc(client, mint(), 'tools/list')
     assert response.status_code == 200, response.text
     tools = response.json()['result']['tools']
-    assert len(tools) == 9
+    assert len(tools) == 10
     assert all(tool['annotations']['readOnlyHint'] for tool in tools)
     profile = rpc(client, mint(), 'tools/call', {'name': 'get_profile', 'arguments': {}})
     assert profile.status_code == 200, profile.text
@@ -63,7 +63,7 @@ def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_bound
     assert response.status_code == 200, response.text
     tools = {item['name']: item for item in response.json()['result']['tools']}
     assert set(tools) == {
-        'get_profile', 'get_current_work_context', 'search_work',
+        'get_profile', 'get_current_work_context', 'get_goal_context', 'search_work',
         'get_workflow_trace', 'find_repeated_workflows',
         'get_workflow_evidence', 'get_agent_runs',
         'search_work_text', 'get_work_text_excerpt',
@@ -75,6 +75,7 @@ def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_bound
         assert tool['description'].strip()
     assert 'resume what I was doing' in tools['get_current_work_context']['description']
     assert 'without naming OpenWorkGraph' in tools['search_work']['description']
+    assert 'previously observed human or agent work' in tools['get_goal_context']['description']
     assert 'usual or repeated real work' in tools['find_repeated_workflows']['description']
     assert 'not a verified task or completion status' in tools['get_current_work_context']['description']
 
@@ -454,6 +455,7 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
         ('get_current_work_context', {}),
         ('get_current_work_context', {'detail': 'rich'}),
         ('search_work', {'query': 'Email to'}),
+        ('get_goal_context', {'goal': 'Find the previous email account workflow'}),
         ('get_workflow_trace', {'detail': 'rich'}),
         ('get_agent_runs', {}),
         ('find_repeated_workflows', {}),
