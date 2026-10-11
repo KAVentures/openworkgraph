@@ -146,8 +146,8 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         raise ValueError("sensitive host is excluded")
     if len(title) > 160 or kind not in {"page", "draft"} or not content or len(content) > MAX_BODY:
         raise ValueError("invalid bounded redacted text")
-    if _SECRET_RE.search(content):
-        raise ValueError("credential-like text is excluded")
+    if _SECRET_RE.search(content) or _SECRET_RE.search(title):
+        raise ValueError("credential-like page title or text is excluded")
     # Cloud redaction must never consult desktop-only settings, identity
     # registries, local privacy keys or a shared on-disk profile. The public
     # projector already works in isolated hosted MCP deployments. Give this
@@ -160,7 +160,7 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
         title = cleaner.text(title, max_chars=160)
     except Exception as exc:
         raise ValueError("cloud-side text redaction failed") from exc
-    if not content or _SECRET_RE.search(content):
+    if not content or _SECRET_RE.search(content) or _SECRET_RE.search(title):
         raise ValueError("cloud text failed security screening")
     seen = _iso(str(value.get("observed_at") or ""))
     now = _now()
