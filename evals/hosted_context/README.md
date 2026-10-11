@@ -1,5 +1,10 @@
 # Real CLI execution
 
+> Historical two-arm hosted MCP routing diagnostic. The primary three-arm
+> product-value study is [../README.md](../README.md). Old authentication-
+> blocked outputs are indexed in [results/HISTORY.md](results/HISTORY.md).
+
+
 `run_clients.py` is an evaluation controller, not the evaluated assistant. It
 launches a new CLI process and empty working directory for every case/condition/
 trial, with the **unchanged case prompt** as the sole user request. It never

@@ -29,6 +29,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 dist/OpenWorkGraph.app
           test -x dist/OpenWorkGraph.app/Contents/MacOS/OpenWorkGraph
           PAYLOAD="$PWD/dist/OpenWorkGraph.app/Contents/Resources/openworkgraph"
+          test ! -d "$PAYLOAD/evals"
           PYTHON_RELATIVE="$(tr -d '\r\n' < "$PAYLOAD/EMBEDDED_PYTHON.txt")"
           test -n "$PYTHON_RELATIVE"
           test -x "$PAYLOAD/$PYTHON_RELATIVE"
@@ -141,6 +142,12 @@ jobs:
       - name: Build standalone Windows tester ZIP
         shell: powershell
         run: ./scripts/build_windows_release.ps1
+      - name: Verify Windows runtime excludes evaluations
+        shell: powershell
+        run: |
+          $Version = (Get-Content VERSION -Raw).Trim()
+          $EvalDir = Join-Path "dist/OpenWorkGraph-Windows-v$Version/.openworkgraph-src" "evals"
+          if (Test-Path $EvalDir) { throw "Evaluation files unexpectedly bundled in Windows runtime" }
       - name: Embed offline runtime for installer
         shell: powershell
         run: ./scripts/embed_windows_runtime.ps1

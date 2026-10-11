@@ -136,3 +136,11 @@ def test_grouped_trials_do_not_mix_models():
     row_b = {**row_a, "client": "other-client", "model": "other-model"}
     report = score_runs([case], [row_a, row_b])
     assert report["trial_count"] == 2 and report["model_count"] == 2
+
+def test_current_hosted_tools_are_recognized_by_routing_diagnostic():
+    from evals.hosted_context.score import TOOL_NAMES, score_case
+    assert {"get_goal_context", "search_work_text", "get_work_text_excerpt"} <= TOOL_NAMES
+    case = BY_ID["named-renewal"]
+    result = score_case(case, recorded(case["id"], call("get_goal_context")))
+    assert result["triggered"] is True
+    assert result["raw_fallback_met"] is False

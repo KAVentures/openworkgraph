@@ -1,5 +1,9 @@
 # Ambiguous continuity A/B
 
+> Historical two-arm diagnostic. The current three-arm product evaluation is
+> described in [../README.md](../README.md).
+
+
 This evaluation decides whether OpenWorkGraph's remaining continuity thesis is
 worth building around.
 

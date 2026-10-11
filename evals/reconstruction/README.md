@@ -1,5 +1,9 @@
 # Workflow reconstruction evaluation
 
+> Secondary evidence-sufficiency diagnostic; primary real-agent study:
+> [../README.md](../README.md).
+
+
 This benchmark tests a narrow product thesis:
 
 > Is OpenWorkGraph's privacy-hardened observed evidence rich enough for a capable

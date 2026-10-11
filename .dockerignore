@@ -8,3 +8,5 @@ data
 dist
 config.json
 *.pyc
+evals
+tests

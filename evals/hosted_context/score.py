@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 TOOL_NAMES = frozenset({
     "get_current_work_context", "search_work", "get_workflow_trace",
     "find_repeated_workflows", "get_workflow_evidence", "get_agent_runs", "get_profile",
+    "get_goal_context", "search_work_text", "get_work_text_excerpt",
 })
 
 

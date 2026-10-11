@@ -23,3 +23,7 @@ browser_extension/pairing.json
 
 # Local build artifacts
 dist/
+
+# Ignore local/private model evaluation results
+evals/results/
+evals/hosted_context/results/20*/

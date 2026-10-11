@@ -1,5 +1,9 @@
 # Automation interpretation evaluation
 
+> Optional automation-advice diagnostic, not a product-efficacy release gate.
+> Primary evaluation: [README.md](README.md).
+
+
 This eval asks the product-value question in a paired design:
 
 > Does OWG evidence make an AI's proposed automation materially better than the same AI working from the user's intent alone?
