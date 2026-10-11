@@ -146,3 +146,50 @@ def test_server_rejects_unacknowledged_legacy_consent(setup_cloud):
     p = db.authenticate("alice-device")
     with pytest.raises(PermissionError, match="acknowledgement"):
         cloud.sync(db, p, **{**_payload(), "consent_version": "older-version"})
+
+
+def test_remote_revocation_blocks_delayed_replay_until_new_user_grant(setup_cloud):
+    db, _app, actor, _ = setup_cloud
+    device = db.authenticate("alice-device")
+    prior_epoch = _time(-3)
+    old_batch = {**_payload(items=[_entry()], refs=["owg:wt:10"]), "granted_at": prior_epoch}
+    cloud.sync(db, device, **old_batch)
+    cloud.revoke(db, device)
+
+    # An old queued request is never allowed to recreate deleted content.
+    with pytest.raises(PermissionError, match="revoked"):
+        cloud.sync(db, device, **old_batch)
+    assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["status"] == "not_enabled"
+
+    # A new explicit consent epoch later than the server-side revoke can start
+    # a new, empty corpus. Older snapshot timestamps cannot be retro-uploaded.
+    future_grant = _time(1)
+    assert cloud.sync(db, device, **{
+        "items": [], "active_refs": [], "granted_at": future_grant,
+        "consent_version": cloud.CONSENT_VERSION,
+    })["status"] == "synced"
+    assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"] == []
+
+
+def test_cloud_storage_performs_second_redaction_without_local_identity_files(setup_cloud, monkeypatch):
+    db, _app, actor, _ = setup_cloud
+    import sys
+    # Gateway must not import/read desktop user's local AI settings at ingest.
+    # Simulate that module being unavailable in the hosted environment.
+    import types
+    old = sys.modules.get("server.ai_context")
+    replacement = types.ModuleType("server.ai_context")
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("desktop-only AI configuration must not run in Gateway")
+    replacement.redact_contextually = forbidden
+    monkeypatch.setitem(sys.modules, "server.ai_context", replacement)
+    p = db.authenticate("alice-device")
+    payload = {**_payload(items=[
+        _entry("Email jane.doe@example.org about quarterly planning.")
+    ])}
+    cloud.sync(db, p, **payload)
+    result = cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")
+    ref = result["results"][0]["reference"]
+    body = cloud.excerpt(db, organization_id=actor, actor_id=actor, reference=ref)["excerpt"]["redacted_text"]
+    assert "jane.doe@example.org" not in body
+    assert "quarterly" in body.lower()
