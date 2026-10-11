@@ -23,7 +23,7 @@ MAX_MANIFEST = 500
 MAX_BODY = 1600
 RETENTION_DAYS = 7
 MAX_ACCOUNT_ROWS = 500
-MAX_ACCOUNT_TEXT_CHARS = 600_000
+MAX_ACCOUNT_STORAGE_BYTES = 500_000
 MAX_APPROVED_DEVICES = 10
 SQL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_work_text (
@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS cloud_work_text_device_approvals (
  organization_id TEXT NOT NULL,
  actor_id TEXT NOT NULL,
  device_id TEXT NOT NULL,
+ token_id TEXT NOT NULL,
  consent_version TEXT NOT NULL,
  approved_at TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id, device_id)
@@ -253,12 +254,14 @@ def approve_device(db: GatewayDB, *, organization_id: str, actor_id: str,
         account_approval = cur.fetchone()
         if not account_approval or str(account_approval[1]) != CONSENT_VERSION:
             raise PermissionError("OAuth account cloud-text approval is required")
-        cur = db._execute(conn, """SELECT scopes_json FROM access_tokens
+        cur = db._execute(conn, """SELECT token_id,scopes_json FROM access_tokens
             WHERE organization_id=? AND actor_id=? AND device_id=?
-            AND token_type='device' AND revoked_at IS NULL LIMIT 1""",
+            AND token_type='device' AND revoked_at IS NULL
+            ORDER BY created_at DESC,token_id DESC""",
             (organization_id, actor_id, device_id))
-        enrolled = cur.fetchone()
-        if not enrolled or "evidence:write" not in json.loads(str(enrolled[0])):
+        enrolled = next((row for row in cur.fetchall()
+                         if "evidence:write" in json.loads(str(row[1]))), None)
+        if not enrolled:
             raise PermissionError("device must be actively enrolled to this OAuth account")
         cur = db._execute(conn, """SELECT 1 FROM cloud_work_text_device_approvals
             WHERE organization_id=? AND actor_id=? AND device_id=?""",
@@ -271,11 +274,12 @@ def approve_device(db: GatewayDB, *, organization_id: str, actor_id: str,
                 raise ValueError("maximum number of approved cloud-text devices reached")
         now = _now().isoformat()
         db._execute(conn, """INSERT INTO cloud_work_text_device_approvals
-            (organization_id,actor_id,device_id,consent_version,approved_at)
-            VALUES (?,?,?,?,?)
+            (organization_id,actor_id,device_id,token_id,consent_version,approved_at)
+            VALUES (?,?,?,?,?,?)
             ON CONFLICT(organization_id,actor_id,device_id) DO UPDATE SET
+            token_id=excluded.token_id,
             consent_version=excluded.consent_version,approved_at=excluded.approved_at""",
-            (organization_id, actor_id, device_id, CONSENT_VERSION, now))
+            (organization_id, actor_id, device_id, str(enrolled[0]), CONSENT_VERSION, now))
     return {"status": "device_approved", "device_id": device_id,
             "notice_version": CONSENT_VERSION}
 
@@ -321,12 +325,13 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
                     "Cloud text was deleted from this account; OAuth reauthorization required"
                 )
             raise PermissionError("OAuth cloud work-text approval required before upload")
-        cur = db._execute(conn, """SELECT approved_at,consent_version
+        cur = db._execute(conn, """SELECT approved_at,consent_version,token_id
             FROM cloud_work_text_device_approvals
             WHERE organization_id=? AND actor_id=? AND device_id=?""",
             (org, actor, device))
         device_approval = cur.fetchone()
-        if not device_approval or str(device_approval[1]) != CONSENT_VERSION:
+        if (not device_approval or str(device_approval[1]) != CONSENT_VERSION
+                or str(device_approval[2]) != p.token_id):
             raise PermissionError("OAuth device-specific cloud-text approval required")
         if account_revocation:
             # A durable deletion tombstone survives account reauthorization.
@@ -389,12 +394,18 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         # All devices of this actor share the same bounded storage budget.
         # The actor row lock ensures concurrent writers cannot both pass the cap.
         # A quota failure rolls back this transaction (including new rows).
-        cur = db._execute(conn, """SELECT COUNT(*),
-            COALESCE(SUM(LENGTH(redacted_text) + LENGTH(page_title) + LENGTH(hostname)),0)
+        # Measure actual UTF-8 storage bytes on both supported databases.
+        size = (lambda field: f"OCTET_LENGTH({field})") if db.is_postgres else (
+            lambda field: f"LENGTH(CAST({field} AS BLOB))"
+        )
+        byte_expr = " + ".join(size(field) for field in (
+            "redacted_text", "page_title", "hostname",
+        ))
+        cur = db._execute(conn, f"""SELECT COUNT(*),COALESCE(SUM({byte_expr}),0)
             FROM cloud_work_text WHERE organization_id=? AND actor_id=?""",
             (org, actor))
-        count, text_chars = cur.fetchone()
-        if int(count) > MAX_ACCOUNT_ROWS or int(text_chars) > MAX_ACCOUNT_TEXT_CHARS:
+        count, stored_bytes = cur.fetchone()
+        if int(count) > MAX_ACCOUNT_ROWS or int(stored_bytes) > MAX_ACCOUNT_STORAGE_BYTES:
             raise ValueError("account cloud-text storage quota exceeded")
         cur = db._execute(conn, """SELECT item_ref FROM cloud_work_text WHERE
             organization_id=? AND actor_id=? AND device_id=? AND expires_at > ?""",
