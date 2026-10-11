@@ -38,6 +38,9 @@ clipboard contents, full web documents, or ordinary structural activity history.
   When on, the sync worker checks local state about every ten seconds,
   transmits only when the snapshot manifest changes or a reconciliation
   is due, and performs an occasional lightweight reconciliation.
+- Server-side approval is independent of local consent: upload requests are
+  rejected until the signed-in account has approved the current cloud notice.
+  The upload endpoints remain inoperable without the explicit operator flag.
 - The OAuth-protected public MCP provides `search_work_text(query)`
   and `get_work_text_excerpt(reference)`. Searches filter by authenticated
   actor, do not accept model-supplied account IDs, and apply a second
@@ -87,12 +90,21 @@ security assessment.
 
 ## Independent consent and account-deletion release gates
 
-The desktop UI records versioned affirmative cloud permission. **The cloud
-server currently trusts a device token's assertion of that version/timestamp.**
-This is not independent confirmation that the signed-in user has approved a
-published privacy notice. Before public activation, add an OAuth-confirmed
-server-side permission record per personal actor/device and require it on
-content uploads. A general TOS checkbox alone is not enough.
+The desktop UI records versioned affirmative cloud permission. The Gateway
+now **also requires a separate OAuth-authenticated personal-account approval**
+(`POST /v1/plugin/work-text-approve` with the current
+`X-OWG-Consent-Version`). A linked device cannot authorize its own cloud
+uploads merely by asserting consent or a future timestamp. Account-level
+deletion preserves its tombstone even after OAuth reauthorization; a fresh
+local consent epoch is still required. Concurrent sync/deletion/approval
+writes are serialized per actor to prevent stale uploads restoring deleted
+content.
+
+**Still missing before public enablement:** an intuitive signed-in web
+consent screen with the published notice and a clear approval action, plus
+a signed-in account Delete Cloud Text control. The API endpoints exist, but
+an undocumented HTTP header is not a user-facing consent experience.
+A general TOS checkbox alone is not enough.
 
 The account-deletion endpoint is available on the authenticated backend, but
 must be exposed in an intuitive signed-in web account screen, with clear
