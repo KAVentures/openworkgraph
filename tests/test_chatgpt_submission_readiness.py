@@ -166,6 +166,7 @@ def test_public_mcp_never_accepts_model_supplied_identity():
     source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
     for signature in (
         "def get_current_work_context(limit:",
+        "def get_goal_context(",
         "def search_work(query:",
         "def get_workflow_trace(",
         "def find_repeated_workflows(",
@@ -182,7 +183,7 @@ def test_public_mcp_never_accepts_model_supplied_identity():
 def test_public_plugin_surface_is_focused_read_only_and_verifiable():
     source = Path("gateway/public_plugin_mcp.py").read_text(encoding="utf-8")
     expected = {
-        "get_profile", "get_current_work_context", "search_work", "get_workflow_trace",
+        "get_profile", "get_current_work_context", "get_goal_context", "search_work", "get_workflow_trace",
         "find_repeated_workflows", "get_workflow_evidence", "get_agent_runs",
         "search_work_text", "get_work_text_excerpt",
     }
@@ -376,7 +377,7 @@ def test_public_tool_metadata_uses_configured_oauth_scope(monkeypatch, tmp_path)
         monkeypatch.setenv(key, value)
 
     tools = asyncio.run(create_public_mcp().list_tools())
-    assert len(tools) == 9
+    assert len(tools) == 10
     assert "get_profile" in {tool.name for tool in tools}
     for tool in tools:
         assert tool.meta["securitySchemes"] == [{"type": "oauth2", "scopes": ["openid"]}]
