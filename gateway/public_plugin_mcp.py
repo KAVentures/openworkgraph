@@ -32,6 +32,7 @@ from .query import workflow_trace
 from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
+from .goal_context import gateway_goal_context
 from .plugin_redaction import project as project_hosted, PublicRedactor
 from . import work_text_cloud
 from .hardening import DistributedPrincipalRateLimiter
@@ -182,6 +183,8 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "A user need not say OpenWorkGraph by name: relevant requests include 'pick up where I left off', "
             "'which file was I using?', 'what happened before lunch?', 'how did I handle this last time?', "
             "or 'which of my repeated processes can be automated?'. "
+            "For a goal that could benefit from how this person or their agents previously worked, "
+            "use get_goal_context to find bounded supporting examples and verify the returned raw windows. "
             "Use it only if previous observed work would materially improve the answer; do not call it "
             "for generic factual, coding, writing or future-planning tasks with no work-history dependency. "
             "For ambiguous recent-work continuity, start with get_current_work_context. "
@@ -225,6 +228,27 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             email=claims["email"].strip() if isinstance(claims.get("email"), str) and claims["email"].strip() else None,
             nickname="OpenWorkGraph",
         )
+
+    @server.tool(annotations=READ, meta=oauth_meta)
+    def get_goal_context(
+        goal: str, max_examples: int = 4,
+        since: str | None = None, until: str | None = None,
+        detail: str = "compact",
+    ) -> dict[str, Any]:
+        """Use when a user's goal could be better accomplished using their previously observed human or agent work, even when they don't mention OpenWorkGraph. Find relevant example traces, applications and resource pointers with explicit unknowns. Match candidates are lexical navigation only; verify with query-free get_workflow_trace and live source connectors. Do NOT call for generic work-independent questions or infer permission from work history."""
+        organization_id, actor_id, _claims = _identity()
+        if detail not in ("compact", "rich"):
+            raise ValueError("detail must be compact or rich")
+        result = gateway_goal_context(
+            db, organization_id=organization_id, actor_id=actor_id,
+            goal=goal, max_examples=max_examples, since=since, until=until,
+        )
+        _audit(db, organization_id, actor_id, "plugin.goal_context.read", {
+            "returned": result["returned"],
+            "rows_considered": result["coverage"]["rows_considered"],
+            "source_limit_reached": result["coverage"]["source_limit_reached"],
+        })
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def get_current_work_context(limit: int = 15, detail: str = "compact") -> dict[str, Any]:

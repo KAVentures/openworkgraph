@@ -49,7 +49,7 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     response = rpc(client, mint(), 'tools/list')
     assert response.status_code == 200, response.text
     tools = response.json()['result']['tools']
-    assert len(tools) == 9
+    assert len(tools) == 10
     assert all(tool['annotations']['readOnlyHint'] for tool in tools)
     profile = rpc(client, mint(), 'tools/call', {'name': 'get_profile', 'arguments': {}})
     assert profile.status_code == 200, profile.text
@@ -63,7 +63,7 @@ def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_bound
     assert response.status_code == 200, response.text
     tools = {item['name']: item for item in response.json()['result']['tools']}
     assert set(tools) == {
-        'get_profile', 'get_current_work_context', 'search_work',
+        'get_profile', 'get_current_work_context', 'get_goal_context', 'search_work',
         'get_workflow_trace', 'find_repeated_workflows',
         'get_workflow_evidence', 'get_agent_runs',
         'search_work_text', 'get_work_text_excerpt',
@@ -75,6 +75,7 @@ def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_bound
         assert tool['description'].strip()
     assert 'resume what I was doing' in tools['get_current_work_context']['description']
     assert 'without naming OpenWorkGraph' in tools['search_work']['description']
+    assert 'previously observed human or agent work' in tools['get_goal_context']['description']
     assert 'usual or repeated real work' in tools['find_repeated_workflows']['description']
     assert 'not a verified task or completion status' in tools['get_current_work_context']['description']
 
@@ -454,6 +455,7 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
         ('get_current_work_context', {}),
         ('get_current_work_context', {'detail': 'rich'}),
         ('search_work', {'query': 'Email to'}),
+        ('get_goal_context', {'goal': 'Find the previous email account workflow'}),
         ('get_workflow_trace', {'detail': 'rich'}),
         ('get_agent_runs', {}),
         ('find_repeated_workflows', {}),
@@ -661,3 +663,95 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
         cloud.sync(db, credential, **payload)
     # A new local grant, with its own distinct epoch, is required.
     assert cloud.sync(db, credential, **later)["status"] == "synced"
+
+
+def test_goal_context_mcp_scopes_goal_evidence_and_does_not_invent_task_success(public_client):
+    from datetime import datetime, timedelta, timezone
+    from gateway.auth import Principal
+    from gateway.db import GatewayDB
+    import os
+
+    client, mint = public_client
+    db = GatewayDB(os.environ["OWG_GATEWAY_DATABASE_URL"])
+    now = datetime.now(timezone.utc)
+    org = "oauth-sub:test-person"
+    person = Principal("device", "device", org, org, "device", frozenset())
+    foreign = Principal("device", "device", org, "not-this-actor", "device", frozenset())
+
+    good = [
+        {
+            "event_id": "goal-inbox",
+            "observed_at": (now - timedelta(minutes=9)).isoformat(),
+            "session_id": "goal-session", "app": "Gmail", "source": "browser",
+            "window_title": "Gmail inbox", "event_type": "screen_click",
+        },
+        {
+            "event_id": "goal-quotation",
+            "observed_at": (now - timedelta(minutes=8)).isoformat(),
+            "session_id": "goal-session", "app": "Google Chrome",
+            "source": "browser", "event_type": "screen_click",
+            "window_title": "Customer quotation spreadsheet",
+            "metadata": {
+                "prompt": "DO_NOT_DISCLOSE_PROMPT",
+                "resource_reference": {
+                    "provider": "google_drive", "resource_kind": "spreadsheet",
+                    "resource_ref": "owg:r:goal-quote",
+                    "resolver_locator": "https://internal.example/secret-account",
+                },
+            },
+        },
+        {
+            "event_id": "goal-crm",
+            "observed_at": (now - timedelta(minutes=7)).isoformat(),
+            "session_id": "goal-session", "app": "Salesforce",
+            "source": "browser", "window_title": "Customer record",
+            "event_type": "screen_click",
+        },
+    ]
+    db.insert_events(person, good)
+    db.insert_events(foreign, [{
+        "event_id": "goal-foreign",
+        "observed_at": (now - timedelta(minutes=8)).isoformat(),
+        "source": "browser", "window_title": "Customer quotation secret",
+        "event_type": "screen_click",
+    }])
+    reply = rpc(client, mint(), "tools/call", {
+        "name": "get_goal_context",
+        "arguments": {"goal": "Prepare customer quotation", "detail": "rich"},
+    })
+    assert reply.status_code == 200, reply.text
+    assert not reply.json()["result"].get("isError"), reply.text
+    data = reply.json()["result"]["structuredContent"]
+    assert data["status"] == "possible_matches"
+    ids = [x["anchor_event_id"] for x in data["examples"]]
+    assert "goal-quotation" in ids
+    assert "goal-foreign" not in reply.text
+    assert "DO_NOT_DISCLOSE_PROMPT" not in reply.text
+    assert "secret-account" not in reply.text
+    assert data["examples"][0]["task_identity_confirmed"] is False
+    assert data["examples"][0]["outcome_verified"] is False
+    assert data["fallback"]["omit_query"] is True
+    assert data["privacy_representation"]["level"] == "hosted_redacted"
+
+    wrong_person = rpc(client, mint(sub="somebody-else"), "tools/call", {
+        "name": "get_goal_context", "arguments": {"goal": "customer quotation"}
+    })
+    assert wrong_person.status_code == 200, wrong_person.text
+    assert wrong_person.json()["result"]["structuredContent"]["status"] == "no_synced_evidence"
+    assert "goal-quotation" not in wrong_person.text
+    assert rpc(client, None, "tools/call", {
+        "name": "get_goal_context", "arguments": {"goal": "customer quotation"}
+    }).status_code == 401
+
+
+def test_goal_context_empty_mcp_response_includes_examples_and_raw_fallback(public_client):
+    client, mint = public_client
+    reply = rpc(client, mint(), "tools/call", {
+        "name": "get_goal_context",
+        "arguments": {"goal": "Plan a quotation workflow from previous work"},
+    })
+    assert reply.status_code == 200
+    data = reply.json()["result"]["structuredContent"]
+    assert data["status"] == "no_synced_evidence"
+    assert data["examples"] == []
+    assert data["fallback"]["omit_query"] is True
