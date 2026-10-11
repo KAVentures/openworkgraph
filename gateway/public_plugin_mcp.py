@@ -519,20 +519,45 @@ class PersonalLinkEndpoint:
             await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         if scope.get("path") in {"/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize"}:
+            # Both approval and reauthorization are OAuth-authenticated and
+            # explicitly bound to an enrolled device. A generic account grant
+            # must never silently authorize every connected recorder.
             organization_id = f"oauth-sub:{subject}"
+            device_id = str(headers.get("x-owg-device-id") or "")
+            if not device_id:
+                await JSONResponse({"detail": "specific enrolled device ID required"},
+                                   status_code=400)(scope, receive, send)
+                return
+            consent_version = str(headers.get("x-owg-consent-version") or "")
             try:
-                result = work_text_cloud.reauthorize_account(
+                # Do not mutate the account grant for an invalid or foreign
+                # device. All validation, including the actor scope, precedes
+                # the OAuth approval action.
+                work_text_cloud.validate_device_approval(
                     self.db, organization_id=organization_id, actor_id=organization_id,
-                    consent_version=str(headers.get("x-owg-consent-version") or ""),
+                    device_id=device_id, consent_version=consent_version,
                 )
+                work_text_cloud.reauthorize_account(
+                    self.db, organization_id=organization_id, actor_id=organization_id,
+                    consent_version=consent_version,
+                )
+                result = work_text_cloud.approve_device(
+                    self.db, organization_id=organization_id, actor_id=organization_id,
+                    device_id=device_id, consent_version=consent_version,
+                )
+            except ValueError as exc:
+                await JSONResponse({"detail": str(exc)[:160]}, status_code=400)(scope, receive, send)
+                return
             except PermissionError:
-                await JSONResponse({"detail": "current cloud consent required"}, status_code=403)(scope, receive, send)
+                await JSONResponse({"detail": "current device-specific cloud consent required"},
+                                   status_code=403)(scope, receive, send)
                 return
             except RuntimeError:
                 await JSONResponse({"detail": "cloud work text disabled"}, status_code=503)(scope, receive, send)
                 return
-            _audit(self.db, organization_id, organization_id, "plugin.personal_work_text.reauthorized",
-                   {"version": result["notice_version"]})
+            _audit(self.db, organization_id, organization_id, "plugin.personal_work_text.device_approved",
+                   {"version": result["notice_version"], "device_fingerprint":
+                    hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:12]})
             await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         gateway_url = str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/")
