@@ -475,7 +475,7 @@ class PersonalLinkEndpoint:
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if (scope.get("type") != "http" or scope.get("method") != "POST" or
-                scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete"}):
+                scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete", "/v1/plugin/work-text-reauthorize"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -515,6 +515,23 @@ class PersonalLinkEndpoint:
                 return
             _audit(self.db, organization_id, organization_id, "plugin.personal_work_text.deleted",
                    {"deleted": result["deleted"]})
+            await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
+            return
+        if scope.get("path") == "/v1/plugin/work-text-reauthorize":
+            organization_id = f"oauth-sub:{subject}"
+            try:
+                result = work_text_cloud.reauthorize_account(
+                    self.db, organization_id=organization_id, actor_id=organization_id,
+                    consent_version=str(headers.get("x-owg-consent-version") or ""),
+                )
+            except PermissionError:
+                await JSONResponse({"detail": "current cloud consent required"}, status_code=403)(scope, receive, send)
+                return
+            except RuntimeError:
+                await JSONResponse({"detail": "cloud work text disabled"}, status_code=503)(scope, receive, send)
+                return
+            _audit(self.db, organization_id, organization_id, "plugin.personal_work_text.reauthorized",
+                   {"version": result["notice_version"]})
             await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         gateway_url = str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/")
