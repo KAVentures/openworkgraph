@@ -78,15 +78,15 @@ def _safe_event(row: dict[str, Any]) -> dict[str, Any]:
         "event_id", "observed_at", "app", "event_type", "window_title", "page_host",
     ) if row.get(k) not in ("", None)}
     if target.get("title"):
-        result["observed_target"] = str(target["title"])[:180]
-    if meta.get("operation"):
-        result["observed_operation"] = str(meta["operation"])[:100]
+        result["target_label"] = str(target["title"])[:180]
+    if meta.get("operation") or meta.get("action"):
+        result["action"] = str(meta.get("operation") or meta.get("action"))[:100]
     if resource.get("resource_ref"):
-        result["resource_pointer"] = {
+        result["metadata"] = {"resource_reference": {
             key: str(resource[key])[:200]
             for key in ("provider", "resource_kind", "resource_ref", "resolution")
             if resource.get(key)
-        }
+        }}
     return result
 
 
@@ -148,7 +148,7 @@ def build_goal_context(
                 "tool": "get_workflow_trace",
                 "since": (anchor_at - timedelta(minutes=10)).isoformat(),
                 "until": (anchor_at + timedelta(minutes=10)).isoformat(),
-                "query": None,
+                "omit_query": True,
                 "reason": "Verify unfiltered surrounding evidence, including omitted actions",
             },
             "task_identity_confirmed": False,
@@ -185,7 +185,7 @@ def build_goal_context(
                 "page the query-free chronological trace with suitable date bounds. "
                 "Do not infer that past work was absent."
             ),
-            "query": None,
+            "omit_query": True,
         },
         "suggested_followups": [
             "Inspect selected query-free raw traces before inferring a work procedure",
