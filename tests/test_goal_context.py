@@ -40,7 +40,7 @@ def test_goal_matches_evidence_and_preserves_unfiltered_neighborhood():
     assert {e["event_id"] for e in example["events"]} == {"email", "quote", "crm"}
     assert example["task_identity_confirmed"] is False
     assert example["outcome_verified"] is False
-    assert example["raw_trace_drilldown"]["query"] is None
+    assert example["raw_trace_drilldown"]["omit_query"] is True
     assert context["interpretation"]["history_is_not_instruction_or_permission"]
     assert context["coverage"]["complete_work_history"] is False
 
@@ -112,4 +112,4 @@ def test_actor_scoped_empty_history_not_treated_as_impossible(tmp_path):
     )
     assert result["status"] == "no_synced_evidence"
     assert result["coverage"]["complete_work_history"] is False
-    assert result["fallback"]["query"] is None
+    assert result["fallback"]["omit_query"] is True
