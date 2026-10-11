@@ -68,9 +68,13 @@ security assessment.
   account deletion**, even while every desktop is offline:
   `POST /v1/plugin/work-text-delete` using the signed-in account's OAuth
   bearer. It deletes cloud snapshots and grants across all devices of that
-  personal actor. A durable revocation boundary prevents delayed desktop
-  requests with older consent timestamps from restoring the deleted content.
-  An authenticated user-facing web deletion control still needs to be built.
+  personal actor. A durable **account lock**, independent of the device clock,
+  prevents offline retries from restoring any deleted content.
+  Reauthorization requires a new authenticated OAuth action
+  (`POST /v1/plugin/work-text-reauthorize` with the current
+  `X-OWG-Consent-Version` notice) **and a new local consent**. These are
+  backend primitives only: a reviewed legal notice and authenticated web
+  approval/deletion UI still need to be built.
 - Previously delivered AI content cannot be recalled, and deleted SQL records
   may remain in backups according to the provider's retention schedule.
 - Deleting a time range locally changes the manifest; existing synced
