@@ -98,6 +98,30 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
             _NEXT_SCAN = current + 2.0
         return len(batch)
     except Exception as exc:
+        # A separately authenticated account-level deletion revokes the cloud
+        # grant on the server. Treat that as authoritative: stop local uploads
+        # and require a fresh user opt-in rather than retrying a stale batch
+        # forever. Check the grant epoch to avoid overriding a newer choice
+        # made while the HTTPS request was in flight.
+        response = getattr(exc, "response", None)
+        if (getattr(response, "status_code", None) == 403
+                and "OAuth reauthorization required" in str(getattr(response, "text", ""))):
+            try:
+                local = wt.get_policy()
+                if local.get("cloud_granted_at") == snapshot["granted_at"]:
+                    wt.set_policy({"cloud_read_enabled": False})
+                    state.set_bool("cloud_text_remote_granted", False)
+                    for name in ("cloud_text_last_manifest", "cloud_text_missing_refs",
+                                 "cloud_text_last_check", "cloud_text_consent"):
+                        state.delete(name)
+                    state.set("cloud_text_last_error",
+                              "Cloud text was deleted from the signed-in account. "
+                              "Cloud sharing is now off on this computer; "
+                              "fresh account and local approval are required.")
+                    return 0
+            except Exception:
+                # Failure to update the local policy never authorizes upload.
+                pass
         state.set("cloud_text_last_error", str(exc)[:180])
         _NEXT_SCAN = current + 30.0
         return 0
