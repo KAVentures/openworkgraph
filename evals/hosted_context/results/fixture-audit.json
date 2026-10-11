@@ -1,0 +1,91 @@
+{
+  "schema": "owg.fixture-validity-audit.v1",
+  "performed_by": "controller; not a model session",
+  "model_results_are_observed": false,
+  "harness_recorded": false,
+  "checks": [
+    {
+      "tool": "get_current_work_context",
+      "synthetic_arguments": {},
+      "is_error": false,
+      "event_ids": [
+        "evt-filler-205",
+        "evt-filler-206",
+        "evt-filler-207",
+        "evt-filler-208",
+        "evt-filler-209",
+        "evt-filler-210",
+        "evt-filler-211",
+        "evt-filler-212",
+        "evt-filler-213",
+        "evt-filler-214",
+        "evt-filler-215",
+        "evt-filler-216",
+        "evt-filler-217",
+        "evt-filler-218",
+        "evt-filler-219"
+      ],
+      "returned": 15,
+      "candidate_count": null,
+      "execution_count": null
+    },
+    {
+      "tool": "search_work",
+      "synthetic_arguments": {
+        "query": "special request"
+      },
+      "is_error": false,
+      "event_ids": [
+        "evt-unmatched-003"
+      ],
+      "returned": 1,
+      "candidate_count": null,
+      "execution_count": null
+    },
+    {
+      "tool": "search_work",
+      "synthetic_arguments": {
+        "query": "Acme pricing"
+      },
+      "is_error": false,
+      "event_ids": [],
+      "returned": 0,
+      "candidate_count": null,
+      "execution_count": null
+    },
+    {
+      "tool": "get_workflow_trace",
+      "synthetic_arguments": {
+        "since": "2026-10-06T00:00:00Z",
+        "until": "2026-10-07T00:00:00Z"
+      },
+      "is_error": false,
+      "event_ids": [
+        "evt-tuesday-001",
+        "evt-tuesday-044"
+      ],
+      "returned": 2,
+      "candidate_count": null,
+      "execution_count": null
+    },
+    {
+      "tool": "find_repeated_workflows",
+      "synthetic_arguments": {},
+      "is_error": false,
+      "event_ids": [],
+      "returned": 0,
+      "candidate_count": null,
+      "execution_count": null
+    },
+    {
+      "tool": "get_agent_runs",
+      "synthetic_arguments": {},
+      "is_error": false,
+      "event_ids": [],
+      "returned": 0,
+      "candidate_count": null,
+      "execution_count": 0
+    }
+  ],
+  "fixture_event_count": 246
+}

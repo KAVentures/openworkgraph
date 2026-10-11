@@ -1,0 +1,9 @@
+{
+  "evaluation_stage": "preliminary: excluded for JWKS listener startup defect",
+  "attempts": 88,
+  "completed": 0,
+  "status": "all blocked_authentication",
+  "shutdown": "timed out; temporary directory removed",
+  "model_results_are_observed": false,
+  "notes": "This is an attempt ledger, not scored model evidence. Final validated matrix is the sibling directory."
+}
