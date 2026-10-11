@@ -755,3 +755,107 @@ def test_goal_context_empty_mcp_response_includes_examples_and_raw_fallback(publ
     assert data["status"] == "no_synced_evidence"
     assert data["examples"] == []
     assert data["fallback"]["omit_query"] is True
+
+
+def test_numeric_search_cannot_match_internal_ids_or_partial_pr_numbers(public_client):
+    from datetime import datetime, timedelta, timezone
+    from gateway.auth import Principal
+    from gateway.db import GatewayDB
+    import os
+    client, mint = public_client
+    db = GatewayDB(os.environ['OWG_GATEWAY_DATABASE_URL'])
+    org = 'oauth-sub:test-person'
+    p = Principal('device', 'device', org, org, 'device', frozenset())
+    now = datetime.now(timezone.utc)
+    db.insert_events(p, [dict(event_id=identity, observed_at=(now-timedelta(minutes=5-i)).isoformat(),
+        app='Chrome', source='browser', event_type='screen_click', window_title=title,
+        metadata={'internal_note':'183', 'target':{'label':'Open'}})
+        for i,(identity,title) in enumerate([('uuid-183-internal','PR 180'),('second','PR 1830'),('real','PR 183')])])
+    reply = rpc(client, mint(), 'tools/call', {'name':'search_work','arguments':{'query':'183','limit':1}})
+    result = reply.json()['result']['structuredContent']
+    assert [r['event_id'] for r in result['rows']] == ['real']
+    assert result['rows'][0]['matched_fields'] == ['window_title']
+    assert result['search_coverage']['candidate_rows_scanned'] == 3
+
+
+def test_context_reports_server_catalog_and_unknown_local_capture_state(public_client):
+    client,mint=public_client
+    result=rpc(client,mint(),'tools/call',{'name':'get_current_work_context','arguments':{}}).json()['result']['structuredContent']
+    assert result['server_capabilities']['tool_count'] == 10
+    assert result['capture_status']['local_recorder_state'] == 'unknown_to_hosted_connector'
+    assert result['capture_status']['latest_observed_at'] is None
+    assert result['capture_status']['cloud_work_text']['status'] == 'operator_disabled'
+
+
+def test_local_capture_to_authenticated_cloud_excerpt_keeps_page_and_coverage(public_client, monkeypatch, tmp_path):
+    from gateway import work_text_cloud as cloud
+    from gateway.db import GatewayDB
+    from server import work_text_capture as wt, ai_access, capture_exclusions
+    from shared import capture_control
+    import os
+    client,mint=public_client
+    monkeypatch.setenv('OWG_CLOUD_WORK_TEXT_ENABLED','1')
+    monkeypatch.setattr(wt,'_POLICY',tmp_path/'text-policy.json')
+    monkeypatch.setattr(wt,'_DB',tmp_path/'local-text.db')
+    monkeypatch.setattr(ai_access,'ai_access_enabled',lambda:True)
+    monkeypatch.setattr(capture_control,'read_state',lambda:{'state':'recording'})
+    monkeypatch.setattr(capture_exclusions,'current',lambda:{'hosts':[],'title_words':[],'apps':[],'defaults':{}})
+    db=GatewayDB(os.environ['OWG_GATEWAY_DATABASE_URL'])
+    org='oauth-sub:test-person'
+    db.put_token(token_id='text-device', token='synthetic-secret',token_type='device',
+        organization_id=org,actor_id=org,device_id='synthetic-device',scopes={'evidence:write'})
+    wt.set_policy({'capture_enabled':True,'ai_read_enabled':True})
+    wt.ingest({'hostname':'docs.example.org','pathname':'/private-project','title':'Planning',
+        'kind':'page','text':'Old local-only planning'})
+    wt.set_policy({'cloud_read_enabled':True,'cloud_ack_version':wt.CLOUD_ACK_VERSION})
+    wt.ingest({'hostname':'docs.example.org','pathname':'/private-project','title':'Planning',
+        'kind':'page','text':'Planning '+('bounded content '*220),
+        'context':{'selection':'viewport_then_page','capture_truncated':True,'inspected_characters':9000}})
+    snapshot=wt.cloud_sync_snapshot()
+    assert len(snapshot['items']) == 1
+    approved=client.post('/v1/plugin/work-text-approve',headers={'Authorization':'Bearer '+mint(),
+        'X-OWG-Device-ID':'synthetic-device','X-OWG-Consent-Version':cloud.CONSENT_VERSION})
+    assert approved.status_code == 200
+    principal=db.authenticate('synthetic-secret')
+    cloud.sync(db,principal,**snapshot,active_refs=[item['ref'] for item in snapshot['items']])
+    def tool(name,arguments):
+        result=rpc(client,mint(),'tools/call',{'name':name,'arguments':arguments}).json()['result']
+        assert not result.get('isError')
+        return result['structuredContent']
+    result=tool('search_work_text',{'query':'planning'})
+    assert len(result['results']) == 1
+    context=result['results'][0]['context']
+    assert context['capture_truncated'] is True and context['sync_truncated'] is True
+    joined=tool('search_work_text',{'query':context['page_ref']})
+    assert joined['results'][0]['reference'] == result['results'][0]['reference']
+    excerpt=tool('get_work_text_excerpt',{'reference':joined['results'][0]['reference']})
+    assert excerpt['excerpt']['context']['page_ref'] == context['page_ref']
+    assert 'Old local-only' not in str(excerpt) and '/private-project' not in str(excerpt)
+    assert len(excerpt['excerpt']['redacted_text']) <= 1220
+    assert tool('get_current_work_context',{})['capture_status']['cloud_work_text']['status'] == 'ready'
+    assert client.post('/v1/plugin/work-text-delete',headers={'Authorization':'Bearer '+mint()}).status_code == 200
+    assert tool('get_work_text_excerpt',{'reference':joined['results'][0]['reference']})['status'] == 'not_enabled'
+
+
+def test_cloud_account_screen_is_scoped_and_nonce_protected(public_client, monkeypatch):
+    from gateway.db import GatewayDB
+    import os
+    client, mint = public_client
+    shell=client.get('/work-text')
+    assert shell.status_code == 200
+    assert shell.headers['cache-control'] == 'no-store'
+    assert "frame-ancestors 'none'" in shell.headers['content-security-policy']
+    assert '__NONCE__' not in shell.text and '__CONFIG__' not in shell.text
+    assert 'example.supabase.co/auth/v1' in shell.text
+    path='/v1/plugin/work-text-status'
+    assert client.get(path).status_code == 401
+    assert client.get(path,headers={'Authorization':'Bearer '+mint(scope='email')}).status_code == 401
+    db=GatewayDB(os.environ['OWG_GATEWAY_DATABASE_URL'])
+    for actor,device in [('oauth-sub:test-person','my-computer'),('oauth-sub:foreign','foreign-computer')]:
+        db.put_token(token_id=device,token=device,token_type='device',organization_id=actor,actor_id=actor,
+            device_id=device,scopes={'evidence:write'})
+    response=client.get(path,headers={'Authorization':'Bearer '+mint()})
+    assert response.status_code == 200
+    assert response.json()['devices'] == [{'device_id':'my-computer','approved':False}]
+    assert 'foreign' not in response.text
+    assert response.json()['operator_available'] is False

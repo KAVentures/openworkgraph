@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
 from .fixtures import case_family_id, load_cases
+
+def _uncertain(prediction: dict[str, Any]) -> bool:
+    dimensions = prediction.get("uncertainty")
+    return bool(prediction.get("insufficient_evidence")) or (isinstance(dimensions, dict) and
+        any(dimensions.get(key) is True for key in ("membership", "business_rule")))
 
 def _set(value: Any) -> set[str]:
     if not isinstance(value, list):
@@ -20,21 +24,21 @@ def _best_mapping(truth: list[dict[str, Any]], predicted: list[dict[str, Any]]) 
         return {}
     tsets = [_set(w.get("event_ids")) for w in truth]
     psets = [_set(w.get("event_ids")) for w in predicted]
-    best_score = -1
-    best: dict[int, int] = {}
-    if len(predicted) <= len(truth):
-        for truth_perm in itertools.permutations(range(len(truth)), len(predicted)):
-            score = sum(len(psets[p] & tsets[t]) for p, t in enumerate(truth_perm))
-            if score > best_score:
-                best_score = score
-                best = {p: t for p, t in enumerate(truth_perm)}
-    else:
-        for pred_subset in itertools.permutations(range(len(predicted)), len(truth)):
-            score = sum(len(psets[p] & tsets[t]) for t, p in enumerate(pred_subset))
-            if score > best_score:
-                best_score = score
-                best = {p: t for t, p in enumerate(pred_subset)}
-    return best
+    # The corpus has at most five true workflows. Dynamic programming avoids
+    # factorial work when a model emits many fragments (or malformed output).
+    states: dict[int, tuple[int, dict[int, int]]] = {0: (0, {})}
+    for p, pset in enumerate(psets):
+        next_states = dict(states)
+        for mask, (score, mapping) in states.items():
+            for t, tset in enumerate(tsets):
+                if mask & (1 << t):
+                    continue
+                candidate = score + len(pset & tset)
+                new_mask = mask | (1 << t)
+                if candidate > next_states.get(new_mask, (-1, {}))[0]:
+                    next_states[new_mask] = (candidate, {**mapping, p: t})
+        states = next_states
+    return max(states.values(), key=lambda item: (item[0], len(item[1])))[1]
 
 def _pairwise_order_accuracy(true_order: list[str], predicted_order: list[str]) -> tuple[int, int]:
     rank = {event_id: idx for idx, event_id in enumerate(predicted_order)}
@@ -59,7 +63,7 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
     recovered_checkpoints = total_checkpoints = 0
 
     for p_idx, prow in enumerate(predicted):
-        pset = _set(prow.get("event_ids")) & all_event_ids
+        pset = _set(prow.get("event_ids"))
         if p_idx in mapping:
             trow = truth[mapping[p_idx]]
             tset = _set(trow.get("event_ids"))
@@ -90,7 +94,18 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    contamination = fp / (tp + fp) if (tp + fp) else 0.0
+    # A pure fragment is a reconstruction/count error, not cross-workflow
+    # contamination. Measure actual mixing independently of 1:1 matching.
+    mixed = assigned = 0
+    fragments = 0
+    for prow in predicted:
+        pset = _set(prow.get("event_ids"))
+        overlaps = [len(pset & _set(trow.get("event_ids"))) for trow in truth]
+        assigned += len(pset)
+        mixed += len(pset) - max(overlaps, default=0)
+        fragments += bool(pset) and sum(bool(n) for n in overlaps) == 1
+    contamination = mixed / assigned if assigned else 0.0
+    unknown_ids = set().union(*[_set(p.get("event_ids")) for p in predicted]) - all_event_ids if predicted else set()
 
     unassigned = _set(prediction.get("unassigned_event_ids"))
     noise_rejected = len(truth_noise & unassigned) / len(truth_noise) if truth_noise else 1.0
@@ -116,8 +131,15 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
     ui_recall = ui_tp / len(true_ui) if true_ui else 1.0
 
     expected_unknown = bool((case.get("ground_truth") or {}).get("requires_uncertainty"))
-    predicted_unknown = bool(prediction.get("insufficient_evidence"))
+    predicted_unknown = _uncertain(prediction)
     uncertainty_correct = predicted_unknown == expected_unknown
+    dimensions = prediction.get("uncertainty")
+    expected_dimensions = (case.get("ground_truth") or {}).get("uncertainty_dimensions", [])
+    dimension_checks = ({key: (dimensions.get(key) is True) == (key in expected_dimensions)
+                         for key in ("membership", "business_rule")}
+                        if isinstance(dimensions, dict) else {})
+    if dimension_checks:
+        uncertainty_correct = all(dimension_checks.values())
 
     return {
         "case_id": case.get("case_id"),
@@ -126,6 +148,11 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
         "workflow_assignment_recall": round(recall, 6),
         "workflow_assignment_f1": round(f1, 6),
         "cross_workflow_contamination": round(contamination, 6),
+        "one_to_one_assignment_error_rate": round(fp / (tp + fp), 6) if tp + fp else 0.0,
+        "pure_fragment_excess": max(0, fragments - len(truth)),
+        "unknown_event_id_count": len(unknown_ids),
+        "membership_observability": "ambiguous" if "membership" in (case.get("ground_truth") or {}).get("uncertainty_dimensions", []) else "not_flagged",
+        "uncertainty_dimensions_expected": (case.get("ground_truth") or {}).get("uncertainty_dimensions", []),
         "workflow_count_exact": len(predicted) == len(truth),
         "interruption_rejection": round(noise_rejected, 6),
         "ordering_accuracy": round(correct_order / total_order, 6) if total_order else 1.0,
@@ -135,6 +162,9 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
         "ui_mechanic_precision": round(ui_precision, 6),
         "ui_mechanic_recall": round(ui_recall, 6),
         "uncertainty_correct": uncertainty_correct,
+        "uncertainty_dimension_checks": dimension_checks,
+        "persisted_outcome_not_established": True,
+        "outcome_uncertainty_reported": dimensions.get("outcome") if isinstance(dimensions, dict) else None,
     }
 
 def _summary(
@@ -193,7 +223,7 @@ def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) ->
 
     rows = [score_case(case, by_id[case["case_id"]]) for case in cases]
     by_prediction = {
-        str(item.get("case_id") or ""): bool(item.get("insufficient_evidence"))
+        str(item.get("case_id") or ""): _uncertain(item)
         for item in predictions
     }
 
@@ -256,6 +286,22 @@ def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) ->
     family_macro["families"] = len(family_rows)
     family_macro["per_family"] = family_rows
     out["family_macro"] = family_macro
+    # Hidden author intent cannot be a certainty gate when observations do not
+    # identify membership. Keep legacy intended-partition scores diagnostic.
+    identifiable_families = []
+    for fid, indices in sorted(grouped.items()):
+        indices = [i for i in indices if "membership" not in
+                   (cases[i].get("ground_truth") or {}).get("uncertainty_dimensions", [])]
+        if indices:
+            identifiable_families.append(_summary([cases[i] for i in indices], [rows[i] for i in indices], by_prediction))
+    out["identifiable_membership_family_macro"] = {
+        name: round(mean(float(row[name]) for row in identifiable_families), 6)
+        for name in family_metric_names if name not in {"uncertainty_accuracy"}
+    } if identifiable_families else {}
+    out["identifiable_membership_family_macro"]["families"] = len(identifiable_families)
+    out["benchmark_contract_version"] = "reconstruction-v2-observability"
+    out["ambiguous_membership_cases"] = sum("membership" in
+        (case.get("ground_truth") or {}).get("uncertainty_dimensions", []) for case in cases)
     return out
 
 THRESHOLDS = {
@@ -273,12 +319,16 @@ def acceptance(report: dict[str, Any]) -> dict[str, Any]:
     checks: dict[str, bool] = {}
     observed: dict[str, float] = {}
     for name, (op, threshold) in THRESHOLDS.items():
-        value = float(gate[name])
+        membership_gate = report.get("identifiable_membership_family_macro")
+        basis = membership_gate if name not in {"required_uncertainty_recall", "unnecessary_uncertainty_rate"} and isinstance(membership_gate, dict) else gate
+        value = float(basis.get(name, 0.0))
         observed[name] = value
         checks[name] = value >= threshold if op == ">=" else value <= threshold
     return {
         "passed": all(checks.values()),
         "basis": "family_macro" if gate is not report else "case_level",
+        "assignment_basis": "identifiable_membership_family_macro" if "identifiable_membership_family_macro" in report else "all_cases",
+        "ambiguous_membership_cases_are_diagnostic": True,
         "checks": checks,
         "observed": observed,
         "thresholds": {name: {"operator": op, "value": threshold} for name, (op, threshold) in THRESHOLDS.items()},

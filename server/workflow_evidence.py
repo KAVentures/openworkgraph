@@ -536,6 +536,9 @@ def _evidence_excerpt(
         projected = [_canonical_event_projection(event) for event in events[:cap]]
         rows.append({
             "execution_id": execution_id,
+            "event_membership_basis": "native_agent_run" if execution.get("actor_kind") == "agent" else "inferred_time_and_session_window",
+            "event_membership_verified": False,
+            "nearby_events_may_be_unrelated": execution.get("actor_kind") != "agent",
             "observed_event_count": len(events),
             "returned_event_count": len(projected),
             "events_truncated": len(events) > len(projected),

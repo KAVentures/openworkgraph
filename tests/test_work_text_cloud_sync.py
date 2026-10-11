@@ -352,3 +352,29 @@ def test_prerelease_device_grants_migrate_without_trusting_old_credentials(tmp_p
                               consent_version=cloud.CONSENT_VERSION)
     with pytest.raises(PermissionError, match="device-specific"):
         cloud.sync(db, db.authenticate("new-enrolled-token"), **_payload(items=[], refs=[]))
+
+
+def test_cloud_context_migration_preserves_legacy_snapshots(setup_cloud):
+    db,app,actor,_=setup_cloud
+    p=db.authenticate('alice-device')
+    cloud.sync(db,p,**_payload(items=[_entry()]))
+    with db.connect() as conn:
+        db._execute(conn,'ALTER TABLE cloud_work_text DROP COLUMN context_json')
+    cloud.init_schema(db)
+    found=cloud.search(db,organization_id=actor,actor_id=actor,query='quarterly')['results']
+    assert len(found)==1 and found[0]['context']=={}
+    cloud.init_schema(db)  # Migration is idempotent.
+    assert cloud.excerpt(db,organization_id=actor,actor_id=actor,reference=found[0]['reference'])['status']=='ready'
+
+
+def test_cloud_context_cannot_carry_arbitrary_content(setup_cloud):
+    db,app,actor,_=setup_cloud
+    entry=_entry();entry['context']={'page_ref':'owg:wp:'+'a'*32,'resource_ref':'owg:r:'+'b'*32,
+        'raw_url':'https://private.example/token','content':'private payload','inspected_characters':10**12,
+        'capture_truncated':False,'selection':'viewport_then_page'}
+    cloud.sync(db,db.authenticate('alice-device'),**_payload(items=[entry]))
+    result=cloud.search(db,organization_id=actor,actor_id=actor,query='owg:r:'+'b'*32)
+    context=result['results'][0]['context']
+    assert context['capture_truncated'] is False
+    assert context['inspected_characters']==1_000_000
+    assert 'raw_url' not in context and 'content' not in context

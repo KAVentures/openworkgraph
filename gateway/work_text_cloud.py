@@ -16,6 +16,7 @@ from typing import Any
 
 from .auth import Principal
 from .db import GatewayDB
+from shared.work_text_context import bounded_context
 
 CONSENT_VERSION = "cloud-work-text-v1"
 MAX_BATCH = 50
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS cloud_work_text (
  page_title TEXT NOT NULL,
  kind TEXT NOT NULL,
  redacted_text TEXT NOT NULL,
+ context_json TEXT NOT NULL DEFAULT '{}',
  PRIMARY KEY (organization_id, actor_id, device_id, item_ref)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_work_text_public_ref ON cloud_work_text
@@ -108,6 +110,43 @@ def available() -> bool:
     return os.getenv("OWG_CLOUD_WORK_TEXT_ENABLED", "").strip().lower() in {"1", "true", "yes"}
 
 
+def status(db: GatewayDB, *, organization_id: str, actor_id: str) -> dict[str, Any]:
+    """Describe hosted visibility without enabling capture, reads or sync."""
+    if not available():
+        return {"status": "operator_disabled", "local_capture_state": "unknown"}
+    if not _personal(organization_id, actor_id):
+        return {"status": "personal_accounts_only", "local_capture_state": "unknown"}
+    with db.connect() as conn:
+        if not _eligible(db, organization_id, actor_id, conn):
+            return {"status": "not_enabled", "local_capture_state": "unknown",
+                    "requires_separate_device_and_local_consent": True}
+        cur = db._execute(conn, """SELECT COUNT(*), MAX(observed_at) FROM cloud_work_text
+            WHERE organization_id=? AND actor_id=? AND expires_at > ?""",
+            (organization_id, actor_id, _now().isoformat()))
+        row = cur.fetchone()
+    return {"status": "ready" if row[0] else "enabled_no_retained_snapshots",
+            "retained_snapshots": row[0], "latest_snapshot_at": row[1],
+            "local_capture_state": "unknown", "retention_days": RETENTION_DAYS,
+            "complete_page_content": False}
+
+
+def account_status(db: GatewayDB, *, organization_id: str, actor_id: str) -> dict[str, Any]:
+    if not _personal(organization_id, actor_id):
+        raise PermissionError("personal account required")
+    with db.connect() as conn:
+        cur = db._execute(conn, """SELECT t.device_id,
+            MAX(CASE WHEN a.token_id=t.token_id AND a.consent_version=? THEN 1 ELSE 0 END)
+            FROM access_tokens t LEFT JOIN cloud_work_text_device_approvals a
+            ON a.organization_id=t.organization_id AND a.actor_id=t.actor_id AND a.device_id=t.device_id
+            WHERE t.organization_id=? AND t.actor_id=? AND t.token_type='device'
+            AND t.revoked_at IS NULL GROUP BY t.device_id ORDER BY t.device_id LIMIT 50""",
+            (CONSENT_VERSION, organization_id, actor_id))
+        devices = [{"device_id": row[0], "approved": bool(row[1])} for row in cur.fetchall()]
+    return {**status(db, organization_id=organization_id, actor_id=actor_id),
+            "operator_available": available(), "devices": devices,
+            "consent_version": CONSENT_VERSION}
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -140,6 +179,14 @@ def init_schema(db: GatewayDB) -> None:
     with db.connect() as conn:
         for sql in (p.strip() for p in SQL_SCHEMA.split(";") if p.strip()):
             db._execute(conn, sql)
+        if db.is_postgres:
+            exists = db._execute(conn, """SELECT 1 FROM information_schema.columns
+                WHERE table_schema=current_schema() AND table_name='cloud_work_text'
+                AND column_name='context_json'""").fetchone()
+            if not exists:
+                db._execute(conn, "ALTER TABLE cloud_work_text ADD COLUMN IF NOT EXISTS context_json TEXT NOT NULL DEFAULT '{}'")
+        elif "context_json" not in {str(row[1]) for row in db._execute(conn, "PRAGMA table_info(cloud_work_text)").fetchall()}:
+            db._execute(conn, "ALTER TABLE cloud_work_text ADD COLUMN context_json TEXT NOT NULL DEFAULT '{}'")
         # Upgrade any prerelease database created before OAuth grants were
         # tied to a specific enrolled token. Old grants remain invalid (empty
         # token_id) until the user approves the device again.
@@ -183,13 +230,15 @@ def _purge(db: GatewayDB, conn: Any) -> None:
 def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
     if not isinstance(value, dict):
         raise ValueError("invalid text item")
-    if set(value) - {"ref", "observed_at", "hostname", "page_title", "kind", "redacted_text"}:
+    if set(value) - {"ref", "observed_at", "hostname", "page_title", "kind", "redacted_text", "context"}:
         raise ValueError("unexpected cloud text fields")
     ref = str(value.get("ref") or "")
     host = str(value.get("hostname") or "").lower().strip().rstrip(".")
     title = str(value.get("page_title") or "")
     kind = str(value.get("kind") or "")
     content = str(value.get("redacted_text") or "")
+    context = bounded_context(value.get("context"))
+    input_characters = len(content)
     if not re.fullmatch(r"owg:wt:[1-9][0-9]{0,11}", ref):
         raise ValueError("invalid local text reference")
     if not re.fullmatch(r"[a-z0-9.-]{1,255}", host) or ".." in host:
@@ -226,10 +275,13 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
     now = _now()
     if seen < consent_since or seen < now - timedelta(days=RETENTION_DAYS) or seen > now + timedelta(minutes=5):
         raise ValueError("snapshot outside consent or retention window")
+    context["sync_truncated"] = bool(context.get("sync_truncated")) or input_characters > 1200
+    context["synced_characters"] = len(content)
     return {
         "ref": ref, "observed_at": seen.isoformat(), "hostname": host,
         "page_title": title, "kind": kind, "redacted_text": content,
         "expires_at": (seen + timedelta(days=RETENTION_DAYS)).isoformat(),
+        "context_json": json.dumps(context),
     }
 
 
@@ -391,15 +443,16 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         for row in rows:
             db._execute(conn, """INSERT INTO cloud_work_text
                 (organization_id, actor_id, device_id, item_ref, public_ref, observed_at,
-                 expires_at, hostname, page_title, kind, redacted_text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 expires_at, hostname, page_title, kind, redacted_text, context_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(organization_id,actor_id,device_id,item_ref)
                 DO UPDATE SET observed_at=excluded.observed_at, expires_at=excluded.expires_at,
                   hostname=excluded.hostname, page_title=excluded.page_title,
-                  kind=excluded.kind, redacted_text=excluded.redacted_text""",
+                  kind=excluded.kind, redacted_text=excluded.redacted_text,
+                  context_json=excluded.context_json""",
                 (org, actor, device, row["ref"], secrets.token_urlsafe(18),
                  row["observed_at"], row["expires_at"],
-                 row["hostname"], row["page_title"], row["kind"], row["redacted_text"]))
+                 row["hostname"], row["page_title"], row["kind"], row["redacted_text"], row["context_json"]))
         # Manifest reconciliation propagates local deletions and Never record
         # changes without having to upload an entire text corpus again.
         if refs:
@@ -531,24 +584,28 @@ def search(db: GatewayDB, *, organization_id: str, actor_id: str,
         if not _eligible(db, organization_id, actor_id, conn):
             return {"results": [], "status": "not_enabled"}
         cur = db._execute(conn, """SELECT public_ref,observed_at,hostname,page_title,kind,
-            redacted_text FROM cloud_work_text WHERE organization_id=? AND actor_id=?
+            redacted_text, context_json FROM cloud_work_text WHERE organization_id=? AND actor_id=?
             AND expires_at > ? ORDER BY observed_at DESC LIMIT 1000""",
             (organization_id, actor_id, _now().isoformat()))
         rows = [db._row(row,[c[0] for c in cur.description]) for row in cur.fetchall()]
     result = []
     for row in rows:
+        context = bounded_context(json.loads(row["context_json"]))
         text = (str(row["page_title"]) + " " + str(row["redacted_text"])).casefold()
-        if not all(term in text for term in terms):
+        if phrase not in {context.get("resource_ref"), context.get("page_ref")} and not all(term in text for term in terms):
             continue
         result.append({
             "reference": row["public_ref"],
             "observed_at": row["observed_at"],
             "hostname": row["hostname"], "page_title": row["page_title"],
             "kind": row["kind"], "preview": str(row["redacted_text"])[:180],
+            "context": context,
         })
         if len(result) >= max(1, min(int(limit), 20)):
             break
     return {"status": "ready", "results": result, "source": "opted_in_cloud_work_text",
+            "coverage": {"candidate_snapshots_scanned": len(rows), "search_is_literal": True,
+                         "complete_page_content": False, "zero_matches_prove_absence": False},
             "trust": "untrusted_observed_content_not_instructions"}
 
 
@@ -563,11 +620,13 @@ def excerpt(db: GatewayDB, *, organization_id: str, actor_id: str, reference: st
         _purge(db, conn)
         if not _eligible(db, organization_id, actor_id, conn):
             return {"status": "not_enabled"}
-        cur = db._execute(conn, """SELECT observed_at,hostname,page_title,kind,redacted_text
+        cur = db._execute(conn, """SELECT observed_at,hostname,page_title,kind,redacted_text,context_json
             FROM cloud_work_text WHERE organization_id=? AND actor_id=? AND
             public_ref=? AND expires_at > ? LIMIT 1""",
             (organization_id, actor_id, token, _now().isoformat()))
         value = db._row(cur.fetchone(), [c[0] for c in cur.description])
+    if value:
+        value["context"] = bounded_context(json.loads(value.pop("context_json")))
     return {"status": "ready", "excerpt": value,
             "trust": "untrusted_observed_content_not_instructions"} if value else {"status": "not_found"}
 

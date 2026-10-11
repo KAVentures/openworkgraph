@@ -113,11 +113,19 @@ partially completed run without re-paying for completed cases.
 
 ## Stage B: real OWG/MCP path
 
-Load each case's source_events into a clean OWG instance, then expose the
-result through the real compact MCP server for the revision being evaluated.
-The model should see the same AI-facing trace shape as presented_evidence, not
-the source-only actor/device/sensor identifiers. Ask the same reconstruction
-question, with canonical evidence as the authority.
+An executable blind replay now exercises the shipped connector policy, Gateway
+store, signed OAuth JWT verification/JWKS, public MCP redaction and pagination:
+
+    python -m evals.reconstruction.replay --detail rich --output /tmp/hosted-rich.jsonl
+    python -m evals.reconstruction.replay --detail compact --output /tmp/hosted-compact.jsonl
+
+Every case uses a separate disposable OAuth identity. Temporary credentials/database
+are deleted afterward; no ambient production OWG endpoint is used. Output contains
+only blind presented evidence plus measured replay counts, never source events or truth.
+Chronology is shifted into the current retention window while preserving time gaps.
+Compact and rich responses intentionally differ; compare them as separate conditions.
+This starts at synthetic stored-event input and does not exercise a real OS observer.
+Browser runtime tests and the local-text-to-cloud OAuth regression cover capture boundaries.
 
 Interpret the comparison this way:
 
@@ -189,3 +197,29 @@ while preferring live authorized connectors/APIs over literal UI replay. A
 missing historical payload does not prove an automation is impossible, and an
 observed approval does not reveal the business rule that caused it unless that
 rule is actually present in evidence.
+
+## Version 2 fidelity and observability
+
+Fixtures now call `shared.evidence.rich_evidence_row` directly, use production-valid
+resource references with hosts, use conservative action confidence and follow canonical
+timestamp order. Every one of the 54 cases is replayed through the hosted MCP in tests.
+These changes invalidate direct comparison with old fixture scores; record the commit
+and `benchmark_contract_version` when publishing results.
+
+Generic cross-resource labels without an observed transfer are conservatively flagged
+as ambiguous membership. Hidden author intent is retained as a diagnostic partition,
+but is not a certainty gate. Assignment thresholds use only the nonflagged membership
+families; uncertainty thresholds still cover all families. This is a synthetic
+observability screen, not independent human adjudication or proof that every unflagged
+case is identifiable. `uncertainty` separates membership, business rule and persisted
+outcome; a UI click alone cannot prove a persisted outcome. Legacy boolean outputs
+remain supported, with less diagnostic resolution.
+
+Actual cross-workflow mixing is measured separately from pure fragmentation. Fragmentation
+still lowers one-to-one assignment F1 and workflow-count accuracy. Unknown event IDs lower
+precision and are reported explicitly. The matching algorithm uses bounded-family dynamic
+programming rather than factorial permutations of predicted fragments.
+
+Paid/independent model trials and verified real-work episodes remain necessary to
+establish usefulness. Passing transport tests, oracle scores or synthetic thresholds
+cannot substitute for those measurements.

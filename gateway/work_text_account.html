@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>OpenWorkGraph · Cloud work text</title>
+<style nonce="__NONCE__">body{font:16px/1.6 system-ui;margin:3rem auto;padding:0 1rem;max-width:680px;color:#18251c;background:#f5f7f3}section{background:white;padding:1.5rem;border:1px solid #dce3d8;border-radius:12px;margin:1rem 0}button,select{font:inherit;padding:.6rem;border-radius:6px;border:1px solid #56715c}button{cursor:pointer;background:#244d31;color:white}button:disabled{opacity:.5;cursor:default}label{display:block;margin:1rem 0}#status{white-space:pre-wrap}code{overflow-wrap:anywhere}</style></head><body>
+<h1>Cloud work text</h1><p>Manage redacted browser excerpts shared with your personal OWG account.</p>
+<section><button id="signin">Sign in to your OWG account</button><button id="signout" hidden>Sign out</button><p id="status" role="status" aria-live="polite">Sign in to see your linked computers and sharing status.</p></section>
+<section id="controls" hidden><h2>Approve one computer</h2><p>This allows the selected linked computer to upload new redacted page text and drafts only after you also enable capture, local AI access and cloud sharing in its Privacy settings. Older local text is not uploaded.</p><p>Excerpts can contain third-party or confidential information despite filtering. Connected cloud AI apps can read them while your computer is offline. They expire within seven days of observation. This does not enable observation on your computer.</p>
+<label>Linked computer <select id="device"></select></label><p>Check the device ID against your desktop connection settings. Do not approve an unrecognized computer.</p>
+<label><input id="ack" type="checkbox"> I understand these excerpts will be uploaded and confirm I am authorized to share them.</label><button id="approve" disabled>Approve this computer</button>
+<h2>Delete cloud work text</h2><p>Deletes retained excerpts and approvals for all your computers. Uploads remain blocked until you approve a device again here and grant fresh permission on that computer. Content already shown in an AI conversation cannot be recalled.</p><button id="erase">Delete all cloud work text</button></section>
+<script nonce="__NONCE__">
+(async()=>{
+'use strict';
+const config=__CONFIG__, $=id=>document.getElementById(id), S=sessionStorage;
+let access='',ready=false;
+const callback=location.origin+'/work-text',key='owg-cloud-text-oauth';
+function message(text){$('status').textContent=text;}
+function controls(){ $('approve').disabled=!ready||!$('ack').checked||!$('device').value; }
+async function api(path,options={}){
+ const response=await fetch(path,{...options,headers:{...options.headers,Authorization:'Bearer '+access},cache:'no-store',credentials:'omit',redirect:'error'});
+ const result=await response.json();if(!response.ok)throw Error(result.detail||'Request failed');return result;
+}
+async function load(){
+ const result=await api('/v1/plugin/work-text-status');
+ ready=result.operator_available===true;
+ $('controls').hidden=false;$('signin').hidden=true;$('signout').hidden=false;
+ $('device').replaceChildren();for(const device of result.devices||[]){const option=document.createElement('option');option.value=device.device_id;option.textContent=device.device_id+(device.approved?' · approved':' · not approved');$('device').append(option);}
+ message(ready?`Sharing status: ${result.status}\nRetained excerpts: ${result.retained_snapshots||0}`:'Cloud work-text sharing is currently unavailable. You can still delete retained cloud content.');controls();
+}
+function base64(bytes){return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+async function signin(){
+ const registration=await fetch(config.issuer+'/oauth/clients/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_name:'OpenWorkGraph Cloud Text Settings',redirect_uris:[callback],grant_types:['authorization_code'],response_types:['code'],token_endpoint_auth_method:'none',scope:config.scope}),credentials:'omit',redirect:'error'});
+ if(!registration.ok)throw Error('Could not start account sign-in.');const client=await registration.json();
+ const verifier=base64(crypto.getRandomValues(new Uint8Array(32))),state=base64(crypto.getRandomValues(new Uint8Array(32)));
+ const challenge=base64(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
+ S.setItem(key,JSON.stringify({verifier,state,client_id:client.client_id,expires:Date.now()+600000}));
+ location.assign(config.issuer+'/oauth/authorize?'+new URLSearchParams({response_type:'code',client_id:client.client_id,redirect_uri:callback,scope:config.scope,state,code_challenge:challenge,code_challenge_method:'S256'}));
+}
+$('signin').onclick=()=>signin().catch(error=>message(error.message));
+$('signout').onclick=()=>{access='';ready=false;S.removeItem(key);$('controls').hidden=true;$('signout').hidden=true;$('signin').hidden=false;$('ack').checked=false;message('Signed out of cloud work-text settings.');};
+$('ack').onchange=controls;$('device').onchange=()=>{$('ack').checked=false;controls();};
+$('approve').onclick=async()=>{if(!ready||!$('ack').checked||!$('device').value)return;const id=$('device').value;if(!confirm('Approve cloud work-text sharing from '+id+'?'))return;try{await api('/v1/plugin/work-text-reauthorize',{method:'POST',headers:{'X-OWG-Consent-Version':'cloud-work-text-v1','X-OWG-Device-ID':id}});$('ack').checked=false;await load();message('Computer approved. Fresh local cloud-sharing permission is still required.');}catch(error){message(error.message);}controls();};
+$('erase').onclick=async()=>{if(!confirm('Delete all retained cloud text and all device approvals?'))return;try{const result=await api('/v1/plugin/work-text-delete',{method:'POST'});$('ack').checked=false;await load();message(`Deleted ${result.deleted} excerpts. New uploads require account approval and fresh local consent.`);}catch(error){message(error.message);}};
+const params=new URLSearchParams(location.search);if(location.search)history.replaceState(null,'',location.pathname);
+if(params.has('code')||params.has('error')){
+ try{const pending=JSON.parse(S.getItem(key)||'null');S.removeItem(key);if(!pending||pending.expires<Date.now()||!params.get('state')||pending.state!==params.get('state'))throw Error('Sign-in expired or could not be verified. Please sign in again.');if(params.has('error'))throw Error('Sign-in was not completed.');
+ const response=await fetch(config.issuer+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',client_id:pending.client_id,code:params.get('code'),redirect_uri:callback,code_verifier:pending.verifier}),credentials:'omit',redirect:'error'});
+ if(!response.ok)throw Error('Account sign-in could not complete.');const token=await response.json();if(typeof token.access_token!=='string'||!token.access_token)throw Error('Account sign-in could not complete.');access=token.access_token;await load();
+ }catch(error){access='';message(error.message);}
+}
+})();
+</script></body></html>

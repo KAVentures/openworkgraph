@@ -203,3 +203,47 @@ def test_cloud_seven_day_cap_does_not_prune_longer_local_retention(isolated):
     assert isolated.cloud_sync_snapshot()["items"] == []
     with isolated._conn() as db:
         assert db.execute("SELECT COUNT(*) FROM work_text").fetchone()[0] == 1
+
+
+def test_same_content_on_different_pages_is_not_deduplicated(isolated):
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
+    assert isolated.ingest(example(page_identity="a"*64))["status"] == "recorded_locally"
+    assert isolated.ingest(example(page_identity="b"*64))["status"] == "recorded_locally"
+    rows = isolated.recent_for_ai()["items"]
+    assert rows[0]["context"]["page_ref"] != rows[1]["context"]["page_ref"]
+    assert "a"*64 not in str(rows) and "/project" not in str(rows)
+
+
+def test_text_context_is_bounded_and_resource_consent_is_rechecked(isolated, monkeypatch):
+    from server import browser_signal_settings
+    from shared.core.resource_references import normalize_resource_reference
+    reference = {"provider": "github", "resource_kind": "pull_request", "host": "github.com",
+                 "resolver_locator": "KAVentures/openworkgraph/pull/183"}
+    # Use the production URL parser; malformed locators must never be fixtures.
+    from shared.core.resource_references import resource_reference_from_url
+    reference = resource_reference_from_url("https://github.com/KAVentures/openworkgraph/pull/183", include_locator=True)
+    # The parser returns persisted format; browser payloads use locator without a persisted ref.
+    reference.pop("resource_ref")
+    expected = normalize_resource_reference(reference, include_locator=False)
+    assert expected is not None
+    isolated.set_policy({"capture_enabled": True, "ai_read_enabled": True})
+    monkeypatch.setattr(browser_signal_settings, "load_settings", lambda: {"business_object_references": False})
+    context={"resource_ref": "owg:r:"+"a"*32, "capture_truncated": True,
+             "selection":"viewport_then_page", "raw_url":"secret", "inspected_characters":9000}
+    isolated.ingest(example(text="First page", resource_reference=reference, context=context))
+    assert "resource_ref" not in isolated.recent_for_ai()["items"][0]["context"]
+    monkeypatch.setattr(browser_signal_settings, "load_settings", lambda: {"business_object_references": True})
+    isolated.ingest(example(text="Second page", resource_reference=reference, context=context))
+    observed=isolated.recent_for_ai()["items"][0]["context"]
+    assert observed["resource_ref"] == expected["resource_ref"]
+    assert observed["capture_truncated"] is True and "raw_url" not in observed
+    assert "resolver_locator" not in str(isolated.recent_for_ai())
+
+
+def test_local_context_migration_preserves_legacy_snapshots(isolated):
+    isolated.set_policy({'capture_enabled':True,'ai_read_enabled':True})
+    isolated.ingest(example())
+    with isolated._conn() as db:
+        db.execute('ALTER TABLE work_text DROP COLUMN context_json')
+    assert isolated.recent_for_ai()['items'][0]['context']=={}
+    assert len(isolated.recent_for_ai()['items'])==1

@@ -157,3 +157,70 @@ def test_hard_corpus_has_independent_uncertainty_and_long_session_coverage():
         all(not ((event.get("metadata") or {}).get("resource_reference")) for event in case["presented_evidence"])
         for case in independent
     )
+
+
+def test_production_formatter_and_reference_normalizer_accept_all_fixtures():
+    from shared.evidence import rich_evidence_row
+    from shared.core.resource_references import normalize_resource_reference
+    for case in generate_cases():
+        for source, presented in zip(case["source_events"], case["presented_evidence"]):
+            assert presented == rich_evidence_row(source)
+            ref = source["metadata"].get("resource_reference")
+            if ref:
+                assert normalize_resource_reference(ref, include_locator=False, allow_persisted=True) == ref
+
+
+def test_generic_case_24_does_not_require_false_certainty():
+    case = next(c for c in generate_cases() if c["case_id"] == "reconstruction-24")
+    assert "membership" in case["ground_truth"]["uncertainty_dimensions"]
+    prediction = _oracle_prediction(case)
+    prediction["insufficient_evidence"] = False
+    assert score_case(case, prediction)["uncertainty_correct"] is False
+    prediction["uncertainty"] = {"membership": True}
+    assert score_case(case, prediction)["uncertainty_correct"] is True
+
+
+def test_pure_fragments_are_not_counted_as_cross_workflow_contamination():
+    case = generate_cases()[0]
+    prediction = _oracle_prediction(case)
+    row = prediction["workflows"].pop(0)
+    prediction["workflows"].extend({"event_ids": [e]} for e in row["event_ids"])
+    score = score_case(case, prediction)
+    assert score["cross_workflow_contamination"] == 0
+    assert score["pure_fragment_excess"] > 0
+    assert score["workflow_assignment_f1"] < 1
+
+
+def test_authenticated_replay_preserves_events_and_hosted_linkage(tmp_path):
+    from evals.reconstruction.replay import replay_client, replay_case
+    cases = generate_cases()
+    with replay_client(tmp_path) as (db, call):
+        for case in cases:
+            payload = replay_case(db, call, case, page_size=7)
+            assert [r["event_id"] for r in payload["presented_evidence"]] == [r["event_id"] for r in case["source_events"]]
+            assert payload["replay_contract"]["returned_rows"] == len(case["source_events"])
+            assert "ground_truth" not in payload and "source_events" not in payload
+            for row in payload["presented_evidence"]:
+                assert "actor_id" not in row and "page_path" not in row
+            original = {r["event_id"]: r for r in case["source_events"]}
+            for row in payload["presented_evidence"]:
+                meta = original[row["event_id"]]["metadata"]
+                if meta.get("clipboard_transfer_id"):
+                    assert row["clipboard_transfer_id"] == meta["clipboard_transfer_id"]
+
+
+def test_hallucinated_ids_reduce_assignment_precision():
+    case=generate_cases()[0]
+    prediction=_oracle_prediction(case)
+    prediction['workflows'][0]['event_ids'].append('invented-event')
+    scored=score_case(case,prediction)
+    assert scored['unknown_event_id_count']==1
+    assert scored['workflow_assignment_precision']<1
+
+
+def test_outcome_uncertainty_is_separate_from_membership_and_rule():
+    case=next(c for c in generate_cases() if not c['ground_truth']['requires_uncertainty'])
+    prediction=_oracle_prediction(case)
+    prediction['uncertainty']={'membership':False,'business_rule':False,'outcome':True}
+    assert score_case(case,prediction)['uncertainty_correct']
+    assert aggregate([case],[prediction])['unnecessary_uncertainty_rate']==0

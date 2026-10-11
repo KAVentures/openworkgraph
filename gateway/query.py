@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from shared.evidence import RAW_RICH_EVIDENCE_CONTRACT, rich_evidence_row
 from shared.time_utils import normalize_optional_timestamp, normalize_timestamp
@@ -47,6 +47,7 @@ def workflow_trace(
     device_id: str | None = None,
     session_id: str | None = None,
     event_type: str | None = None,
+    row_matcher: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     page_limit = max(1, min(int(limit), 500))
     state = _decode_cursor(cursor or "") if cursor else {}
@@ -103,12 +104,33 @@ def workflow_trace(
         event_type=event_type,
         limit=page_limit + 1,
     )
+    scanned = len(rows)
+    scan_exhausted = False
+    last_scanned = rows[-1] if rows else None
+    if row_matcher is not None:
+        candidates = rows
+        rows = [row for row in candidates if row_matcher(row)]
+        while len(rows) <= page_limit and len(candidates) == page_limit + 1 and scanned < 2000:
+            last = candidates[-1]
+            candidates = db.trace_rows(
+                organization_id=organization_id, since=since, until=trace_until,
+                after_at=last["observed_at"], after_event_id=last["event_id"],
+                query=query, actor_id=actor_id, device_id=device_id,
+                session_id=session_id, event_type=event_type,
+                limit=min(page_limit + 1, 2000 - scanned),
+            )
+            scanned += len(candidates)
+            if candidates:
+                last_scanned = candidates[-1]
+            rows.extend(row for row in candidates if row_matcher(row))
+        scan_exhausted = scanned >= 2000 and len(rows) <= page_limit
     has_more = len(rows) > page_limit
+    has_more = has_more or scan_exhausted
     visible = rows[:page_limit]
     rich = [rich_evidence_row(row, include_identity=True) for row in visible]
     next_cursor = None
-    if has_more and visible:
-        last = visible[-1]
+    if has_more and (visible or last_scanned):
+        last = visible[-1] if visible else last_scanned
         next_cursor = _encode_cursor({
             "snapshot_until": snapshot_until,
             "since": since or "",
@@ -130,4 +152,5 @@ def workflow_trace(
         "data_layer": "privacy_hardened_raw_rich_evidence",
         "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
         "derived_task_inference_authoritative": False,
+        "search_coverage": {"candidate_rows_scanned": scanned, "scan_limit_reached": scan_exhausted} if row_matcher else None,
     }

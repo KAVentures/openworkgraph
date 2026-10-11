@@ -79,8 +79,8 @@ security assessment.
   Reauthorization requires a new authenticated device-specific OAuth action
   (`POST /v1/plugin/work-text-reauthorize` with the current
   `X-OWG-Consent-Version` notice **and `X-OWG-Device-ID`**) **and a new local
-  consent**. These are backend primitives only: a reviewed legal notice and
-  authenticated web approval/deletion UI still need to be built.
+  consent**. The signed-in `/work-text` account screen now exposes device approval and
+  account deletion. Published notices and provider retention review remain operator release gates.
 - Previously delivered AI content cannot be recalled, and deleted SQL records
   may remain in backups according to the provider's retention schedule.
 - Deleting a time range locally changes the manifest; existing synced
@@ -111,17 +111,24 @@ serialized per actor to prevent stale uploads restoring deleted content.
 This is not hardware attestation: a compromised client can still falsify
 local timestamps, so users must not approve an unrecognized device.
 
-**Still missing before public enablement:** an intuitive signed-in web
-consent screen identifying the enrolled device, showing the published
-notice and confirming device-specific approval, plus a signed-in account
-Delete Cloud Text control. The API endpoints exist, but
-an undocumented HTTP header is not a user-facing consent experience.
-A general TOS checkbox alone is not enough.
+The public MCP deployment serves `/work-text`, linked from desktop Privacy.
+It signs in through the configured issuer's existing dynamic-registration OAuth
+flow with PKCE, state checking and a ten-minute callback window. Tokens remain
+in page memory; they are not stored in local/session storage or URLs. The
+screen loads only the authenticated actor's active device IDs, requires an
+explicit acknowledgement and confirmation for the selected device, and exposes
+account-wide deletion with success/failure status. `GET
+/v1/plugin/work-text-status` is OAuth protected and returns no text. The screen
+cannot approve anything while the operator gate is disabled. It still allows
+an authenticated user to delete retained content while sharing is disabled.
 
-The account-deletion endpoint is available on the authenticated backend, but
-must be exposed in an intuitive signed-in web account screen, with clear
-success/failure status. After account deletion, the desktop must clearly
-explain that fresh consent is required rather than quietly retrying uploads.
+Deployment validation must confirm the issuer accepts this web client's HTTPS
+callback and browser token exchange (including CORS). Unit and transport tests
+cannot establish a production issuer's configuration. A published reviewed
+notice, provider/backups retention review and operator readiness remain required
+before public enablement. After deletion, fresh local and OAuth consent remain
+mandatory.
+
 Retest the workflow with a desktop that is offline and later reconnects.
 
 **Merging code behind a disabled operator flag is not the same as activating
@@ -165,3 +172,24 @@ capture timestamp, hostname, redacted title, page/draft type and opaque
 reference. It cannot reliably know an underlying Gmail message ID or
 document identity, nor read native desktop text. More precise resource
 linking needs separate, privacy-preserving work.
+
+## Snapshot provenance and coverage
+
+Text remains in the separate opted-in plane. New snapshots include an installation-keyed
+`page_ref`, with no URL/path/fragment in cloud storage, to distinguish documents on the
+same host. The browser derives a pairing-keyed identity including a recognized provider
+locator (for example a Gmail thread), and the local server rekeys it. A production-valid
+`resource_ref` is included only when business-object capture is separately enabled;
+client-supplied persisted resource IDs cannot bypass that gate.
+
+Context is a bounded allowlist: selection strategy, inspected/captured/synced character
+counts and capture/sync/presentation truncation flags. Unknown fields are discarded.
+Existing databases migrate with empty context; no historical page identity is fabricated.
+Page snapshots prioritize visible viewport text before older page text, within the bounded
+scan. This is neither complete document capture nor an exact record of what was read.
+Drafts are bounded snapshots after typing stops, not evidence of send/save. Search accepts
+observed page/resource references as well as literal text, preserving page provenance.
+
+`get_current_work_context.capture_status` distinguishes operator-disabled text, absent
+consent, no retained snapshots and visible snapshots. It reports recent observation and
+receive times separately and explicitly cannot observe the local recorder's current state.

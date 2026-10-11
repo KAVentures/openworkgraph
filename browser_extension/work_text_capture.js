@@ -13,6 +13,7 @@
   let lastPage = 0;
   let lastDraft = 0;
   let latestDraft = null;
+  let pageCoverage = {};
   const DENY = /(?:password|passcode|one.time|security.code|api.key|secret|credential|login|sign.in|mfa|2fa|bank|payment|credit.card|patient|medical)/i;
   const DENY_SELECTOR = 'script,style,noscript,template,svg,iframe,input,textarea,select,option,[hidden],[aria-hidden="true"],[data-private],[data-sensitive],[contenteditable]';
   const MAX_TEXT = 4000;
@@ -27,6 +28,9 @@
 
   function sensitiveSurface() {
     const host = location.hostname.toLowerCase();
+    if (['accounts.google.com', 'login.microsoftonline.com', 'account.microsoft.com',
+         '1177.se', 'paypal.com', 'stripe.com', 'bankid.se', 'bankid.com'].some(
+           blocked => host === blocked || host.endsWith('.' + blocked))) return true;
     const title = String(document.title || "").toLowerCase();
     if (exclusions.hosts.some(raw => {
       const input = String(raw || "").toLowerCase().trim();
@@ -59,17 +63,37 @@
 
   function visiblePageText() {
     if (!document.body || sensitiveSurface()) return '';
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    // Sample rendered viewport elements first so a long conversation's old
+    // DOM prefix cannot consume the entire scan budget before its visible tail.
+    const roots = new Set();
+    if (document.elementFromPoint) {
+      for (const x of [0.25, 0.5, 0.75]) for (const y of [0.15, 0.4, 0.65, 0.9]) {
+        const el = document.elementFromPoint(window.innerWidth * x, window.innerHeight * y);
+        if (el && el !== document.body && el !== document.documentElement && safeElement(el)) roots.add(el);
+      }
+    }
+    roots.add(document.body);
+    const walkers = [...roots].map(root => document.createTreeWalker(root, NodeFilter.SHOW_TEXT));
+    const seen = new Set();
+    let walkerIndex=0;
     const parts = [];
+    const viewport = [];
     let size=0;
     let inspected=0;
+    let nodeTruncated=false;
     while (inspected < 2500) {
-      const node = walker.nextNode();
-      if (!node) break;
+      const node = walkers[walkerIndex]?.nextNode();
+      if (!node) {
+        if (++walkerIndex >= walkers.length) break;
+        continue;
+      }
+      if (seen.has(node)) continue;
+      seen.add(node);
       inspected++;
       const el = node.parentElement;
       if (!safeElement(el)) continue;
-      const value = normal(node.nodeValue, 500);
+      const value = normal(node.nodeValue, MAX_TEXT);
+      nodeTruncated ||= normal(node.nodeValue, MAX_TEXT + 1).length > MAX_TEXT;
       if (!value) continue;
       try {
         // A styled child can appear "display:inline" beneath a hidden parent.
@@ -79,14 +103,20 @@
         if (style?.display === 'none' || style?.visibility === 'hidden' ||
             style?.visibility === 'collapse' || style?.opacity === '0') continue;
       } catch (_) { continue; }
-      parts.push(value);
+      let rect;
+      try { rect = el.getBoundingClientRect?.(); } catch (_) {}
+      if (rect && rect.bottom > 0 && rect.top < window.innerHeight) viewport.push(value);
+      else parts.push(value);
       size += value.length + 1;
-      if (size >= MAX_TEXT) break;
+      if (size >= MAX_TEXT * 8) break;
     }
-    return normal(parts.join(' '));
+    const text = [...viewport, ...parts].join(' ');
+    pageCoverage = {selection: 'viewport_then_page', inspected_characters: size,
+      capture_truncated: nodeTruncated || text.length > MAX_TEXT || inspected >= 2500 || size >= MAX_TEXT * 8};
+    return normal(text);
   }
 
-  function emit(kind, text) {
+  function emit(kind, text, context = {}) {
     if (!enabled || !isTop() || document.visibilityState !== 'visible' ||
         sensitiveSurface() || !text) return;
     try {
@@ -96,7 +126,8 @@
         text: normal(text),
         hostname: location.hostname,
         pathname: location.pathname,
-        title: document.title
+        title: document.title,
+        context
       }).catch?.(() => {});
     } catch (_) {}
   }
@@ -107,7 +138,7 @@
     const text = visiblePageText();
     if (!text) return;
     lastPage = Date.now();
-    emit('page', text);
+    emit('page', text, pageCoverage);
   }
 
   function schedulePage() {
@@ -129,13 +160,15 @@
     if (DENY.test(descriptors) || element.getAttribute?.('data-private') !== null ||
         element.getAttribute?.('aria-hidden') === 'true') return '';
     const text = tag === 'TEXTAREA' ? element.value : element.innerText;
-    return normal(text);
+    return {text: normal(text), context: {selection: 'editable_draft',
+      inspected_characters: String(text || '').length,
+      capture_truncated: String(text || '').length > MAX_TEXT}};
   }
 
   function scheduleDraft(target) {
     if (!enabled || !isTop()) return;
     const text = editableText(target);
-    if (!text) return;
+    if (!text || !text.text) return;
     latestDraft = text;
     if (draftTimer) clearTimeout(draftTimer);
     // Debounce until typing stops, then respect the cooldown without
@@ -147,7 +180,7 @@
       const finalText = latestDraft;
       latestDraft = null;
       lastDraft = Date.now();
-      emit('draft', finalText);
+      emit('draft', finalText.text, finalText.context);
     }, Math.max(2200, cooldown));
   }
 
@@ -187,6 +220,7 @@
   addEventListener('DOMContentLoaded', schedulePage);
   addEventListener('pageshow', schedulePage);
   addEventListener('click', schedulePage, true);
+  addEventListener('scroll', schedulePage, true);
   addEventListener('input', event => scheduleDraft(event.target), true);
   // At document_start some browsers have not created documentElement yet.
   // Do not crash the entire sensor on those pages.

@@ -235,6 +235,9 @@ def cluster_runs(
             "derived": True,
             "authoritative": False,
             "cluster_is_business_workflow_ground_truth": False,
+            "business_membership_verified": False,
+            "similarity_basis": "structural_action_sequence",
+            "generic_ui_repetition_may_be_unrelated": True,
             "canonical_evidence_overrides_cluster": True,
             "use": (
                 "navigation candidate only; inspect canonical evidence for selected "
