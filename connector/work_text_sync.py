@@ -29,13 +29,27 @@ def process_cloud_text(client: Any, *, url: str, state: SyncState,
         and policy.get("cloud_ack_version") == wt.CLOUD_ACK_VERSION
         and ai_access_enabled() and read_state().get("state") == "recording"
     )
+    # The sync-state DB may be recreated (reinstall, storage cleanup, worker
+    # reset) independently of the user's persistent privacy policy. A disabled
+    # grant must still reach the Gateway for deletion in that case. Remember
+    # the successfully revoked *grant epoch*, so no calls are made for users
+    # who have never enabled cloud sharing and successful revokes are not
+    # repeatedly retried.
     previously_shared = state.get_bool("cloud_text_remote_granted", False)
+    grant_epoch = str(policy.get("cloud_granted_at") or "")
+    revocation_due = bool(
+        previously_shared or (
+            grant_epoch and state.get("cloud_text_last_revoked_grant") != grant_epoch
+        )
+    )
     if not allowed:
-        if previously_shared:
+        if revocation_due:
             try:
                 response = client.post(f"{url}/v1/device/work-text-revoke")
                 response.raise_for_status()
                 state.set_bool("cloud_text_remote_granted", False)
+                if grant_epoch:
+                    state.set("cloud_text_last_revoked_grant", grant_epoch)
                 for name in ("cloud_text_last_manifest", "cloud_text_missing_refs",
                              "cloud_text_last_check", "cloud_text_consent"):
                     state.delete(name)
