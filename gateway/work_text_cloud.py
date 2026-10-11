@@ -213,6 +213,25 @@ def _item(value: Any, *, consent_since: datetime) -> dict[str, str]:
     }
 
 
+def validate_device_approval(db: GatewayDB, *, organization_id: str, actor_id: str,
+                             device_id: str, consent_version: str) -> None:
+    """Preflight the identity before an OAuth approval alters any account state."""
+    _guard()
+    if not _personal(organization_id, actor_id) or consent_version != CONSENT_VERSION:
+        raise PermissionError("personal OAuth approval with current notice required")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", device_id):
+        raise ValueError("invalid enrolled device ID")
+    with db.connect() as conn:
+        cur = db._execute(conn, """SELECT scopes_json FROM access_tokens
+            WHERE organization_id=? AND actor_id=? AND device_id=?
+            AND token_type='device' AND revoked_at IS NULL""",
+            (organization_id, actor_id, device_id))
+        valid = any("evidence:write" in json.loads(str(row[0]))
+                    for row in cur.fetchall())
+        if not valid:
+            raise PermissionError("device must be actively enrolled to this OAuth account")
+
+
 def approve_device(db: GatewayDB, *, organization_id: str, actor_id: str,
                    device_id: str, consent_version: str) -> dict[str, Any]:
     """Authorize one enrolled device from an independent signed-in OAuth action.
