@@ -13,7 +13,10 @@ interruption and therefore need not be one contiguous time block. Use stable res
 tab identity, semantic actions, clipboard linkage, titles/labels, timing and your own judgment.
 Do not mechanically require historical UI clicks for automation. Distinguish meaningful
 information dependencies/checkpoints from UI mechanics. If the evidence does not establish a
-business rule or causal condition, mark insufficient_evidence=true rather than inventing it.
+workflow membership, business rule, causal condition or persisted outcome, mark
+insufficient_evidence=true rather than inventing it. Timing alone is not a membership link.
+The uncertainty object distinguishes these dimensions; true means evidence is insufficient.
+Keep resource-level partial reconstructions when a larger workflow is ambiguous.
 
 Return JSON only:
 {
@@ -29,6 +32,7 @@ Return JSON only:
   ],
   "unassigned_event_ids": ["..."],
   "insufficient_evidence": false,
+  "uncertainty": {"membership": false, "business_rule": false, "outcome": false},
   "notes": "brief optional explanation"
 }
 """

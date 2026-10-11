@@ -56,6 +56,8 @@ def main():
             "ref": "owg:wt:1", "observed_at": _now(),
             "hostname": "docs.example.org", "page_title": "Synthetic planning",
             "kind": "page", "redacted_text": "Synthetic quarterly work plan.",
+            "context": {"page_ref": "owg:wp:" + "a" * 32,
+                        "selection": "viewport_then_page", "capture_truncated": True},
         }
         try:
             cloud.sync(
@@ -77,6 +79,15 @@ def main():
             (actor,),
         ).fetchone()
         assert row[0] == 1, row
+    retrieved = cloud.search(db, organization_id=actor, actor_id=actor,
+                             query="owg:wp:" + "a" * 32)
+    assert len(retrieved["results"]) == 1
+    context = retrieved["results"][0]["context"]
+    assert context["capture_truncated"] is True
+    assert context["selection"] == "viewport_then_page"
+    assert cloud.account_status(db, organization_id=actor, actor_id=actor)["devices"]
+    # Repeat schema initialization checks the existing-column path on PostgreSQL.
+    cloud.init_schema(db)
 
     # A concurrent deletion must win the final state irrespective of which
     # operation acquired the PostgreSQL actor row lock first.

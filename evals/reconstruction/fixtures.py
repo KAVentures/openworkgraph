@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from shared.evidence import rich_evidence_row
 
 ROOT = Path(__file__).resolve().parent
 CASES_PATH = ROOT / "cases.jsonl"
@@ -77,7 +78,7 @@ def _event(
     metadata: dict[str, Any] = {
         "action": action,
         "semantic_action": action,
-        "semantic_action_confidence": "high",
+        "semantic_action_confidence": "label_heuristic",
         "target": {"role": "button", "label": label},
     }
     if host:
@@ -93,12 +94,16 @@ def _event(
         metadata["resource_reference"] = {
             "provider": provider,
             "resource_kind": kind,
-            "resource_ref": f"owg:r:{opaque_resource}",
+            "host": host,
+            "resolution": "observed",
+            "resource_ref": "owg:r:" + hashlib.sha256(str(resource).encode()).hexdigest()[:32],
         }
     if clipboard_transfer:
         metadata["clipboard_transfer_id"] = opaque_transfer
-        metadata["clipboard_source_observed"] = clipboard_action == "paste"
+        metadata["clipboard_source_observed"] = True
         metadata["action"] = clipboard_action or action
+        metadata["semantic_action"] = clipboard_action or action
+        metadata["semantic_action_confidence"] = "direct_event"
     return {
         "event_id": event_id,
         "observed_at": _iso(base, seconds),
@@ -127,57 +132,13 @@ def _source_event(event: dict[str, Any]) -> dict[str, Any]:
     return out
 
 def _trace_projection(event: dict[str, Any]) -> dict[str, Any]:
-    """Mirror shared.evidence.rich_evidence_row(..., include_identity=False)."""
-    meta = deepcopy(event.get("metadata") or {})
-    page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
-    target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
-    target_label = (
-        target.get("label")
-        or target.get("title")
-        or target.get("description")
-        or target.get("help")
-        or ""
-    )
-    target_role = (
-        target.get("role")
-        or target.get("localized_role")
-        or target.get("tag")
-        or ""
-    )
-    out: dict[str, Any] = {
-        "event_id": event.get("event_id"),
-        "observed_at": event.get("observed_at"),
-        "app": event.get("app"),
-        "window_title": event.get("window_title"),
-        "event_type": event.get("event_type"),
-        "duration_seconds": event.get("duration_seconds", 0) or 0,
-        "source": event.get("source", ""),
-        "session_id": event.get("session_id", ""),
-        "metadata": meta,
-        "has_local_screenshot": False,
-        "action": meta.get("action", ""),
-        "target_label": target_label,
-        "target_role": target_role,
-        "page_host": page.get("hostname", ""),
-        "page_path": page.get("pathname", ""),
-        "browser_hostname": page.get("hostname", ""),
-        "tab_context_id": meta.get("tab_context_id"),
-        "semantic_action": meta.get("semantic_action"),
-        "semantic_action_confidence": meta.get("semantic_action_confidence"),
-        "clipboard_transfer_id": meta.get("clipboard_transfer_id"),
-    }
-    for key in (
-        "browser_hostname",
-        "tab_context_id",
-        "semantic_action",
-        "semantic_action_confidence",
-        "clipboard_transfer_id",
-    ):
-        if out.get(key) in (None, ""):
-            out.pop(key, None)
-    return out
+    """Use the shipped formatter: fixture presentation must not fork production."""
+    return rich_evidence_row(_source_event(event), include_identity=False)
 
 def _case(case_id: str, events: list[dict[str, Any]], *, requires_uncertainty: bool = False, note: str = "") -> dict[str, Any]:
+    # Match canonical trace ordering, including inserted distractors whose
+    # construction position is not necessarily their timestamp position.
+    events = sorted(events, key=lambda event: (event["observed_at"], event["event_id"]))
     workflows: dict[str, dict[str, Any]] = {}
     noise: list[str] = []
     for event in events:
@@ -217,8 +178,18 @@ def _case(case_id: str, events: list[dict[str, Any]], *, requires_uncertainty: b
         "ground_truth": {
             "workflows": wf_list,
             "noise_event_ids": noise,
-            "requires_uncertainty": requires_uncertainty,
+            "requires_uncertainty": requires_uncertainty or any(
+                (e["metadata"].get("target") or {}).get("label") in {"New message", "Open item", "Open message", "Open row"}
+                and not e["metadata"].get("clipboard_transfer_id") for e in events),
             "note": note,
+            "uncertainty_dimensions": (["business_rule"] if requires_uncertainty else [])
+                + (["membership"] if any(
+                    (e["metadata"].get("target") or {}).get("label") in {"New message", "Open item", "Open message", "Open row"}
+                    and not e["metadata"].get("clipboard_transfer_id")
+                    for e in events
+                ) else []),
+            "membership_truth_basis": "synthetic author intent; not necessarily identifiable from observations",
+            "outcome_truth_basis": "UI actions do not establish persisted business outcomes",
         },
     }
 
@@ -650,7 +621,7 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
                 tab = meta.get("tab_context_id")
                 transfer = meta.get("clipboard_transfer_id")
                 path = page.get("pathname")
-                if ref and not re.fullmatch(r"owg:r:r-[0-9a-f]{16}", str(ref)):
+                if ref and not re.fullmatch(r"owg:r:[0-9a-f]{32}", str(ref)):
                     errors.append(f"{cid}: non-opaque {surface_name} resource_ref")
                 if tab and not re.fullmatch(r"t-[0-9a-f]{16}", str(tab)):
                     errors.append(f"{cid}: non-opaque {surface_name} tab_context_id")

@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -271,6 +272,20 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             ]
         rich = [rich_evidence_row(row, include_identity=False) for row in source_rows]
         context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit)
+        context["capture_status"] = {
+            "latest_observed_at": max((str(row.get("observed_at") or "") for row in source_rows), default=None),
+            "recent_evidence_latest_received_at": max((str(row.get("ingested_at") or "") for row in source_rows), default=None),
+            "local_recorder_state": "unknown_to_hosted_connector",
+            "coverage": "bounded_recent_synced_evidence",
+            "cloud_work_text": work_text_cloud.status(db, organization_id=organization_id, actor_id=actor_id),
+        }
+        context["server_capabilities"] = {
+            "contract_version": "hosted-evidence-v2",
+            "tool_count": 10,
+            "optional_text_tools": ["search_work_text", "get_work_text_excerpt"],
+            "goal_tool": "get_goal_context",
+            "catalog_notice": "If these tools are missing from the client catalog, refresh or reconnect the plugin; server availability does not grant text consent.",
+        }
         context["onboarding"] = ({
             "status": "no_synced_evidence",
             "desktop_recorder_optional": True,
@@ -291,14 +306,35 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         return _protected(context, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
-    def search_work(query: str, limit: int = 25, detail: str = "compact") -> dict[str, Any]:
+    def search_work(query: str, limit: int = 25, detail: str = "compact", cursor: str | None = None) -> dict[str, Any]:
         """Use to locate previously observed work when a user mentions a particular past project, document, conversation, person or resource without naming OpenWorkGraph. Lexical search of this account's synced, redacted evidence; a miss is not proof of absence. Inspect dated get_workflow_trace for context."""
         organization_id, actor_id, _claims = _identity()
+        cleaner = PublicRedactor(secret=os.environ["OWG_PLUGIN_PROFILE_KEY"], principal=f"{organization_id}|{actor_id}")
+        needle = str(query).casefold().strip()
+        if not needle:
+            raise ValueError("search query must not be empty")
+        if len(needle) > 240:
+            raise ValueError("search query must be at most 240 characters")
+        matched_fields: dict[str, list[str]] = {}
+        pattern = re.compile((r"(?<!\d)" if needle[0].isdigit() else "")
+            + re.escape(needle) + (r"(?!\d)" if needle[-1].isdigit() else ""))
+        def visible_match(row: dict[str, Any]) -> bool:
+            safe = cleaner.event(rich_evidence_row(row), detail="rich")
+            values = {key: str(safe.get(key) or "").casefold()
+                      for key in ("app", "window_title", "target_label", "page_host", "semantic_action")}
+            values["resource_ref"] = str(((safe.get("metadata") or {}).get("resource_reference") or {}).get("resource_ref") or "").casefold()
+            fields = [key for key, value in values.items()
+                      if (needle == value if key == "resource_ref" else bool(pattern.search(value)))]
+            matched_fields[str(row["event_id"])] = fields
+            return bool(fields)
         result = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
-            query=query, limit=max(1, min(int(limit), 500)),
+            query=query, cursor=cursor, limit=max(1, min(int(limit), 500)), row_matcher=visible_match,
         )
+        for row in result["rows"]:
+            row["matched_fields"] = matched_fields[str(row["event_id"])]
         result["query"] = query
+        result["pagination_tool"] = "search_work"
         result["local_evidence_may_be_richer"] = True
         result["retrieval_notice"] = (
             "This is a lexical match over synced privacy-hardened evidence, not "
@@ -437,6 +473,9 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 for entry in safe["results"] if isinstance(entry, dict)
             ]
         if isinstance(safe.get("excerpt"), dict):
+            context = dict(safe["excerpt"].get("context") or {})
+            context["presentation_truncated"] = len(str(safe["excerpt"].get("redacted_text") or "")) > 1200
+            safe["excerpt"]["context"] = context
             safe["excerpt"] = {
                 key: cleaner.text(value, max_chars=1200 if key == "redacted_text" else 240)
                 if isinstance(value, str) and key in {"page_title", "hostname", "redacted_text"} else value
@@ -498,9 +537,19 @@ class PersonalLinkEndpoint:
         self.verifier = verifier
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if (scope.get("type") != "http" or scope.get("method") != "POST" or
+        if scope.get("type") == "http" and scope.get("method") == "GET" and scope.get("path") == "/work-text":
+            from .html_pages import render_page
+            issuer_origin = urlsplit(self.verifier.issuer)
+            allowed = f"{issuer_origin.scheme}://{issuer_origin.netloc}"
+            response = render_page("work_text_account.html",
+                config={"issuer": self.verifier.issuer, "scope": self.verifier.required_scope},
+                connect_origin=allowed)
+            await response(scope, receive, send)
+            return
+        is_status = scope.get("method") == "GET" and scope.get("path") == "/v1/plugin/work-text-status"
+        if (scope.get("type") != "http" or (scope.get("method") != "POST" and not is_status) or
                 scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete",
-                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize"}):
+                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize", "/v1/plugin/work-text-status"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -528,6 +577,11 @@ class PersonalLinkEndpoint:
             return
         if not subject:
             await JSONResponse({"detail": "OAuth subject is required"}, status_code=401)(scope, receive, send)
+            return
+        if is_status:
+            organization_id = f"oauth-sub:{subject}"
+            result = work_text_cloud.account_status(self.db, organization_id=organization_id, actor_id=organization_id)
+            await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         if scope.get("path") == "/v1/plugin/work-text-delete":
             organization_id = f"oauth-sub:{subject}"

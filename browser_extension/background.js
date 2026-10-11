@@ -314,12 +314,28 @@ async function deliverWorkTextSnapshot(message, sender) {
     }
   }); } catch (_) {}
   if (!on) return;
+  // A keyed page identity keeps same-host documents distinct without sending
+  // their URL, query, fragment or provider locator to cloud storage.
+  const parsed = globalThis.OpenWorkGraphResourceReferences?.parse?.(sender.tab.url || '');
+  const secret = await globalThis.OWGBrowserAuth?.pairingSecret?.();
+  if (!secret) return;
+  const rawPath = new URL(sender.tab.url).pathname;
+  const identity = source.hostname + '|' + rawPath + '|' + (parsed?.resolver_locator || '');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(identity));
+  const pageIdentity = Array.from(new Uint8Array(signature)).map(x => x.toString(16).padStart(2, '0')).join('');
   await postDirect("/v1/work-text/ingest", {
     hostname: source.hostname,
     pathname: source.pathname,
     title: String(sender.tab.title || "").slice(0, 240),
     kind: message.kind,
     text: message.text,
+    page_identity: pageIdentity,
+    context: message.context,
+    ...(fresh?.signal_settings?.business_object_references === true && parsed ? {
+      resource_reference: parsed
+    } : {}),
   });
 }
 

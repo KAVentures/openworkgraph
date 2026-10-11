@@ -26,6 +26,8 @@ _META_SIMPLE = frozenset({
     "duration_seconds", "click_count", "scroll_count", "keypress_count",
     "foreground_seconds", "engaged_seconds", "active_input_seconds",
     "idle_seconds", "observation_level", "outcome_status",
+    "clipboard_transfer_id", "linked_copy_event_id", "clipboard_source_tab_context_id",
+    "clipboard_link_age_seconds", "clipboard_source_observed", "clipboard_contents_captured",
 })
 _META_TARGET = frozenset({"role", "tag", "localized_role", "label", "title"})
 _META_PAGE = frozenset({"hostname"})
@@ -54,7 +56,12 @@ _IDS = frozenset({
     "event_id", "session_id", "execution_id", "family_key", "resource_ref",
     "file_ref", "candidate_cluster_id", "candidate_id", "trace_id", "run_id",
     "browser_session_id", "tab_context_id",
+    "clipboard_transfer_id", "linked_copy_event_id", "clipboard_source_tab_context_id",
+    "page_ref",
 })
+_ID_LISTS = frozenset({"evidence_event_ids", "event_ids", "ordered_event_ids",
+                       "supporting_execution_ids", "execution_ids", "resource_refs"})
+_OPAQUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$")
 _MAX_TEXT = 240
 
 
@@ -96,19 +103,24 @@ class PublicRedactor:
         for key in _META_SIMPLE:
             value = raw.get(key)
             if isinstance(value, (bool, int, float)):
-                if value not in (0, 0.0, False):
+                if isinstance(value, bool) or value not in (0, 0.0):
                     output[key] = value
             elif isinstance(value, str) and value and key not in _DROP_FIELDS:
-                output[key] = self.text(value)
+                if key in _IDS:
+                    if _OPAQUE.fullmatch(value):
+                        output[key] = value
+                else:
+                    output[key] = self.text(value)
         for key, allowed in (("target", _META_TARGET), ("page", _META_PAGE),
                              ("resource_reference", _META_REFERENCE),
                              ("file_reference", _META_REFERENCE)):
             child = raw.get(key)
             if not isinstance(child, dict):
                 continue
-            safe = {k: self.text(v) if isinstance(v, str) else v
+            safe = {k: (v if k in _IDS else self.text(v)) if isinstance(v, str) else v
                     for k, v in child.items() if k in allowed
-                    and isinstance(v, (str, int, float, bool)) and v not in (None, "", 0, False)}
+                    and isinstance(v, (str, int, float, bool)) and v not in (None, "", 0, False)
+                    and (k not in _IDS or isinstance(v, str) and _OPAQUE.fullmatch(v))}
             if safe:
                 output[key] = safe
         return output
@@ -133,6 +145,9 @@ class PublicRedactor:
                 else self.text(str(value))
             )
         meta = self.metadata(raw.get("metadata"))
+        if isinstance(raw.get("matched_fields"), list):
+            result["matched_fields"] = [key for key in raw["matched_fields"]
+                if key in {"app", "window_title", "target_label", "page_host", "semantic_action", "resource_ref"}]
         if detail == "rich":
             if meta:
                 result["metadata"] = meta
@@ -142,6 +157,11 @@ class PublicRedactor:
             reference = meta.get("resource_reference")
             if isinstance(reference, dict) and reference.get("resource_ref"):
                 result["resource_ref"] = reference["resource_ref"]
+        # Cross-app linkage is structural evidence, useful at either detail level.
+        for key in ("clipboard_transfer_id", "linked_copy_event_id", "clipboard_source_tab_context_id",
+                    "clipboard_link_age_seconds", "clipboard_source_observed", "clipboard_contents_captured"):
+            if key in meta:
+                result[key] = meta[key]
         return result
 
     def visit(self, value: Any, *, detail: str, key: str = "") -> Any:
@@ -168,6 +188,7 @@ class PublicRedactor:
                     "onboarding", "rows", "next_cursor", "resources",
                     "agent_runs", "resource_relations", "resource_agent_relations",
                     "candidates", "executions", "canonical_evidence", "examples",
+                    "latest_observed_at", "recent_evidence_latest_received_at", "latest_snapshot_at",
                 }:
                     # Public MCP compatibility: an empty array / null cursor
                     # is meaningful and must never disappear on projection.
@@ -178,6 +199,8 @@ class PublicRedactor:
         if isinstance(value, tuple):
             return [self.visit(x, detail=detail, key=key) for x in value]
         if isinstance(value, str):
+            if key in _ID_LISTS:
+                return value if _OPAQUE.fullmatch(value) else "[INVALID_REFERENCE]"
             return value if key in _IDS or key in {"observed_at", "snapshot_until", "next_cursor"} else self.text(value)
         return value
 

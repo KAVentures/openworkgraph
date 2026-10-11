@@ -183,20 +183,7 @@ class SSOStartRequest(BaseModel):
 
 # --- installer ------------------------------------------------------------------------------------
 
-def _page(name: str) -> Response:
-    nonce = secrets.token_urlsafe(18)
-    html = (_HERE / name).read_text(encoding="utf-8").replace("__NONCE__", nonce)
-    csp = (
-        "default-src 'none'; "
-        f"script-src 'nonce-{nonce}'; "
-        "style-src 'unsafe-inline'; "
-        "connect-src 'self'; img-src data:; "
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    )
-    return Response(content=html, media_type="text/html; charset=utf-8", headers={
-        "Content-Security-Policy": csp, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
-    })
+from .html_pages import render_page as _page
 
 
 def _take(app: FastAPI, path: str, method: str) -> Callable[..., Any] | None:
