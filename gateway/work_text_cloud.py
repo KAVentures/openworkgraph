@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS cloud_work_text_grants (
  refreshed_at TEXT NOT NULL,
  PRIMARY KEY (organization_id, actor_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS cloud_work_text_revocations (
+ organization_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ revoked_at TEXT NOT NULL,
+ PRIMARY KEY (organization_id, actor_id, device_id)
+);
 """
 _SECRET_RE = re.compile(
     r"(?i)(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
@@ -182,14 +189,24 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
     org, actor, device = p.organization_id, p.actor_id, p.device_id
     with db.connect() as conn:
         _purge(db, conn)
-        # A changed consent epoch replaces prior sharing rather than restoring
-        # snapshots from the previous grant.
+        # Revocation is durable: an old delayed/retried request must not
+        # resurrect data after a successful revoke. Only a fresh consent epoch
+        # later than the server-side revoke timestamp may enable uploads again.
+        cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_revocations
+            WHERE organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
+        revocation = cur.fetchone()
+        if revocation and consent_since <= _iso(str(revocation[0])):
+            raise PermissionError("Cloud work-text consent has been revoked; grant it again on this desktop")
         cur = db._execute(conn, """SELECT granted_at FROM cloud_work_text_grants
             WHERE organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
         old = cur.fetchone()
-        if old and str(old[0]) != consent_since.isoformat():
-            db._execute(conn, """DELETE FROM cloud_work_text WHERE
-                organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
+        if old:
+            previous_grant = _iso(str(old[0]))
+            if consent_since < previous_grant:
+                raise PermissionError("Previous consent epoch cannot be replayed")
+            if consent_since > previous_grant:
+                db._execute(conn, """DELETE FROM cloud_work_text WHERE
+                    organization_id=? AND actor_id=? AND device_id=?""", (org, actor, device))
         db._execute(conn, """INSERT INTO cloud_work_text_grants
             (organization_id, actor_id, device_id, consent_version, granted_at, refreshed_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -239,6 +256,13 @@ def revoke(db: GatewayDB, p: Principal) -> dict[str, Any]:
         db._execute(conn, """DELETE FROM cloud_work_text_grants WHERE
             organization_id=? AND actor_id=? AND device_id=?""",
             (p.organization_id, p.actor_id, p.device_id))
+        # Remember a server-generated revocation boundary instead of dropping
+        # all knowledge of the old grant. This blocks stale in-flight writes.
+        db._execute(conn, """INSERT INTO cloud_work_text_revocations
+            (organization_id, actor_id, device_id, revoked_at) VALUES (?,?,?,?)
+            ON CONFLICT(organization_id,actor_id,device_id) DO UPDATE SET
+            revoked_at=excluded.revoked_at""",
+            (p.organization_id, p.actor_id, p.device_id, _now().isoformat()))
     return {"status": "revoked", "deleted": count}
 
 
