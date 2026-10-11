@@ -193,3 +193,19 @@ def test_cloud_storage_performs_second_redaction_without_local_identity_files(se
     body = cloud.excerpt(db, organization_id=actor, actor_id=actor, reference=ref)["excerpt"]["redacted_text"]
     assert "jane.doe@example.org" not in body
     assert "quarterly" in body.lower()
+
+
+def test_cloud_endpoint_rejects_oversized_body_before_json_model_parsing(setup_cloud):
+    _db, app, _actor, _other = setup_cloud
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer alice-device",
+                   "Content-Type": "application/json"}
+        response = client.post("/v1/device/work-text-sync", headers=headers,
+                               content=b" " * 200_000)
+        assert response.status_code == 413
+        response = client.post("/v1/device/work-text-sync", headers=headers,
+                               content=b"{broken")
+        assert response.status_code == 400
+        valid = client.post("/v1/device/work-text-sync", headers=headers,
+                            json=_payload(items=[_entry()]))
+        assert valid.status_code == 200, valid.text
