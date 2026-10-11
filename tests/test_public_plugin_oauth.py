@@ -609,7 +609,7 @@ def test_account_cloud_text_delete_is_oauth_scoped_and_blocks_stale_desktop_uplo
     with pytest.raises(PermissionError, match="OAuth cloud work-text approval required"):
         cloud.sync(db, credential, **payload)
     approved = client.post(
-        "/v1/plugin/work-text-reauthorize",
+        "/v1/plugin/work-text-approve",
         headers={"Authorization": f"Bearer {mint()}",
                  "X-OWG-Consent-Version": cloud.CONSENT_VERSION},
     )
