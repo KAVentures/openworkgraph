@@ -254,7 +254,10 @@ def test_cloud_account_quota_failure_rolls_back_new_rows(setup_cloud, monkeypatc
     cloud.sync(db, device, **first)
     extra = {**_entry(), "ref": "owg:wt:11", "page_title": "Second task"}
     with pytest.raises(ValueError, match="quota"):
-        cloud.sync(db, device, **_payload(items=[extra], refs=["owg:wt:10", "owg:wt:11"]))
+        cloud.sync(db, device, **{
+            **_payload(items=[extra], refs=["owg:wt:10", "owg:wt:11"]),
+            "granted_at": first["granted_at"],
+        })
     found = cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")
     assert len(found["results"]) == 1
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="Second")["results"] == []
@@ -267,3 +270,18 @@ def test_cloud_account_character_quota_is_enforced(setup_cloud, monkeypatch):
     with pytest.raises(ValueError, match="quota"):
         cloud.sync(db, device, **_payload(items=[_entry()]))
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"] == []
+
+
+def test_cloud_device_upload_rate_limit_is_isolated_to_text_endpoint(setup_cloud):
+    _db, app, _actor, _other = setup_cloud
+    headers = {"Authorization": "Bearer alice-device"}
+    with TestClient(app) as client:
+        for _ in range(30):
+            response = client.post("/v1/device/work-text-sync",
+                                   json=_payload(items=[], refs=[]), headers=headers)
+            assert response.status_code == 200, response.text
+        throttled = client.post("/v1/device/work-text-sync",
+                                json=_payload(items=[], refs=[]), headers=headers)
+        assert throttled.status_code == 429
+        assert int(throttled.headers["Retry-After"]) >= 1
+        assert client.get("/health").status_code == 200
