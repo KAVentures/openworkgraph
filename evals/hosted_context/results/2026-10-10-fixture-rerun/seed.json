@@ -1,0 +1,9 @@
+{
+  "inserted": {
+    "populated": 288,
+    "empty": 0,
+    "local-only": 0
+  },
+  "structural_agent_sharing": "explicit synthetic opt-in, disabled after ingestion",
+  "gateway_scope": "disposable loopback SQLite only"
+}
