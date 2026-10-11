@@ -77,9 +77,10 @@ def _safe_event(row: dict[str, Any]) -> dict[str, Any]:
     result = {k: row.get(k) for k in (
         "event_id", "observed_at", "app", "event_type", "source", "session_id",
         "window_title", "page_host", "duration_seconds",
+        "target_label", "target_role", "action",
     ) if row.get(k) not in ("", None)}
-    if target.get("title"):
-        result["target_label"] = str(target["title"])[:180]
+    if target.get("title") or target.get("label"):
+        result["target_label"] = str(target.get("title") or target.get("label"))[:180]
     if meta.get("operation") or meta.get("action"):
         result["action"] = str(meta.get("operation") or meta.get("action"))[:100]
     if resource.get("resource_ref"):
