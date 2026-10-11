@@ -228,16 +228,24 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_account_revocations
             WHERE organization_id=? AND actor_id=?""", (org, actor))
         account_revocation = cur.fetchone()
+        cur = db._execute(conn, """SELECT approved_at, consent_version
+            FROM cloud_work_text_account_reapprovals
+            WHERE organization_id=? AND actor_id=?""", (org, actor))
+        approval = cur.fetchone()
+        # A device credential alone is insufficient: this server-side grant
+        # must be created by an independently authenticated OAuth account
+        # action. Older installations have no grant and therefore fail closed.
+        if not approval or str(approval[1]) != CONSENT_VERSION:
+            if account_revocation:
+                raise PermissionError(
+                    "Cloud text was deleted from this account; OAuth reauthorization required"
+                )
+            raise PermissionError("OAuth cloud work-text approval required before upload")
         if account_revocation:
             # A durable deletion tombstone survives account reauthorization.
-            # Never restore pre-deletion device grants or queued snapshots.
+            # Both the OAuth approval and desktop grant must be newer than it.
             revoked_at = _iso(str(account_revocation[0]))
-            cur = db._execute(conn, """SELECT approved_at, consent_version
-                FROM cloud_work_text_account_reapprovals
-                WHERE organization_id=? AND actor_id=?""", (org, actor))
-            approval = cur.fetchone()
-            if (not approval or str(approval[1]) != CONSENT_VERSION
-                    or _iso(str(approval[0])) <= revoked_at
+            if (_iso(str(approval[0])) <= revoked_at
                     or consent_since <= revoked_at):
                 raise PermissionError(
                     "Cloud text was deleted from this account; OAuth reauthorization required; "
@@ -349,10 +357,10 @@ def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dic
 
 def reauthorize_account(db: GatewayDB, *, organization_id: str, actor_id: str,
                         consent_version: str) -> dict[str, Any]:
-    """Explicit signed-in OAuth action after prior account deletion.
+    """Independent OAuth account approval, initially and after cloud deletion.
 
-    This is a backend authorization primitive, NOT the user-facing legal
-    notice/consent UI. The latter remains a public launch prerequisite.
+    Does not replace the separate local desktop opt-in. This endpoint is a
+    backend primitive; the reviewed user-facing notice remains a launch gate.
     """
     _guard()
     if not _personal(organization_id, actor_id):
