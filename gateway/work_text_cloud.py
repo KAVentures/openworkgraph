@@ -240,8 +240,8 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
                     or _iso(str(approval[0])) <= revoked_at
                     or consent_since <= revoked_at):
                 raise PermissionError(
-                    "Cloud text was deleted from this account; OAuth reauthorization "
-                    "and fresh local grant required"
+                    "Cloud text was deleted from this account; OAuth reauthorization required; "
+                    "fresh local grant required"
                 )
         # Revocation is durable: delayed/retried requests must not resurrect
         # data after a successful device revoke.
