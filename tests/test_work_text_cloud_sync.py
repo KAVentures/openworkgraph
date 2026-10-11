@@ -263,10 +263,10 @@ def test_cloud_account_quota_failure_rolls_back_new_rows(setup_cloud, monkeypatc
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="Second")["results"] == []
 
 
-def test_cloud_account_character_quota_is_enforced(setup_cloud, monkeypatch):
+def test_cloud_account_byte_quota_is_enforced(setup_cloud, monkeypatch):
     db, _app, actor, _ = setup_cloud
     device = db.authenticate("alice-device")
-    monkeypatch.setattr(cloud, "MAX_ACCOUNT_TEXT_CHARS", 16)
+    monkeypatch.setattr(cloud, "MAX_ACCOUNT_STORAGE_BYTES", 16)
     with pytest.raises(ValueError, match="quota"):
         cloud.sync(db, device, **_payload(items=[_entry()]))
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"] == []
@@ -285,3 +285,22 @@ def test_cloud_device_upload_rate_limit_is_isolated_to_text_endpoint(setup_cloud
         assert throttled.status_code == 429
         assert int(throttled.headers["Retry-After"]) >= 1
         assert client.get("/health").status_code == 200
+
+
+def test_reenrolled_device_token_cannot_inherit_old_cloud_approval(setup_cloud):
+    db, _app, actor, _ = setup_cloud
+    # Same actor and visible desktop name, but a newly enrolled credential:
+    # an old OAuth approval must never authorize a different device token.
+    db.put_token(token_id="rotated-credential", token="rotated-credential",
+                 token_type="device", organization_id=actor, actor_id=actor,
+                 device_id="desk-"+actor, scopes=set(DEVICE_SCOPES))
+    rotated = db.authenticate("rotated-credential")
+    with pytest.raises(PermissionError, match="device-specific"):
+        cloud.sync(db, rotated, **_payload(items=[]))
+    cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                         device_id=rotated.device_id,
+                         consent_version=cloud.CONSENT_VERSION)
+    assert cloud.sync(db, rotated, **_payload(items=[], refs=[]))["status"] == "synced"
+    # Reapproval for the new token simultaneously invalidates the older token.
+    with pytest.raises(PermissionError, match="device-specific"):
+        cloud.sync(db, db.authenticate("alice-device"), **_payload(items=[], refs=[]))
