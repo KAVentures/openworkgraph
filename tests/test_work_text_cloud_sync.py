@@ -32,6 +32,9 @@ def setup_cloud(monkeypatch, tmp_path):
             organization_id=actor, actor_id=actor,
             device_id="desk-"+actor, scopes=set(DEVICE_SCOPES),
         )
+        cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                             device_id="desk-"+actor,
+                             consent_version=cloud.CONSENT_VERSION)
     app = create_app(
         settings=GatewaySettings(database_url=db.database_url, admin_token="admin",
                                  enrollment_token="enroll"), db=db
@@ -165,13 +168,21 @@ def test_remote_revocation_blocks_delayed_replay_until_new_user_grant(setup_clou
     cloud.revoke(db, device)
 
     # An old queued request is never allowed to recreate deleted content.
-    with pytest.raises(PermissionError, match="revoked"):
+    with pytest.raises(PermissionError, match="device-specific"):
         cloud.sync(db, device, **old_batch)
     assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["status"] == "not_enabled"
 
     # A new explicit consent epoch later than the server-side revoke can start
     # a new, empty corpus. Older snapshot timestamps cannot be retro-uploaded.
     future_grant = _time(1)
+    # A fabricated fresh device timestamp is insufficient; explicit OAuth
+    # approval of this enrolled device must occur again after revocation.
+    with pytest.raises(PermissionError, match="device-specific"):
+        cloud.sync(db, device, items=[], active_refs=[],
+                   granted_at=future_grant, consent_version=cloud.CONSENT_VERSION)
+    cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                         device_id=device.device_id,
+                         consent_version=cloud.CONSENT_VERSION)
     assert cloud.sync(db, device, **{
         "items": [], "active_refs": [], "granted_at": future_grant,
         "consent_version": cloud.CONSENT_VERSION,
@@ -217,3 +228,42 @@ def test_cloud_endpoint_rejects_oversized_body_before_json_model_parsing(setup_c
         valid = client.post("/v1/device/work-text-sync", headers=headers,
                             json=_payload(items=[_entry()]))
         assert valid.status_code == 200, valid.text
+
+
+def test_cloud_device_authorization_is_actor_bound(setup_cloud):
+    db, _app, actor, other = setup_cloud
+    device = db.authenticate("alice-device")
+    cloud.revoke(db, device)
+    with pytest.raises(PermissionError, match="device"):
+        cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                             device_id="nonexistent-device",
+                             consent_version=cloud.CONSENT_VERSION)
+    with pytest.raises(PermissionError, match="device"):
+        cloud.approve_device(db, organization_id=other, actor_id=other,
+                             device_id=device.device_id,
+                             consent_version=cloud.CONSENT_VERSION)
+    with pytest.raises(PermissionError, match="device-specific"):
+        cloud.sync(db, device, **{**_payload(), "granted_at": _time(1)})
+
+
+def test_cloud_account_quota_failure_rolls_back_new_rows(setup_cloud, monkeypatch):
+    db, _app, actor, _ = setup_cloud
+    device = db.authenticate("alice-device")
+    monkeypatch.setattr(cloud, "MAX_ACCOUNT_ROWS", 1)
+    first = {**_payload(items=[_entry()], refs=["owg:wt:10"]), "granted_at": _time(-1)}
+    cloud.sync(db, device, **first)
+    extra = {**_entry(), "ref": "owg:wt:11", "page_title": "Second task"}
+    with pytest.raises(ValueError, match="quota"):
+        cloud.sync(db, device, **_payload(items=[extra], refs=["owg:wt:10", "owg:wt:11"]))
+    found = cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")
+    assert len(found["results"]) == 1
+    assert cloud.search(db, organization_id=actor, actor_id=actor, query="Second")["results"] == []
+
+
+def test_cloud_account_character_quota_is_enforced(setup_cloud, monkeypatch):
+    db, _app, actor, _ = setup_cloud
+    device = db.authenticate("alice-device")
+    monkeypatch.setattr(cloud, "MAX_ACCOUNT_TEXT_CHARS", 16)
+    with pytest.raises(ValueError, match="quota"):
+        cloud.sync(db, device, **_payload(items=[_entry()]))
+    assert cloud.search(db, organization_id=actor, actor_id=actor, query="quarterly")["results"] == []
