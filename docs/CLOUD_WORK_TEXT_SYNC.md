@@ -148,8 +148,10 @@ legal/security tests are complete.
    in the *actual* production architecture before rollout.
 6. Enforce cloud-only request limits (30 uploads/minute per device, 90 per
    actor), at most 10 approved devices per personal actor, 500 active rows
-   and 600,000 characters of page titles/hosts/excerpts across the actor's
-   devices. Quota violations roll back their database transaction. Reverse
+   and 500,000 UTF-8 bytes of page titles/hosts/excerpts across the actor's
+   devices. Device approvals bind to the enrolled credential ID, so rotating
+   a device token cannot inherit an older OAuth grant. Quota violations roll
+   back their database transaction. Reverse
    proxy abuse controls and service monitoring are still required.
 7. Verify the GitHub Actions PostgreSQL concurrency job: simultaneous actor
    uploads, quotas, account deletion and durable tombstones. This does not
