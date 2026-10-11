@@ -24,6 +24,8 @@ def test_device_sync_and_revocation_use_existing_gateway_credentials(tmp_path, m
     db.put_token(token_id="desktop", token="desktop-token", token_type="device",
                  organization_id=org, actor_id=org, device_id="desktop-one",
                  scopes=set(DEVICE_SCOPES))
+    cloud.approve_device(db, organization_id=org, actor_id=org,
+                         device_id="desktop-one", consent_version=cloud.CONSENT_VERSION)
     app = create_app(settings=GatewaySettings(database_url=db.database_url, admin_token="admin",
                                                enrollment_token="enroll"), db=db)
     state = SyncState(tmp_path / "sync.db")
@@ -96,6 +98,8 @@ def test_account_delete_revokes_local_cloud_toggle_and_never_retries_stale_batch
     db.put_token(token_id="del-device", token="del-token", token_type="device",
                  organization_id=org, actor_id=org, device_id="local-device",
                  scopes=set(DEVICE_SCOPES))
+    cloud.approve_device(db, organization_id=org, actor_id=org,
+                         device_id="local-device", consent_version=cloud.CONSENT_VERSION)
     app = create_app(settings=GatewaySettings(database_url=db.database_url,
                     admin_token="admin", enrollment_token="enroll"), db=db)
     state = SyncState(tmp_path / "sync.db")
@@ -148,6 +152,8 @@ def test_disabled_cloud_grant_revokes_even_if_worker_sync_state_was_reset(tmp_pa
     db.put_token(token_id="device", token="valid-device", token_type="device",
                  organization_id=actor, actor_id=actor, device_id="linked-one",
                  scopes=set(DEVICE_SCOPES))
+    cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                         device_id="linked-one", consent_version=cloud.CONSENT_VERSION)
     app = create_app(settings=GatewaySettings(database_url=db.database_url,
                      admin_token="", enrollment_token=""), db=db)
     start = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
@@ -217,6 +223,8 @@ def test_missing_oauth_account_approval_does_not_spam_gateway_or_disable_local_c
                                          state=state, now=12) == 0
         cloud.reauthorize_account(db, organization_id=actor, actor_id=actor,
                                   consent_version=cloud.CONSENT_VERSION)
+        cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                             device_id="desktop", consent_version=cloud.CONSENT_VERSION)
         assert worker.process_cloud_text(client, url="http://testserver",
                                          state=state, now=311) == 0
         assert state.get_bool("cloud_text_remote_granted") is True
@@ -236,6 +244,8 @@ def test_pausing_cloud_sharing_revokes_and_requires_fresh_local_opt_in(tmp_path,
     db.put_token(token_id="pause-device", token="pause-token", token_type="device",
                  organization_id=actor, actor_id=actor, device_id="desktop",
                  scopes=set(DEVICE_SCOPES))
+    cloud.approve_device(db, organization_id=actor, actor_id=actor,
+                         device_id="desktop", consent_version=cloud.CONSENT_VERSION)
     app = create_app(settings=GatewaySettings(database_url=db.database_url,
                      admin_token="", enrollment_token=""), db=db)
     epoch = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
