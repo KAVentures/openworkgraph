@@ -19,6 +19,13 @@ def setup_cloud(monkeypatch, tmp_path):
     db.init()
     cloud.init_schema(db)
     one, two = "oauth-sub:alice", "oauth-sub:bob"
+    # The desktop bearer never confers cloud-content permission on its own.
+    # These fixture approvals stand in for an independent signed-in OAuth
+    # account action, not a device-supplied timestamp.
+    cloud.reauthorize_account(db, organization_id=one, actor_id=one,
+                              consent_version=cloud.CONSENT_VERSION)
+    cloud.reauthorize_account(db, organization_id=two, actor_id=two,
+                              consent_version=cloud.CONSENT_VERSION)
     for token, actor in (("alice-device", one), ("bob-device", two)):
         db.put_token(
             token_id=token, token=token, token_type="device",
