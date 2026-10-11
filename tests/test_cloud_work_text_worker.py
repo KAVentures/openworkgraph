@@ -77,3 +77,49 @@ def test_worker_requires_consent_and_no_data_upload_while_disabled(tmp_path, mon
         def post(self, *_args, **_kwargs):
             raise AssertionError("no network request when never opted in")
     assert worker.process_cloud_text(NoNetwork(), url="https://invalid.test", state=state, now=10) == 0
+
+
+def test_account_delete_revokes_local_cloud_toggle_and_never_retries_stale_batch(tmp_path, monkeypatch):
+    from server import work_text_capture, ai_access
+    from shared import capture_control
+
+    monkeypatch.setenv("OWG_CLOUD_WORK_TEXT_ENABLED", "1")
+    org = "oauth-sub:delete-test"
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    db.init()
+    db.put_token(token_id="del-device", token="del-token", token_type="device",
+                 organization_id=org, actor_id=org, device_id="local-device",
+                 scopes=set(DEVICE_SCOPES))
+    app = create_app(settings=GatewaySettings(database_url=db.database_url,
+                    admin_token="admin", enrollment_token="enroll"), db=db)
+    state = SyncState(tmp_path / "sync.db")
+    now = datetime.now(timezone.utc)
+    consent = (now - timedelta(minutes=2)).isoformat()
+    policy = {"capture_enabled": True, "ai_read_enabled": True,
+              "cloud_read_enabled": True, "cloud_ack_version": cloud.CONSENT_VERSION,
+              "cloud_granted_at": consent}
+    entry = {"ref": "owg:wt:7", "observed_at": now.isoformat(),
+             "hostname": "docs.example.org", "page_title": "Synthetic task",
+             "kind": "page", "redacted_text": "Quarterly synthetic task document"}
+    monkeypatch.setattr(work_text_capture, "get_policy", lambda: dict(policy))
+    def update_local(change):
+        policy.update(change)
+        return dict(policy)
+    monkeypatch.setattr(work_text_capture, "set_policy", update_local)
+    monkeypatch.setattr(work_text_capture, "cloud_sync_snapshot", lambda: {
+        "items": [entry], "granted_at": consent, "consent_version": cloud.CONSENT_VERSION,
+    })
+    monkeypatch.setattr(ai_access, "ai_access_enabled", lambda: True)
+    monkeypatch.setattr(capture_control, "read_state", lambda: {"state": "recording"})
+    monkeypatch.setattr(worker, "_NEXT_SCAN", 0.0)
+
+    with TestClient(app, headers={"Authorization": "Bearer del-token"}) as client:
+        worker.process_cloud_text(client, url="http://testserver", state=state, now=10.0)
+        assert worker.process_cloud_text(client, url="http://testserver", state=state, now=22.0) == 1
+        assert state.get_bool("cloud_text_remote_granted")
+        assert cloud.delete_account(db, organization_id=org, actor_id=org)["deleted"] == 1
+        assert worker.process_cloud_text(client, url="http://testserver", state=state, now=40.0) == 0
+        assert policy["cloud_read_enabled"] is False
+        assert not state.get_bool("cloud_text_remote_granted")
+        assert "fresh account and local approval" in state.get("cloud_text_last_error")
+        assert worker.process_cloud_text(client, url="http://testserver", state=state, now=60.0) == 0
