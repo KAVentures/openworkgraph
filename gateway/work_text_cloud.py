@@ -200,8 +200,11 @@ def sync(db: GatewayDB, p: Principal, *, items: Any, active_refs: Any,
         cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_account_revocations
             WHERE organization_id=? AND actor_id=?""", (org, actor))
         account_revocation = cur.fetchone()
-        if account_revocation and consent_since <= _iso(str(account_revocation[0])):
-            raise PermissionError("Cloud text was deleted from this account; give new consent locally")
+        if account_revocation:
+            # Never let a device-supplied timestamp unlock an account deletion:
+            # its clock may be ahead or its queue may contain stale requests.
+            # Only a NEW, authenticated OAuth-side approval can lift this lock.
+            raise PermissionError("Cloud text was deleted from this account; OAuth reauthorization required")
         # Revocation is durable: delayed/retried requests must not resurrect
         # data after a successful device revoke.
         cur = db._execute(conn, """SELECT revoked_at FROM cloud_work_text_revocations
@@ -300,6 +303,24 @@ def delete_account(db: GatewayDB, *, organization_id: str, actor_id: str) -> dic
             (organization_id, actor_id, now))
     return {"status": "deleted", "deleted": deleted,
             "reconsent_required": True, "active_copies": 0}
+
+
+def reauthorize_account(db: GatewayDB, *, organization_id: str, actor_id: str,
+                        consent_version: str) -> dict[str, Any]:
+    """Explicit signed-in OAuth action after prior account deletion.
+
+    This is a backend authorization primitive, NOT the user-facing legal
+    notice/consent UI. The latter remains a public launch prerequisite.
+    """
+    _guard()
+    if not _personal(organization_id, actor_id):
+        raise PermissionError("personal OAuth identity required")
+    if consent_version != CONSENT_VERSION:
+        raise PermissionError("current cloud sharing notice acknowledgment required")
+    with db.connect() as conn:
+        db._execute(conn, """DELETE FROM cloud_work_text_account_revocations
+            WHERE organization_id=? AND actor_id=?""", (organization_id, actor_id))
+    return {"status": "reauthorized", "notice_version": CONSENT_VERSION}
 
 
 def _eligible(db: GatewayDB, org: str, actor: str, conn: Any) -> bool:
