@@ -193,3 +193,91 @@ def build_goal_context(
             "Use source-system connectors for contents, business rules, current state and actions",
         ],
     }
+
+def gateway_goal_context(
+    db: Any, *, organization_id: str, actor_id: str, goal: str,
+    max_examples: int = 4, since: str | None = None, until: str | None = None,
+) -> dict[str, Any]:
+    """Actor-scoped bounded recall: recent tail + dated lexical lookups.
+
+    Keyword lookups are only candidate selection; query-free raw windows are
+    fetched around leading anchors so nearby actions are never lexically
+    filtered. Every DB query uses the authenticated organization and actor.
+    """
+    from .query import workflow_trace
+    from .lifecycle import get_retention_policy
+    from shared.evidence import rich_evidence_row
+    from shared.time_utils import normalize_optional_timestamp
+
+    # Reject malformed requests *before* database reads.
+    terms = _terms(goal)
+    if not isinstance(goal, str) or not 4 <= len(goal.strip()) <= 500:
+        raise ValueError("goal must be 4-500 characters")
+    since = normalize_optional_timestamp(since)
+    until = normalize_optional_timestamp(until)
+    if since and until and since >= until:
+        raise ValueError("until must be after since")
+    policy_cutoff = get_retention_policy(db, organization_id).get("cutoff")
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    source_limit_reached = False
+
+    # Recent tail complements chronological lexical lookups; it never claims
+    # the tail covers all previous work.
+    recent = db.recent_rows(
+        organization_id=organization_id, actor_id=actor_id,
+        device_id=None, limit=500,
+    )
+    source_limit_reached |= len(recent) == 500
+    for source in recent:
+        when = str(source.get("observed_at") or "")
+        if (since and when < since) or (until and when > until):
+            continue
+        if policy_cutoff and when < str(policy_cutoff):
+            continue
+        row = rich_evidence_row(source, include_identity=False)
+        if row.get("event_id"):
+            rows_by_id[str(row["event_id"])] = row
+
+    # Search older work by useful goal words. These are deliberately bounded
+    # lexical probes, NOT a vector search or semantic guarantee.
+    for term in sorted(terms, key=lambda x: (-len(x), x))[:4]:
+        page = workflow_trace(
+            db, organization_id=organization_id, actor_id=actor_id,
+            since=since, until=until, query=term, limit=60,
+        )
+        source_limit_reached |= bool(page["has_more"])
+        for row in page["rows"]:
+            if row.get("event_id"):
+                rows_by_id[str(row["event_id"])] = row
+
+    initial = build_goal_context(
+        goal, list(rows_by_id.values()),
+        max_examples=max_examples,
+        source_limit_reached=source_limit_reached,
+    )
+    # Expand only a handful of candidate windows. This preserves neighboring
+    # unfiltered chronology when a lexical result itself lacks enough detail.
+    for example in initial["examples"]:
+        anchor_at = _iso(example["anchor_observed_at"])
+        if anchor_at is None:
+            continue
+        page = workflow_trace(
+            db, organization_id=organization_id, actor_id=actor_id,
+            since=(anchor_at - timedelta(minutes=3)).isoformat(),
+            until=(anchor_at + timedelta(minutes=3)).isoformat(),
+            limit=100,
+        )
+        source_limit_reached |= bool(page["has_more"])
+        for row in page["rows"]:
+            if row.get("event_id"):
+                rows_by_id[str(row["event_id"])] = row
+
+    result = build_goal_context(
+        goal, list(rows_by_id.values()),
+        max_examples=max_examples, source_limit_reached=source_limit_reached,
+    )
+    result["coverage"]["sampling"] = "most_recent_500_and_four_bounded_lexical_probes"
+    result["coverage"]["keywords_searched"] = min(len(terms), 4)
+    result["coverage"]["all_matching_history_found"] = False
+    result["data_layer"] = "gateway_synced_privacy_hardened_evidence"
+    return result
