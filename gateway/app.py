@@ -19,6 +19,7 @@ from .query import workflow_trace
 from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
 from .settings import PRODUCT_VERSION, GatewaySettings
 from . import work_text_cloud
+from .hardening import DistributedPrincipalRateLimiter
 
 
 class EnrollmentRequest(BaseModel):
@@ -111,6 +112,9 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         init_enrollment_schema(db)
         init_lifecycle_schema(db)
         work_text_cloud.init_schema(db)
+        # Cloud-only throttle. Existing structural evidence requests and
+        # Gateway rate-limit settings are not changed.
+        app.state.cloud_text_limiter = DistributedPrincipalRateLimiter(db)
 
     def principal(authorization: str | None = Header(default=None)) -> Principal:
         token = _bearer(authorization)
@@ -403,11 +407,26 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         # Apply a size limit while STREAMING, before Pydantic constructs a
         # possibly huge untrusted JSON body. The ordinary evidence ingestion
         # request and its existing limit remain untouched.
+        if not work_text_cloud.available():
+            raise HTTPException(status_code=503, detail="Cloud text sharing is disabled")
+        try:
+            work_text_cloud._device(p)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        limiter = app.state.cloud_text_limiter
+        for key, limit in (
+            (f"cloud-work-text:device:{p.organization_id}:{p.actor_id}:{p.device_id}", 30),
+            (f"cloud-work-text:actor:{p.organization_id}:{p.actor_id}", 90),
+        ):
+            allowed, retry_after = limiter.check(key, limit)
+            if not allowed:
+                raise HTTPException(status_code=429, detail="cloud text upload rate limit",
+                                    headers={"Retry-After": str(retry_after)})
         body = bytearray()
         async for chunk in http_request.stream():
-            body.extend(chunk)
-            if len(body) > 196_608:
+            if len(chunk) > 196_608 - len(body):
                 raise HTTPException(status_code=413, detail="cloud text upload exceeds 192 KiB")
+            body.extend(chunk)
         try:
             request = WorkTextCloudBatch.model_validate_json(bytes(body))
         except (ValueError, TypeError):
