@@ -275,7 +275,21 @@ def test_cloud_account_byte_quota_is_enforced(setup_cloud, monkeypatch):
 def test_cloud_device_upload_rate_limit_is_isolated_to_text_endpoint(setup_cloud):
     _db, app, _actor, _other = setup_cloud
     headers = {"Authorization": "Bearer alice-device"}
+    class DeterministicLimiter:
+        def __init__(self):
+            self.device_attempts = 0
+
+        def check(self, key, limit):
+            if ":device:" in key:
+                assert limit == 30
+                self.device_attempts += 1
+                return self.device_attempts <= limit, 60
+            assert ":actor:" in key and limit == 90
+            return True, 0
+
     with TestClient(app) as client:
+        limiter = DeterministicLimiter()
+        app.state.cloud_text_limiter = limiter
         for _ in range(30):
             response = client.post("/v1/device/work-text-sync",
                                    json=_payload(items=[], refs=[]), headers=headers)
@@ -283,7 +297,8 @@ def test_cloud_device_upload_rate_limit_is_isolated_to_text_endpoint(setup_cloud
         throttled = client.post("/v1/device/work-text-sync",
                                 json=_payload(items=[], refs=[]), headers=headers)
         assert throttled.status_code == 429
-        assert int(throttled.headers["Retry-After"]) >= 1
+        assert throttled.headers["Retry-After"] == "60"
+        assert limiter.device_attempts == 31
         assert client.get("/health").status_code == 200
 
 
