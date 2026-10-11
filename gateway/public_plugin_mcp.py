@@ -474,7 +474,8 @@ class PersonalLinkEndpoint:
         self.verifier = verifier
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/v1/plugin/device-link":
+        if (scope.get("type") != "http" or scope.get("method") != "POST" or
+                scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -502,6 +503,19 @@ class PersonalLinkEndpoint:
             return
         if not subject:
             await JSONResponse({"detail": "OAuth subject is required"}, status_code=401)(scope, receive, send)
+            return
+        if scope.get("path") == "/v1/plugin/work-text-delete":
+            organization_id = f"oauth-sub:{subject}"
+            try:
+                result = work_text_cloud.delete_account(
+                    self.db, organization_id=organization_id, actor_id=organization_id
+                )
+            except PermissionError:
+                await JSONResponse({"detail": "personal account required"}, status_code=403)(scope, receive, send)
+                return
+            _audit(self.db, organization_id, organization_id, "plugin.personal_work_text.deleted",
+                   {"deleted": result["deleted"]})
+            await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         gateway_url = str(os.getenv("OWG_PLUGIN_GATEWAY_URL", "")).strip().rstrip("/")
         if not gateway_url.startswith("https://"):
