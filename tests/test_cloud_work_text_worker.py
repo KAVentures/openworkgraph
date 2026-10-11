@@ -118,6 +118,9 @@ def test_account_delete_revokes_local_cloud_toggle_and_never_retries_stale_batch
         assert worker.process_cloud_text(client, url="http://testserver", state=state, now=22.0) == 1
         assert state.get_bool("cloud_text_remote_granted")
         assert cloud.delete_account(db, organization_id=org, actor_id=org)["deleted"] == 1
+        # Periodic reconciliation discovers revocation; no standing poll is
+        # added while the local cloud preference is disabled.
+        state.set("cloud_text_last_check", "-3600")
         assert worker.process_cloud_text(client, url="http://testserver", state=state, now=40.0) == 0
         assert policy["cloud_read_enabled"] is False
         assert not state.get_bool("cloud_text_remote_granted")
