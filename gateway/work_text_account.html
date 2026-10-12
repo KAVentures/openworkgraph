@@ -12,7 +12,25 @@
 'use strict';
 const config=__CONFIG__, $=id=>document.getElementById(id), S=sessionStorage;
 let access='',ready=false;
-const callback=location.origin+'/work-text',key='owg-cloud-text-oauth';
+const callback=location.origin+'/work-text',key='owg-cloud-text-oauth',prefix=key+':';
+// Email links commonly return in a new tab. Share only short-lived PKCE
+// transactions by exact state; bearer tokens remain in this page's memory.
+function prune(limit=5){
+ const entries=[];
+ for(let i=0;i<localStorage.length;i++){const name=localStorage.key(i);if(name?.startsWith(prefix))entries.push(name);}
+ const valid=[];for(const name of entries){try{const item=JSON.parse(localStorage.getItem(name));if(!item||!Number.isFinite(item.expires)||item.expires<Date.now()||name!==prefix+item.state)localStorage.removeItem(name);else valid.push([name,item.expires]);}catch{localStorage.removeItem(name);}}
+ valid.sort((a,b)=>a[1]-b[1]);while(valid.length>limit)localStorage.removeItem(valid.shift()[0]);
+}
+function take(state){
+ if(!state||state.length>256)throw Error('Sign-in could not be verified. Please sign in again.');
+ const name=prefix+state;let pending=JSON.parse(localStorage.getItem(name)||'null');
+ if(pending){if(pending.state!==state)throw Error('Sign-in could not be verified. Please sign in again.');localStorage.removeItem(name);}
+ else{const legacy=JSON.parse(S.getItem(key)||'null');if(legacy?.state===state){pending=legacy;S.removeItem(key);}}
+ if(!pending)throw Error('This sign-in could not be found in this browser. Return to the browser where you started and sign in again.');
+ if(!Number.isFinite(pending.expires)||pending.expires<Date.now())throw Error('This sign-in timed out. Please sign in again.');
+ if(typeof pending.verifier!=='string'||!pending.verifier||typeof pending.client_id!=='string'||!pending.client_id)throw Error('Sign-in could not be verified. Please sign in again.');
+ return pending;
+}
 function message(text){$('status').textContent=text;}
 function controls(){ $('approve').disabled=!ready||!$('ack').checked||!$('device').value; }
 async function api(path,options={}){
@@ -32,20 +50,20 @@ async function signin(){
  if(!registration.ok)throw Error('Could not start account sign-in.');const client=await registration.json();
  const verifier=base64(crypto.getRandomValues(new Uint8Array(32))),state=base64(crypto.getRandomValues(new Uint8Array(32)));
  const challenge=base64(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
- S.setItem(key,JSON.stringify({verifier,state,client_id:client.client_id,expires:Date.now()+600000}));
+ prune(4);localStorage.setItem(prefix+state,JSON.stringify({verifier,state,client_id:client.client_id,expires:Date.now()+600000}));
  location.assign(config.issuer+'/oauth/authorize?'+new URLSearchParams({response_type:'code',client_id:client.client_id,redirect_uri:callback,scope:config.scope,state,code_challenge:challenge,code_challenge_method:'S256'}));
 }
 $('signin').onclick=()=>signin().catch(error=>message(error.message));
-$('signout').onclick=()=>{access='';ready=false;S.removeItem(key);$('controls').hidden=true;$('signout').hidden=true;$('signin').hidden=false;$('ack').checked=false;message('Signed out of cloud work-text settings.');};
+$('signout').onclick=()=>{access='';ready=false;S.removeItem(key);const names=[];for(let i=0;i<localStorage.length;i++){const name=localStorage.key(i);if(name?.startsWith(prefix))names.push(name);}for(const name of names)localStorage.removeItem(name);$('controls').hidden=true;$('signout').hidden=true;$('signin').hidden=false;$('ack').checked=false;message('Signed out of cloud work-text settings.');};
 $('ack').onchange=controls;$('device').onchange=()=>{$('ack').checked=false;controls();};
 $('approve').onclick=async()=>{if(!ready||!$('ack').checked||!$('device').value)return;const id=$('device').value;if(!confirm('Approve cloud work-text sharing from '+id+'?'))return;try{await api('/v1/plugin/work-text-reauthorize',{method:'POST',headers:{'X-OWG-Consent-Version':'cloud-work-text-v1','X-OWG-Device-ID':id}});$('ack').checked=false;await load();message('Computer approved. Fresh local cloud-sharing permission is still required.');}catch(error){message(error.message);}controls();};
 $('erase').onclick=async()=>{if(!confirm('Delete all retained cloud text and all device approvals?'))return;try{const result=await api('/v1/plugin/work-text-delete',{method:'POST'});$('ack').checked=false;await load();message(`Deleted ${result.deleted} excerpts. New uploads require account approval and fresh local consent.`);}catch(error){message(error.message);}};
 const params=new URLSearchParams(location.search);if(location.search)history.replaceState(null,'',location.pathname);
 if(params.has('code')||params.has('error')){
- try{const pending=JSON.parse(S.getItem(key)||'null');S.removeItem(key);if(!pending||pending.expires<Date.now()||!params.get('state')||pending.state!==params.get('state'))throw Error('Sign-in expired or could not be verified. Please sign in again.');if(params.has('error'))throw Error('Sign-in was not completed.');
+ try{const pending=take(params.get('state'));if(params.has('error'))throw Error('Sign-in was not completed.');
  const response=await fetch(config.issuer+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',client_id:pending.client_id,code:params.get('code'),redirect_uri:callback,code_verifier:pending.verifier}),credentials:'omit',redirect:'error'});
  if(!response.ok)throw Error('Account sign-in could not complete.');const token=await response.json();if(typeof token.access_token!=='string'||!token.access_token)throw Error('Account sign-in could not complete.');access=token.access_token;await load();
  }catch(error){access='';message(error.message);}
-}
+}else{try{prune();}catch{message('This browser must allow local storage to complete account sign-in.');}}
 })();
 </script></body></html>
