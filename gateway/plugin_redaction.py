@@ -76,14 +76,14 @@ rename update refresh sync login sign signin log logout in out settings
 compose mail email message inbox sent drafts draft thread threads document
 documents file files folder folders sheet sheets spreadsheet quote quotation
 issue issues ticket tickets pull request requests branch commit github gmail
-chatgpt claude dashboard home account profile button tab link menu
+chatgpt claude chrome safari firefox edge browser dashboard home account profile dialog button tab link menu
 history work workflow trace help accept decline allow deny yes no
 contract invoice subject support calendar meeting release code oauth app browser terminal
 name account username password cloud github search console issue tracker
 customer project task tasks review apply merge pr read unread approve
 approval comment comments add openworkgraph
 """.split())
-_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-]{1,120}$")
+_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—]{1,120}$")
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
