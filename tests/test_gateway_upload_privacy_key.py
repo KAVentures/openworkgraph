@@ -102,3 +102,25 @@ def test_owner_key_is_never_exposed_in_device_projection_metadata(tmp_path):
     assert key not in str(projected)
     assert "Alexandra Named" not in str(projected)
     assert projected["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
+
+
+def test_custom_connector_config_aliases_are_used_without_mutating_identity_cache(
+    tmp_path, monkeypatch,
+):
+    local_cache = {"trusted doctor": "OWNER"}
+    monkeypatch.setattr(
+        "server.presentation._owner_identity",
+        lambda: (local_cache, set(), set()),
+    )
+    config = tmp_path / "config.json"
+    config.write_text('{"owner_aliases": ["Koyar Afrasyab"]}', encoding="utf-8")
+    names = local_owner_names(config)
+    assert "koyar" in names
+    assert "koyar afrasyab" in names
+    assert "koyar afrasyab" not in local_cache
+    projected = project_event_for_upload(
+        _event("Möte: Koyar / Emil"),
+        secret="device-private-key-unrelated-to-bearer",
+        owner_names=names,
+    )
+    assert "Koyar" not in str(projected)
