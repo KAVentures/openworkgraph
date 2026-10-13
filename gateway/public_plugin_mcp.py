@@ -422,9 +422,19 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         pattern = re.compile((r"(?<!\d)" if needle[0].isdigit() else "")
             + re.escape(needle) + (r"(?!\d)" if needle[-1].isdigit() else ""))
         def visible_match(row: dict[str, Any]) -> bool:
-            safe = cleaner.event(rich_evidence_row(row), detail="rich")
+            original = rich_evidence_row(row, include_identity=False)
+            safe = cleaner.event(original, detail="rich")
             values = {key: str(safe.get(key) or "").casefold()
-                      for key in ("app", "window_title", "target_label", "page_host", "semantic_action")}
+                      for key in ("app", "page_host", "semantic_action")}
+            # Server-side matching against only approved *observed* title and
+            # target fields allows an authorized user's exact query to find
+            # an opaque result. Never match arbitrary prompt/clipboard blobs
+            # or expose the original caption in the returned MCP event.
+            values["window_title"] = str(original.get("window_title") or "").casefold()
+            raw_meta = original.get("metadata") if isinstance(original.get("metadata"), dict) else {}
+            raw_target = raw_meta.get("target") if isinstance(raw_meta.get("target"), dict) else {}
+            values["target_label"] = str(original.get("target_label") or
+                                          raw_target.get("title") or raw_target.get("label") or "").casefold()
             values["resource_ref"] = str(((safe.get("metadata") or {}).get("resource_reference") or {}).get("resource_ref") or "").casefold()
             fields = [key for key, value in values.items()
                       if (needle == value if key == "resource_ref" else bool(pattern.search(value)))]
