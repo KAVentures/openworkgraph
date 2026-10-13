@@ -272,6 +272,13 @@ def test_medlink_email_preview_redacts_swedish_self_introduction_and_signature()
 
     # A standalone organization in a job/employer sentence also gets masked.
     assert "Medlink" not in redactor.text("Jag jobbar på Medlink idag")
+    # These forms may also occur in optional shared-text previews and other
+    # metadata fields that use PublicRedactor.text instead of target_label.
+    for plain in ("Mitt namn är Michaela och jag jobbar...",
+                  "Hälsningar, Michaela", "/ Michaela"):
+        projected = redactor.text(plain)
+        assert "Michaela" not in projected
+        assert "PERSON_" in projected
     # Previously inferred firm prefixes are masked across later labels in
     # the same authorized redactor request (without a global denylist).
     redactor.text("Medlink Nordic AB")
