@@ -157,12 +157,12 @@ def _owner_names(claims: dict[str, Any]) -> tuple[str, ...]:
             value = source.get(field)
             if isinstance(value, str) and 3 <= len(value.strip()) <= 100:
                 candidates.add(value.strip())
-                for part in re.split(r"\\s+", value.strip()):
+                for part in re.split(r"\s+", value.strip()):
                     if len(part) >= 3:
                         candidates.add(part)
     email = claims.get("email")
     if isinstance(email, str) and "@" in email:
-        for part in re.split(r"[._+\\-\\d]+", email.split("@", 1)[0]):
+        for part in re.split(r"[._+\-\d]+", email.split("@", 1)[0]):
             if 3 <= len(part) <= 40:
                 candidates.add(part)
     return tuple(sorted(candidates, key=lambda x: (-len(x), x.casefold())))
