@@ -162,3 +162,40 @@ def test_gateway_redaction_projection_fails_closed_on_bad_secret():
         pass
     else:
         raise AssertionError("A missing local secret must never upload unredacted data")
+
+
+def test_optional_local_ner_redacts_new_unlisted_identity(monkeypatch):
+    monkeypatch.setenv("OWG_LOCAL_NER_MODEL", "sv_core_news_sm")
+
+    def fake_model(_model_name):
+        class Model:
+            def __call__(self, text):
+                class Entity:
+                    start_char = text.index("Zymboria")
+                    end_char = start_char + len("Zymboria")
+                    label_ = "PER"
+                    text = "Zymboria"
+
+                class Document:
+                    ents = [Entity()]
+                return Document()
+        return Model()
+
+    monkeypatch.setattr("connector.cloud_privacy._load_local_ner", fake_model)
+    e = _event()
+    e["window_title"] = "Zymboria skrev ett dokument"
+    output = project_event_for_upload(e, secret=_SECRET)
+    assert "Zymboria" not in str(output)
+    assert output["window_title"].startswith("PERSON_")
+    assert "skrev ett dokument" in output["window_title"]
+
+
+def test_configured_ner_error_stops_upload_no_unredacted_fallback(monkeypatch):
+    monkeypatch.setenv("OWG_LOCAL_NER_MODEL", "sv_core_news_sm")
+
+    def fail(_model_name):
+        raise RuntimeError("NER not installed")
+    monkeypatch.setattr("connector.cloud_privacy._load_local_ner", fail)
+    import pytest
+    with pytest.raises(RuntimeError, match="NER"):
+        project_event_for_upload(_event(), secret=_SECRET)
