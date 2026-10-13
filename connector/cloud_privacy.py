@@ -31,6 +31,7 @@ SAFE_META_STRINGS = frozenset({
     "outcome_status", "tab_context_id", "browser_session_id", "tab_id",
     "clipboard_transfer_id", "linked_copy_event_id",
     "clipboard_source_tab_context_id", "source", "operation",
+    "agent_provider", "agent_run_id", "state_source",
 })
 SAFE_META_NUMBERS = frozenset({
     "duration_seconds", "foreground_seconds", "engaged_seconds",
