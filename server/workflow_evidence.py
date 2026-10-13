@@ -292,36 +292,47 @@ def _candidate_runs(
     except Exception:
         pass
 
-    # Only map an opaque surface key to a vetted product label when the
-    # underlying event proves that mapping. Never echo arbitrary window titles.
+    # Structural keys must be labelled by the surface which *created* them,
+    # not by whichever website happened to be open in a generic Chrome window.
     from .procedural_memory import _surface_key
-    allowed_labels = {
-        "ChatGPT", "Claude", "GitHub", "Gmail", "Google Drive", "Google Docs",
-        "Google Sheets", "Google Slides", "Jira", "Linear", "Notion",
-        "Salesforce", "Slack", "OpenWorkGraph", "VS Code", "Terminal",
+    fixed = {
+        "chrome": "Browser", "google chrome": "Browser", "browser": "Browser",
+        "safari": "Browser", "edge": "Browser", "microsoft edge": "Browser",
+        "firefox": "Browser", "claude": "Claude", "chatgpt": "ChatGPT",
+        "gmail": "Gmail", "github": "GitHub", "slack": "Slack",
+        "openworkgraph": "OpenWorkGraph", "terminal": "Terminal",
+        "google docs": "Google Docs", "google sheets": "Google Sheets",
+        "google drive": "Google Drive", "jira": "Jira", "linear": "Linear",
     }
-    known_labels: dict[str, str] = {}
+    fixed_hosts = {
+        "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
+        "mail.google.com": "Gmail", "github.com": "GitHub",
+        "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
+    }
+    label_candidates: dict[str, set[str]] = defaultdict(set)
     for event in raw_events:
         etype = str(event.get("event_type") or "")
         if etype.startswith(("browser_", "screen_")):
             try:
-                source = analytics._semantic_surface(event)
+                source = str(analytics._semantic_surface(event) or "")
             except Exception:
-                source = event.get("app")
+                source = str(event.get("app") or "")
         else:
-            source = event.get("app")
-        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
-        host = str(event.get("page_host") or page.get("hostname") or "").lower()
-        host = host.removeprefix("www.").split(":", 1)[0]
-        by_host = {
-            "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
-            "mail.google.com": "Gmail", "github.com": "GitHub",
-            "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
-        }
-        label = by_host.get(host) or _surface_for_event(event)
-        if label in allowed_labels:
-            known_labels[_surface_key(source)] = label
+            source = str(event.get("app") or "")
+        if not source:
+            continue
+        source_name = source.casefold().strip()
+        # Host labels are valid only when the structural source *is* that host.
+        # A browser app's visited page must never relabel surface:chrome.
+        label = fixed.get(source_name) or fixed_hosts.get(source_name)
+        label_candidates[_surface_key(source)].add(label or "Other surface (redacted)")
+    known_labels = {
+        key: next(iter(values)) if len(values) == 1 else "Other surface (redacted)"
+        for key, values in label_candidates.items()
+    }
+    for browser in ("chrome", "google chrome", "browser", "safari",
+                    "firefox", "microsoft edge", "edge"):
+        known_labels[_surface_key(browser)] = "Browser"
 
     projected: list[dict[str, Any]] = []
     for execution in executions:
