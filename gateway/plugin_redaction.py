@@ -135,7 +135,7 @@ class PublicRedactor:
         # while continuing to redact adjacent names and all other PII.
         self.person_detector = Detector(
             token=self._token,
-            settings=Settings(never_redact=("Välkommen", "Ring", "Jobbar", "Arbetar")),
+            settings=Settings(never_redact=("Välkommen", "Ring", "Jobbar", "Arbetar", "Svar", "Uppdatering", "Hälsa")),
         )
         # Only aliases proven by organization suffixes in this one redaction
         # request. Never persist personal/customer names across accounts.
