@@ -439,9 +439,9 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
-        include_low_specificity: bool = False,
+        include_low_specificity: bool = True,
     ) -> dict[str, Any]:
-        """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns heuristic structural candidates, not verified business rules or permission. Verify representative runs with get_workflow_evidence and raw traces."""
+        """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns ranked candidate patterns (including low-specificity patterns by default), not verified business workflows. Inspect raw chronology, including across applications, before drawing conclusions."""
         organization_id, actor_id, _claims = _identity()
         result = repeated_workflows(
             db, organization_id=organization_id, actor_id=actor_id,
