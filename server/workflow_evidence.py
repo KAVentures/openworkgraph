@@ -264,8 +264,12 @@ def _candidate_runs(
     readable_by_id: dict[str, list[str]] = {}
     try:
         from .procedural_feedback import _human_runs
-        for run in _human_runs(raw_events, split_human_hosts=partition_host_switches,
-                               split_human_idle=partition_idle_gaps):
+        for run in (
+            _human_runs(raw_events, split_human_hosts=partition_host_switches,
+                        split_human_idle=partition_idle_gaps)
+            if (partition_host_switches or partition_idle_gaps)
+            else _human_runs(raw_events)
+        ):
             execution_id = str(run.get("execution_id") or "")
             if execution_id:
                 readable_by_id[execution_id] = [
