@@ -68,25 +68,19 @@ _COMPANY_NAME = re.compile(
     r"(?<![\w])(?:[A-ZÅÄÖ][\wÅÄÖåäö&.-]{1,45}\s+){1,4}"
     r"(?:AB|Aktiebolag|Ltd|LLC|Inc|GmbH|Oy|PLC)\b"
 )
-_UI_WORDS = frozenset("""
-open close create new edit view preview save send reply forward delete remove
-copy paste cut submit search find select choose cancel confirm ok next back
-previous continue start stop finish upload download attach share archive move
-rename update refresh sync login sign signin log logout in out settings
-compose mail email message inbox sent drafts draft thread threads document
-documents file files folder folders sheet sheets spreadsheet quote quotation
-issue issues ticket tickets pull request requests branch commit github gmail
-chatgpt claude chrome safari firefox edge browser dashboard home account profile dialog button tab link menu
-history work workflow trace help accept decline allow deny yes no
-contract invoice subject support calendar meeting release code oauth app browser terminal
-name account username password cloud github search console issue tracker
-customer project task tasks review apply merge pr read unread approve
-approval comment comments add openworkgraph
-zendesk salesforce jira linear slack notion outlook microsoft excel
-read grep write bash bashrc shell terminal visual studio finder
-work copy open click scroll file issue new issue save draft
+# Only genuinely ambiguous single-word labels need a conservative fallback.
+# Multi-word interface text is NOT checked against an English vocabulary list.
+_SAFE_SINGLE_UI = frozenset("""
+open close save cancel continue retry settings next previous refresh
+new edit view search submit copy paste share help download upload
+ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
-_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—·()]{1,120}$")
+_SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
+# High-precision cues for uncommon single names absent from the lexicon.
+_CONTACT_CUE = re.compile(
+    r"(?i)(\b(?:for|from|to|with|contact|attn|för|från|till|med)\s+)"
+    r"([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with|i)\b|[,;:]|$)"
+)
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
@@ -137,25 +131,29 @@ class PublicRedactor:
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
     def target_label(self, value: str, *, token_kind: str = "TARGET") -> str:
-        """Fail closed for unknown names/companies in free-form UI labels.
+        """Mask sensitive spans, retaining Swedish UI, PR numbers and resources.
 
-        Standard verbs/structural UI descriptions remain readable. Unknown
-        captions are owner-scoped tokens, not truncated leaked plaintext.
+        Redaction is best-effort: unknown names *without* contextual cues are
+        inherently ambiguous. Single-word name-shaped labels use a conservative
+        fallback, but normal multiword UI text is never tested against a fixed
+        English vocabulary. Original permitted evidence remains unchanged.
         """
         safe = self.text(str(value), max_chars=1200)
         if _PSEUDONYM.fullmatch(safe):
             return safe
-        words = re.findall(r"[\wÅÄÖåäö-]+|#[0-9]+", safe)
-        if (len(safe) <= 120 and _SAFE_UI_LABEL.fullmatch(safe)
-                and words and all(
-                    word.casefold() in _UI_WORDS
-                    or (word.startswith("#") and word[1:].isdigit())
-                    or (word.isdigit() and len(word) <= 5)
-                    or bool(_PSEUDONYM.fullmatch(word))
-                    for word in words
-                )):
-            return safe
-        return self._token(token_kind, str(value))
+
+        def contact(match: re.Match[str]) -> str:
+            caption = match.group(2)
+            # Do not mask clearly generic UI terms after a cue.
+            if caption.casefold() in _SAFE_SINGLE_UI:
+                return match.group(0)
+            return match.group(1) + self._token("PERSON", caption)
+
+        safe = _CONTACT_CUE.sub(contact, safe)
+        if (_SINGLE_CAPTION.fullmatch(safe)
+                and safe.casefold() not in _SAFE_SINGLE_UI):
+            return self._token(token_kind, safe)
+        return safe[:_MAX_TEXT] + "…[truncated]" if len(safe) > _MAX_TEXT else safe
 
     def metadata(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
