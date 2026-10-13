@@ -413,6 +413,11 @@ def split_human_execution_windows(
             f"{task.get('task_id')}|surface-boundary-v1|{index}|{first}".encode()
         ).hexdigest()[:16]
         clone["elapsed_seconds"] = max(0.0, (_ts(last) or 0) - (_ts(first) or 0))
+        # The parent inferred task's family/outcome/anchors may refer to a
+        # different host. Never copy those claims into every partition.
+        clone["task_family"] = ""
+        clone["completion_observed"] = False
+        clone["anchor_event_ids"] = []
         clone["host_switch_partitioned"] = True
         result.append(clone)
     return result or [task]
