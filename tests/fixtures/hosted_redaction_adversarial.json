@@ -80,6 +80,9 @@
       "retain": [
         "Hälsningar / ",
         "PERSON_"
+      ],
+      "also_forbid": [
+        "Berg"
       ]
     },
     {
@@ -181,6 +184,9 @@
       "retain": [
         "ORG_",
         "Mitt namn är PERSON_"
+      ],
+      "also_forbid": [
+        "Michaela"
       ]
     }
   ],
