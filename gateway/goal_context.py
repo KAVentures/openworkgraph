@@ -227,6 +227,9 @@ def gateway_goal_context(
     lexical_probes_capped = False
     raw_recent: list[dict[str, Any]] = []
     lexical_rows_scanned = 0
+    lexical_budget_rows = 800
+    lexical_probe_cap = 300
+    lexical_terms_skipped_due_budget = 0
 
     # Recent tail complements chronological lexical lookups; it never claims
     # the tail covers all previous work.
@@ -252,19 +255,26 @@ def gateway_goal_context(
 
     # Search older work by useful goal words. These are deliberately bounded
     # lexical probes, NOT a vector search or semantic guarantee.
-    for term in sorted(terms, key=lambda x: (-len(x), x))[:4]:
-        # Query the entire authorized synced history. Page up to the explicit
-        # per-term budget rather than accepting only the first 180 matching
-        # rows in oldest-first order. Raw chronology is never filtered by
-        # inferred tasks, clusters or a quality threshold.
+    for term_index, term in enumerate(sorted(terms, key=lambda x: (-len(x), x))[:4]):
+        # A combined budget prevents four common-word LIKE probes from
+        # scanning up to 2,400 rows. Stop explicitly and disclose incomplete
+        # coverage; never pretend a capped search found all older history.
+        if lexical_rows_scanned >= lexical_budget_rows:
+            lexical_terms_skipped_due_budget += 1
+            lexical_probes_capped = True
+            source_limit_reached = True
+            continue
         cursor: str | None = None
         scanned_for_term = 0
         has_more = False
-        while scanned_for_term < 600:
+        while (scanned_for_term < lexical_probe_cap
+               and lexical_rows_scanned < lexical_budget_rows):
             page = workflow_trace(
                 db, organization_id=organization_id, actor_id=actor_id,
                 since=since, until=until, query=term,
-                cursor=cursor, limit=min(200, 600 - scanned_for_term),
+                cursor=cursor, limit=min(
+                    150, lexical_probe_cap - scanned_for_term,
+                    lexical_budget_rows - lexical_rows_scanned),
             )
             scanned_for_term += len(page["rows"])
             lexical_rows_scanned += len(page["rows"])
@@ -304,8 +314,11 @@ def gateway_goal_context(
         goal, list(rows_by_id.values()),
         max_examples=max_examples, source_limit_reached=source_limit_reached,
     )
-    result["coverage"]["sampling"] = "most_recent_500_and_four_full_history_lexical_probes_up_to_600_each"
+    result["coverage"]["sampling"] = "most_recent_500_plus_four_bounded_full_history_lexical_probes"
     result["coverage"]["lexical_rows_scanned"] = lexical_rows_scanned
+    result["coverage"]["lexical_probe_cap_per_term"] = lexical_probe_cap
+    result["coverage"]["lexical_row_budget_total"] = lexical_budget_rows
+    result["coverage"]["lexical_terms_skipped_due_budget"] = lexical_terms_skipped_due_budget
     result["coverage"]["raw_sample_is_query_free"] = True
     result["coverage"]["recent_tail_capped"] = recent_tail_capped
     result["coverage"]["lexical_probes_capped"] = lexical_probes_capped
