@@ -14,6 +14,7 @@ import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
+from datetime import datetime, timezone
 
 import jwt
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -383,8 +384,20 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             ]
         rich = [rich_evidence_row(row, include_identity=False) for row in source_rows]
         context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit)
+        latest_observed = max((str(row.get("observed_at") or "") for row in source_rows), default=None)
+        try:
+            when = datetime.fromisoformat(str(latest_observed).replace("Z", "+00:00"))
+            age_seconds = max(0, round((datetime.now(timezone.utc) - when).total_seconds())) if when.tzinfo else None
+        except (TypeError, ValueError, OverflowError):
+            age_seconds = None
         context["capture_status"] = {
-            "latest_observed_at": max((str(row.get("observed_at") or "") for row in source_rows), default=None),
+            "latest_observed_at": latest_observed,
+            "last_evidence_age_seconds": age_seconds,
+            "evidence_freshness": (
+                "unknown" if age_seconds is None
+                else "recent" if age_seconds <= 900 else "stale"
+            ),
+            "freshness_is_not_recorder_liveness": True,
             "recent_evidence_latest_received_at": max((str(row.get("ingested_at") or "") for row in source_rows), default=None),
             "local_recorder_state": "unknown_to_hosted_connector",
             "coverage": "bounded_recent_synced_evidence",
