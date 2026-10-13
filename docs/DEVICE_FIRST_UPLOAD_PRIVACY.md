@@ -25,7 +25,7 @@ Scope limitation: the independent, explicitly opted-in *cloud work-text* and *vi
 6. Existing retained data is still personal data when it contains HMAC pseudonyms or identifying context. This is pseudonymization, not GDPR anonymization.
 7. A privacy-first standard should prevent initial upload of recognized patient context *and* consider exclusion of health-related apps, sites or accounts at the capture and sync-policy level. Single-string clinical cues are not enough to prevent every special-category disclosure.
 
-This implementation does not add or download a desktop language model. The optional local Swedish spaCy audit is evaluation-only, because real-world PII performance, packaging footprint, latency and license compatibility are not yet established. See [spaCy Swedish models](https://spacy.io/models/sv).
+This implementation does not add or download a desktop language model. It adds an **optional, OFF-by-default local NER hook** via `OWG_LOCAL_NER_MODEL=sv_core_news_sm` or `en_core_web_sm`, loading an already installed model on the device and applying typed PERSON/ORG spans before the deterministic detector. If configured but unavailable or crashing, upload fails closed; it never downloads a model or silently falls back. **Do not enable for regulated deployments before held-out evaluation and licensing/packaging review.** The separate spaCy audit remains evaluation-only, because real-world PII performance, packaging footprint, latency and license compatibility are not yet established. See [spaCy Swedish models](https://spacy.io/models/sv).
 
 ## Independent held-out release evaluation
 
