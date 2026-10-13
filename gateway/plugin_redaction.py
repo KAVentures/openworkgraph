@@ -13,7 +13,7 @@ import hmac
 import re
 from typing import Any, Iterable
 
-from server.contextual_redaction import Detector, STOPWORDS
+from server.contextual_redaction import Detector, Settings, STOPWORDS
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -113,7 +113,13 @@ class PublicRedactor:
         if not secret or not principal:
             raise ValueError("public redaction requires a scoped secret")
         self.key = hmac.new(secret.encode(), principal.encode(), hashlib.sha256).digest()
-        self.person_detector = Detector(token=self._token)
+        # These are unambiguous UI verbs/greetings in this connector's
+        # telemetry. Protect just these spans from lexicon false positives,
+        # while continuing to redact adjacent names and all other PII.
+        self.person_detector = Detector(
+            token=self._token,
+            settings=Settings(never_redact=("Välkommen", "Ring")),
+        )
         # Only aliases proven by organization suffixes in this one redaction
         # request. Never persist personal/customer names across accounts.
         self.organization_aliases: set[str] = set()
