@@ -186,6 +186,8 @@ def test_optional_local_ner_redacts_new_unlisted_identity(monkeypatch):
         from types import SimpleNamespace
         class Model:
             def __call__(self, content):
+                if "Zymboria" not in content:
+                    return SimpleNamespace(ents=[])
                 start = content.index("Zymboria")
                 entity = SimpleNamespace(
                     start_char=start, end_char=start + len("Zymboria"),
