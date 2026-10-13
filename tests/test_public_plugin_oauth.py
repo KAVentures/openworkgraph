@@ -954,6 +954,25 @@ def test_private_title_remains_searchable_without_returning_third_party_caption(
     assert blocked_trace.json()["result"].get("isError") is True
     assert not any(row["event_id"] == "private-title-search-1"
                    for row in normal_data["rows"])
+    # The AI-controlled flag alone cannot grant private-title search.
+    unapproved = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "include_private_matches": True},
+    })
+    assert unapproved.status_code == 200
+    assert unapproved.json()["result"].get("isError") is True
+
+    # A separate OAuth-authenticated user account setting must be enabled.
+    status_url = "/v1/plugin/private-search-status"
+    enable_url = "/v1/plugin/private-search-enable"
+    disable_url = "/v1/plugin/private-search-disable"
+    bearer = {"Authorization": f"Bearer {token}"}
+    assert client.get(status_url, headers=bearer).json()["enabled"] is False
+    assert client.post(enable_url, headers=bearer).status_code == 400
+    assert client.post(enable_url, headers={
+        **bearer, "X-OWG-Private-Search-Consent": "private-title-search-v1",
+    }).json()["enabled"] is True
+
     # Explicit owner-scoped opt-in knowingly discloses name existence but
     # must still never return raw title or target label text.
     response = rpc(client, token, "tools/call", {
@@ -979,3 +998,16 @@ def test_private_title_remains_searchable_without_returning_third_party_caption(
     assert any(row["event_id"] == "private-title-search-1"
                for row in trace_data["rows"])
     assert "Zorina" not in trace.text
+    assert client.post(disable_url, headers=bearer).json()["enabled"] is False
+    revoked = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "include_private_matches": True},
+    })
+    assert revoked.json()["result"].get("isError") is True
+    # Consent belongs to the OAuth actor, not everybody in the same backend.
+    outsider = {"Authorization": f"Bearer {mint(sub='different-person')}"}
+    assert client.get(status_url, headers=outsider).json()["enabled"] is False
+    mapped = {"Authorization": f"Bearer {mint(owg_org_id='company', owg_actor_id='employee')}"}
+    assert client.post(enable_url, headers={
+        **mapped, "X-OWG-Private-Search-Consent": "private-title-search-v1",
+    }).status_code == 409
