@@ -172,3 +172,26 @@ def test_raw_first_benchmark_never_loses_raw_only_recall():
     assert report["raw_only_recall"] == 1.0
     assert report["combined_recall"] >= report["raw_only_recall"]
     assert report["inference_only_recall"] < report["raw_only_recall"]
+
+
+def test_readable_steps_and_unknown_search_queries_are_not_plaintext():
+    from gateway.plugin_redaction import project
+
+    raw = {
+        "query": "Zorina",
+        "candidate_clusters": [{
+            "readable_steps": [
+                "Gmail · Open ticket for Zorina at Sample Nordic AB",
+                "Gmail · Open ticket",
+            ],
+            "structural_steps": ["surface:chrome", "action:click"],
+        }],
+    }
+    safe = project(raw, secret="test-secret", principal="owner-a", detail="rich")
+    assert safe["query"] != "Zorina"
+    result = safe["candidate_clusters"][0]
+    assert result["readable_steps"][0].startswith(("STEP_", "PERSON_"))
+    assert result["readable_steps"][1] == "Gmail · Open ticket"
+    assert result["structural_steps"] == ["surface:chrome", "action:click"]
+    assert "Zorina" not in str(safe)
+    assert "Sample Nordic" not in str(safe)
