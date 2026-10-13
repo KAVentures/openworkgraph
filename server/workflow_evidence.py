@@ -646,8 +646,10 @@ def build_workflow_evidence(
 ) -> dict[str, Any]:
     ids = _parse_execution_ids(execution_ids)
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = derive_executions(raw, split_human_hosts=partition_host_switches,
+    executions = (derive_executions(raw, split_human_hosts=partition_host_switches,
                                    split_human_idle=partition_idle_gaps)
+                  if (partition_host_switches or partition_idle_gaps)
+                  else derive_executions(raw))
     selected = _select_executions(
         executions,
         family_key=family_key,
@@ -793,8 +795,10 @@ def list_workflow_evidence_candidates(
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = derive_executions(raw, split_human_hosts=partition_host_switches,
+    executions = (derive_executions(raw, split_human_hosts=partition_host_switches,
                                    split_human_idle=partition_idle_gaps)
+                  if (partition_host_switches or partition_idle_gaps)
+                  else derive_executions(raw))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
         key = str(execution.get("family_key") or "")
