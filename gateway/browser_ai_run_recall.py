@@ -43,14 +43,30 @@ def browser_ai_agent_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     observed prompt, page title or response body enters the run summary.
     """
     grouped: dict[tuple[str, str, str], list[tuple[datetime, str, dict]]] = defaultdict(list)
+    # Separate resource observations have no agent_run_id. Link by the
+    # *same* opaque browser tab + browser runtime + authenticated work session,
+    # and by observed time. Never join on an arbitrary title or shared host.
+    references: dict[tuple[str, str, str, str], list[tuple[datetime, str]]] = defaultdict(list)
     for event in events:
         if str(event.get("source") or "") != "browser_extension":
             continue
-        action = _ACTIONS.get(str(event.get("event_type") or ""))
-        if not action:
-            continue
         meta = event.get("metadata")
         if not isinstance(meta, dict):
+            continue
+        timestamp = _at(event.get("observed_at"))
+        session = str(event.get("session_id") or "")[:160]
+        tab = str(meta.get("tab_id") or "")
+        runtime = str(meta.get("browser_session_id") or "")
+        if (event.get("event_type") == "browser_resource_reference_observed"
+                and timestamp and tab and runtime and session):
+            resource = meta.get("resource_reference")
+            if isinstance(resource, dict):
+                provider = str(resource.get("provider") or "").lower()
+                token = str(resource.get("resource_ref") or "")
+                if provider in _PROVIDERS and _RESOURCE_REF.fullmatch(token):
+                    references[(provider, session, runtime, tab)].append((timestamp, token))
+        action = _ACTIONS.get(str(event.get("event_type") or ""))
+        if not action:
             continue
         provider = str(meta.get("agent_provider") or "").lower()
         run = str(meta.get("agent_run_id") or "")
@@ -82,6 +98,25 @@ def browser_ai_agent_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             token = str((reference or {}).get("resource_ref") or "") if isinstance(reference, dict) else ""
             if _RESOURCE_REF.fullmatch(token) and token not in refs:
                 refs.append(token)
+
+        # Resource and lifecycle events are intentionally different captures.
+        # Pick the most recent reference in this browser tab before the run,
+        # or a reference first observed within 30s after a run starts.
+        # A later tab navigation must not retroactively relabel earlier runs.
+        first_meta = rows[0][2].get("metadata") or {}
+        tab = str(first_meta.get("tab_id") or "")
+        runtime = str(first_meta.get("browser_session_id") or "")
+        if tab and runtime and session:
+            candidates = references.get((provider, session, runtime, tab), [])
+            before = [(ts, ref) for ts, ref in candidates
+                      if 0 <= (start - ts).total_seconds() <= 7200]
+            after = [(ts, ref) for ts, ref in candidates
+                     if 0 < (ts - start).total_seconds() <= 30]
+            chosen = (max(before, default=None)
+                      or min(after, default=None))
+            if chosen and chosen[1] not in refs:
+                refs.append(chosen[1])
+
         # IDs are random opaque Web-session references. Include session to
         # prevent one browser run becoming another device/session's run.
         material = "|".join((provider, run, session))
