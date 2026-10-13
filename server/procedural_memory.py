@@ -460,7 +460,7 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "_session_ids": [session_id] if session_id else [],
             })
     
-        agent_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    agent_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
         if str(event.get("source") or "") != "agent" and not str(event.get("event_type") or "").startswith("agent_"):
             continue
