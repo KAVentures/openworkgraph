@@ -73,6 +73,7 @@ def repeated_workflows(
         min_runs=min_runs,
         limit=limit,
         min_cluster_quality=0.0 if include_low_specificity else 0.45,
+        partition_host_switches=True,
         _raw_events=raw,
     )
     result["gateway_projection"] = True
@@ -111,6 +112,7 @@ def workflow_evidence(
         max_runs=max_runs,
         max_events_per_run=max_events_per_run,
         include_canonical_evidence=True,
+        partition_host_switches=True,
         _raw_events=raw,
     )
     provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
