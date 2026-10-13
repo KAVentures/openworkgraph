@@ -413,10 +413,14 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         return _protected(context, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
-    def search_work(query: str, limit: int = 25, detail: str = "compact", cursor: str | None = None) -> dict[str, Any]:
-        """Use to locate previously observed work when a user mentions a particular past project, document, conversation, person or resource without naming OpenWorkGraph. Lexical search of this account's synced, redacted evidence; a miss is not proof of absence. Inspect dated get_workflow_trace for context."""
-        organization_id, actor_id, _claims = _identity()
-        cleaner = PublicRedactor(secret=os.environ["OWG_PLUGIN_PROFILE_KEY"], principal=f"{organization_id}|{actor_id}")
+    def search_work(query: str, limit: int = 25, detail: str = "compact", cursor: str | None = None, include_private_matches: bool = False) -> dict[str, Any]:
+        """Use to locate previously observed work when a user mentions a particular past project, document, conversation, person or resource without naming OpenWorkGraph. By default matches only redacted model-visible fields. Explicit include_private_matches=true searches original authorized title/target fields, disclosing existence of a private term despite redacted results. Never enable this implicitly. A miss is not proof of absence; verify query-free trace context."""
+        organization_id, actor_id, claims = _identity()
+        cleaner = PublicRedactor(
+            secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
+            principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        )
         needle = str(query).casefold().strip()
         if not needle:
             raise ValueError("search query must not be empty")
@@ -430,15 +434,19 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             safe = cleaner.event(original, detail="rich")
             values = {key: str(safe.get(key) or "").casefold()
                       for key in ("app", "page_host", "semantic_action")}
-            # Server-side matching against only approved *observed* title and
-            # target fields allows an authorized user's exact query to find
-            # an opaque result. Never match arbitrary prompt/clipboard blobs
-            # or expose the original caption in the returned MCP event.
-            values["window_title"] = str(original.get("window_title") or "").casefold()
+            # Private original captions can act as a name-existence oracle.
+            # Only opt into matching those permitted fields when explicitly asked.
+            values["window_title"] = str(safe.get("window_title") or "").casefold()
             raw_meta = original.get("metadata") if isinstance(original.get("metadata"), dict) else {}
             raw_target = raw_meta.get("target") if isinstance(raw_meta.get("target"), dict) else {}
-            values["target_label"] = str(original.get("target_label") or
-                                          raw_target.get("title") or raw_target.get("label") or "").casefold()
+            safe_meta = safe.get("metadata") if isinstance(safe.get("metadata"), dict) else {}
+            safe_target = safe_meta.get("target") if isinstance(safe_meta.get("target"), dict) else {}
+            values["target_label"] = str(safe.get("target_label") or
+                                          safe_target.get("title") or safe_target.get("label") or "").casefold()
+            if include_private_matches:
+                values["window_title"] = str(original.get("window_title") or "").casefold()
+                values["target_label"] = str(original.get("target_label") or
+                                              raw_target.get("title") or raw_target.get("label") or "").casefold()
             values["resource_ref"] = str(((safe.get("metadata") or {}).get("resource_reference") or {}).get("resource_ref") or "").casefold()
             fields = [key for key, value in values.items()
                       if (needle == value if key == "resource_ref" else bool(pattern.search(value)))]
@@ -451,6 +459,8 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         for row in result["rows"]:
             row["matched_fields"] = matched_fields[str(row["event_id"])]
         result["query"] = query
+        result["private_title_match_enabled"] = bool(include_private_matches)
+        result["private_match_discloses_term_existence"] = bool(include_private_matches)
         result["pagination_tool"] = "search_work"
         result["local_evidence_may_be_richer"] = True
         result["retrieval_notice"] = (
@@ -465,7 +475,10 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "omit_query_to_include_unmatched_events": True,
             "restart_without_search_cursor": True,
         }
-        _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
+        _audit(db, organization_id, actor_id, "plugin.search.read", {
+            "returned": result.get("returned", 0),
+            "private_title_match_enabled": bool(include_private_matches),
+        })
         return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
