@@ -479,7 +479,9 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
     assert 'prompt' not in row['metadata']
     assert 'resolver_locator' not in row['metadata']['resource_reference']
     assert 'pathname' not in row['metadata']['page']
-    assert 'EMAIL_' in row['window_title']
+    # Fully opaque titles are safer than partial email masking when
+    # unfamiliar names or organizations might remain.
+    assert row['window_title'].startswith(('TITLE_', 'EMAIL_'))
     assert rich['privacy_representation']['level'] == 'hosted_redacted'
     assert rich['evidence_contract']['metadata_preserved'] is False
 
