@@ -6,7 +6,52 @@ from fastapi.testclient import TestClient
 
 from connector.cloud_privacy import DEVICE_REDACTION_VERSION, project_event_for_upload
 from connector.policy import prepare_event_for_gateway
-from tests.test_gateway_v53 import _gateway, _enroll, _service, _event
+from gateway.app import create_app
+from gateway.db import GatewayDB
+from gateway.settings import GatewaySettings
+
+
+def _gateway(tmp_path):
+    db = GatewayDB("sqlite:///" + str(tmp_path / "gateway.db"))
+    app = create_app(settings=GatewaySettings(
+        database_url=db.database_url, admin_token="admin-secret",
+        enrollment_token="enroll-secret",
+    ), db=db)
+    return app, db
+
+
+def _enroll(client, organization, device, actor):
+    response = client.post(
+        "/v1/devices/enroll", headers={"Authorization": "Bearer enroll-secret"},
+        json={"organization_id": organization, "device_id": device, "actor_id": actor},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _service(client, organization):
+    response = client.post(
+        "/v1/admin/integration-tokens",
+        headers={"Authorization": "Bearer admin-secret"},
+        json={"organization_id": organization, "scopes": ["evidence:read"], "label": "read"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _event(event_id="evt-1"):
+    return {
+        "event_id": event_id, "observed_at": "2026-10-13T08:00:00+00:00",
+        "schema_version": "1.0", "source": "browser_extension",
+        "device_id": "device-1", "sensor_id": "browser:sensor",
+        "session_id": "session-1", "app": "Google Chrome",
+        "window_title": "Samarbetsavtal 2026", "event_type": "browser_click",
+        "duration_seconds": 0, "metadata": {
+            "action": "click", "clipboard_transfer_id": "transfer-123",
+            "page": {"hostname": "mail.example.com", "pathname": "/inbox"},
+            "target": {"role": "button", "label": "Hämta igen"},
+        },
+    }
 
 
 _SECRET = "synthetic-device-scoped-secret-for-tests"
@@ -98,7 +143,6 @@ def test_gateway_rejects_legacy_uploads_when_device_gate_is_enabled(monkeypatch,
         blocked = client.post("/v1/evidence/batch", headers=headers, json={"events": [raw]})
         assert blocked.status_code == 400
         assert "projection" in blocked.text
-        assert db.trace_rows("org", actor_id="actor", limit=10) == [] if False else True
         safe = project_event_for_upload(raw, secret=_SECRET)
         result = client.post("/v1/evidence/batch", headers=headers, json={"events": [safe]})
         assert result.status_code == 200, result.text
