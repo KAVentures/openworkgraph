@@ -919,3 +919,40 @@ def test_minimal_detail_is_additive_and_preserves_cursor(public_client):
     })
     assert follow.status_code == 200, follow.text
     assert follow.json()["result"]["structuredContent"]["rows"]
+
+
+def test_private_title_remains_searchable_without_returning_third_party_caption(public_client):
+    """Authorized exact search matches raw permitted title, output remains opaque."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    _insert_personal_events([{
+        "event_id": "private-title-search-1",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser", "event_type": "browser_click",
+        "session_id": "private-title-search",
+        "app": "Chrome",
+        "window_title": "Contract for Zorina at Sample Nordic AB",
+        "metadata": {"target": {"role": "button",
+                                "label": "Open contract for Zorina"}},
+    }])
+    token = mint()
+    response = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {"query": "Zorina", "limit": 5},
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["result"]["structuredContent"]
+    found = [row for row in data["rows"]
+             if row["event_id"] == "private-title-search-1"]
+    assert len(found) == 1
+    assert found[0]["window_title"].startswith("TITLE_")
+    assert data["query"] != "Zorina"
+    assert "Zorina" not in response.text
+    assert "Sample Nordic" not in response.text
+    trace = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"limit": 15},
+    })
+    assert trace.status_code == 200, trace.text
+    trace_data = trace.json()["result"]["structuredContent"]
+    assert any(row["event_id"] == "private-title-search-1"
+               for row in trace_data["rows"])
+    assert "Zorina" not in trace.text
