@@ -26,6 +26,8 @@ _ALLOWED_KINDS: dict[str, set[str]] = {
     "salesforce": {"record"},
     "jira": {"issue"},
     "linear": {"issue"},
+    "chatgpt": {"conversation"},
+    "claude": {"conversation"},
 }
 
 _SENSOR_REF_RE = re.compile(r"^owg:e:[0-9a-f]{24}$")
@@ -56,6 +58,10 @@ def _host_allowed(provider: str, host: str) -> bool:
         return host.endswith(".atlassian.net")
     if provider == "linear":
         return host == "linear.app"
+    if provider == "chatgpt":
+        return host in {"chatgpt.com", "chat.openai.com"}
+    if provider == "claude":
+        return host == "claude.ai"
     return False
 
 
@@ -80,6 +86,8 @@ def _locator_valid(provider: str, kind: str, locator: str) -> bool:
         return bool(_ISSUE_KEY_RE.fullmatch(locator))
     if provider == "linear" and kind == "issue":
         return bool(_LINEAR_RE.fullmatch(locator))
+    if provider in {"chatgpt", "claude"} and kind == "conversation":
+        return bool(re.fullmatch(r"conversation:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", locator))
     return False
 
 
@@ -252,6 +260,16 @@ def resource_reference_from_url(
             candidate = f"{parts[index - 1]}:{parts[index + 1]}"
             if _LINEAR_RE.fullmatch(candidate):
                 provider, kind, locator = "linear", "issue", candidate
+    elif host in {"chatgpt.com", "chat.openai.com", "claude.ai"} and not parsed.query and not parsed.fragment:
+        if len(parts) == 2 and (
+            (host in {"chatgpt.com", "chat.openai.com"} and parts[0] == "c")
+            or (host == "claude.ai" and parts[0] == "chat")
+        ) and re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            parts[1], re.IGNORECASE,
+        ):
+            provider, kind = ("claude" if host == "claude.ai" else "chatgpt"), "conversation"
+            locator = "conversation:" + parts[1].lower()
     elif host == "mail.google.com":
         fragment = str(parsed.fragment or "").lstrip("#")
         fragments = [part for part in fragment.split("/") if part]
