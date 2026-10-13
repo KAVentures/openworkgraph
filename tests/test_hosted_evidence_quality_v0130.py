@@ -120,3 +120,39 @@ def test_minimal_keeps_evidence_and_cursor_without_repeated_contracts():
     assert minimal["has_more"] is True
     assert "privacy_representation" not in minimal
     assert "interpretation_contract" not in minimal
+
+
+def test_host_partition_is_opt_in_and_readable_ids_match(monkeypatch):
+    from server import procedural_memory as memory
+    from server import procedural_feedback as feedback
+
+    task = {
+        "task_id": "parent", "session_id": "s1",
+        "started_at": "2026-10-13T10:00:00Z",
+        "ended_at": "2026-10-13T10:01:00Z",
+        "elapsed_seconds": 60, "task_family": "email.compose_send",
+        "completion_observed": True,
+    }
+    raw = [
+        {"event_id": "a", "observed_at": "2026-10-13T10:00:00Z",
+         "app": "Claude", "window_title": "Claude", "event_type": "focus_span",
+         "source": "desktop", "session_id": "s1", "duration_seconds": 20},
+        {"event_id": "b", "observed_at": "2026-10-13T10:01:00Z",
+         "app": "Gmail", "window_title": "Gmail", "event_type": "focus_span",
+         "source": "desktop", "session_id": "s1", "duration_seconds": 20},
+    ]
+    monkeypatch.setattr(memory, "candidate_tasks", lambda **_kwargs: {"tasks": [task]})
+    monkeypatch.setattr(feedback, "candidate_tasks", lambda **_kwargs: {"tasks": [task]})
+
+    original = [item for item in memory.derive_executions(raw)
+                if item["actor_kind"] == "human"]
+    hosted = [item for item in memory.derive_executions(raw, split_human_hosts=True)
+              if item["actor_kind"] == "human"]
+    readable = feedback._human_runs(raw, split_human_hosts=True)
+    assert len(original) == 1
+    assert len(hosted) == len(readable) == 2
+    assert {item["execution_id"] for item in hosted} == {
+        item["execution_id"] for item in readable
+    }
+    assert all(item["outcome_status"] == "unknown" for item in hosted)
+    assert original[0]["outcome_status"] == "observed_completion"
