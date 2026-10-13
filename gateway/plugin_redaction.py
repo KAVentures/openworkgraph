@@ -73,6 +73,7 @@ _COMPANY_NAME = re.compile(
 _SAFE_SINGLE_UI = frozenset("""
 open close save cancel continue retry settings next previous refresh
 new edit view search submit copy paste share help download upload
+openworkgraph owg github gmail chatgpt claude oneflow
 ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
