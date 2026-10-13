@@ -104,6 +104,67 @@ def test_run_and_separate_conversation_resource_link_by_same_opaque_tab_and_time
     assert ref_other not in str(result)
 
 
+def test_new_chat_same_tab_prefers_first_conversation_seen_after_run_start():
+    # A's pointer persists in the same tab. The new chat B only receives its
+    # conversation UUID after the first message has started the Web AI run.
+    for provider in ("chatgpt", "claude"):
+        ref_a = "owg:r:" + "a" * 32
+        ref_b = "owg:r:" + "b" * 32
+        ref_c = "owg:r:" + "c" * 32
+        tab = "ref_" + "d" * 24
+        runtime = "browser-runtime-s1"
+
+        def resource(event_id, at, ref):
+            return {
+                "event_id": event_id, "source": "browser_extension",
+                "event_type": "browser_resource_reference_observed",
+                "observed_at": at, "session_id": "desktop-s1",
+                "metadata": {
+                    "tab_id": tab, "browser_session_id": runtime,
+                    "resource_reference": {"provider": provider, "resource_ref": ref},
+                },
+            }
+
+        rows = [
+            resource("conversation-a", "2026-10-13T08:00:00Z", ref_a),
+            row("start", "agent_run_started", "2026-10-13T08:10:00Z",
+                provider=provider,
+                metadata={"tab_id": tab, "browser_session_id": runtime}),
+            resource("conversation-b", "2026-10-13T08:10:05Z", ref_b),
+            # A different conversation opened later must not replace B.
+            resource("conversation-c", "2026-10-13T08:10:20Z", ref_c),
+            row("finish", "agent_run_finished", "2026-10-13T08:10:45Z",
+                provider=provider,
+                metadata={"tab_id": tab, "browser_session_id": runtime}),
+        ]
+        result = browser_ai_agent_runs(rows)
+        assert len(result) == 1
+        assert result[0]["resource_refs"] == [ref_b]
+        assert ref_a not in str(result)
+        assert ref_c not in str(result)
+
+
+def test_post_start_conversation_pointer_must_be_within_30_seconds():
+    ref = "owg:r:" + "e" * 32
+    tab = "ref_" + "f" * 24
+    runtime = "browser-runtime-s1"
+    rows = [
+        row("start", "agent_run_started", "2026-10-13T08:00:00Z",
+            metadata={"tab_id": tab, "browser_session_id": runtime}),
+        {
+            "event_id": "too-late", "source": "browser_extension",
+            "event_type": "browser_resource_reference_observed",
+            "observed_at": "2026-10-13T08:00:31Z", "session_id": "desktop-s1",
+            "metadata": {"tab_id": tab, "browser_session_id": runtime,
+                         "resource_reference": {"provider": "chatgpt",
+                                                "resource_ref": ref}},
+        },
+        row("finish", "agent_run_finished", "2026-10-13T08:01:00Z",
+            metadata={"tab_id": tab, "browser_session_id": runtime}),
+    ]
+    assert browser_ai_agent_runs(rows)[0]["resource_refs"] == []
+
+
 def test_device_upload_preserves_only_opaque_browser_tab_correlation():
     from connector.cloud_privacy import project_event_for_upload
 
