@@ -510,8 +510,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         session_id: str | None = None, query: str | None = None,
         detail: str = "compact",
     ) -> dict[str, Any]:
-        """Canonical raw privacy-hardened chronology with stable pagination. Use with explicit dates and no query to see surrounding events omitted by a failed inferred-task or lexical search; page until has_more is false."""
-        organization_id, actor_id, _claims = _identity()
+        """Canonical privacy-hardened chronology. Use query-free pagination to avoid inference misses. Private-name queries are rejected here; explicit owner-authorized name search uses search_work(include_private_matches=true)."""
+        organization_id, actor_id, claims = _identity()
+        if query and PublicRedactor(
+            secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
+            principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        ).target_label(query, token_kind="QUERY") != query:
+            raise ValueError(
+                "Private-name filtering is disabled for get_workflow_trace; "
+                "use search_work(include_private_matches=true) explicitly "
+                "or inspect query-free raw chronology."
+            )
         result = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
             since=since, until=until, cursor=cursor,
