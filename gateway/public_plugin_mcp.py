@@ -206,7 +206,19 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         safe["contract_version"] = "hosted-evidence-v3"
         safe["privacy_level"] = "hosted_redacted"
         safe["evidence_and_workflow_interpretation"] = "non_authoritative"
-    return protect_observed_payload(safe)
+    secured = protect_observed_payload(safe)
+    if detail == "minimal":
+        # The hardener adds an intentionally verbose explanatory block on each
+        # invocation. Preserve its actionable counters and suppressed paths,
+        # while the invariant trust rule lives in MCP server instructions.
+        security = secured.pop("_openworkgraph_security", {})
+        secured["security_summary"] = {
+            "trust": "untrusted_observed_data",
+            "suppressed_fields": security.get("instruction_like_fields_suppressed", 0),
+            "suppressed_paths": security.get("suppressed_field_paths", []),
+            "normalized_fields": security.get("normalized_field_count", 0),
+        }
+    return secured
 
 
 def _audit(db: GatewayDB, organization_id: str, actor_id: str, action: str, details: dict[str, Any]) -> None:
