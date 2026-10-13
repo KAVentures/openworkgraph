@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "openworkgraph": {
+      "type": "http",
+      "url": "https://mcp.owg.kinvectum.com/mcp"
+    }
+  }
+}
