@@ -215,48 +215,49 @@ def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     output: list[dict[str, Any]] = []
     task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
-    for task in task_data.get("tasks") or []:
-        if not isinstance(task, dict):
+    for candidate in task_data.get("tasks") or []:
+        if not isinstance(candidate, dict):
             continue
-        session_id = str(task.get("session_id") or "")
+        session_id = str(candidate.get("session_id") or "")
         session_events = by_session.get(session_id, [])
-        structural_steps = memory._human_steps(task, session_events)
-        if not structural_steps:
-            continue
-        family_key, family_basis = memory._human_family(task, structural_steps)
-        semantic_steps = _semantic_steps(task, session_events)
-        observed_completion = bool(task.get("completion_observed"))
-        started_at = task.get("started_at")
-        ended_at = task.get("ended_at")
-        output.append({
-            "execution_id": memory._execution_id(
-                "human", task.get("task_id") or session_id, started_at
-            ),
-            "family_key": family_key,
-            "family_basis": family_basis,
-            "started_at": started_at,
-            "ended_at": ended_at,
-            "duration_seconds": round(float(task.get("elapsed_seconds") or 0), 3),
-            "outcome_status": "observed_completion" if observed_completion else "unknown",
-            "outcome_basis": (
-                "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor"
-            ),
-            "positive_example": observed_completion,
-            "structural_steps": structural_steps[:_MAX_STEPS],
-            "semantic_steps": semantic_steps[:_MAX_STEPS],
-            "evidence_refs": _window_event_refs(task, session_events),
-            "evidence_window": {"started_at": started_at, "ended_at": ended_at},
-            "trace_lookup": {
-                "tool": "get_workflow_trace",
-                "since": started_at,
-                "until": ended_at,
-                "scope": "all",
-            },
-            "derived": True,
-            "authoritative": False,
-            "needs_review": True,
-        })
-    output.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+        for task in memory.split_human_execution_windows(candidate, session_events):
+            structural_steps = memory._human_steps(task, session_events)
+            if not structural_steps:
+                continue
+            family_key, family_basis = memory._human_family(task, structural_steps)
+            semantic_steps = _semantic_steps(task, session_events)
+            observed_completion = bool(task.get("completion_observed"))
+            started_at = task.get("started_at")
+            ended_at = task.get("ended_at")
+            output.append({
+                "execution_id": memory._execution_id(
+                    "human", task.get("task_id") or session_id, started_at
+                ),
+                "family_key": family_key,
+                "family_basis": family_basis,
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": round(float(task.get("elapsed_seconds") or 0), 3),
+                "outcome_status": "observed_completion" if observed_completion else "unknown",
+                "outcome_basis": (
+                    "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor"
+                ),
+                "positive_example": observed_completion,
+                "structural_steps": structural_steps[:_MAX_STEPS],
+                "semantic_steps": semantic_steps[:_MAX_STEPS],
+                "evidence_refs": _window_event_refs(task, session_events),
+                "evidence_window": {"started_at": started_at, "ended_at": ended_at},
+                "trace_lookup": {
+                    "tool": "get_workflow_trace",
+                    "since": started_at,
+                    "until": ended_at,
+                    "scope": "all",
+                },
+                "derived": True,
+                "authoritative": False,
+                "needs_review": True,
+            })
+        output.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
     return output
 
 
