@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import hmac
 import os
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Iterable
 
 from gateway.plugin_redaction import PublicRedactor
@@ -109,7 +111,7 @@ def _ner_project(text: str, cleaner: PublicRedactor) -> str:
     return text
 
 
-def local_owner_names() -> tuple[str, ...]:
+def local_owner_names(config_path: Path | None = None) -> tuple[str, ...]:
     """Local identity evidence only; never ship the names or derivation hints.
 
     Respect the existing owner identity policy: explicitly configured aliases
@@ -120,6 +122,22 @@ def local_owner_names() -> tuple[str, ...]:
     from server.presentation import _owner_identity
 
     aliases, _emails, _phones = _owner_identity()
+    # The standalone sync executable may have been started with an explicit
+    # --config path that differs from the server's default config path.
+    # Read ONLY its configured owner aliases, never send the config itself.
+    if config_path is not None:
+        try:
+            config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            config = {}
+        if isinstance(config, dict):
+            extra = config.get("owner_aliases", [])
+            if isinstance(extra, str):
+                extra = [extra]
+            if isinstance(extra, list):
+                for entry in extra:
+                    if isinstance(entry, str) and 3 <= len(entry.strip()) <= 100:
+                        aliases[entry.strip().casefold()] = "OWNER"
     names: set[str] = set()
     for original in aliases:
         name = str(original).strip()
