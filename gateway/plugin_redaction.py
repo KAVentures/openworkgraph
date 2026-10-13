@@ -13,7 +13,7 @@ import hmac
 import re
 from typing import Any, Iterable
 
-from server.contextual_redaction import Detector
+from server.contextual_redaction import Detector, STOPWORDS
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -148,16 +148,16 @@ class PublicRedactor:
         def contact(match: re.Match[str]) -> str:
             caption = match.group(2)
             # Do not mask clearly generic UI terms after a cue.
-            if caption.casefold() in _SAFE_SINGLE_UI:
+            if caption.casefold() in (_SAFE_SINGLE_UI | STOPWORDS):
                 return match.group(0)
             return match.group(1) + self._token("PERSON", caption)
 
         safe = _CONTACT_CUE.sub(contact, safe)
         safe = _LEADING_CONTACT.sub(
             lambda m: self._token("PERSON", m.group(1))
-            if m.group(1).casefold() not in _SAFE_SINGLE_UI else m.group(1), safe)
+            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS) else m.group(1), safe)
         if (_SINGLE_CAPTION.fullmatch(safe)
-                and safe.casefold() not in _SAFE_SINGLE_UI):
+                and safe.casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)):
             return self._token(token_kind, safe)
         return safe[:_MAX_TEXT] + "…[truncated]" if len(safe) > _MAX_TEXT else safe
 
