@@ -24,6 +24,12 @@ def test_unknown_people_and_companies_do_not_leak_through_target_or_title():
     assert redactor.target_label("Chrome – Uniqueowner", token_kind="TITLE") == (
         "Chrome – " + redactor.owner_token
     )
+    # Swedish UI and file/PR references must remain navigable, never opaque.
+    for caption in ("Hämta igen", "Ny", "Adress- och sökfält",
+                    "3. Rapportering", "Continue connecting",
+                    "Pull requests · KAVentures/openworkgraph",
+                    "Sync v31 … Pull Request #1"):
+        assert redactor.target_label(caption) == caption
     raw = {"rows": [{
         "event_id": "synthetic-1", "observed_at": "2026-10-13T10:00:00Z",
         "event_type": "browser_click", "app": "Chrome",
@@ -38,13 +44,15 @@ def test_unknown_people_and_companies_do_not_leak_through_target_or_title():
                        detail=detail, owner_names=["Uniqueowner"])
         row = safe["rows"][0]
         assert row["event_id"] == "synthetic-1"
-        assert row["target_label"].startswith("TARGET_")
-        assert row["window_title"].startswith("TITLE_")
+        assert "PERSON_" in row["target_label"]
+        assert "ORG_" in row["target_label"]
+        assert row["window_title"].startswith("Confidential work for ")
+        assert "ORG_" in row["window_title"]
         assert "Michaela" not in str(safe)
         assert "Medlink Nordic" not in str(safe)
         if detail == "rich":
-            assert row["metadata"]["target"]["label"].startswith("TARGET_")
-            assert row["metadata"]["target"]["title"].startswith("TARGET_")
+            assert "ORG_" in row["metadata"]["target"]["label"]
+            assert "PERSON_" in row["metadata"]["target"]["title"]
 
 
 def test_browser_surface_never_inherits_visited_claude_label():
@@ -190,8 +198,39 @@ def test_readable_steps_and_unknown_search_queries_are_not_plaintext():
     safe = project(raw, secret="test-secret", principal="owner-a", detail="rich")
     assert safe["query"] != "Zorina"
     result = safe["candidate_clusters"][0]
-    assert result["readable_steps"][0].startswith(("STEP_", "PERSON_"))
+    assert result["readable_steps"][0].startswith("Gmail · Open ticket for ")
+    assert "PERSON_" in result["readable_steps"][0]
+    assert "ORG_" in result["readable_steps"][0]
     assert result["readable_steps"][1] == "Gmail · Open ticket"
     assert result["structural_steps"] == ["surface:chrome", "action:click"]
     assert "Zorina" not in str(safe)
     assert "Sample Nordic" not in str(safe)
+
+
+def test_idle_boundaries_keep_quick_cross_app_work_but_split_unrelated_sessions():
+    from server.procedural_memory import split_human_execution_windows
+
+    t0 = datetime(2026, 10, 13, 10, 0, tzinfo=timezone.utc)
+    def event(seconds, app):
+        return {
+            "observed_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+            "event_id": f"e-{seconds}", "event_type": "focus_span",
+            "app": app, "session_id": "same-session",
+        }
+    # Continuous real work can move Gmail -> Sheets -> Salesforce.
+    events = [event(0, "Gmail"), event(15, "Google Sheets"), event(30, "Salesforce")]
+    task = {
+        "task_id": "inferred", "session_id": "same-session",
+        "started_at": events[0]["observed_at"],
+        "ended_at": (t0 + timedelta(seconds=210)).isoformat(),
+    }
+    assert split_human_execution_windows(task, events, mode="idle") == [task]
+    # Following an actual quiet interval, a Oneflow contract is a new
+    # candidate even though the desktop session is unchanged.
+    events.append(event(210, "Oneflow"))
+    split = split_human_execution_windows(task, events, mode="idle")
+    assert len(split) == 2
+    assert split[0]["idle_gap_partitioned"] is True
+    assert split[1]["started_at"] == events[-1]["observed_at"]
+    assert not any(row.get("host_switch_partitioned") for row in split)
+    assert len(events) == 4
