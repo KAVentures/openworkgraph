@@ -13,6 +13,7 @@ import json
 import os
 import re
 from typing import Any
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import jwt
@@ -131,6 +132,43 @@ def _identity() -> tuple[str, str, dict[str, Any]]:
     if not organization_id or not actor_id:
         raise RuntimeError("OAuth identity is missing OpenWorkGraph account mapping")
     return organization_id, actor_id, claims
+
+
+def _reported_recorder_state(
+    db: GatewayDB, *, organization_id: str, actor_id: str,
+) -> dict[str, Any]:
+    """Only a fresh enrolled-device status can imply current liveness.
+
+    A stale or absent report never means the recorder stopped; do not infer
+    process health from the last observed event timestamp alone.
+    """
+    report = db.last_recorder_heartbeat(
+        organization_id=organization_id, actor_id=actor_id,
+    )
+    age = None
+    try:
+        when = datetime.fromisoformat(str((report or {}).get("received_at") or "").replace("Z", "+00:00"))
+        if when.tzinfo:
+            age = max(0, int((datetime.now(timezone.utc) - when).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    fresh = age is not None and age <= 60
+    claimed = str((report or {}).get("collector_state") or "")
+    local_collector_age = (report or {}).get("collector_age_seconds")
+    allowed = {"recording", "paused", "stopped", "no_recent_collector_heartbeat"}
+    verified = fresh and claimed in allowed
+    return {
+        "local_recorder_state": claimed if verified else "unknown_to_hosted_connector",
+        "fresh_authenticated_device_report": bool(fresh),
+        "last_device_report_age_seconds": age,
+        "desktop_collector_heartbeat_verified": bool(
+            fresh and claimed == "recording"
+            and isinstance(local_collector_age, int) and local_collector_age <= 45
+        ),
+        "recorder_state_is_based_on_event_timestamp": False,
+        "status_report_contains_work_content": False,
+        "stale_report_is_not_proof_recorder_stopped": True,
+    }
 
 
 def _public_payload(value: Any) -> Any:
@@ -381,9 +419,9 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         rich = [rich_evidence_row(row, include_identity=False) for row in source_rows]
         context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit)
         context["capture_status"] = {
+            **_reported_recorder_state(db, organization_id=organization_id, actor_id=actor_id),
             "latest_observed_at": max((str(row.get("observed_at") or "") for row in source_rows), default=None),
             "recent_evidence_latest_received_at": max((str(row.get("ingested_at") or "") for row in source_rows), default=None),
-            "local_recorder_state": "unknown_to_hosted_connector",
             "coverage": "bounded_recent_synced_evidence",
             "cloud_work_text": work_text_cloud.status(db, organization_id=organization_id, actor_id=actor_id),
         }
