@@ -717,6 +717,7 @@ def list_workflow_evidence_candidates(
     source_event_limit: int = 25_000,
     min_runs: int = 2,
     limit: int = 20,
+    min_cluster_quality: float = 0.0,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
@@ -727,15 +728,22 @@ def list_workflow_evidence_candidates(
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
-    candidate_clusters = cluster_runs(
+    all_clusters = cluster_runs(
         _candidate_runs(raw, executions),
         min_runs=threshold,
         structural_key="structural_steps",
         readable_key="semantic_steps",
         limit=100,
     )
+    candidate_clusters = [row for row in all_clusters
+                          if float(row.get("cluster_quality") or 0) >= min_cluster_quality]
+    qualifying_ids = {eid for row in candidate_clusters
+                      for eid in row.get("execution_ids") or []}
     items: list[dict[str, Any]] = []
     for family_key, members in grouped.items():
+        if min_cluster_quality > 0:
+            members = [member for member in members
+                       if member.get("execution_id") in qualifying_ids]
         if len(members) < threshold:
             continue
         steps, _transitions = _step_statistics(members)
@@ -769,6 +777,9 @@ def list_workflow_evidence_candidates(
         "families": items[:bounded],
         "candidate_clusters": candidate_clusters[:bounded],
         "preferred_navigation": "candidate_clusters",
+        "minimum_cluster_quality": float(min_cluster_quality),
+        "suppressed_low_specificity_clusters": len(all_clusters) - len(candidate_clusters),
+        "low_specificity_candidates_remain_in_raw_trace": True,
         "coarse_families_kept_for_compatibility": True,
         "returned": min(len(candidate_clusters) if candidate_clusters else len(items), bounded),
         "total": len(items),
