@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic Swedish/English inbox, calendar and Slack-like titles. No real messages or private work are stored here.",
+  "sensitive": [
+    {
+      "id": "inbox-greeting-sv",
+      "kind": "person",
+      "text": "Välkommen Michaela!",
+      "span": "Michaela",
+      "retain": [
+        "Välkommen ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-greeting-sv-2",
+      "kind": "person",
+      "text": "Hej Johanna, tack för ditt svar",
+      "span": "Johanna",
+      "retain": [
+        "Hej ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-greeting-en",
+      "kind": "person",
+      "text": "Hello Zorina, let's schedule a call",
+      "span": "Zorina",
+      "retain": [
+        "Hello ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "slack-greeting",
+      "kind": "person",
+      "text": "Slack · Hej Fatima! Kan du granska den?",
+      "span": "Fatima",
+      "retain": [
+        "Slack · Hej ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "calendar-greeting",
+      "kind": "person",
+      "text": "Calendar · Welcome Priya, thanks for joining",
+      "span": "Priya",
+      "retain": [
+        "Calendar · Welcome ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-signoff",
+      "kind": "person",
+      "text": "Hälsningar, Michaela",
+      "span": "Michaela",
+      "retain": [
+        "Hälsningar, ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-signoff-slash",
+      "kind": "person",
+      "text": "Tack! / Michaela",
+      "span": "Michaela",
+      "retain": [
+        "Tack! / ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-signoff-multi",
+      "kind": "person",
+      "text": "Hälsningar / Anna Berg",
+      "span": "Anna",
+      "retain": [
+        "Hälsningar / ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-self-introduction",
+      "kind": "person",
+      "text": "Mitt namn är Johanna och jag arbetar med support",
+      "span": "Johanna",
+      "retain": [
+        "Mitt namn är ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "slack-swedish-self",
+      "kind": "person",
+      "text": "Slack · Jag heter Zorina och är ny här",
+      "span": "Zorina",
+      "retain": [
+        "Jag heter ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-english-self",
+      "kind": "person",
+      "text": "My name is Michaela and I work here",
+      "span": "Michaela",
+      "retain": [
+        "My name is ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "calendar-person",
+      "kind": "person",
+      "text": "Calendar · Möte med Anna Svensson",
+      "span": "Anna",
+      "retain": [
+        "Calendar · ",
+        "PERSON_"
+      ]
+    },
+    {
+      "id": "inbox-org-hospital",
+      "kind": "org",
+      "text": "ringer från Karolinska",
+      "span": "Karolinska",
+      "retain": [
+        "ringer från ",
+        "ORG_"
+      ]
+    },
+    {
+      "id": "inbox-org-clinic",
+      "kind": "org",
+      "text": "ringer från Capio",
+      "span": "Capio",
+      "retain": [
+        "ringer från ",
+        "ORG_"
+      ]
+    },
+    {
+      "id": "org-standalone",
+      "kind": "org",
+      "text": "Jobbar på Capio idag",
+      "span": "Capio",
+      "retain": [
+        "Jobbar på ",
+        "ORG_",
+        " idag"
+      ]
+    },
+    {
+      "id": "org-sahlgrenska",
+      "kind": "org",
+      "text": "Fakturan skickades till Sahlgrenska",
+      "span": "Sahlgrenska",
+      "retain": [
+        "Fakturan skickades till ",
+        "ORG_"
+      ]
+    },
+    {
+      "id": "org-aleris",
+      "kind": "org",
+      "text": "Ny kund hos Aleris",
+      "span": "Aleris",
+      "retain": [
+        "Ny kund hos ",
+        "ORG_"
+      ]
+    },
+    {
+      "id": "org-suffix",
+      "kind": "org",
+      "text": "Medlink Nordic AB – Mitt namn är Michaela",
+      "span": "Medlink Nordic AB",
+      "retain": [
+        "ORG_",
+        "Mitt namn är PERSON_"
+      ]
+    }
+  ],
+  "preserve": [
+    "Välkommen till oss på mottagningen",
+    "Välkommen tillbaka",
+    "Välkommen alla!",
+    "Hello World",
+    "Hello everyone!",
+    "Jobbar på rapporten idag",
+    "Jobbar på projektet",
+    "Ring upp imorgon",
+    "3 / 5 klara",
+    "Q3 / 2026 budget",
+    "/var/log/owg/2026-10-13.log",
+    "Pull requests · KAVentures/openworkgraph",
+    "Sync v31 … Pull Request #1",
+    "Adress- och sökfält",
+    "Hämta igen",
+    "3. Rapportering",
+    "Sollefteå v41",
+    "Samarbetsavtal 2026",
+    "Continue connecting",
+    "Gmail · Inbox",
+    "Slack · Open #general",
+    "Calendar · Team standup"
+  ]
+}
