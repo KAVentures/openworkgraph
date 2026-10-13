@@ -56,6 +56,7 @@ def repeated_workflows(
     source_event_limit: int = 25_000,
     min_runs: int = 2,
     limit: int = 20,
+    include_low_specificity: bool = False,
 ) -> dict[str, Any]:
     raw = load_gateway_evidence(
         db,
@@ -71,6 +72,7 @@ def repeated_workflows(
         source_event_limit=source_event_limit,
         min_runs=min_runs,
         limit=limit,
+        min_cluster_quality=0.0 if include_low_specificity else 0.45,
         _raw_events=raw,
     )
     result["gateway_projection"] = True
