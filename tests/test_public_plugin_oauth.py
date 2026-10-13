@@ -1011,3 +1011,25 @@ def test_private_title_remains_searchable_without_returning_third_party_caption(
     assert client.post(enable_url, headers={
         **mapped, "X-OWG-Private-Search-Consent": "private-title-search-v1",
     }).status_code == 409
+
+
+def test_city_like_private_query_still_finds_model_visible_history(public_client):
+    """No yes/no private-name oracle, but normal geography remains searchable."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    _insert_personal_events([{
+        "event_id": "city-visible-1",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser", "event_type": "browser_click",
+        "app": "Chrome", "window_title": "Customer follow-up in Sollefteå",
+        "session_id": "city-search-session",
+    }])
+    response = rpc(client, mint(), "tools/call", {
+        "name": "search_work", "arguments": {"query": "Sollefteå", "limit": 5},
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["result"]["structuredContent"]
+    assert data["private_query_scanned_visible_only"] is True
+    assert data["private_title_match_enabled"] is False
+    assert any(row["event_id"] == "city-visible-1" for row in data["rows"])
+    assert "Sollefteå" in str(data["rows"])
