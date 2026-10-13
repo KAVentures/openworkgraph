@@ -17,6 +17,7 @@ from shared.discovery_scope import read_state as read_discovery_state
 from .config import load_device_token, load_gateway_settings
 from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
+from .cloud_privacy import project_event_for_upload
 from .state import SyncState
 from .work_text_sync import process_cloud_text
 
@@ -415,6 +416,11 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     item = prepare_event_for_gateway(event, policy)
                     if item is None:
                         continue
+                    # Drop preview/body fields and locally redact all allowed
+                    # title/label surfaces before constructing an HTTP batch.
+                    # A failed projection stops sync; it NEVER retries with
+                    # the original unredacted event.
+                    item = project_event_for_upload(item, secret=token)
                     event_id = str(item.get("event_id") or "").strip()
                     if not event_id:
                         raise RuntimeError(
