@@ -402,7 +402,10 @@ def split_human_execution_windows(
         when = _ts(event.get("observed_at"))
         etype = str(event.get("event_type") or "").casefold()
         meta, _trace = _meta(event)
-        duration = float(event.get("duration_seconds") or meta.get("duration_seconds") or 0)
+        try:
+            duration = float(event.get("duration_seconds") or meta.get("duration_seconds") or 0)
+        except (TypeError, ValueError, OverflowError):
+            duration = 0.0
         # A focus span explicitly marked idle is stronger than an app change.
         is_idle = ("idle" in etype or bool(meta.get("idle")))
         split = (
