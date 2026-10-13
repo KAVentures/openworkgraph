@@ -146,16 +146,39 @@ def _public_payload(value: Any) -> Any:
     return value
 
 
+def _owner_names(claims: dict[str, Any]) -> tuple[str, ...]:
+    """Identity-derived redaction hints only; never used for authorization."""
+    candidates: set[str] = set()
+    meta = claims.get("user_metadata")
+    sources = [claims, meta] if isinstance(meta, dict) else [claims]
+    for source in sources:
+        for field in ("name", "full_name", "given_name", "family_name",
+                      "first_name", "last_name", "preferred_username"):
+            value = source.get(field)
+            if isinstance(value, str) and 3 <= len(value.strip()) <= 100:
+                candidates.add(value.strip())
+                for part in re.split(r"\\s+", value.strip()):
+                    if len(part) >= 3:
+                        candidates.add(part)
+    email = claims.get("email")
+    if isinstance(email, str) and "@" in email:
+        for part in re.split(r"[._+\\-\\d]+", email.split("@", 1)[0]):
+            if 3 <= len(part) <= 40:
+                candidates.add(part)
+    return tuple(sorted(candidates, key=lambda x: (-len(x), x.casefold())))
+
+
 def _protected(value: Any, *, detail: str = "compact") -> Any:
     # Model-facing responses are ALWAYS redacted by the hosted server, even if
     # a connected device mistakenly sends richer metadata. Rich mode only
     # changes structural detail, never the privacy boundary.
-    organization_id, actor_id, _claims = _identity()
+    organization_id, actor_id, claims = _identity()
     safe = project_hosted(
         _public_payload(value),
         secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
         principal=f"{organization_id}|{actor_id}",
         detail=detail,
+        owner_names=_owner_names(claims),
     )
     return protect_observed_payload(safe)
 
@@ -223,10 +246,16 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         material = f"{organization_id}|{actor_id}".encode("utf-8")
         profile_id = "prf_" + hmac.new(profile_key.encode("utf-8"), material, hashlib.sha256).hexdigest()[:24]
         _audit(db, organization_id, actor_id, "plugin.profile.read", {})
+        cleaner = PublicRedactor(
+            secret=profile_key, principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        )
+        # Opaque ID remains stable for multi-account UX. Never return raw
+        # owner claims or a non-email placeholder in the email field.
         return Profile(
             id=profile_id,
-            name=claims["name"].strip() if isinstance(claims.get("name"), str) and claims["name"].strip() else None,
-            email=claims["email"].strip() if isinstance(claims.get("email"), str) and claims["email"].strip() else None,
+            name=cleaner.owner_token if _owner_names(claims) else None,
+            email=None,
             nickname="OpenWorkGraph",
         )
 
@@ -459,10 +488,11 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         })
 
     def _present_text(raw: dict[str, Any]) -> dict[str, Any]:
-        organization_id, actor_id, _claims = _identity()
+        organization_id, actor_id, claims = _identity()
         cleaner = PublicRedactor(
             secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
             principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
         )
         safe = dict(raw)
         if isinstance(safe.get("results"), list):
