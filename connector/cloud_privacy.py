@@ -155,6 +155,43 @@ class DeviceUploadRedactor:
                         and isinstance(v, str) and v}
                 if safe:
                     result[group] = safe
+        # Preserve the specifically allowlisted agent execution graph.
+        # This channel is separately opt-in, and still never includes prompts,
+        # response bodies, tool arguments/results or arbitrary nested fields.
+        if metadata.get("actor_kind") == "agent" or metadata.get("source") == "agent":
+            result["actor_kind"] = "agent"
+            agent = metadata.get("agent")
+            if isinstance(agent, dict):
+                safe = {k: self.label(v) for k, v in agent.items()
+                        if k in {"name", "provider", "framework", "model"}
+                        and isinstance(v, str) and v}
+                if safe:
+                    result["agent"] = safe
+            trace = metadata.get("trace")
+            if isinstance(trace, dict):
+                safe = {k: _opaque_id(v, secret=self.secret, kind="ref")
+                        for k, v in trace.items()
+                        if k in {"run_id", "trace_id", "span_id", "parent_span_id",
+                                 "workflow_id", "trigger_event_id"}
+                        and isinstance(v, str) and v}
+                if safe:
+                    result["trace"] = safe
+            tool = metadata.get("tool")
+            if isinstance(tool, dict):
+                safe = {k: self.label(v) for k, v in tool.items()
+                        if k in {"name", "category"} and isinstance(v, str) and v}
+                if safe:
+                    result["tool"] = safe
+            usage = metadata.get("usage")
+            if isinstance(usage, dict):
+                safe = {k: v for k, v in usage.items()
+                        if k in {"input_tokens", "output_tokens", "cached_input_tokens",
+                                 "total_tokens"} and isinstance(v, int) and not isinstance(v, bool)}
+                if safe:
+                    result["usage"] = safe
+            workspace = metadata.get("workspace_ref")
+            if isinstance(workspace, str) and workspace:
+                result["workspace_ref"] = _opaque_id(workspace, secret=self.secret, kind="ref")
         result["gateway_sync"] = {
             "source": "device_local_projection",
             "device_redaction_version": DEVICE_REDACTION_VERSION,
