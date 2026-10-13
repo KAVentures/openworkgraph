@@ -304,6 +304,18 @@ def test_name_cues_preserve_swedish_non_names_and_verbs():
     assert redactor.target_label("/ Michaela").endswith(
         redactor._token("PERSON", "Michaela")
     )
+    # A standalone slash signature must work at column zero, not just after
+    # whitespace or a newline. Redaction must be shared across text fields.
+    assert redactor.text("/ Michaela") == "/ " + redactor._token("PERSON", "Michaela")
+    assert redactor.target_label(" / Michaela") == " / " + redactor._token("PERSON", "Michaela")
+    assert redactor.text("Välkommen till oss på mottagningen") == (
+        "Välkommen till oss på mottagningen"
+    )
+    # Healthcare organization Capio is an ORG, not PERSON after "från".
+    labeled = redactor.target_label("ringer från Capio")
+    assert "Capio" not in labeled
+    assert "ORG_" in labeled
+    assert "PERSON_" not in labeled
     for caption in ("Hämta igen", "Adress- och sökfält",
                     "Sync v31 … Pull Request #1",
                     "Pull requests · KAVentures/openworkgraph"):
