@@ -202,7 +202,7 @@ def _compact_response(value: Any) -> Any:
         if name in {"navigation_hints", "suggested_followups", "ai_drafting_guidance"}:
             continue
         if name == "_openworkgraph_security" and isinstance(item, dict):
-            result[name] = {key: val for key, val in item.items() if key != "handling"}
+            result[name] = dict(item)
         elif name == "raw_evidence_fallback" and isinstance(item, dict):
             result[name] = {key: val for key, val in item.items()
                             if key not in {"reason", "instruction", "strategy"}}
