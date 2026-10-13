@@ -310,7 +310,16 @@ def _candidate_runs(
                 source = event.get("app")
         else:
             source = event.get("app")
-        label = _surface_for_event(event)
+        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+        host = str(event.get("page_host") or page.get("hostname") or "").lower()
+        host = host.removeprefix("www.").split(":", 1)[0]
+        by_host = {
+            "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
+            "mail.google.com": "Gmail", "github.com": "GitHub",
+            "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
+        }
+        label = by_host.get(host) or _surface_for_event(event)
         if label in allowed_labels:
             known_labels[_surface_key(source)] = label
 
