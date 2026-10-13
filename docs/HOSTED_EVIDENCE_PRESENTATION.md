@@ -8,13 +8,13 @@ These rules apply to both Claude and ChatGPT over the **same OAuth-protected OWG
 
 - `get_profile.id` stays a stable opaque account identifier. `get_profile.name` is an `OWNER_…` token when identity name hints are available; `get_profile.email` is `null` (not a fabricated email address).
 - The public redactor uses identity hints from the *validated* OAuth token, solely to detect the owner in observed text. This never changes permission checks or actor/tenant scoping.
-- Known emails become `EMAIL_…`; owner aliases become `OWNER_…`. Unknown free-form observed titles and target captions now **fail closed** to stable `TITLE_…` / `TARGET_…` tokens, including nested target metadata. Recognizable bounded UI action labels remain readable. `ORG_…` covers company-suffix expressions. This is deliberately more conservative than person-name dictionaries.
-- Original evidence is kept in the authorized store. Exact title/target searches match approved observed fields server-side, returning opaque results rather than leaking the original captions. Other fields or separately opted-in shared text need their own privacy review.
+- Known emails become `EMAIL_…`; owner aliases become `OWNER_…`. Observed titles and target captions now **redact detected person, owner and organization spans** while preserving remaining UI text (including Swedish interface labels and PR numbers). Ambiguous single-word titlecase captions can still become opaque `TITLE_…` / `TARGET_…` tokens. Rich nested target metadata follows the same rule. `ORG_…` covers company-suffix expressions. This is deliberately more conservative than person-name dictionaries.
+- Original evidence is kept in the authorized store. `search_work` matches model-visible redacted fields by default; `include_private_matches=true` explicitly opts into matching original authorized title/target fields. **Opting in discloses the presence or absence of a private search term even when output is pseudonymized**; do not set it automatically. Searches never bypass tenant/retention checks. Other fields or separately opted-in shared text need their own privacy review.
 - Redaction is a presentation transformation only. Original Gateway evidence is not rewritten or retroactively rescanned. The local application retains its existing access policies.
 
 ## Repeated workflow candidates
 
-Human candidate windows can cover unrelated websites, but genuine workflows can also cross Gmail, Sheets, and CRM. Hosted **discovery now retains unsplit session windows** and ranks by distinctiveness rather than treating host changes as task boundaries. Selected execution lookup still accepts split legacy references where available. Neither split nor unsplit grouping is verified business task identity; inspect the unfiltered raw trace.
+Human candidate windows can cover unrelated websites, but genuine workflows can also cross Gmail, Sheets, and CRM. Hosted discovery **splits inferred executions on measured idle gaps (75 seconds), not on quick host changes**, and ranks by distinctiveness. Thus Gmail → Sheets → Salesforce may remain one candidate when continuous, but unrelated work after idle should not be merged. Selected execution lookup still accepts split legacy references where available. Neither split nor unsplit grouping is verified business task identity; inspect the unfiltered raw trace.
 
 Each cluster has `cluster_quality` between 0 and 1. This is a **structural specificity score, not probability or confidence that the executions share a business task**. Generic `action:click` / `action:scroll` and single-surface similarity score low. Shared copy/paste, edit, submit or agent tool sequences are more informative.
 
@@ -28,11 +28,11 @@ Hosted `find_repeated_workflows` **includes low-specificity candidates by defaul
 
 ## Payload size
 
-Existing `detail="compact"` and `detail="rich"` remain supported. Compact now omits repeated explanatory prose while retaining observed evidence, pagination, suppression counters, and required boolean authority flags. The **opt-in** `detail="minimal"` mode is even smaller and is accepted by tools already exposing a `detail` parameter. It projects compact events and elides repetitive explanatory fields, keeping evidence, IDs, pagination, flags and a short `contract_version` marker. Static safety instructions remain in the MCP server's instructions. Minimal does **not** weaken authentication, text-consent checks or privacy redaction. Use compact/rich if existing clients rely on verbose contracts.
+Existing `detail="compact"` and `detail="rich"` remain supported. Compact now omits repeated explanatory prose while retaining observed evidence, pagination, suppression counters, required boolean authority flags and the short `_openworkgraph_security.handling` prompt-injection guidance. The **opt-in** `detail="minimal"` mode is even smaller and is accepted by tools already exposing a `detail` parameter. It projects compact events and elides repetitive explanatory fields, keeping evidence, IDs, pagination, flags and a short `contract_version` marker. Static safety instructions remain in the MCP server's instructions. Minimal does **not** weaken authentication, text-consent checks or privacy redaction. Use compact/rich if existing clients rely on verbose contracts.
 
 ## Historical goal search and coverage
 
-`get_goal_context` samples the latest 500 actor-scoped synced rows plus up to four lexical probes over the **full permitted synced time range**. Each probe now pages up to 600 matching events; this is still bounded and does **not** guarantee recall. The response explicitly includes:
+`get_goal_context` samples the latest 500 actor-scoped synced rows plus up to four lexical probes over the **full permitted synced time range**. Each lexical probe pages up to 300 matching events, with a shared budget of at most 800 matching rows across probes; this is still bounded and does **not** guarantee recall. The response explicitly includes:
 
 - `recent_tail_capped`, `lexical_probes_capped`, and `source_limit_reached`;
 - `lexical_search_indexed=false` (the current LIKE search does not have a dedicated full-text index);
