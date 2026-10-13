@@ -78,8 +78,11 @@ ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
 # High-precision cues for uncommon single names absent from the lexicon.
 _CONTACT_CUE = re.compile(
-    r"(?i)(\b(?:for|from|to|with|contact|attn|för|från|till|med)\s+)"
-    r"([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with|i)\b|[,;:]|$)"
+    r"(?i)(\b(?:for|from|to|with|contact|attn|för|från|till|med|private)\s+)"
+    r"([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with|i|message|email)\b|[,;:–—-]|$)"
+)
+_LEADING_CONTACT = re.compile(
+    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with)\b)"
 )
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
@@ -150,6 +153,9 @@ class PublicRedactor:
             return match.group(1) + self._token("PERSON", caption)
 
         safe = _CONTACT_CUE.sub(contact, safe)
+        safe = _LEADING_CONTACT.sub(
+            lambda m: self._token("PERSON", m.group(1))
+            if m.group(1).casefold() not in _SAFE_SINGLE_UI else m.group(1), safe)
         if (_SINGLE_CAPTION.fullmatch(safe)
                 and safe.casefold() not in _SAFE_SINGLE_UI):
             return self._token(token_kind, safe)
