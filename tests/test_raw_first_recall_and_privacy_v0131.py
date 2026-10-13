@@ -236,3 +236,68 @@ def test_idle_boundaries_keep_quick_cross_app_work_but_split_unrelated_sessions(
     assert split[1]["started_at"] == events[-1]["observed_at"]
     assert not any(row.get("host_switch_partitioned") for row in split)
     assert len(events) == 4
+
+
+def test_medlink_email_preview_redacts_swedish_self_introduction_and_signature():
+    from gateway.plugin_redaction import project
+    redactor = PublicRedactor(secret="synthetic-test-secret", principal="actor-medlink")
+
+    # Exercise the same linguistic forms seen in the report, across compact,
+    # rich, nested UI fields and free-text redaction.
+    preview = (
+        "Medlink Nordic AB – Mitt namn är Michaela och jag jobbar på Medlink. "
+        "Vi hjälper vårdgivare att effektivisera arbetet. "
+        "Hälsningar, Michaela"
+    )
+    for detail in ("compact", "rich"):
+        projected = project({"rows": [{
+            "event_id": "medlink-preview",
+            "observed_at": "2026-10-13T08:00:00Z",
+            "event_type": "browser_click",
+            "app": "Chrome", "window_title": "Gmail · Inbox",
+            "target_label": preview,
+            "metadata": {"target": {
+                "role": "button", "label": preview, "title": preview,
+            }},
+        }]}, secret="synthetic-test-secret", principal="actor-medlink",
+            detail=detail)
+        serialized = str(projected)
+        assert "Michaela" not in serialized
+        assert "Medlink Nordic AB" not in serialized
+        assert "Medlink" not in serialized
+        assert "Mitt namn är PERSON_" in serialized
+        assert "Hälsningar, PERSON_" in serialized
+        assert "Vi hjälper vårdgivare" in serialized
+        assert "jag jobbar på ORG_" in serialized
+
+    # A standalone organization in a job/employer sentence also gets masked.
+    assert "Medlink" not in redactor.text("Jag jobbar på Medlink idag")
+    # Previously inferred firm prefixes are masked across later labels in
+    # the same authorized redactor request (without a global denylist).
+    redactor.text("Medlink Nordic AB")
+    assert redactor.text("Kontakta Medlink imorgon") == (
+        "Kontakta " + redactor._token("ORG", "Medlink") + " imorgon"
+    )
+
+
+def test_name_cues_preserve_swedish_non_names_and_verbs():
+    redactor = PublicRedactor(secret="synthetic-test-secret", principal="actor-test")
+    assert redactor.target_label("Välkommen till oss på mottagningen") == (
+        "Välkommen till oss på mottagningen"
+    )
+    ring = redactor.target_label("Ring Erik imorgon")
+    assert ring.startswith("Ring ")
+    assert "Erik" not in ring
+    assert redactor.target_label("Hälsningar, Michaela").startswith(
+        "Hälsningar, PERSON_"
+    )
+    assert redactor.target_label("Mitt namn är Michaela och jag jobbar").startswith(
+        "Mitt namn är PERSON_"
+    )
+    assert redactor.target_label("/ Michaela").endswith(
+        redactor._token("PERSON", "Michaela")
+    )
+    for caption in ("Hämta igen", "Adress- och sökfält",
+                    "Sync v31 … Pull Request #1",
+                    "Pull requests · KAVentures/openworkgraph"):
+        assert redactor.target_label(caption) == caption
