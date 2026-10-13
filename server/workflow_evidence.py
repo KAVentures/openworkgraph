@@ -156,6 +156,10 @@ def _events_for_execution(
 def _resource_surface(reference: dict[str, Any]) -> str:
     provider = str(reference.get("provider") or "").strip().lower()
     kind = str(reference.get("resource_kind") or "").strip().lower()
+    if provider == "chatgpt":
+        return "ChatGPT"
+    if provider == "claude":
+        return "Claude"
     if provider == "gmail":
         return "Gmail"
     if provider == "salesforce":
