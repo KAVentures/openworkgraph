@@ -103,21 +103,38 @@ def workflow_evidence(
         until=until,
         limit=source_event_limit,
     )
-    result = build_workflow_evidence(
-        family_key=family_key,
-        execution_ids=execution_ids,
-        since=since,
-        until=until,
-        source_event_limit=source_event_limit,
-        max_runs=max_runs,
-        max_events_per_run=max_events_per_run,
-        include_canonical_evidence=True,
-        partition_host_switches=True,
-        _raw_events=raw,
-    )
+    def _build(*, split: bool) -> dict[str, Any]:
+        return build_workflow_evidence(
+            family_key=family_key,
+            execution_ids=execution_ids,
+            since=since,
+            until=until,
+            source_event_limit=source_event_limit,
+            max_runs=max_runs,
+            max_events_per_run=max_events_per_run,
+            include_canonical_evidence=True,
+            partition_host_switches=split,
+            _raw_events=raw,
+        )
+
+    legacy_reference_used = False
+    try:
+        result = _build(split=True)
+    except WorkflowEvidenceError as exc:
+        # Previously issued opaque IDs/family keys must remain resolvable.
+        # This fallback is read-only and uses the SAME actor-scoped, bounded
+        # canonical rows. Never swallow malformed selector errors.
+        if not (execution_ids or family_key) or not (
+            "unavailable in this bounded" in str(exc)
+            or "workflow family was not found" in str(exc)
+        ):
+            raise
+        result = _build(split=False)
+        legacy_reference_used = True
     provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
     provenance["source"] = "gateway_synced_privacy_hardened_evidence"
     provenance["canonical_local_store_may_be_richer"] = True
+    provenance["legacy_unsplit_execution_reference_used"] = legacy_reference_used
     result["provenance"] = provenance
     result["gateway_projection"] = True
     return result
