@@ -121,7 +121,8 @@ def local_owner_names(config_path: Path | None = None) -> tuple[str, ...]:
     """
     from server.presentation import _owner_identity
 
-    aliases, _emails, _phones = _owner_identity()
+    known_aliases, _emails, _phones = _owner_identity()
+    aliases = dict(known_aliases)  # never mutate presentation's identity cache
     # The standalone sync executable may have been started with an explicit
     # --config path that differs from the server's default config path.
     # Read ONLY its configured owner aliases, never send the config itself.
