@@ -156,3 +156,29 @@ def test_host_partition_is_opt_in_and_readable_ids_match(monkeypatch):
     }
     assert all(item["outcome_status"] == "unknown" for item in hosted)
     assert original[0]["outcome_status"] == "observed_completion"
+
+
+def test_hosted_legacy_execution_ids_resolve_without_cross_actor_reads(monkeypatch):
+    from gateway import workflow_evidence as gateway_module
+    from server.workflow_evidence import WorkflowEvidenceError
+
+    events = [{"event_id": "one", "session_id": "s1"}]
+    calls = []
+    def fake_load(_db, *, organization_id, actor_id, **_kwargs):
+        assert (organization_id, actor_id) == ("tenant-a", "actor-a")
+        return events
+    def fake_build(**kwargs):
+        assert kwargs["_raw_events"] is events
+        calls.append(kwargs["partition_host_switches"])
+        if kwargs["partition_host_switches"]:
+            raise WorkflowEvidenceError("One or more selected executions are unavailable in this bounded permitted evidence window.")
+        return {"provenance": {}, "selector": {"selected_execution_count": 1}}
+    monkeypatch.setattr(gateway_module, "load_gateway_evidence", fake_load)
+    monkeypatch.setattr(gateway_module, "build_workflow_evidence", fake_build)
+    output = gateway_module.workflow_evidence(
+        object(), organization_id="tenant-a", actor_id="actor-a",
+        execution_ids="execution:aaaaaaaaaaaaaaaa",
+    )
+    assert calls == [True, False]
+    assert output["provenance"]["legacy_unsplit_execution_reference_used"] is True
+    assert output["gateway_projection"] is True
