@@ -13,7 +13,7 @@ import hmac
 import re
 from typing import Any, Iterable
 
-from server.contextual_redaction import Detector
+from server.contextual_redaction import Detector, Settings, STOPWORDS
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -64,13 +64,69 @@ _ID_LISTS = frozenset({"evidence_event_ids", "event_ids", "ordered_event_ids",
 _OPAQUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$")
 _MAX_TEXT = 240
 
+_COMPANY_NAME = re.compile(
+    r"(?<![\w])(?:[A-ZÅÄÖ][\wÅÄÖåäö&.-]{1,45}\s+){1,4}"
+    r"(?:AB|Aktiebolag|Ltd|LLC|Inc|GmbH|Oy|PLC)\b"
+)
+# Only genuinely ambiguous single-word labels need a conservative fallback.
+# Multi-word interface text is NOT checked against an English vocabulary list.
+_SAFE_SINGLE_UI = frozenset("""
+open close save cancel continue retry settings next previous refresh
+new edit view search submit copy paste share help download upload
+openworkgraph owg github gmail chatgpt claude oneflow
+välkommen ring
+ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
+""".split())
+_SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
+# High-precision cues for uncommon single names absent from the lexicon.
+# Make only the *cue* case insensitive. The name itself must start with an
+# uppercase letter: otherwise Swedish "till oss på..." can redact "oss".
+_CONTACT_CUE = re.compile(
+    r"(?i:(\b(?:for|from|to|with|contact|attn|för|från|till|med|private)\s+))"
+    r"([A-ZÅÄÖ][a-zåäö]{2,35})"
+    r"(?=\s+(?i:at|hos|på|from|från|till|to|med|with|i|message|email)\b|[,;:–—-]|$)"
+)
+_LEADING_CONTACT = re.compile(
+    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?i:at|hos|på|from|från|to|med|with)\b)"
+)
+# Explicit grammatical identity and closing-signature cues cover unfamiliar
+# names missing from the first-name dictionary, including Swedish email bodies.
+_SELF_NAME_CUE = re.compile(
+    r"(?i:(?<!\w)(?:mitt\s+namn\s+är|jag\s+heter|namnet\s+är|"
+    r"my\s+name\s+is|vänliga\s+hälsningar|med\s+vänliga\s+hälsningar|"
+    r"hälsningar|best\s+regards|kind\s+regards|regards))"
+    r"\s*[,:\-]?\s*([A-ZÅÄÖ][a-zåäö]{2,40})\b"
+)
+_SLASH_SIGNATURE = re.compile(
+    r"(?<![\w/])/[ \t]+([A-ZÅÄÖ][a-zåäö]{2,40})(?=\s*(?:$|[\n.,;]))"
+)
+_EMPLOYER_CUE = re.compile(
+    r"(?i:(?<!\w)(?:jag\s+jobbar|jag\s+arbetar|jobbar|arbetar|"
+    r"anställd|employed|i\s+work|work)\s+(?:på|hos|at|for)\s+)"
+    r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö\-]{3,49})\b"
+)
+_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
+_BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
+
+
+# Verified organization brand, disambiguated before generic person matching.
+_KNOWN_ORG_BRANDS = re.compile(r"(?<!\w)(Capio)(?!\w)", re.I)
 
 class PublicRedactor:
     def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
         if not secret or not principal:
             raise ValueError("public redaction requires a scoped secret")
         self.key = hmac.new(secret.encode(), principal.encode(), hashlib.sha256).digest()
-        self.person_detector = Detector(token=self._token)
+        # These are unambiguous UI verbs/greetings in this connector's
+        # telemetry. Protect just these spans from lexicon false positives,
+        # while continuing to redact adjacent names and all other PII.
+        self.person_detector = Detector(
+            token=self._token,
+            settings=Settings(never_redact=("Välkommen", "Ring")),
+        )
+        # Only aliases proven by organization suffixes in this one redaction
+        # request. Never persist personal/customer names across accounts.
+        self.organization_aliases: set[str] = set()
         # Authenticated identity hints redact owner names in all text surfaces.
         names = {str(name).strip() for name in owner_names
                  if isinstance(name, str) and 3 <= len(name.strip()) <= 100}
@@ -100,13 +156,74 @@ class PublicRedactor:
         # URLs with arbitrary paths/queries can carry names, tokens or email
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
+        def company(match: re.Match[str]) -> str:
+            phrase = match.group(0)
+            first = phrase.split()[0]
+            if len(first) >= 5 and first.casefold() not in STOPWORDS:
+                self.organization_aliases.add(first)
+            return self._token("ORG", phrase)
+
+        text = _COMPANY_NAME.sub(company, text)
+        text = _KNOWN_ORG_BRANDS.sub(lambda m: self._token("ORG", m.group(0)), text)
+        # Strong employment context also identifies brands without AB/Ltd.
+        text = _EMPLOYER_CUE.sub(
+            lambda m: m.group(0)[:-len(m.group(1))] + self._token("ORG", m.group(1)),
+            text,
+        )
+        for company_alias in sorted(self.organization_aliases, key=len, reverse=True):
+            text = re.sub(
+                r"(?<!\w)" + re.escape(company_alias) + r"(?!\w)",
+                lambda m: self._token("ORG", m.group(0)), text,
+                flags=re.IGNORECASE,
+            )
+        text = _BARE_OWNER.sub(self.owner_token, text)
         # The same token must win for full owner name and first-name suffix,
         # even if the generic detector would otherwise use a PERSON token.
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
         text = self.person_detector.redact(text)
+        # Apply explicit grammatical name and signature cues on EVERY hosted
+        # text surface, not just UI targets (also shared-text previews,
+        # metadata and search excerpts). The general detector above does not
+        # recognize all unfamiliar names, e.g. Swedish "Mitt namn är ...".
+        def name_cue(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name.casefold() in (_SAFE_SINGLE_UI | STOPWORDS):
+                return match.group(0)
+            return match.group(0)[:-len(name)] + self._token("PERSON", name)
+
+        text = _SELF_NAME_CUE.sub(name_cue, text)
+        text = _SLASH_SIGNATURE.sub(name_cue, text)
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
+
+    def target_label(self, value: str, *, token_kind: str = "TARGET") -> str:
+        """Mask sensitive spans, retaining Swedish UI, PR numbers and resources.
+
+        Redaction is best-effort: unknown names *without* contextual cues are
+        inherently ambiguous. Single-word name-shaped labels use a conservative
+        fallback, but normal multiword UI text is never tested against a fixed
+        English vocabulary. Original permitted evidence remains unchanged.
+        """
+        safe = self.text(str(value), max_chars=1200)
+        if _PSEUDONYM.fullmatch(safe):
+            return safe
+
+        def contact(match: re.Match[str]) -> str:
+            caption = match.group(2)
+            # Do not mask clearly generic UI terms after a cue.
+            if caption.casefold() in (_SAFE_SINGLE_UI | STOPWORDS):
+                return match.group(0)
+            return match.group(1) + self._token("PERSON", caption)
+
+        safe = _CONTACT_CUE.sub(contact, safe)
+        safe = _LEADING_CONTACT.sub(
+            lambda m: self._token("PERSON", m.group(1))
+            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS) else m.group(1), safe)
+        if (_SINGLE_CAPTION.fullmatch(safe)
+                and safe.casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)):
+            return self._token(token_kind, safe)
+        return safe[:_MAX_TEXT] + "…[truncated]" if len(safe) > _MAX_TEXT else safe
 
     def metadata(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -129,7 +246,9 @@ class PublicRedactor:
             child = raw.get(key)
             if not isinstance(child, dict):
                 continue
-            safe = {k: (v if k in _IDS else self.text(v)) if isinstance(v, str) else v
+            safe = {k: (v if k in _IDS else self.target_label(v)
+                         if key == "target" and k in {"label", "title"}
+                         else self.target_label(v) if key == "target" else self.text(v)) if isinstance(v, str) else v
                     for k, v in child.items() if k in allowed
                     and isinstance(v, (str, int, float, bool)) and v not in (None, "", 0, False)
                     and (k not in _IDS or isinstance(v, str) and _OPAQUE.fullmatch(v))}
@@ -154,6 +273,8 @@ class PublicRedactor:
                     len(str(value)) > 160 or "@" in str(value) or "/" in str(value)
                 )
                 else str(value) if key in _IDS or key == "observed_at"
+                else self.target_label(str(value)) if key == "target_label"
+                else self.target_label(str(value), token_kind="TITLE") if key == "window_title"
                 else self.text(str(value))
             )
         meta = self.metadata(raw.get("metadata"))
@@ -213,6 +334,17 @@ class PublicRedactor:
         if isinstance(value, str):
             if key in _ID_LISTS:
                 return value if _OPAQUE.fullmatch(value) else "[INVALID_REFERENCE]"
+            if key == "target_label":
+                return self.target_label(value)
+            if key == "query":
+                return self.target_label(value, token_kind="QUERY")
+            if key in {"window_title", "page_title"}:
+                return self.target_label(value, token_kind="TITLE")
+            if key in {"step", "readable_steps", "semantic_steps", "core_steps",
+                       "readable_step", "from_step", "to_step"}:
+                if value.startswith(("surface:", "action:", "tool:")) and _OPAQUE.fullmatch(value):
+                    return value
+                return self.target_label(value, token_kind="STEP")
             return value if key in _IDS or key in {"observed_at", "snapshot_until", "next_cursor"} else self.text(value)
         return value
 

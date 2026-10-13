@@ -35,7 +35,7 @@ from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
 from .goal_context import gateway_goal_context
 from .plugin_redaction import project as project_hosted, PublicRedactor
-from . import work_text_cloud
+from . import work_text_cloud, private_search_consent
 from .hardening import DistributedPrincipalRateLimiter
 from .enrollment import create_enrollment_grant, init_enrollment_schema
 
@@ -187,6 +187,39 @@ def _minimal_response(value: Any) -> Any:
     return value
 
 
+def _compact_response(value: Any) -> Any:
+    """Keep legacy structural fields but avoid repeating static paragraphs.
+
+    Privacy controls and suppression diagnostics are *not* dropped. Dynamic
+    evidence, resource pointers, events and pagination are never summarized.
+    """
+    if isinstance(value, list):
+        return [_compact_response(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, Any] = {}
+    for name, item in value.items():
+        if name in {"navigation_hints", "suggested_followups", "ai_drafting_guidance"}:
+            continue
+        if name == "_openworkgraph_security" and isinstance(item, dict):
+            result[name] = dict(item)
+        elif name == "raw_evidence_fallback" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if key not in {"reason", "instruction", "strategy"}}
+        elif name == "interpretation_contract" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool)}
+        elif name == "evidence_contract" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool) or key == "version"}
+        elif name == "interpretation" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool)}
+        else:
+            result[name] = _compact_response(item)
+    return result
+
+
 def _protected(value: Any, *, detail: str = "compact") -> Any:
     if detail not in ("compact", "rich", "minimal"):
         raise ValueError("detail must be compact, minimal or rich")
@@ -207,6 +240,9 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         safe["privacy_level"] = "hosted_redacted"
         safe["evidence_and_workflow_interpretation"] = "non_authoritative"
     secured = protect_observed_payload(safe)
+    if detail == "compact":
+        secured = _compact_response(secured)
+        secured["contract_version"] = "hosted-evidence-v3"
     if detail == "minimal":
         # The hardener adds an intentionally verbose explanatory block on each
         # invocation. Preserve its actionable counters and suppressed paths,
@@ -236,6 +272,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     db.init()
     init_enrollment_schema(db)
     work_text_cloud.init_schema(db)
+    private_search_consent.init_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope, resource=resource)
     oauth_meta = _oauth_meta(required_scope)
     server = MCPServer(
@@ -246,7 +283,11 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "'which file was I using?', 'what happened before lunch?', 'how did I handle this last time?', "
             "or 'which of my repeated processes can be automated?'. "
             "For a goal that could benefit from how this person or their agents previously worked, "
-            "use get_goal_context to find bounded supporting examples and verify the returned raw windows. "
+            "use get_goal_context to find bounded supporting examples AND query-free recent_raw_evidence. "
+            "The example ranking is optional navigation, not a recall gate. If a result is "
+            "empty, ambiguous or source_limit_reached is true, retrieve relevant dated "
+            "get_workflow_trace pages without query before claiming a work item was absent. "
+            "Never rely on workflow cluster quality to exclude authorized raw observations. "
             "Use it only if previous observed work would materially improve the answer; do not call it "
             "for generic factual, coding, writing or future-planning tasks with no work-history dependency. "
             "For ambiguous recent-work continuity, start with get_current_work_context. "
@@ -373,22 +414,58 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         return _protected(context, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
-    def search_work(query: str, limit: int = 25, detail: str = "compact", cursor: str | None = None) -> dict[str, Any]:
-        """Use to locate previously observed work when a user mentions a particular past project, document, conversation, person or resource without naming OpenWorkGraph. Lexical search of this account's synced, redacted evidence; a miss is not proof of absence. Inspect dated get_workflow_trace for context."""
-        organization_id, actor_id, _claims = _identity()
-        cleaner = PublicRedactor(secret=os.environ["OWG_PLUGIN_PROFILE_KEY"], principal=f"{organization_id}|{actor_id}")
+    def search_work(query: str, limit: int = 25, detail: str = "compact", cursor: str | None = None, include_private_matches: bool = False) -> dict[str, Any]:
+        """Use to locate previously observed work when a user mentions a particular past project, document, conversation, person or resource without naming OpenWorkGraph. By default matches only redacted model-visible fields. Explicit include_private_matches=true searches original authorized title/target fields, disclosing existence of a private term despite redacted results. Never enable this implicitly. A miss is not proof of absence; verify query-free trace context."""
+        organization_id, actor_id, claims = _identity()
+        cleaner = PublicRedactor(
+            secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
+            principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        )
         needle = str(query).casefold().strip()
         if not needle:
             raise ValueError("search query must not be empty")
         if len(needle) > 240:
             raise ValueError("search query must be at most 240 characters")
+        # If a term is itself private (person/company/owner), default search
+        # must not even SQL-filter the original title: that would expose a
+        # name-existence side channel through row counts or has_more.
+        if include_private_matches and not private_search_consent.is_enabled(
+            db, organization_id=organization_id, actor_id=actor_id,
+        ):
+            raise PermissionError(
+                "Private title/target search requires your separate account "
+                "approval at /work-text, not only include_private_matches=true."
+            )
+        # Private-looking terms are still useful for searching *visible*
+        # redacted fields (e.g. a place name such as Sollefteå). Do not
+        # pre-filter source SQL on a hidden name unless the account owner
+        # separately enabled private-name existence searches.
+        visible_only_scan = bool(
+            not include_private_matches
+            and cleaner.target_label(query, token_kind="QUERY") != query
+        )
         matched_fields: dict[str, list[str]] = {}
         pattern = re.compile((r"(?<!\d)" if needle[0].isdigit() else "")
             + re.escape(needle) + (r"(?!\d)" if needle[-1].isdigit() else ""))
         def visible_match(row: dict[str, Any]) -> bool:
-            safe = cleaner.event(rich_evidence_row(row), detail="rich")
+            original = rich_evidence_row(row, include_identity=False)
+            safe = cleaner.event(original, detail="rich")
             values = {key: str(safe.get(key) or "").casefold()
-                      for key in ("app", "window_title", "target_label", "page_host", "semantic_action")}
+                      for key in ("app", "page_host", "semantic_action")}
+            # Private original captions can act as a name-existence oracle.
+            # Only opt into matching those permitted fields when explicitly asked.
+            values["window_title"] = str(safe.get("window_title") or "").casefold()
+            raw_meta = original.get("metadata") if isinstance(original.get("metadata"), dict) else {}
+            raw_target = raw_meta.get("target") if isinstance(raw_meta.get("target"), dict) else {}
+            safe_meta = safe.get("metadata") if isinstance(safe.get("metadata"), dict) else {}
+            safe_target = safe_meta.get("target") if isinstance(safe_meta.get("target"), dict) else {}
+            values["target_label"] = str(safe.get("target_label") or
+                                          safe_target.get("title") or safe_target.get("label") or "").casefold()
+            if include_private_matches:
+                values["window_title"] = str(original.get("window_title") or "").casefold()
+                values["target_label"] = str(original.get("target_label") or
+                                              raw_target.get("title") or raw_target.get("label") or "").casefold()
             values["resource_ref"] = str(((safe.get("metadata") or {}).get("resource_reference") or {}).get("resource_ref") or "").casefold()
             fields = [key for key, value in values.items()
                       if (needle == value if key == "resource_ref" else bool(pattern.search(value)))]
@@ -396,11 +473,16 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             return bool(fields)
         result = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
-            query=query, cursor=cursor, limit=max(1, min(int(limit), 500)), row_matcher=visible_match,
+            query=None if visible_only_scan else query, cursor=cursor,
+            limit=max(1, min(int(limit), 500)), row_matcher=visible_match,
         )
         for row in result["rows"]:
             row["matched_fields"] = matched_fields[str(row["event_id"])]
         result["query"] = query
+        result["private_title_match_enabled"] = bool(include_private_matches)
+        result["private_match_discloses_term_existence"] = bool(include_private_matches)
+        result["private_query_scanned_visible_only"] = visible_only_scan
+        result["private_query_requires_opt_in"] = visible_only_scan
         result["pagination_tool"] = "search_work"
         result["local_evidence_may_be_richer"] = True
         result["retrieval_notice"] = (
@@ -415,7 +497,11 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "omit_query_to_include_unmatched_events": True,
             "restart_without_search_cursor": True,
         }
-        _audit(db, organization_id, actor_id, "plugin.search.read", {"returned": result.get("returned", 0)})
+        _audit(db, organization_id, actor_id, "plugin.search.read", {
+            "returned": result.get("returned", 0),
+            "private_title_match_enabled": bool(include_private_matches),
+            "private_query_scanned_visible_only": visible_only_scan,
+        })
         return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
@@ -425,8 +511,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         session_id: str | None = None, query: str | None = None,
         detail: str = "compact",
     ) -> dict[str, Any]:
-        """Canonical raw privacy-hardened chronology with stable pagination. Use with explicit dates and no query to see surrounding events omitted by a failed inferred-task or lexical search; page until has_more is false."""
-        organization_id, actor_id, _claims = _identity()
+        """Canonical privacy-hardened chronology. Use query-free pagination to avoid inference misses. Private-name queries are rejected here; explicit owner-authorized name search uses search_work(include_private_matches=true)."""
+        organization_id, actor_id, claims = _identity()
+        if query and PublicRedactor(
+            secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
+            principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        ).target_label(query, token_kind="QUERY") != query:
+            raise ValueError(
+                "Private-name filtering is disabled for get_workflow_trace; "
+                "use search_work(include_private_matches=true) explicitly "
+                "or inspect query-free raw chronology."
+            )
         result = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
             since=since, until=until, cursor=cursor,
@@ -439,9 +535,9 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
-        include_low_specificity: bool = False,
+        include_low_specificity: bool = True,
     ) -> dict[str, Any]:
-        """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns heuristic structural candidates, not verified business rules or permission. Verify representative runs with get_workflow_evidence and raw traces."""
+        """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns ranked candidate patterns (including low-specificity patterns by default), not verified business workflows. Inspect raw chronology, including across applications, before drawing conclusions."""
         organization_id, actor_id, _claims = _identity()
         result = repeated_workflows(
             db, organization_id=organization_id, actor_id=actor_id,
@@ -616,10 +712,14 @@ class PersonalLinkEndpoint:
                 connect_origin=allowed)
             await response(scope, receive, send)
             return
-        is_status = scope.get("method") == "GET" and scope.get("path") == "/v1/plugin/work-text-status"
+        is_status = scope.get("method") == "GET" and scope.get("path") in {
+            "/v1/plugin/work-text-status", "/v1/plugin/private-search-status",
+        }
         if (scope.get("type") != "http" or (scope.get("method") != "POST" and not is_status) or
                 scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete",
-                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize", "/v1/plugin/work-text-status"}):
+                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize", "/v1/plugin/work-text-status",
+                                          "/v1/plugin/private-search-status", "/v1/plugin/private-search-enable",
+                                          "/v1/plugin/private-search-disable"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -647,6 +747,34 @@ class PersonalLinkEndpoint:
             return
         if not subject:
             await JSONResponse({"detail": "OAuth subject is required"}, status_code=401)(scope, receive, send)
+            return
+        if scope.get("path", "").startswith("/v1/plugin/private-search-"):
+            organization_id = f"oauth-sub:{subject}"
+            setting_path = scope.get("path")
+            if setting_path == "/v1/plugin/private-search-status":
+                enabled = private_search_consent.is_enabled(
+                    self.db, organization_id=organization_id, actor_id=organization_id
+                )
+                await JSONResponse({
+                    "enabled": enabled,
+                    "requires_user_opt_in": True,
+                    "consent_version": private_search_consent.CONSENT_VERSION,
+                }, headers={"Cache-Control": "no-store"})(scope, receive, send)
+                return
+            enabling = setting_path == "/v1/plugin/private-search-enable"
+            if enabling and headers.get("x-owg-private-search-consent") != private_search_consent.CONSENT_VERSION:
+                await JSONResponse({"detail": "Explicit private search acknowledgement required"},
+                                   status_code=400)(scope, receive, send)
+                return
+            result = private_search_consent.set_enabled(
+                self.db, organization_id=organization_id, actor_id=organization_id,
+                enabled=enabling,
+            )
+            _audit(self.db, organization_id, organization_id,
+                   "plugin.personal_private_search.enabled" if enabling
+                   else "plugin.personal_private_search.disabled",
+                   {"consent_version": private_search_consent.CONSENT_VERSION})
+            await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         if is_status:
             organization_id = f"oauth-sub:{subject}"

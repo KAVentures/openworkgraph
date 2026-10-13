@@ -7,6 +7,13 @@
 <label>Linked computer <select id="device"></select></label><p>Check the device ID against your desktop connection settings. Do not approve an unrecognized computer.</p>
 <label><input id="ack" type="checkbox"> I understand these excerpts will be uploaded and confirm I am authorized to share them.</label><button id="approve" disabled>Approve this computer</button>
 <h2>Delete cloud work text</h2><p>Deletes retained excerpts and approvals for all your computers. Uploads remain blocked until you approve a device again here and grant fresh permission on that computer. Content already shown in an AI conversation cannot be recalled.</p><button id="erase">Delete all cloud work text</button></section>
+<section id="private-settings" hidden><h2>Private-name search</h2>
+<p>Separate from cloud work-text sharing. Off by default. If enabled, connected AIs can choose to ask whether a particular person's or company's name appears in your synchronized work titles and UI labels. Although the answer hides the original name, a matching result can reveal that person's or company's association with your work. This does not share full email bodies.</p>
+<p id="private-state" role="status">Private-name search is disabled.</p>
+<label><input id="private-ack" type="checkbox"> I understand private-name existence can be disclosed to connected AI apps and choose to allow this account-level search capability.</label>
+<button id="private-enable" disabled>Allow private-name search</button>
+<button id="private-disable">Turn off private-name search</button>
+</section>
 <script nonce="__NONCE__">
 (async()=>{
 'use strict';
@@ -32,7 +39,10 @@ function take(state){
  return pending;
 }
 function message(text){$('status').textContent=text;}
-function controls(){ $('approve').disabled=!ready||!$('ack').checked||!$('device').value; }
+function controls(){
+ $('approve').disabled=!ready||!$('ack').checked||!$('device').value;
+ $('private-enable').disabled=!access||!$('private-ack').checked;
+}
 async function api(path,options={}){
  const response=await fetch(path,{...options,headers:{...options.headers,Authorization:'Bearer '+access},cache:'no-store',credentials:'omit',redirect:'error'});
  const result=await response.json();if(!response.ok)throw Error(result.detail||'Request failed');return result;
@@ -42,7 +52,13 @@ async function load(){
  ready=result.operator_available===true;
  $('controls').hidden=false;$('signin').hidden=true;$('signout').hidden=false;
  $('device').replaceChildren();for(const device of result.devices||[]){const option=document.createElement('option');option.value=device.device_id;option.textContent=device.device_id+(device.approved?' · approved':' · not approved');$('device').append(option);}
- message(ready?`Sharing status: ${result.status}\nRetained excerpts: ${result.retained_snapshots||0}`:'Cloud work-text sharing is currently unavailable. You can still delete retained cloud content.');controls();
+ message(ready?`Sharing status: ${result.status}\nRetained excerpts: ${result.retained_snapshots||0}`:'Cloud work-text sharing is currently unavailable. You can still delete retained cloud content.');
+ const privateSetting=await api('/v1/plugin/private-search-status');
+ $('private-settings').hidden=false;
+ $('private-state').textContent=privateSetting.enabled?'Private-name search is enabled.':'Private-name search is disabled.';
+ $('private-disable').disabled=!privateSetting.enabled;
+ $('private-ack').checked=false;
+ controls();
 }
 function base64(bytes){return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 async function signin(){
@@ -54,8 +70,23 @@ async function signin(){
  location.assign(config.issuer+'/oauth/authorize?'+new URLSearchParams({response_type:'code',client_id:client.client_id,redirect_uri:callback,scope:config.scope,state,code_challenge:challenge,code_challenge_method:'S256'}));
 }
 $('signin').onclick=()=>signin().catch(error=>message(error.message));
-$('signout').onclick=()=>{access='';ready=false;S.removeItem(key);const names=[];for(let i=0;i<localStorage.length;i++){const name=localStorage.key(i);if(name?.startsWith(prefix))names.push(name);}for(const name of names)localStorage.removeItem(name);$('controls').hidden=true;$('signout').hidden=true;$('signin').hidden=false;$('ack').checked=false;message('Signed out of cloud work-text settings.');};
+$('signout').onclick=()=>{access='';ready=false;S.removeItem(key);const names=[];for(let i=0;i<localStorage.length;i++){const name=localStorage.key(i);if(name?.startsWith(prefix))names.push(name);}for(const name of names)localStorage.removeItem(name);$('controls').hidden=true;$('private-settings').hidden=true;$('private-ack').checked=false;$('signout').hidden=true;$('signin').hidden=false;$('ack').checked=false;message('Signed out of cloud work-text settings.');};
 $('ack').onchange=controls;$('device').onchange=()=>{$('ack').checked=false;controls();};
+$('private-ack').onchange=controls;
+$('private-enable').onclick=async()=>{
+ if(!$('private-ack').checked||!access)return;
+ if(!confirm('Allow connected AI apps to search private names in your recorded titles? A hit can reveal the name appeared in your work.'))return;
+ try{await api('/v1/plugin/private-search-enable',{method:'POST',
+  headers:{'X-OWG-Private-Search-Consent':'private-title-search-v1'}});
+  await load();message('Private-name search is enabled for this account.');}
+ catch(error){message(error.message);}
+};
+$('private-disable').onclick=async()=>{
+ if(!access)return;
+ try{await api('/v1/plugin/private-search-disable',{method:'POST'});
+  await load();message('Private-name search is disabled.');}
+ catch(error){message(error.message);}
+};
 $('approve').onclick=async()=>{if(!ready||!$('ack').checked||!$('device').value)return;const id=$('device').value;if(!confirm('Approve cloud work-text sharing from '+id+'?'))return;try{await api('/v1/plugin/work-text-reauthorize',{method:'POST',headers:{'X-OWG-Consent-Version':'cloud-work-text-v1','X-OWG-Device-ID':id}});$('ack').checked=false;await load();message('Computer approved. Fresh local cloud-sharing permission is still required.');}catch(error){message(error.message);}controls();};
 $('erase').onclick=async()=>{if(!confirm('Delete all retained cloud text and all device approvals?'))return;try{const result=await api('/v1/plugin/work-text-delete',{method:'POST'});$('ack').checked=false;await load();message(`Deleted ${result.deleted} excerpts. New uploads require account approval and fresh local consent.`);}catch(error){message(error.message);}};
 const params=new URLSearchParams(location.search);if(location.search)history.replaceState(null,'',location.pathname);

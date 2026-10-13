@@ -372,12 +372,14 @@ def _execution_surface(event: dict[str, Any]) -> str:
 
 
 def split_human_execution_windows(
-    task: dict[str, Any], session_events: list[dict[str, Any]]
+    task: dict[str, Any], session_events: list[dict[str, Any]],
+    *, mode: str = "host", idle_gap_seconds: float = 75.0,
 ) -> list[dict[str, Any]]:
-    """Split unrelated host/app switches *within* a heuristic task window.
+    """Split heuristic windows on host switches (legacy) or real idle gaps.
 
-    A stable session alone is not a verified task identity. Keep boundaries
-    derived and conservative; the unmodified raw trace remains available.
+    Idle mode preserves rapid legitimate cross-app workflows while splitting
+    unrelated tasks after measured inactivity; never treat either derived
+    boundary as verified business intent or erase canonical evidence.
     """
     start, end = _ts(task.get("started_at")), _ts(task.get("ended_at"))
     if start is None or end is None:
@@ -389,15 +391,39 @@ def split_human_execution_windows(
     ]
     if len(events) < 2:
         return [task]
+    if mode not in {"host", "idle"}:
+        raise ValueError("unknown execution boundary mode")
     blocks: list[list[dict[str, Any]]] = [[]]
     current = ""
+    last_at: float | None = None
+    last_idle_duration = 0.0
     for event in events:
         surface = _execution_surface(event)
-        if surface and current and surface != current and blocks[-1]:
+        when = _ts(event.get("observed_at"))
+        etype = str(event.get("event_type") or "").casefold()
+        meta, _trace = _meta(event)
+        try:
+            duration = float(event.get("duration_seconds") or meta.get("duration_seconds") or 0)
+        except (TypeError, ValueError, OverflowError):
+            duration = 0.0
+        # A focus span explicitly marked idle is stronger than an app change.
+        is_idle = ("idle" in etype or bool(meta.get("idle")))
+        split = (
+            bool(surface and current and surface != current)
+            if mode == "host" else (
+                bool(last_at is not None and when is not None
+                     and when - last_at >= idle_gap_seconds)
+                or bool(last_idle_duration >= idle_gap_seconds)
+            )
+        )
+        if split and blocks[-1]:
             blocks.append([])
         blocks[-1].append(event)
         if surface:
             current = surface
+        if when is not None:
+            last_at = when
+        last_idle_duration = duration if is_idle else 0.0
     if len(blocks) == 1:
         return [task]
     result: list[dict[str, Any]] = []
@@ -409,8 +435,9 @@ def split_human_execution_windows(
             continue
         clone = dict(task)
         clone["started_at"], clone["ended_at"] = first, last
+        boundary_version = "surface-boundary-v1" if mode == "host" else "idle-gap-boundary-v1"
         clone["task_id"] = hashlib.sha256(
-            f"{task.get('task_id')}|surface-boundary-v1|{index}|{first}".encode()
+            f"{task.get('task_id')}|{boundary_version}|{index}|{first}".encode()
         ).hexdigest()[:16]
         clone["elapsed_seconds"] = max(0.0, (_ts(last) or 0) - (_ts(first) or 0))
         # The parent inferred task's family/outcome/anchors may refer to a
@@ -418,12 +445,13 @@ def split_human_execution_windows(
         clone["task_family"] = ""
         clone["completion_observed"] = False
         clone["anchor_event_ids"] = []
-        clone["host_switch_partitioned"] = True
+        clone["host_switch_partitioned"] = mode == "host"
+        clone["idle_gap_partitioned"] = mode == "idle"
         result.append(clone)
     return result or [task]
 
 
-def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False) -> list[dict[str, Any]]:
+def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False, split_human_idle: bool = False) -> list[dict[str, Any]]:
     """Build privacy-minimized human and agent executions from canonical evidence."""
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
@@ -435,8 +463,9 @@ def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bo
     task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
     for candidate in task_data.get("tasks") or []:
         session_id = str(candidate.get("session_id") or "")
-        for task in (split_human_execution_windows(candidate, by_session.get(session_id, []))
-                     if split_human_hosts else [candidate]):
+        for task in (split_human_execution_windows(candidate, by_session.get(session_id, []),
+                       mode="idle" if split_human_idle else "host")
+                     if (split_human_hosts or split_human_idle) else [candidate]):
             steps = _human_steps(task, by_session.get(session_id, []))
             if not steps:
                 continue

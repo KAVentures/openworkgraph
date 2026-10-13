@@ -479,7 +479,11 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
     assert 'prompt' not in row['metadata']
     assert 'resolver_locator' not in row['metadata']['resource_reference']
     assert 'pathname' not in row['metadata']['page']
-    assert 'EMAIL_' in row['window_title']
+    # Fully opaque titles are safer than partial email masking when
+    # unfamiliar names or organizations might remain.
+    assert 'Anna Svensson' not in row['window_title']
+    assert email not in row['window_title']
+    assert ('PERSON_' in row['window_title'] or 'EMAIL_' in row['window_title'])
     assert rich['privacy_representation']['level'] == 'hosted_redacted'
     assert rich['evidence_contract']['metadata_preserved'] is False
 
@@ -917,3 +921,115 @@ def test_minimal_detail_is_additive_and_preserves_cursor(public_client):
     })
     assert follow.status_code == 200, follow.text
     assert follow.json()["result"]["structuredContent"]["rows"]
+
+
+def test_private_title_remains_searchable_without_returning_third_party_caption(public_client):
+    """Authorized exact search matches raw permitted title, output remains opaque."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    _insert_personal_events([{
+        "event_id": "private-title-search-1",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser", "event_type": "browser_click",
+        "session_id": "private-title-search",
+        "app": "Chrome",
+        "window_title": "Contract for Zorina at Sample Nordic AB",
+        "metadata": {"target": {"role": "button",
+                                "label": "Open contract for Zorina"}},
+    }])
+    token = mint()
+    # Default matching never uses private original names as a yes/no oracle.
+    normal = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {"query": "Zorina", "limit": 5},
+    })
+    assert normal.status_code == 200, normal.text
+    normal_data = normal.json()["result"]["structuredContent"]
+    assert normal_data["private_title_match_enabled"] is False
+    assert normal_data["private_query_requires_opt_in"] is True
+    # The raw trace tool cannot bypass the private-name search decision.
+    blocked_trace = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"query": "Zorina"},
+    })
+    assert blocked_trace.status_code == 200, blocked_trace.text
+    assert blocked_trace.json()["result"].get("isError") is True
+    assert not any(row["event_id"] == "private-title-search-1"
+                   for row in normal_data["rows"])
+    # The AI-controlled flag alone cannot grant private-title search.
+    unapproved = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "include_private_matches": True},
+    })
+    assert unapproved.status_code == 200
+    assert unapproved.json()["result"].get("isError") is True
+
+    # A separate OAuth-authenticated user account setting must be enabled.
+    status_url = "/v1/plugin/private-search-status"
+    enable_url = "/v1/plugin/private-search-enable"
+    disable_url = "/v1/plugin/private-search-disable"
+    bearer = {"Authorization": f"Bearer {token}"}
+    assert client.get(status_url, headers=bearer).json()["enabled"] is False
+    assert client.post(enable_url, headers=bearer).status_code == 400
+    assert client.post(enable_url, headers={
+        **bearer, "X-OWG-Private-Search-Consent": "private-title-search-v1",
+    }).json()["enabled"] is True
+
+    # Explicit owner-scoped opt-in knowingly discloses name existence but
+    # must still never return raw title or target label text.
+    response = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "limit": 5, "include_private_matches": True},
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["result"]["structuredContent"]
+    found = [row for row in data["rows"]
+             if row["event_id"] == "private-title-search-1"]
+    assert len(found) == 1
+    assert found[0]["window_title"].startswith("Contract for ")
+    assert "PERSON_" in found[0]["window_title"]
+    assert data["private_match_discloses_term_existence"] is True
+    assert data["query"] != "Zorina"
+    assert "Zorina" not in response.text
+    assert "Sample Nordic" not in response.text
+    trace = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"limit": 15},
+    })
+    assert trace.status_code == 200, trace.text
+    trace_data = trace.json()["result"]["structuredContent"]
+    assert any(row["event_id"] == "private-title-search-1"
+               for row in trace_data["rows"])
+    assert "Zorina" not in trace.text
+    assert client.post(disable_url, headers=bearer).json()["enabled"] is False
+    revoked = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "include_private_matches": True},
+    })
+    assert revoked.json()["result"].get("isError") is True
+    # Consent belongs to the OAuth actor, not everybody in the same backend.
+    outsider = {"Authorization": f"Bearer {mint(sub='different-person')}"}
+    assert client.get(status_url, headers=outsider).json()["enabled"] is False
+    mapped = {"Authorization": f"Bearer {mint(owg_org_id='company', owg_actor_id='employee')}"}
+    assert client.post(enable_url, headers={
+        **mapped, "X-OWG-Private-Search-Consent": "private-title-search-v1",
+    }).status_code == 409
+
+
+def test_city_like_private_query_still_finds_model_visible_history(public_client):
+    """No yes/no private-name oracle, but normal geography remains searchable."""
+    from datetime import datetime, timezone
+    client, mint = public_client
+    _insert_personal_events([{
+        "event_id": "city-visible-1",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser", "event_type": "browser_click",
+        "app": "Chrome", "window_title": "Customer follow-up in Sollefteå",
+        "session_id": "city-search-session",
+    }])
+    response = rpc(client, mint(), "tools/call", {
+        "name": "search_work", "arguments": {"query": "Sollefteå", "limit": 5},
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["result"]["structuredContent"]
+    assert data["private_query_scanned_visible_only"] is True
+    assert data["private_title_match_enabled"] is False
+    assert any(row["event_id"] == "city-visible-1" for row in data["rows"])
+    assert "Sollefteå" in str(data["rows"])

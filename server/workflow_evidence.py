@@ -21,6 +21,7 @@ from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
 
 FORMAT = "openworkgraph.workflow-evidence.v1"
+LOW_SPECIFICITY_QUALITY_FLOOR = 0.45
 MAX_SOURCE_EVENTS = 100_000
 MAX_RUNS = 25
 MAX_EVENTS_PER_RUN = 160
@@ -257,14 +258,18 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
 def _candidate_runs(
     raw_events: list[dict[str, Any]],
     executions: list[dict[str, Any]],
-    *, partition_host_switches: bool = False,
+    *, partition_host_switches: bool = False, partition_idle_gaps: bool = False,
 ) -> list[dict[str, Any]]:
     """Overlay the one privacy-safe readable projection onto structural runs."""
     readable_by_id: dict[str, list[str]] = {}
     try:
         from .procedural_feedback import _human_runs
-        for run in (_human_runs(raw_events, split_human_hosts=True)
-                    if partition_host_switches else _human_runs(raw_events)):
+        for run in (
+            _human_runs(raw_events, split_human_hosts=partition_host_switches,
+                        split_human_idle=partition_idle_gaps)
+            if (partition_host_switches or partition_idle_gaps)
+            else _human_runs(raw_events)
+        ):
             execution_id = str(run.get("execution_id") or "")
             if execution_id:
                 readable_by_id[execution_id] = [
@@ -292,36 +297,47 @@ def _candidate_runs(
     except Exception:
         pass
 
-    # Only map an opaque surface key to a vetted product label when the
-    # underlying event proves that mapping. Never echo arbitrary window titles.
+    # Structural keys must be labelled by the surface which *created* them,
+    # not by whichever website happened to be open in a generic Chrome window.
     from .procedural_memory import _surface_key
-    allowed_labels = {
-        "ChatGPT", "Claude", "GitHub", "Gmail", "Google Drive", "Google Docs",
-        "Google Sheets", "Google Slides", "Jira", "Linear", "Notion",
-        "Salesforce", "Slack", "OpenWorkGraph", "VS Code", "Terminal",
+    fixed = {
+        "chrome": "Browser", "google chrome": "Browser", "browser": "Browser",
+        "safari": "Browser", "edge": "Browser", "microsoft edge": "Browser",
+        "firefox": "Browser", "claude": "Claude", "chatgpt": "ChatGPT",
+        "gmail": "Gmail", "github": "GitHub", "slack": "Slack",
+        "openworkgraph": "OpenWorkGraph", "terminal": "Terminal",
+        "google docs": "Google Docs", "google sheets": "Google Sheets",
+        "google drive": "Google Drive", "jira": "Jira", "linear": "Linear",
     }
-    known_labels: dict[str, str] = {}
+    fixed_hosts = {
+        "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
+        "mail.google.com": "Gmail", "github.com": "GitHub",
+        "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
+    }
+    label_candidates: dict[str, set[str]] = defaultdict(set)
     for event in raw_events:
         etype = str(event.get("event_type") or "")
         if etype.startswith(("browser_", "screen_")):
             try:
-                source = analytics._semantic_surface(event)
+                source = str(analytics._semantic_surface(event) or "")
             except Exception:
-                source = event.get("app")
+                source = str(event.get("app") or "")
         else:
-            source = event.get("app")
-        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
-        host = str(event.get("page_host") or page.get("hostname") or "").lower()
-        host = host.removeprefix("www.").split(":", 1)[0]
-        by_host = {
-            "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
-            "mail.google.com": "Gmail", "github.com": "GitHub",
-            "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
-        }
-        label = by_host.get(host) or _surface_for_event(event)
-        if label in allowed_labels:
-            known_labels[_surface_key(source)] = label
+            source = str(event.get("app") or "")
+        if not source:
+            continue
+        source_name = source.casefold().strip()
+        # Host labels are valid only when the structural source *is* that host.
+        # A browser app's visited page must never relabel surface:chrome.
+        label = fixed.get(source_name) or fixed_hosts.get(source_name)
+        label_candidates[_surface_key(source)].add(label or "Other surface (redacted)")
+    known_labels = {
+        key: next(iter(values)) if len(values) == 1 else "Other surface (redacted)"
+        for key, values in label_candidates.items()
+    }
+    for browser in ("chrome", "google chrome", "browser", "safari",
+                    "firefox", "microsoft edge", "edge"):
+        known_labels[_surface_key(browser)] = "Browser"
 
     projected: list[dict[str, Any]] = []
     for execution in executions:
@@ -629,12 +645,15 @@ def build_workflow_evidence(
     max_events_per_run: int = 100,
     include_canonical_evidence: bool = True,
     partition_host_switches: bool = False,
+    partition_idle_gaps: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ids = _parse_execution_ids(execution_ids)
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = (derive_executions(raw, split_human_hosts=True)
-                  if partition_host_switches else derive_executions(raw))
+    executions = (derive_executions(raw, split_human_hosts=partition_host_switches,
+                                   split_human_idle=partition_idle_gaps)
+                  if (partition_host_switches or partition_idle_gaps)
+                  else derive_executions(raw))
     selected = _select_executions(
         executions,
         family_key=family_key,
@@ -650,7 +669,7 @@ def build_workflow_evidence(
     high_steps = [row for row in steps if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
     less_common = [row for row in steps if int(row["support_runs"]) < threshold][:MAX_STEPS_RETURNED]
     high_transitions = [row for row in transitions if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
-    selected_candidates = _candidate_runs(raw, selected, partition_host_switches=partition_host_switches)
+    selected_candidates = _candidate_runs(raw, selected, partition_host_switches=partition_host_switches, partition_idle_gaps=partition_idle_gaps)
     surface_labels = {
         key: value for run in selected_candidates
         for key, value in (run.get("surface_labels") or {}).items()
@@ -775,11 +794,15 @@ def list_workflow_evidence_candidates(
     limit: int = 20,
     min_cluster_quality: float = 0.0,
     partition_host_switches: bool = False,
+    partition_idle_gaps: bool = False,
+    rank_by_quality: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = (derive_executions(raw, split_human_hosts=True)
-                  if partition_host_switches else derive_executions(raw))
+    executions = (derive_executions(raw, split_human_hosts=partition_host_switches,
+                                   split_human_idle=partition_idle_gaps)
+                  if (partition_host_switches or partition_idle_gaps)
+                  else derive_executions(raw))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
         key = str(execution.get("family_key") or "")
@@ -787,7 +810,7 @@ def list_workflow_evidence_candidates(
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
     all_clusters = cluster_runs(
-        _candidate_runs(raw, executions, partition_host_switches=partition_host_switches),
+        _candidate_runs(raw, executions, partition_host_switches=partition_host_switches, partition_idle_gaps=partition_idle_gaps),
         min_runs=threshold,
         structural_key="structural_steps",
         readable_key="semantic_steps",
@@ -795,6 +818,12 @@ def list_workflow_evidence_candidates(
     )
     candidate_clusters = [row for row in all_clusters
                           if float(row.get("cluster_quality") or 0) >= min_cluster_quality]
+    if rank_by_quality:
+        candidate_clusters.sort(key=lambda row: (
+            -float(row.get("cluster_quality") or 0),
+            -int(row.get("execution_count") or 0),
+            str(row.get("candidate_cluster_id") or ""),
+        ))
     qualifying_ids = {eid for row in candidate_clusters
                       for eid in row.get("execution_ids") or []}
     items: list[dict[str, Any]] = []
@@ -837,6 +866,11 @@ def list_workflow_evidence_candidates(
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": len(all_clusters) - len(candidate_clusters),
+        "low_specificity_cluster_count": sum(
+            float(row.get("cluster_quality") or 0) < LOW_SPECIFICITY_QUALITY_FLOOR for row in all_clusters
+        ),
+        "candidate_ranking": "specificity_then_support" if rank_by_quality else "support",
+        "returned_clusters_are_verified_tasks": False,
         "low_specificity_candidates_remain_in_raw_trace": True,
         "coarse_families_kept_for_compatibility": True,
         "returned": min(len(candidate_clusters) if candidate_clusters else len(items), bounded),

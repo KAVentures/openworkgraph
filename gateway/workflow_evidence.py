@@ -11,6 +11,7 @@ from typing import Any
 
 from server.workflow_evidence import (
     WorkflowEvidenceError,
+    LOW_SPECIFICITY_QUALITY_FLOOR,
     build_workflow_evidence,
     list_workflow_evidence_candidates,
 )
@@ -56,7 +57,7 @@ def repeated_workflows(
     source_event_limit: int = 25_000,
     min_runs: int = 2,
     limit: int = 20,
-    include_low_specificity: bool = False,
+    include_low_specificity: bool = True,
 ) -> dict[str, Any]:
     raw = load_gateway_evidence(
         db,
@@ -72,8 +73,11 @@ def repeated_workflows(
         source_event_limit=source_event_limit,
         min_runs=min_runs,
         limit=limit,
-        min_cluster_quality=0.0 if include_low_specificity else 0.45,
-        partition_host_switches=True,
+        min_cluster_quality=0.0 if include_low_specificity else LOW_SPECIFICITY_QUALITY_FLOOR,
+        # Preserve cross-app sequences: host changes do not prove task changes.
+        partition_host_switches=False,
+        partition_idle_gaps=True,
+        rank_by_quality=True,
         _raw_events=raw,
     )
     result["gateway_projection"] = True
@@ -103,7 +107,7 @@ def workflow_evidence(
         until=until,
         limit=source_event_limit,
     )
-    def _build(*, split: bool) -> dict[str, Any]:
+    def _build(*, mode: str) -> dict[str, Any]:
         return build_workflow_evidence(
             family_key=family_key,
             execution_ids=execution_ids,
@@ -113,28 +117,35 @@ def workflow_evidence(
             max_runs=max_runs,
             max_events_per_run=max_events_per_run,
             include_canonical_evidence=True,
-            partition_host_switches=split,
+            partition_host_switches=mode == "host",
+            partition_idle_gaps=mode == "idle",
             _raw_events=raw,
         )
 
-    legacy_reference_used = False
-    try:
-        result = _build(split=True)
-    except WorkflowEvidenceError as exc:
-        # Previously issued opaque IDs/family keys must remain resolvable.
-        # This fallback is read-only and uses the SAME actor-scoped, bounded
-        # canonical rows. Never swallow malformed selector errors.
-        if not (execution_ids or family_key) or not (
-            "unavailable in this bounded" in str(exc)
-            or "workflow family was not found" in str(exc)
-        ):
-            raise
-        result = _build(split=False)
-        legacy_reference_used = True
+    # New discovery issues idle-partitioned IDs. Preserve older host-partition
+    # and original unsplit IDs so stored references do not silently disappear.
+    # All three modes operate on identical actor-scoped, bounded evidence.
+    partition_mode = "idle"
+    for candidate_mode in ("idle", "host", "unsplit"):
+        try:
+            result = _build(mode=candidate_mode)
+            partition_mode = candidate_mode
+            break
+        except WorkflowEvidenceError as exc:
+            recoverable = (
+                (execution_ids or family_key) and
+                ("unavailable in this bounded" in str(exc)
+                 or "workflow family was not found" in str(exc))
+            )
+            if not recoverable or candidate_mode == "unsplit":
+                raise
+    legacy_reference_used = partition_mode == "unsplit"
     provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
     provenance["source"] = "gateway_synced_privacy_hardened_evidence"
     provenance["canonical_local_store_may_be_richer"] = True
     provenance["legacy_unsplit_execution_reference_used"] = legacy_reference_used
+    provenance["legacy_host_partition_reference_used"] = partition_mode == "host"
+    provenance["execution_partition_mode"] = partition_mode
     result["provenance"] = provenance
     result["gateway_projection"] = True
     return result

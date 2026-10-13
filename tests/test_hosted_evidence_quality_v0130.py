@@ -169,8 +169,8 @@ def test_hosted_legacy_execution_ids_resolve_without_cross_actor_reads(monkeypat
         return events
     def fake_build(**kwargs):
         assert kwargs["_raw_events"] is events
-        calls.append(kwargs["partition_host_switches"])
-        if kwargs["partition_host_switches"]:
+        calls.append((kwargs["partition_host_switches"], kwargs["partition_idle_gaps"]))
+        if kwargs["partition_host_switches"] or kwargs["partition_idle_gaps"]:
             raise WorkflowEvidenceError("One or more selected executions are unavailable in this bounded permitted evidence window.")
         return {"provenance": {}, "selector": {"selected_execution_count": 1}}
     monkeypatch.setattr(gateway_module, "load_gateway_evidence", fake_load)
@@ -179,6 +179,7 @@ def test_hosted_legacy_execution_ids_resolve_without_cross_actor_reads(monkeypat
         object(), organization_id="tenant-a", actor_id="actor-a",
         execution_ids="execution:aaaaaaaaaaaaaaaa",
     )
-    assert calls == [True, False]
+    assert calls == [(False, True), (True, False), (False, False)]
+    assert output["provenance"]["execution_partition_mode"] == "unsplit"
     assert output["provenance"]["legacy_unsplit_execution_reference_used"] is True
     assert output["gateway_projection"] is True
