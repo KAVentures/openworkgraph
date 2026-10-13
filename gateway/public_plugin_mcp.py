@@ -35,7 +35,7 @@ from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
 from .goal_context import gateway_goal_context
 from .plugin_redaction import project as project_hosted, PublicRedactor
-from . import work_text_cloud
+from . import work_text_cloud, private_search_consent
 from .hardening import DistributedPrincipalRateLimiter
 from .enrollment import create_enrollment_grant, init_enrollment_schema
 
@@ -272,6 +272,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     db.init()
     init_enrollment_schema(db)
     work_text_cloud.init_schema(db)
+    private_search_consent.init_schema(db)
     verifier = OIDCJWTVerifier(issuer=issuer, audience=token_audience, jwks_url=jwks, algorithms=algorithms, required_scope=required_scope, resource=resource)
     oauth_meta = _oauth_meta(required_scope)
     server = MCPServer(
@@ -429,6 +430,13 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         # If a term is itself private (person/company/owner), default search
         # must not even SQL-filter the original title: that would expose a
         # name-existence side channel through row counts or has_more.
+        if include_private_matches and not private_search_consent.is_enabled(
+            db, organization_id=organization_id, actor_id=actor_id,
+        ):
+            raise PermissionError(
+                "Private title/target search requires your separate account "
+                "approval at /work-text, not only include_private_matches=true."
+            )
         if not include_private_matches and cleaner.target_label(query, token_kind="QUERY") != query:
             _audit(db, organization_id, actor_id, "plugin.search.read", {
                 "returned": 0, "private_title_match_enabled": False,
@@ -711,10 +719,14 @@ class PersonalLinkEndpoint:
                 connect_origin=allowed)
             await response(scope, receive, send)
             return
-        is_status = scope.get("method") == "GET" and scope.get("path") == "/v1/plugin/work-text-status"
+        is_status = scope.get("method") == "GET" and scope.get("path") in {
+            "/v1/plugin/work-text-status", "/v1/plugin/private-search-status",
+        }
         if (scope.get("type") != "http" or (scope.get("method") != "POST" and not is_status) or
                 scope.get("path") not in {"/v1/plugin/device-link", "/v1/plugin/work-text-delete",
-                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize", "/v1/plugin/work-text-status"}):
+                                          "/v1/plugin/work-text-approve", "/v1/plugin/work-text-reauthorize", "/v1/plugin/work-text-status",
+                                          "/v1/plugin/private-search-status", "/v1/plugin/private-search-enable",
+                                          "/v1/plugin/private-search-disable"}):
             await self.app(scope, receive, send)
             return
         from starlette.responses import JSONResponse
@@ -742,6 +754,34 @@ class PersonalLinkEndpoint:
             return
         if not subject:
             await JSONResponse({"detail": "OAuth subject is required"}, status_code=401)(scope, receive, send)
+            return
+        if scope.get("path", "").startswith("/v1/plugin/private-search-"):
+            organization_id = f"oauth-sub:{subject}"
+            setting_path = scope.get("path")
+            if setting_path == "/v1/plugin/private-search-status":
+                enabled = private_search_consent.is_enabled(
+                    self.db, organization_id=organization_id, actor_id=organization_id
+                )
+                await JSONResponse({
+                    "enabled": enabled,
+                    "requires_user_opt_in": True,
+                    "consent_version": private_search_consent.CONSENT_VERSION,
+                }, headers={"Cache-Control": "no-store"})(scope, receive, send)
+                return
+            enabling = setting_path == "/v1/plugin/private-search-enable"
+            if enabling and headers.get("x-owg-private-search-consent") != private_search_consent.CONSENT_VERSION:
+                await JSONResponse({"detail": "Explicit private search acknowledgement required"},
+                                   status_code=400)(scope, receive, send)
+                return
+            result = private_search_consent.set_enabled(
+                self.db, organization_id=organization_id, actor_id=organization_id,
+                enabled=enabling,
+            )
+            _audit(self.db, organization_id, organization_id,
+                   "plugin.personal_private_search.enabled" if enabling
+                   else "plugin.personal_private_search.disabled",
+                   {"consent_version": private_search_consent.CONSENT_VERSION})
+            await JSONResponse(result, headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         if is_status:
             organization_id = f"oauth-sub:{subject}"
