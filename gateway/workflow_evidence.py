@@ -11,6 +11,7 @@ from typing import Any
 
 from server.workflow_evidence import (
     WorkflowEvidenceError,
+    LOW_SPECIFICITY_QUALITY_FLOOR,
     build_workflow_evidence,
     list_workflow_evidence_candidates,
 )
@@ -72,7 +73,7 @@ def repeated_workflows(
         source_event_limit=source_event_limit,
         min_runs=min_runs,
         limit=limit,
-        min_cluster_quality=0.0 if include_low_specificity else 0.45,
+        min_cluster_quality=0.0 if include_low_specificity else LOW_SPECIFICITY_QUALITY_FLOOR,
         # Preserve cross-app sequences: host changes do not prove task changes.
         partition_host_switches=False,
         partition_idle_gaps=True,
