@@ -183,17 +183,15 @@ def test_optional_local_ner_redacts_new_unlisted_identity(monkeypatch):
     monkeypatch.setenv("OWG_LOCAL_NER_MODEL", "sv_core_news_sm")
 
     def fake_model(_model_name):
+        from types import SimpleNamespace
         class Model:
-            def __call__(self, text):
-                class Entity:
-                    start_char = text.index("Zymboria")
-                    end_char = start_char + len("Zymboria")
-                    label_ = "PER"
-                    text = "Zymboria"
-
-                class Document:
-                    ents = [Entity()]
-                return Document()
+            def __call__(self, content):
+                start = content.index("Zymboria")
+                entity = SimpleNamespace(
+                    start_char=start, end_char=start + len("Zymboria"),
+                    label_="PER", text="Zymboria",
+                )
+                return SimpleNamespace(ents=[entity])
         return Model()
 
     monkeypatch.setattr("connector.cloud_privacy._load_local_ner", fake_model)
