@@ -12,6 +12,14 @@ No OpenWorkGraph account or cloud storage is required for the local product. Org
 
 > **Project status:** early public infrastructure. OWG is designed for reconstructable work evidence and AI context, not employee productivity scoring.
 
+### Download the latest ZIP
+
+- **[macOS ZIP (manual/tester bundle)](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-macOS.zip)**
+- **[Windows ZIP (manual/tester bundle)](https://github.com/KAVentures/openworkgraph/releases/latest/download/OpenWorkGraph-Windows.zip)**
+
+These download links always resolve to the **latest published GitHub release**, without updating the README for each version. The ZIP bundles are for manual setup or testing. For the simplest installation (including a private Python runtime), use the **macOS .pkg** or **Windows .exe** installers in [Install](#install) below. [Browse all release assets](https://github.com/KAVentures/openworkgraph/releases/latest).
+
+
 ## The idea
 
 Most AI can retrieve what was written down. OWG adds another layer:
