@@ -18,6 +18,7 @@ from .config import load_device_token, load_gateway_settings
 from .declared_policy import refresh_managed_declared_policy
 from .policy import merge_policies, prepare_event_for_gateway
 from .cloud_privacy import project_event_for_upload
+from .privacy_key import load_or_create_upload_privacy_key
 from .state import SyncState
 from .work_text_sync import process_cloud_text
 
@@ -325,8 +326,16 @@ def run(config_path: Path, *, once: bool = False) -> int:
     db_path = data_dir / "workflow_observer.db"
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
+    # The OAuth/device bearer authenticates HTTP only. It MUST NOT key
+    # pseudonyms: the Gateway knows the bearer and token rotation is expected.
+    upload_privacy_key = load_or_create_upload_privacy_key(auth_dir)
     headers = {"Authorization": f"Bearer {token}"}
     remote_policy: dict[str, Any] = {}
+    # Owner aliases are resolved only on this computer and never included as
+    # readable request metadata. A confident full name also masks its first
+    # component, e.g. "Koyar / Emil"; bare OS usernames are not trusted.
+    from .cloud_privacy import local_owner_names
+    owner_names = local_owner_names()
     initial_local_policy = dict(settings.local_policy)
     initial_local_policy["allow_agent_session_messages"] = _agent_session_local_opt_in(data_dir)
     policy: dict[str, Any] = merge_policies(initial_local_policy, remote_policy)
@@ -420,7 +429,9 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     # title/label surfaces before constructing an HTTP batch.
                     # A failed projection stops sync; it NEVER retries with
                     # the original unredacted event.
-                    item = project_event_for_upload(item, secret=token)
+                    item = project_event_for_upload(
+                        item, secret=upload_privacy_key, owner_names=owner_names,
+                    )
                     event_id = str(item.get("event_id") or "").strip()
                     if not event_id:
                         raise RuntimeError(
