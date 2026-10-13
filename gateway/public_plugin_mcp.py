@@ -35,6 +35,7 @@ from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
 from .goal_context import gateway_goal_context
+from .browser_ai_run_recall import browser_ai_agent_runs
 from .plugin_redaction import project as project_hosted, PublicRedactor
 from . import work_text_cloud, private_search_consent
 from .hardening import DistributedPrincipalRateLimiter
@@ -652,11 +653,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             cursor = str(page.get("next_cursor") or "") or None
             if not cursor:
                 break
-        runs = [
+        native_runs = [
             {k: v for k, v in item.items() if not str(k).startswith("_")}
             for item in derive_executions(raw)
             if item.get("actor_kind") == "agent"
-        ][:bounded]
+        ]
+        # Browser ChatGPT/Claude UI lifecycle events are structurally observed
+        # separately from source='agent' native Claude Code/Codex events.
+        # Do not lose them just because derive_executions ignores browser_*.
+        runs = sorted(
+            native_runs + browser_ai_agent_runs(raw),
+            key=lambda item: str(item.get("started_at") or ""), reverse=True,
+        )[:bounded]
         _audit(db, organization_id, actor_id, "plugin.agent_runs.read", {"returned": len(runs)})
         return _protected({
             "executions": runs, "returned": len(runs), "derived": True,
