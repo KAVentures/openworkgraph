@@ -110,6 +110,7 @@ ORGANIZATIONS = frozenset("""
 ericsson volvo scania saab skanska telia spotify ikea nordea swedbank handelsbanken seb klarna
 electrolux husqvarna sandvik securitas vattenfall northvolt tele2 ica coop atlas copco
 ford dell disney boeing siemens philips nokia bosch porsche ferrari mcdonald mcdonalds
+capio karolinska sahlgrenska aleris praktikertjänst medlink
 """.split())
 
 # A name-like word directly followed by one of these is a place or an

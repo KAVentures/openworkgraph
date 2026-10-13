@@ -13,7 +13,7 @@ import hmac
 import re
 from typing import Any, Iterable
 
-from server.contextual_redaction import Detector, Settings, STOPWORDS
+from server.contextual_redaction import Detector, Settings, STOPWORDS, ORGANIZATIONS
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -74,7 +74,7 @@ _SAFE_SINGLE_UI = frozenset("""
 open close save cancel continue retry settings next previous refresh
 new edit view search submit copy paste share help download upload
 openworkgraph owg github gmail chatgpt claude oneflow
-välkommen ring
+välkommen ring jobbar arbetar
 ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
@@ -108,9 +108,22 @@ _EMPLOYER_CUE = re.compile(
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
-
-# Verified organization brand, disambiguated before generic person matching.
-_KNOWN_ORG_BRANDS = re.compile(r"(?<!\w)(Capio)(?!\w)", re.I)
+# Curated organizations are loaded from the *shared* contextual entity lexicon.
+# The generic person detector is not permitted to relabel a known organization.
+_KNOWN_ORG_BRANDS = re.compile(
+    r"(?<!\w)(?:" + "|".join(re.escape(name)
+        for name in sorted(ORGANIZATIONS, key=lambda word: (-len(word), word))) + r")(?!\w)",
+    re.I,
+)
+# Treat common greetings as contexts for PERSON spans, even if the greeting is
+# protected as a safe UI word. This never classifies the greeting itself.
+_GREETING_NAME_CUE = re.compile(
+    r"(?i:(?<!\w)(?:välkommen|hej|hejsan|hello|hi|dear|welcome))"
+    r"[ \t]*[,!]?\s+([A-ZÅÄÖ][a-zåäö]{2,40})(?=[\s!,.?:;]|$)"
+)
+_GREETING_GENERIC = frozenset(
+    "alla all back everyone everybody team world there kollegor vänner tillbaka".split()
+)
 
 class PublicRedactor:
     def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
@@ -122,7 +135,7 @@ class PublicRedactor:
         # while continuing to redact adjacent names and all other PII.
         self.person_detector = Detector(
             token=self._token,
-            settings=Settings(never_redact=("Välkommen", "Ring")),
+            settings=Settings(never_redact=("Välkommen", "Ring", "Jobbar", "Arbetar")),
         )
         # Only aliases proven by organization suffixes in this one redaction
         # request. Never persist personal/customer names across accounts.
@@ -194,6 +207,12 @@ class PublicRedactor:
 
         text = _SELF_NAME_CUE.sub(name_cue, text)
         text = _SLASH_SIGNATURE.sub(name_cue, text)
+        text = _GREETING_NAME_CUE.sub(
+            lambda m: name_cue(m)
+            if m.group(1).casefold() not in _GREETING_GENERIC
+            else m.group(0),
+            text,
+        )
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 

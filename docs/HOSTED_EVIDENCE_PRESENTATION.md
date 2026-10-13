@@ -43,3 +43,12 @@ Every goal-context response also includes up to ten query-free recent raw events
 ## Release gate
 
 Test these contracts with synthetic users in the real Claude and ChatGPT connector sessions: OAuth and stable profile ID; profile/name/title consistency, foreign-account isolation; generic click false positives; real distinct workflows; truncated 100+ event drilldowns; stable cursor pagination; compact/rich/minimal compatibility; same-origin tool selection; optional work text disabled/enabled; and empty or sparse history. Only deploy after the repository's cross-platform regression suite passes.
+
+## Adversarial multilingual name detection (PR #195)
+
+- Hosted text projection now treats greetings such as `Välkommen Michaela!` and `Hello Zorina!` as contextual **PERSON** mentions, without converting `Välkommen till oss på mottagningen` or `Hello World` into sensitive tokens. The action verb `Jobbar` likewise stays readable in `Jobbar på Capio idag`, while the healthcare organization becomes an **ORG** token.
+- Organization words are detected from a shared, reviewable `ORGANIZATIONS` lexicon in `server/contextual_redaction.py`; there is no one-off `Capio` regex in the hosted projector. The list is *not* complete for all possible employers or hospitals.
+- `tests/fixtures/hosted_redaction_adversarial.json` is a synthetic multilingual collection for Gmail/Slack/calendar-style captions. The parameterized tests and a seeded wrapper fuzz test enforce no first-name leakage and readable safe UI/PR/path/date strings. None of these fixtures contain user transcripts or private observed text.
+- A **separate optional local-only** audit (`python -m evals.optional_spacy_ner_audit --model sv_core_news_sm`) can compare spaCy PERSON/ORG predictions with the synthetic corpus if compatible language dependencies are manually installed. It is not a production MCP dependency and will not send data off-device. The official Swedish spaCy pipeline advertises NER, but is trained on news text and distributes under CC BY-SA 4.0. Before any production opt-in, independently check model licensing with legal counsel, memory and serverless cold-start costs, PII recall on consented work data, false positives in UI labels, and tail latency. Source: https://spacy.io/models/sv
+
+This regression corpus catches known adversarial language patterns, **not** all possible proper nouns. Never describe it as a guarantee of perfect anonymization. Low false-positive rates and high redaction recall can conflict; neither can be established by a synthetic corpus alone.
