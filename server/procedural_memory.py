@@ -350,6 +350,74 @@ def _time_window(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _execution_surface(event: dict[str, Any]) -> str:
+    """Conservative host/app partition key for human candidate windows.
+
+    Browser chrome without a known host is ignored instead of switching to an
+    invented surface. Canonical raw evidence remains unchanged.
+    """
+    meta, _trace = _meta(event)
+    page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+    hostname = str(event.get("page_host") or page.get("hostname") or "").strip().lower()
+    hostname = hostname.removeprefix("www.").split(":", 1)[0]
+    if hostname and re.fullmatch(r"[a-z0-9.-]{3,160}", hostname):
+        return "host:" + hostname
+    app = str(event.get("app") or "").strip().lower()
+    if app in {"", "browser", "chrome", "google chrome", "safari", "firefox",
+               "microsoft edge", "edge"}:
+        return ""
+    if event.get("event_type") in {"focus_span", "focus_period"} and app:
+        return "app:" + app
+    return ""
+
+
+def split_human_execution_windows(
+    task: dict[str, Any], session_events: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Split unrelated host/app switches *within* a heuristic task window.
+
+    A stable session alone is not a verified task identity. Keep boundaries
+    derived and conservative; the unmodified raw trace remains available.
+    """
+    start, end = _ts(task.get("started_at")), _ts(task.get("ended_at"))
+    if start is None or end is None:
+        return [task]
+    events = [
+        event for event in session_events
+        if (when := _ts(event.get("observed_at"))) is not None
+        and start - 0.001 <= when <= end + 0.001
+    ]
+    if len(events) < 2:
+        return [task]
+    blocks: list[list[dict[str, Any]]] = [[]]
+    current = ""
+    for event in events:
+        surface = _execution_surface(event)
+        if surface and current and surface != current and blocks[-1]:
+            blocks.append([])
+        blocks[-1].append(event)
+        if surface:
+            current = surface
+    if len(blocks) == 1:
+        return [task]
+    result: list[dict[str, Any]] = []
+    for index, block in enumerate(blocks):
+        if not block:
+            continue
+        first, last = block[0].get("observed_at"), block[-1].get("observed_at")
+        if not first or not last:
+            continue
+        clone = dict(task)
+        clone["started_at"], clone["ended_at"] = first, last
+        clone["task_id"] = hashlib.sha256(
+            f"{task.get('task_id')}|surface-boundary-v1|{index}|{first}".encode()
+        ).hexdigest()[:16]
+        clone["elapsed_seconds"] = max(0.0, (_ts(last) or 0) - (_ts(first) or 0))
+        clone["host_switch_partitioned"] = True
+        result.append(clone)
+    return result or [task]
+
+
 def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build privacy-minimized human and agent executions from canonical evidence."""
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -360,38 +428,39 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     output: list[dict[str, Any]] = []
     task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
-    for task in task_data.get("tasks") or []:
-        session_id = str(task.get("session_id") or "")
-        steps = _human_steps(task, by_session.get(session_id, []))
-        if not steps:
-            continue
-        family_key, family_basis = _human_family(task, steps)
-        observed_completion = bool(task.get("completion_observed"))
-        output.append({
-            "execution_id": _execution_id("human", task.get("task_id") or session_id, task.get("started_at")),
-            "actor_kind": "human",
-            "family_key": family_key,
-            "family_basis": family_basis,
-            "started_at": task.get("started_at"),
-            "ended_at": task.get("ended_at"),
-            "duration_seconds": round(float(task.get("elapsed_seconds") or 0), 3),
-            "outcome_status": "observed_completion" if observed_completion else "unknown",
-            "outcome_basis": "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor",
-            "positive_example": observed_completion,
-            "explicit_failure": False,
-            "steps": steps[:_MAX_STEPS],
-            "observation_level": "human_observed",
-            "evidence_refs": [_event_ref(value) for value in list(task.get("anchor_event_ids") or [])[:12]],
-            "evidence_window": _time_window(task),
-            "derived": True,
-            "authoritative": False,
-            "needs_review": True,
-            "_approval_points": [],
-            "_run_material": f"human|{task.get('task_id') or session_id}",
-            "_session_ids": [session_id] if session_id else [],
-        })
-
-    agent_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for candidate in task_data.get("tasks") or []:
+        session_id = str(candidate.get("session_id") or "")
+        for task in split_human_execution_windows(candidate, by_session.get(session_id, [])):
+            steps = _human_steps(task, by_session.get(session_id, []))
+            if not steps:
+                continue
+            family_key, family_basis = _human_family(task, steps)
+            observed_completion = bool(task.get("completion_observed"))
+            output.append({
+                "execution_id": _execution_id("human", task.get("task_id") or session_id, task.get("started_at")),
+                "actor_kind": "human",
+                "family_key": family_key,
+                "family_basis": family_basis,
+                "started_at": task.get("started_at"),
+                "ended_at": task.get("ended_at"),
+                "duration_seconds": round(float(task.get("elapsed_seconds") or 0), 3),
+                "outcome_status": "observed_completion" if observed_completion else "unknown",
+                "outcome_basis": "strong_completion_anchor" if observed_completion else "no_strong_completion_anchor",
+                "positive_example": observed_completion,
+                "explicit_failure": False,
+                "steps": steps[:_MAX_STEPS],
+                "observation_level": "human_observed",
+                "evidence_refs": [_event_ref(value) for value in list(task.get("anchor_event_ids") or [])[:12]],
+                "evidence_window": _time_window(task),
+                "derived": True,
+                "authoritative": False,
+                "needs_review": True,
+                "_approval_points": [],
+                "_run_material": f"human|{task.get('task_id') or session_id}",
+                "_session_ids": [session_id] if session_id else [],
+            })
+    
+        agent_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
         if str(event.get("source") or "") != "agent" and not str(event.get("event_type") or "").startswith("agent_"):
             continue
