@@ -16,7 +16,7 @@ import hmac
 import os
 import re
 from functools import lru_cache
-from typing import Any
+from typing import Any, Iterable
 
 from gateway.plugin_redaction import PublicRedactor
 from server.contextual_redaction import ORGANIZATIONS, STOPWORDS
@@ -104,6 +104,29 @@ def _ner_project(text: str, cleaner: PublicRedactor) -> str:
     return text
 
 
+def local_owner_names() -> tuple[str, ...]:
+    """Local identity evidence only; never ship the names or derivation hints.
+
+    Respect the existing owner identity policy: explicitly configured aliases
+    and confidently discovered FULL display names, not bare OS usernames.
+    First names from those high-confidence full aliases are included because
+    desktop titles frequently abbreviate "Fullname Surname" to "Firstname".
+    """
+    from server.presentation import _owner_identity
+
+    aliases, _emails, _phones = _owner_identity()
+    names: set[str] = set()
+    for original in aliases:
+        name = str(original).strip()
+        if len(name) < 3 or len(name) > 100:
+            continue
+        names.add(name)
+        words = name.split()
+        if len(words) >= 2 and len(words[0]) >= 3:
+            names.add(words[0])
+    return tuple(sorted(names, key=lambda x: (-len(x), x)))
+
+
 def _opaque_id(value: Any, *, secret: str, kind: str) -> str:
     raw = str(value or "")
     if SAFE_ID.fullmatch(raw):
@@ -113,11 +136,13 @@ def _opaque_id(value: Any, *, secret: str, kind: str) -> str:
 
 
 class DeviceUploadRedactor:
-    def __init__(self, *, secret: str):
+    def __init__(self, *, secret: str, owner_names: Iterable[str] = ()):
         if not secret or len(secret) < 16:
             raise ValueError("device-scoped local redaction secret required")
         self.secret = secret
-        self.cleaner = PublicRedactor(secret=secret, principal="device-gateway-upload")
+        self.cleaner = PublicRedactor(
+            secret=secret, principal="device-gateway-upload", owner_names=owner_names,
+        )
 
     def label(self, value: Any, *, max_chars: int = MAX_STRUCTURAL_TITLE) -> str:
         original = str(value or "")
@@ -261,6 +286,8 @@ class DeviceUploadRedactor:
         return result
 
 
-def project_event_for_upload(event: dict[str, Any], *, secret: str) -> dict[str, Any]:
+def project_event_for_upload(
+    event: dict[str, Any], *, secret: str, owner_names: Iterable[str] = (),
+) -> dict[str, Any]:
     """Strict pre-HTTP projection, with no fallback to original event on error."""
-    return DeviceUploadRedactor(secret=secret).event(event)
+    return DeviceUploadRedactor(secret=secret, owner_names=owner_names).event(event)
