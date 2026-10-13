@@ -6,7 +6,8 @@ This directory is the map for software that connects **to** OpenWorkGraph. Packa
 
 - [agents/](agents/) — agent bootstrap/connect helpers used from a checkout; release builds retain compatibility copies at installed payload root.
 - [../adapters/](../adapters/) — Python adapters for agent runtimes and execution/approval/context hooks.
-- [plugins/openworkgraph/](plugins/openworkgraph/) — installable Claude Code plugin package with commands, hooks and the OWG skill.
+- [plugins/openworkgraph/](plugins/openworkgraph/) — existing **local** Claude Code plugin with commands, hooks and the OWG skill.
+- [plugins/openworkgraph-cloud/](plugins/openworkgraph-cloud/) — new **remote** Claude chat/Claude Code plugin, reusing the same OAuth MCP as ChatGPT with no local launch or duplicate backend. See [Claude remote connector setup](../docs/CLAUDE_REMOTE_CONNECTOR.md).
 - [../openworkgraph_agent/](../openworkgraph_agent/) — compatibility Python package.
 - [../sdk/](../sdk/) — published Python/TypeScript integration SDKs.
 
