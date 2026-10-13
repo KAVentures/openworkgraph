@@ -100,9 +100,10 @@ def browser_ai_agent_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 refs.append(token)
 
         # Resource and lifecycle events are intentionally different captures.
-        # Pick the most recent reference in this browser tab before the run,
-        # or a reference first observed within 30s after a run starts.
-        # A later tab navigation must not retroactively relabel earlier runs.
+        # Prefer the first reference observed up to 30s after run start:
+        # new ChatGPT/Claude chats get their conversation ID after sending.
+        # Only fall back to the most recent pre-run reference if none arrives.
+        # Choose the earliest post-start reference to avoid later relabeling.
         first_meta = rows[0][2].get("metadata") or {}
         tab = str(first_meta.get("tab_id") or "")
         runtime = str(first_meta.get("browser_session_id") or "")
@@ -112,8 +113,8 @@ def browser_ai_agent_runs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                       if 0 <= (start - ts).total_seconds() <= 7200]
             after = [(ts, ref) for ts, ref in candidates
                      if 0 < (ts - start).total_seconds() <= 30]
-            chosen = (max(before, default=None)
-                      or min(after, default=None))
+            chosen = (min(after, default=None)
+                      or max(before, default=None))
             if chosen and chosen[1] not in refs:
                 refs.append(chosen[1])
 
