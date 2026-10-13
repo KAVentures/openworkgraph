@@ -157,12 +157,12 @@ def test_gateway_rejects_legacy_uploads_when_device_gate_is_enabled(monkeypatch,
 
 def test_device_drops_multiline_preview_and_user_home_paths():
     event = _event()
-    event["window_title"] = "Inbox preview: first line\\nsecond line from patient"
-    event["metadata"]["target"]["label"] = "Line one\\nLine two"
+    event["window_title"] = "Inbox preview: first line\nsecond line from patient"
+    event["metadata"]["target"]["label"] = "Line one\nLine two"
     output = project_event_for_upload(event, secret=_SECRET)
     assert output["window_title"] == "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
     assert output["metadata"]["target"]["label"] == "[LONG_FREE_TEXT_WITHHELD]"
-    for local_path in ("C:\\\\Users\\\\Michaela\\\\Documents\\\\cv.pdf",
+    for local_path in ("C:\\Users\\Michaela\\Documents\\cv.pdf",
                        "/Users/Michaela/Documents/file.pdf", "/home/koyar/data"):
         event["window_title"] = local_path
         assert project_event_for_upload(event, secret=_SECRET)["window_title"] == (
