@@ -945,6 +945,13 @@ def test_private_title_remains_searchable_without_returning_third_party_caption(
     assert normal.status_code == 200, normal.text
     normal_data = normal.json()["result"]["structuredContent"]
     assert normal_data["private_title_match_enabled"] is False
+    assert normal_data["private_query_requires_opt_in"] is True
+    # The raw trace tool cannot bypass the private-name search decision.
+    blocked_trace = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"query": "Zorina"},
+    })
+    assert blocked_trace.status_code == 200, blocked_trace.text
+    assert blocked_trace.json()["result"].get("isError") is True
     assert not any(row["event_id"] == "private-title-search-1"
                    for row in normal_data["rows"])
     # Explicit owner-scoped opt-in knowingly discloses name existence but
