@@ -481,7 +481,9 @@ def test_hosted_poison_metadata_redacted_across_read_tools(public_client):
     assert 'pathname' not in row['metadata']['page']
     # Fully opaque titles are safer than partial email masking when
     # unfamiliar names or organizations might remain.
-    assert row['window_title'].startswith(('TITLE_', 'EMAIL_'))
+    assert 'Anna Svensson' not in row['window_title']
+    assert email not in row['window_title']
+    assert ('PERSON_' in row['window_title'] or 'EMAIL_' in row['window_title'])
     assert rich['privacy_representation']['level'] == 'hosted_redacted'
     assert rich['evidence_contract']['metadata_preserved'] is False
 
@@ -936,15 +938,29 @@ def test_private_title_remains_searchable_without_returning_third_party_caption(
                                 "label": "Open contract for Zorina"}},
     }])
     token = mint()
-    response = rpc(client, token, "tools/call", {
+    # Default matching never uses private original names as a yes/no oracle.
+    normal = rpc(client, token, "tools/call", {
         "name": "search_work", "arguments": {"query": "Zorina", "limit": 5},
+    })
+    assert normal.status_code == 200, normal.text
+    normal_data = normal.json()["result"]["structuredContent"]
+    assert normal_data["private_title_match_enabled"] is False
+    assert not any(row["event_id"] == "private-title-search-1"
+                   for row in normal_data["rows"])
+    # Explicit owner-scoped opt-in knowingly discloses name existence but
+    # must still never return raw title or target label text.
+    response = rpc(client, token, "tools/call", {
+        "name": "search_work", "arguments": {
+            "query": "Zorina", "limit": 5, "include_private_matches": True},
     })
     assert response.status_code == 200, response.text
     data = response.json()["result"]["structuredContent"]
     found = [row for row in data["rows"]
              if row["event_id"] == "private-title-search-1"]
     assert len(found) == 1
-    assert found[0]["window_title"].startswith("TITLE_")
+    assert found[0]["window_title"].startswith("Contract for ")
+    assert "PERSON_" in found[0]["window_title"]
+    assert data["private_match_discloses_term_existence"] is True
     assert data["query"] != "Zorina"
     assert "Zorina" not in response.text
     assert "Sample Nordic" not in response.text
