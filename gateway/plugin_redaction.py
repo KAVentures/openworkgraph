@@ -87,7 +87,7 @@ read grep write bash bashrc shell terminal visual studio finder
 work copy open click scroll file issue new issue save draft
 """.split())
 _SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—·()]{1,120}$")
-_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
+_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
 
@@ -268,6 +268,8 @@ class PublicRedactor:
                 return value if _OPAQUE.fullmatch(value) else "[INVALID_REFERENCE]"
             if key == "target_label":
                 return self.target_label(value)
+            if key == "query":
+                return self.target_label(value, token_kind="QUERY")
             if key in {"window_title", "page_title"}:
                 return self.target_label(value, token_kind="TITLE")
             if key in {"step", "readable_steps", "semantic_steps", "core_steps",
