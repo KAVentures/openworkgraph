@@ -791,6 +791,40 @@ def test_context_reports_server_catalog_and_unknown_local_capture_state(public_c
     assert result['capture_status']['cloud_work_text']['status'] == 'operator_disabled'
 
 
+def test_context_combines_fresh_authenticated_recorder_state_with_evidence_freshness(
+    public_client, monkeypatch,
+):
+    """Regression for #198 merge: liveness and evidence age are complementary."""
+    client, mint = public_client
+    monkeypatch.setattr(
+        plugin, "_reported_recorder_state",
+        lambda _db, *, organization_id, actor_id: {
+            "local_recorder_state": "recording",
+            "fresh_authenticated_device_report": True,
+            "last_device_report_age_seconds": 3,
+            "desktop_collector_heartbeat_verified": True,
+            "recorder_state_is_based_on_event_timestamp": False,
+            "status_report_contains_work_content": False,
+            "stale_report_is_not_proof_recorder_stopped": True,
+        },
+    )
+    reply = rpc(client, mint(), "tools/call", {
+        "name": "get_current_work_context", "arguments": {"limit": 2},
+    })
+    assert reply.status_code == 200, reply.text
+    data = reply.json()["result"]["structuredContent"]
+    state = data["capture_status"]
+    assert state["local_recorder_state"] == "recording"
+    assert state["desktop_collector_heartbeat_verified"] is True
+    assert state["fresh_authenticated_device_report"] is True
+    assert state["last_evidence_age_seconds"] is None
+    assert state["evidence_freshness"] == "unknown"
+    assert state["freshness_is_not_recorder_liveness"] is True
+    assert state["latest_observed_at"] is None
+    assert data["contract_version"] == "hosted-evidence-v3"
+    assert data["server_capabilities"]["contract_version"] == "hosted-evidence-v3"
+
+
 def test_local_capture_to_authenticated_cloud_excerpt_keeps_page_and_coverage(public_client, monkeypatch, tmp_path):
     from gateway import work_text_cloud as cloud
     from gateway.db import GatewayDB
