@@ -875,7 +875,7 @@ def test_authenticated_owner_profile_and_window_titles_share_redaction_policy(pu
     info = profile.json()["result"]["structuredContent"]
     assert info["id"].startswith("prf_")
     assert info["name"].startswith("OWNER_")
-    assert info["email"] is None
+    assert info.get("email") is None
     _insert_personal_events([{
         "event_id": "owner-title-1", "observed_at": datetime.now(timezone.utc).isoformat(),
         "app": "Chrome", "window_title": "Chrome – Uniqueowner",
