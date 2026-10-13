@@ -401,6 +401,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
+        include_low_specificity: bool = False,
     ) -> dict[str, Any]:
         """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns heuristic structural candidates, not verified business rules or permission. Verify representative runs with get_workflow_evidence and raw traces."""
         organization_id, actor_id, _claims = _identity()
@@ -408,6 +409,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             db, organization_id=organization_id, actor_id=actor_id,
             since=since, until=until, min_runs=max(2, min(int(min_runs), 25)),
             limit=max(1, min(int(limit), 100)),
+            include_low_specificity=bool(include_low_specificity),
         )
         result["raw_evidence_fallback"] = {
             "tool": "get_workflow_trace",
