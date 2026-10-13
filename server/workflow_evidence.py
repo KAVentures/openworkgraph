@@ -257,12 +257,14 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
 def _candidate_runs(
     raw_events: list[dict[str, Any]],
     executions: list[dict[str, Any]],
+    *, partition_host_switches: bool = False,
 ) -> list[dict[str, Any]]:
     """Overlay the one privacy-safe readable projection onto structural runs."""
     readable_by_id: dict[str, list[str]] = {}
     try:
         from .procedural_feedback import _human_runs
-        for run in _human_runs(raw_events):
+        for run in (_human_runs(raw_events, split_human_hosts=True)
+                    if partition_host_switches else _human_runs(raw_events)):
             execution_id = str(run.get("execution_id") or "")
             if execution_id:
                 readable_by_id[execution_id] = [
@@ -617,11 +619,13 @@ def build_workflow_evidence(
     max_runs: int = 12,
     max_events_per_run: int = 100,
     include_canonical_evidence: bool = True,
+    partition_host_switches: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ids = _parse_execution_ids(execution_ids)
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = derive_executions(raw)
+    executions = (derive_executions(raw, split_human_hosts=True)
+                  if partition_host_switches else derive_executions(raw))
     selected = _select_executions(
         executions,
         family_key=family_key,
@@ -637,7 +641,7 @@ def build_workflow_evidence(
     high_steps = [row for row in steps if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
     less_common = [row for row in steps if int(row["support_runs"]) < threshold][:MAX_STEPS_RETURNED]
     high_transitions = [row for row in transitions if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
-    selected_candidates = _candidate_runs(raw, selected)
+    selected_candidates = _candidate_runs(raw, selected, partition_host_switches=partition_host_switches)
     surface_labels = {
         key: value for run in selected_candidates
         for key, value in (run.get("surface_labels") or {}).items()
@@ -761,10 +765,12 @@ def list_workflow_evidence_candidates(
     min_runs: int = 2,
     limit: int = 20,
     min_cluster_quality: float = 0.0,
+    partition_host_switches: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = derive_executions(raw)
+    executions = (derive_executions(raw, split_human_hosts=True)
+                  if partition_host_switches else derive_executions(raw))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
         key = str(execution.get("family_key") or "")
@@ -772,7 +778,7 @@ def list_workflow_evidence_candidates(
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
     all_clusters = cluster_runs(
-        _candidate_runs(raw, executions),
+        _candidate_runs(raw, executions, partition_host_switches=partition_host_switches),
         min_runs=threshold,
         structural_key="structural_steps",
         readable_key="semantic_steps",
