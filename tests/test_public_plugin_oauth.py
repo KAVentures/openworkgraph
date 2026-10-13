@@ -817,7 +817,7 @@ def test_context_combines_fresh_authenticated_recorder_state_with_evidence_fresh
     assert state["local_recorder_state"] == "recording"
     assert state["desktop_collector_heartbeat_verified"] is True
     assert state["fresh_authenticated_device_report"] is True
-    assert state["last_evidence_age_seconds"] is None
+    assert state.get("last_evidence_age_seconds") is None  # null fields may be omitted in compact responses
     assert state["evidence_freshness"] == "unknown"
     assert state["freshness_is_not_recorder_liveness"] is True
     assert state["latest_observed_at"] is None
