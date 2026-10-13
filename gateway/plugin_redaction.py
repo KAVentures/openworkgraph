@@ -110,7 +110,7 @@ _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
 
 # Verified organization brand, disambiguated before generic person matching.
-_KNOWN_ORG_BRANDS = re.compile(r"(?<!\\w)(Capio)(?!\\w)", re.I)
+_KNOWN_ORG_BRANDS = re.compile(r"(?<!\w)(Capio)(?!\w)", re.I)
 
 class PublicRedactor:
     def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
