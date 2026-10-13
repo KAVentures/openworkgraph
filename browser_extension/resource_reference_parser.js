@@ -107,6 +107,25 @@
     return candidate("linear", "issue", `${workspace}:${key}`, u.hostname);
   }
 
+  // AI conversations are resources, not message text. The validated object
+  // identifier stays in the local-only resolver; only a keyed opaque
+  // resource_ref is allowed into ordinary synced evidence.
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function parseAIConversation(u) {
+    const host = u.hostname.toLowerCase();
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (u.search || u.hash) return null; // do not infer identifiers from content-bearing query/fragment
+    if ((host === "chatgpt.com" || host === "chat.openai.com")
+        && parts.length === 2 && parts[0] === "c" && UUID.test(parts[1])) {
+      return candidate("chatgpt", "conversation", "conversation:" + parts[1].toLowerCase(), host);
+    }
+    if (host === "claude.ai" && parts.length === 2
+        && parts[0] === "chat" && UUID.test(parts[1])) {
+      return candidate("claude", "conversation", "conversation:" + parts[1].toLowerCase(), host);
+    }
+    return null;
+  }
+
   function parse(raw) {
     let u;
     try {
@@ -115,7 +134,7 @@
       return null;
     }
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u);
+    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u) || parseAIConversation(u);
   }
 
   const api = {parse};
