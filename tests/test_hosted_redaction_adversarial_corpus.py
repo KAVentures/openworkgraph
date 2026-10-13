@@ -3,6 +3,7 @@
 The cases resemble Swedish/English Gmail, Slack, and calendar snippets but
 contain no captured real user data. Preserve utility as well as name recall.
 """
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -61,7 +62,8 @@ def test_structural_event_projection_redacts_names_in_nested_fields():
     """Event, target metadata and readable workflow step paths all agree."""
     for case in CASES["sensitive"]:
         row = {
-            "event_id": f"synthetic-{case['id']}",
+            "event_id": "synthetic-" + hashlib.sha256(
+                case["id"].encode("utf-8")).hexdigest()[:12],
             "observed_at": "2026-10-13T08:00:00Z",
             "event_type": "browser_click", "app": "Chrome",
             "window_title": case["text"], "target_label": case["text"],
