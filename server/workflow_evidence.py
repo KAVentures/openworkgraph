@@ -638,6 +638,10 @@ def build_workflow_evidence(
     less_common = [row for row in steps if int(row["support_runs"]) < threshold][:MAX_STEPS_RETURNED]
     high_transitions = [row for row in transitions if int(row["support_runs"]) >= threshold][:MAX_STEPS_RETURNED]
     selected_candidates = _candidate_runs(raw, selected)
+    surface_labels = {
+        key: value for run in selected_candidates
+        for key, value in (run.get("surface_labels") or {}).items()
+    }
     sequence_variants = cluster_runs(
         selected_candidates,
         min_runs=1,
@@ -671,6 +675,7 @@ def build_workflow_evidence(
             "all_transition_count": len(transitions),
             "observed_variations": observed_variations,
             "structural_sequence_variants": sequence_variants,
+            "surface_labels": dict(sorted(surface_labels.items())),
             "common_path_claimed": False,
         },
         "resource_types": _resource_types(per_run_events),
