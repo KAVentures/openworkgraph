@@ -539,6 +539,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
         include_low_specificity: bool = True,
+        detail: str = "compact",
     ) -> dict[str, Any]:
         """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns ranked candidate patterns (including low-specificity patterns by default), not verified business workflows. Inspect raw chronology, including across applications, before drawing conclusions."""
         organization_id, actor_id, _claims = _identity()
@@ -557,8 +558,31 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             ),
             "no_inferred_family_required": True,
         }
+        if detail == "compact":
+            # Default navigation should not deliver full duplicate execution
+            # variants and lengthy instructional text. Drill down with
+            # get_workflow_evidence or detail=rich instead.
+            result["candidate_clusters"] = [{
+                key: val for key, val in row.items() if key in {
+                    "candidate_cluster_id", "execution_count", "execution_ids",
+                    "core_steps", "core_structural_steps", "surface_labels",
+                    "cluster_quality", "cluster_quality_is_task_confidence",
+                    "median_duration_seconds", "first_observed_at", "last_observed_at",
+                    "actor_kind", "derived", "authoritative",
+                    "cluster_is_business_workflow_ground_truth",
+                }
+            } for row in result.get("candidate_clusters") or []]
+            result["families"] = [{
+                key: val for key, val in row.items() if key in {
+                    "family_key", "execution_count", "execution_ids",
+                    "surface_labels", "high_support_display_steps",
+                    "median_execution_duration_seconds", "family_is_ground_truth",
+                }
+            } for row in result.get("families") or []]
+            result["response_projection"] = "compact_navigation"
+            result["rich_detail_available"] = True
         _audit(db, organization_id, actor_id, "plugin.repeated_work.read", {"returned": len(result.get("candidate_clusters") or [])})
-        return _protected(result)
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_evidence(
