@@ -177,6 +177,18 @@ class PublicRedactor:
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
         text = self.person_detector.redact(text)
+        # Apply explicit grammatical name and signature cues on EVERY hosted
+        # text surface, not just UI targets (also shared-text previews,
+        # metadata and search excerpts). The general detector above does not
+        # recognize all unfamiliar names, e.g. Swedish "Mitt namn är ...".
+        def name_cue(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name.casefold() in (_SAFE_SINGLE_UI | STOPWORDS):
+                return match.group(0)
+            return match.group(0)[:-len(name)] + self._token("PERSON", name)
+
+        text = _SELF_NAME_CUE.sub(name_cue, text)
+        text = _SLASH_SIGNATURE.sub(name_cue, text)
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
@@ -199,18 +211,6 @@ class PublicRedactor:
                 return match.group(0)
             return match.group(1) + self._token("PERSON", caption)
 
-        safe = _SELF_NAME_CUE.sub(
-            lambda m: m.group(0)[:-len(m.group(1))] + self._token("PERSON", m.group(1))
-            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)
-            else m.group(0),
-            safe,
-        )
-        safe = _SLASH_SIGNATURE.sub(
-            lambda m: m.group(0)[:-len(m.group(1))] + self._token("PERSON", m.group(1))
-            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)
-            else m.group(0),
-            safe,
-        )
         safe = _CONTACT_CUE.sub(contact, safe)
         safe = _LEADING_CONTACT.sub(
             lambda m: self._token("PERSON", m.group(1))
