@@ -154,6 +154,8 @@ Useful AI entry points include:
 - `get_workflow_evidence` — gather reviewed examples for a procedure/automation;
 - agent-run/handoff tools — continue or inspect prior agent execution.
 
+For Claude chat/desktop and Claude Code remote access, see **[Connect OpenWorkGraph to Claude](docs/CLAUDE_REMOTE_CONNECTOR.md)**. The same OAuth-protected hosted MCP is used by the ChatGPT cloud plugin. The separate local Claude Code plugin remains available.
+
 See **[MCP architecture](docs/MCP_ARCHITECTURE.md)**, **[AI guide](docs/ai/guide.md)**, and **[Exports and AI](docs/EXPORTS_AND_AI.md)**.
 
 ## Repository map
