@@ -19,6 +19,7 @@ async function page({search='',pending=null,enabled=true,shared=new Map()}={}){
    if(url.endsWith('/token'))return {access_token:'synthetic-access'};
    if(url.endsWith('/work-text-status'))return {operator_available:enabled,status:'not_enabled',devices:[{device_id:'my-computer',approved:false}]};
    if(url.endsWith('/work-text-delete'))return {deleted:2};
+   if(url.endsWith('/private-search-status'))return {enabled:false};
    return {status:'device_approved'};
   }};}});
  await vm.runInContext(script,context);
@@ -90,4 +91,22 @@ test('sign-in prunes expired and bounds shared transactions',async()=>{
  const p=await page({shared});await p.elements.signin.onclick();
  assert.equal(shared.size,5);assert.equal(shared.has('owg-cloud-text-oauth:old'),false);
  p.elements.signout.onclick();assert.equal(shared.size,0);
+});
+
+test('private-name search cannot be enabled without owner acknowledgement',async()=>{
+ const p=await page({pending:pending(),search:'?code=example&state=valid-state'});
+ assert.equal(p.elements['private-settings'].hidden,false);
+ assert.equal(p.elements['private-enable'].disabled,true);
+ await p.elements['private-enable'].onclick();
+ assert.ok(!p.calls.some(c=>c.url?.endsWith('/private-search-enable')));
+ p.elements['private-ack'].checked=true;
+ p.elements['private-ack'].onchange();
+ assert.equal(p.elements['private-enable'].disabled,false);
+ await p.elements['private-enable'].onclick();
+ const approval=p.calls.find(c=>c.url?.endsWith('/private-search-enable'));
+ assert.equal(approval.options.headers['X-OWG-Private-Search-Consent'],'private-title-search-v1');
+ await p.elements['private-disable'].onclick();
+ assert.ok(p.calls.some(c=>c.url?.endsWith('/private-search-disable')));
+ p.elements.signout.onclick();
+ assert.equal(p.elements['private-settings'].hidden,true);
 });
