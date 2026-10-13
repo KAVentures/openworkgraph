@@ -113,3 +113,44 @@ def test_actor_scoped_empty_history_not_treated_as_impossible(tmp_path):
     assert result["status"] == "no_synced_evidence"
     assert result["coverage"]["complete_work_history"] is False
     assert result["fallback"]["omit_query"] is True
+
+
+def test_goal_hints_resolve_contract_to_oneflow_and_pr_to_github():
+    rows = [
+        event("contract-host", "Agreement ready to review", minute=0,
+              metadata={"page": {"hostname": "app.oneflow.com"}},
+              app="Google Chrome"),
+        event("github-pr", "Files changed", minute=20,
+              metadata={"page": {"hostname": "github.com", "title": "Pull request"}},
+              app="Google Chrome"),
+        event("noise", "Random activity", minute=40),
+    ]
+    oneflow = build_goal_context("Find the contract I worked on", rows)
+    assert oneflow["status"] == "possible_matches"
+    assert oneflow["examples"][0]["anchor_event_id"] == "contract-host"
+    assert "oneflow" in oneflow["app_surface_hints"]
+
+    pr = build_goal_context("Continue the PR", rows)
+    assert pr["status"] == "possible_matches"
+    assert pr["examples"][0]["anchor_event_id"] == "github-pr"
+    assert "github" in pr["app_surface_hints"]
+
+
+def test_goal_can_say_no_relevant_match_and_offer_search_fallback():
+    result = build_goal_context(
+        "contract renewal", [event("irrelevant", "Weather forecast")],
+    )
+    assert result["status"] == "no_relevant_match"
+    assert result["examples"] == []
+    assert result["fallback"]["tool"] == "get_workflow_trace"
+    assert result["fallback"]["secondary_tool"] == "search_work"
+    assert result["coverage"]["no_match_proves_no_relevant_work"] is False
+
+
+def test_goal_matches_target_label_and_page_surface_without_title():
+    rows = [event("label-target", "", metadata={
+        "page": {"hostname": "internal.example", "surface": "Oneflow"},
+        "target": {"label": "Review contract"},
+    })]
+    result = build_goal_context("Review contract", rows)
+    assert result["returned"] == 1
