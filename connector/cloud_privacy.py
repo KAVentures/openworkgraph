@@ -59,13 +59,18 @@ MAX_TARGET_CAPTION = 100
 # High-precision social verb contexts complement (do not replace) the
 # general person detector. Never interpret ordinary sentence-start verbs as
 # people, and never include arbitrary remote preview text.
+# Professional titles can precede an uncommon surname absent from lexicons.
+PROFESSIONAL_NAME = re.compile(
+    r"(?i:(?<!\w)(?:dr\.?|doktor|prof\.?|professor))"
+    r"[ \t]+([A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{2,49})\b"
+)
 SOCIAL_ACTOR = re.compile(
     r"(?<!\w)([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+"
-    r"(?i:kommenterade|skrev|delade|ringde|svarade|bjuder|"
+    r"(?i:kommenterade|skrev|delade|ringde|svarade|lämnade|bjuder|"
     r"commented|wrote|shared|replied|called|invited)\b)"
 )
 SOCIAL_GREETING = re.compile(
-    r"(?i:(?<!\w)(?:tack|thanks|hey|hej|välkommen|hello|welcome))"
+    r"(?i:(?<!\w)(?:tack|thanks|hey|hej|välkommen|hello|welcome|hälsa))"
     r"\s*[,!]?\s+([A-ZÅÄÖ][a-zåäö]{2,35})(?=[\s!,.?:;]|$)"
 )
 _GENERIC_GREETING = frozenset("alla all everyone everybody team world tillbaka back there oss".split())
@@ -164,6 +169,10 @@ class DeviceUploadRedactor:
                 return match.group(0)
             return self.cleaner._token("PERSON", name)
 
+        clean = PROFESSIONAL_NAME.sub(
+            lambda m: m.group(0)[:-len(m.group(1))]
+            + self.cleaner._token("PERSON", m.group(1)), clean,
+        )
         clean = SOCIAL_ACTOR.sub(actor, clean)
         clean = SOCIAL_GREETING.sub(
             lambda m: m.group(0) if m.group(1).casefold() in _GENERIC_GREETING
