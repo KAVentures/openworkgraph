@@ -100,10 +100,11 @@ class PublicRedactor:
         # URLs with arbitrary paths/queries can carry names, tokens or email
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
-        text = self.person_detector.redact(text)
-        # Generic name detection can miss uncommon names and browser suffixes.
+        # The same token must win for full owner name and first-name suffix,
+        # even if the generic detector would otherwise use a PERSON token.
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
+        text = self.person_detector.redact(text)
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
