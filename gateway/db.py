@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS agent_session_messages (
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_time ON agent_session_messages(organization_id, observed_at, message_ref);
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_ref ON agent_session_messages(organization_id, session_ref, observed_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_workspace ON agent_session_messages(organization_id, workspace_ref, observed_at);
+CREATE TABLE IF NOT EXISTS recorder_heartbeats (
+  organization_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  collector_state TEXT NOT NULL,
+  capture_policy TEXT NOT NULL,
+  collector_age_seconds INTEGER,
+  PRIMARY KEY (organization_id, actor_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
+  ON recorder_heartbeats(organization_id, actor_id, received_at);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -120,6 +132,18 @@ CREATE TABLE IF NOT EXISTS agent_session_messages (
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_time ON agent_session_messages(organization_id, observed_at, message_ref);
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_ref ON agent_session_messages(organization_id, session_ref, observed_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_agent_session_workspace ON agent_session_messages(organization_id, workspace_ref, observed_at);
+CREATE TABLE IF NOT EXISTS recorder_heartbeats (
+  organization_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  collector_state TEXT NOT NULL,
+  capture_policy TEXT NOT NULL,
+  collector_age_seconds INTEGER,
+  PRIMARY KEY (organization_id, actor_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
+  ON recorder_heartbeats(organization_id, actor_id, received_at);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -311,6 +335,44 @@ class GatewayDB:
                 cur = self._execute(conn, sql, params)
                 inserted += max(0, int(cur.rowcount or 0))
         return inserted, acknowledged
+
+    def report_recorder_heartbeat(
+        self, principal: Principal, *, collector_state: str,
+        capture_policy: str, collector_age_seconds: int | None,
+    ) -> None:
+        """Only the enrolled device identity is trusted, never body-supplied IDs."""
+        at = _now()
+        with self.connect() as conn:
+            self._execute(conn, """
+                INSERT INTO recorder_heartbeats(
+                    organization_id, actor_id, device_id, received_at,
+                    collector_state, capture_policy, collector_age_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(organization_id,actor_id,device_id)
+                DO UPDATE SET received_at=excluded.received_at,
+                  collector_state=excluded.collector_state,
+                  capture_policy=excluded.capture_policy,
+                  collector_age_seconds=excluded.collector_age_seconds
+            """, (
+                principal.organization_id, principal.actor_id, principal.device_id,
+                at, collector_state, capture_policy, collector_age_seconds,
+            ))
+
+    def last_recorder_heartbeat(
+        self, *, organization_id: str, actor_id: str,
+    ) -> dict[str, Any] | None:
+        """Read only the authenticated actor's latest content-free status."""
+        with self.connect() as conn:
+            cur = self._execute(conn, """
+                SELECT received_at, collector_state, capture_policy,
+                       collector_age_seconds
+                FROM recorder_heartbeats
+                WHERE organization_id = ? AND actor_id = ?
+                ORDER BY received_at DESC LIMIT 1
+            """, (organization_id, actor_id))
+            row = cur.fetchone()
+            columns = [d[0] for d in cur.description] if cur.description else None
+        return self._row(row, columns) if row else None
 
     def insert_agent_session_messages(self, principal: Principal, items: list[dict[str, Any]]) -> tuple[int, list[str]]:
         inserted = 0

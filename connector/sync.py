@@ -300,6 +300,49 @@ def _refresh_managed_policy_if_due(
     return now
 
 
+def _local_recorder_health() -> dict[str, Any]:
+    """Probe only the fixed loopback API, without the Gateway bearer header."""
+    try:
+        # A separate request with no authorization header prevents accidentally
+        # disclosing the remote device credential to another local process.
+        with httpx.Client(timeout=2.0, trust_env=False, follow_redirects=False) as local:
+            response = local.get("http://127.0.0.1:8787/v1/collector-health")
+        response.raise_for_status()
+        info = response.json()
+        if not isinstance(info, dict):
+            raise ValueError("invalid local collector status")
+        state = str(info.get("collector_state") or "")
+        policy = str(info.get("local_capture_policy") or "")
+        age = info.get("collector_heartbeat_age_seconds")
+        if state not in {"recording", "paused", "stopped",
+                         "no_recent_collector_heartbeat"}:
+            raise ValueError("invalid local collector state")
+        if policy not in {"recording", "paused", "stopped", "unknown"}:
+            raise ValueError("invalid local capture policy")
+        if age is not None and (type(age) is not int or not 0 <= age <= 3600):
+            age = None
+        return {
+            "collector_state": state, "local_capture_policy": policy,
+            "collector_heartbeat_age_seconds": age,
+        }
+    except Exception:
+        return {
+            "collector_state": "no_recent_collector_heartbeat",
+            "local_capture_policy": "unknown",
+            "collector_heartbeat_age_seconds": None,
+        }
+
+
+def _report_recorder_health(client: httpx.Client, url: str) -> bool:
+    """Best-effort, body-free liveness reporting; not evidence upload."""
+    result = client.post(
+        f"{url}/v1/device/recorder-heartbeat",
+        json=_local_recorder_health(),
+    )
+    result.raise_for_status()
+    return result.status_code == 200
+
+
 def run(config_path: Path, *, once: bool = False) -> int:
     """Synchronize privacy-approved local evidence to an optional company Gateway.
 
@@ -341,6 +384,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
     policy: dict[str, Any] = merge_policies(initial_local_policy, remote_policy)
     policy_fetched_at = 0.0
     managed_policy_fetched_at = 0.0
+    heartbeat_due_at = 0.0
     delay = settings.poll_seconds
     state.set("gateway_url", settings.url)
 
@@ -382,6 +426,16 @@ def run(config_path: Path, *, once: bool = False) -> int:
                     # Read by the local server (server.ai_context) to lock AI
                     # context detail to Redacted when the organization requires it.
                     state.set_bool("org_force_redacted_ai_context", bool(policy.get("force_redacted_ai_context")))
+
+                # This is separate from evidence synchronization and carries no
+                # work content. One failure must not block normal data delivery.
+                if not once and time.monotonic() >= heartbeat_due_at:
+                    heartbeat_due_at = time.monotonic() + 20.0
+                    try:
+                        _report_recorder_health(client, settings.url)
+                        state.set("last_recorder_health_report_error", "")
+                    except Exception as exc:
+                        state.set("last_recorder_health_report_error", type(exc).__name__)
 
                 # Apply local transcript opt-in immediately even between remote
                 # policy refreshes, using the last successfully fetched org policy.

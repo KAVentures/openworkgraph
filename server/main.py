@@ -218,6 +218,41 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/v1/collector-health")
+def collector_health() -> dict[str, Any]:
+    """Content-free local status for the enrolled Gateway sync worker.
+
+    A fresh in-memory collector heartbeat is stronger than the persistent
+    capture-control file, which can still say "recording" after a crash.
+    No window title, work contents or device identifiers leave this endpoint.
+    """
+    from shared.capture_control import read_state
+
+    now = datetime.now(timezone.utc)
+    raw = str(COLLECTOR_STATUS.get("received_at") or "")
+    try:
+        seen = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        age = max(0, int((now - seen).total_seconds())) if seen.tzinfo else None
+    except (TypeError, ValueError, OverflowError):
+        age = None
+    active = age is not None and age <= 45
+    local_state = str(read_state().get("state") or "unknown")
+    if active and local_state == "recording":
+        state = "recording"
+    elif active and local_state in {"paused", "stopped"}:
+        state = local_state
+    else:
+        state = "no_recent_collector_heartbeat"
+    return {
+        "collector_state": state,
+        "collector_heartbeat_age_seconds": age,
+        "recent_collector_heartbeat": bool(active),
+        "local_capture_policy": local_state if local_state in {"recording", "paused", "stopped"} else "unknown",
+        "evidence_contents_included": False,
+        "source": "local_api_in_memory_collector_heartbeat",
+    }
+
+
 @app.post("/v1/events")
 def ingest(batch: EventBatch) -> dict[str, int]:
     # The "never record" lists apply here too, so a change made in the

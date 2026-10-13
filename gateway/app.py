@@ -50,6 +50,12 @@ class RetentionPolicyRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=1, le=36500)
 
 
+class RecorderHeartbeatRequest(BaseModel):
+    collector_state: str
+    local_capture_policy: str
+    collector_heartbeat_age_seconds: int | None = Field(default=None, ge=0, le=3600)
+
+
 class EvidenceBatch(BaseModel):
     events: list[dict[str, Any]]
 
@@ -466,6 +472,32 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             "policy_is_ceiling": True,
             "note": "Endpoint local policy can only further restrict what is synchronized.",
         }
+
+    @app.post("/v1/device/recorder-heartbeat")
+    def recorder_heartbeat(
+        request: RecorderHeartbeatRequest,
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "evidence:write")
+        if p.token_type != "device" or not p.device_id:
+            raise HTTPException(status_code=403, detail="an enrolled device is required")
+        if request.collector_state not in {
+            "recording", "paused", "stopped", "no_recent_collector_heartbeat",
+        } or request.local_capture_policy not in {
+            "recording", "paused", "stopped", "unknown",
+        }:
+            raise HTTPException(status_code=400, detail="invalid content-free collector status")
+        if (request.collector_state == "recording" and
+                (request.local_capture_policy != "recording" or
+                 request.collector_heartbeat_age_seconds is None or
+                 request.collector_heartbeat_age_seconds > 45)):
+            raise HTTPException(status_code=400, detail="recording requires a fresh collector heartbeat")
+        db.report_recorder_heartbeat(
+            p, collector_state=request.collector_state,
+            capture_policy=request.local_capture_policy,
+            collector_age_seconds=request.collector_heartbeat_age_seconds,
+        )
+        return {"status": "accepted", "contents_received": False}
 
     @app.post("/v1/evidence/batch")
     def ingest(batch: EvidenceBatch, p: Principal = Depends(principal)) -> dict[str, Any]:
