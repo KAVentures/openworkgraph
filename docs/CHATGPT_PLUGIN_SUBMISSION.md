@@ -95,12 +95,15 @@ Set `OWG_PLUGIN_GATEWAY_URL` to the public Gateway base URL returned to the acco
 Keep the directory-facing server focused and read-only:
 
 - `get_profile` — authenticated account identity for multi-account UX.
+- `get_goal_context` — goal-relevant prior work evidence.
 - `get_current_work_context` — cheap first orientation call.
 - `search_work` — concrete historical lookup.
 - `get_workflow_trace` — canonical chronology.
 - `find_repeated_workflows` — derived repeated-work navigation.
 - `get_workflow_evidence` — selected executions + support/provenance.
 - `get_agent_runs` — observed prior agent attempts.
+- `search_work_text` — optional separately consented redacted work-text search.
+- `get_work_text_excerpt` — retrieve an authorized search-returned excerpt reference.
 
 Do not expose local file reads, governance experiments, admin tools, enrollment,
 write-back, or saved workflow-knowledge mutation in the initial public plugin.
@@ -186,7 +189,7 @@ Before pressing Submit:
 - privacy policy accurately lists every user-related field returned by tools;
 - company URL, privacy URL, support path and logo are live;
 - reviewer demo account contains useful sample data and has no inaccessible 2FA;
-- tool scan shows the intended seven public tools, read-only annotations and OAuth
+- tool scan shows the intended ten public tools, read-only annotations and OAuth
   security metadata;
 - all five positive and three negative review cases pass;
 - demo video/release notes/localization fields are complete.
