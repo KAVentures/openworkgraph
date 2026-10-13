@@ -51,7 +51,7 @@ _APP_HINTS = {
     "claude": ("claude",),
     "codex": ("codex",),
 }
-_SHORT_INTENT = re.compile(r"(?<!\\w)(?:PR|PRs)(?!\\w)", re.I)
+_SHORT_INTENT = re.compile(r"(?<!\w)(?:PR|PRs)(?!\w)", re.I)
 
 
 def _goal_terms(goal: str) -> tuple[set[str], list[str]]:
@@ -217,8 +217,8 @@ def build_goal_context(
             "use_live_source_connectors_to_verify_current_state": True,
         },
         "fallback": {
-            "tool": "search_work",
-            "alternative_tool": "get_workflow_trace",
+            "tool": "get_workflow_trace",
+            "secondary_tool": "search_work",
             "strategy": "Search redacted titles, app and host first; then open query-free trace around plausible timestamps.",
             "instruction": (
                 "When nothing matches, retrieval is capped, or goal terms are generic, "
