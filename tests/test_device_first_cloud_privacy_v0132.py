@@ -118,6 +118,18 @@ def test_device_projection_preserves_useful_ui_and_holds_clinical_context():
     assert "Karl Gustafsson" not in str(projected)
 
 
+
+def test_swedish_status_words_are_not_names():
+    from gateway.plugin_redaction import PublicRedactor
+    redactor = PublicRedactor(
+        secret=_SECRET, principal="test-Swedish-ui-words",
+    )
+    for label in ("Svar", "Uppdatering", "Hälsa", "Svar från support"):
+        assert redactor.target_label(label).startswith(label.split()[0])
+        projected = project_event_for_upload(_event(), secret=_SECRET)
+        assert projected["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
+
+
 def test_device_projection_redacts_handles_and_social_messages():
     for value, secret in (
         ("Slack · @lisa.k reacted", "@lisa.k"),
