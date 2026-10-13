@@ -187,6 +187,39 @@ def _minimal_response(value: Any) -> Any:
     return value
 
 
+def _compact_response(value: Any) -> Any:
+    """Keep legacy structural fields but avoid repeating static paragraphs.
+
+    Privacy controls and suppression diagnostics are *not* dropped. Dynamic
+    evidence, resource pointers, events and pagination are never summarized.
+    """
+    if isinstance(value, list):
+        return [_compact_response(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, Any] = {}
+    for name, item in value.items():
+        if name in {"navigation_hints", "suggested_followups", "ai_drafting_guidance"}:
+            continue
+        if name == "_openworkgraph_security" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items() if key != "handling"}
+        elif name == "raw_evidence_fallback" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if key not in {"reason", "instruction", "strategy"}}
+        elif name == "interpretation_contract" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool)}
+        elif name == "evidence_contract" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool) or key == "version"}
+        elif name == "interpretation" and isinstance(item, dict):
+            result[name] = {key: val for key, val in item.items()
+                            if isinstance(val, bool)}
+        else:
+            result[name] = _compact_response(item)
+    return result
+
+
 def _protected(value: Any, *, detail: str = "compact") -> Any:
     if detail not in ("compact", "rich", "minimal"):
         raise ValueError("detail must be compact, minimal or rich")
@@ -207,6 +240,9 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         safe["privacy_level"] = "hosted_redacted"
         safe["evidence_and_workflow_interpretation"] = "non_authoritative"
     secured = protect_observed_payload(safe)
+    if detail == "compact":
+        secured = _compact_response(secured)
+        secured["contract_version"] = "hosted-evidence-v3"
     if detail == "minimal":
         # The hardener adds an intentionally verbose explanatory block on each
         # invocation. Preserve its actionable counters and suppressed paths,
