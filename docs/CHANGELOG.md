@@ -1,5 +1,16 @@
 # OpenWorkGraph changelog
 
+# OpenWorkGraph v0.123.1
+
+This patch ships the tested changes merged after the v0.123.0 desktop release. Existing release assets remain immutable; download the new installer and reload the matching browser sensor.
+
+- **Consented browser work text:** Privacy exposes separate visible-text capture, local-AI read, and redacted cloud-sharing controls. New installs keep these choices off; cloud uploads also require explicit approval of the enrolled computer.
+- **Hosted evidence fidelity:** page identity, stable pointers, timestamps and excerpt coverage remain visible without uploading earlier local text or rewriting raw evidence.
+- **Cloud account sign-in:** callbacks opened in another tab can recover the matching short-lived PKCE transaction.
+- **Installer upgrades:** the version bump publishes fresh macOS, Windows, browser-sensor and integration assets instead of leaving the October 9 package as the latest download.
+
+---
+
 # OpenWorkGraph v0.123.0
 
 This release makes the personal ChatGPT connection available in the downloadable desktop app.

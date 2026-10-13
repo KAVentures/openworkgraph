@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.123.0"
+EXPECTED_VERSION = "0.123.1"
 
 
 def test_release_version_sources_are_aligned():
@@ -42,6 +42,7 @@ def test_release_notes_are_current_and_version_driven():
     assert "telemetry actually observed" in workflow
     assert "Custom harnesses" in workflow
     assert "First useful reconstruction" in workflow
+    assert "### v0.123.1: consented browser text and hosted fidelity" in workflow
     assert "### v0.123: personal ChatGPT connection" in workflow
     assert "Explicit local approval" in workflow
     assert "### v0.122: enterprise productization and simpler browser setup" in workflow
@@ -125,6 +126,7 @@ def test_release_notes_are_current_and_version_driven():
 
     changelog = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     changelog_lower = changelog.lower()
+    assert EXPECTED_VERSION in changelog
     assert "0.123.0" in changelog
     assert "Separate sharing approval" in changelog
     assert "0.122.0" in changelog
