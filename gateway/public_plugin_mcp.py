@@ -240,6 +240,9 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         safe["privacy_level"] = "hosted_redacted"
         safe["evidence_and_workflow_interpretation"] = "non_authoritative"
     secured = protect_observed_payload(safe)
+    # One stable version across nested capability metadata and every detail
+    # mode, including rich. Avoid mixing top-level v3 with inner v2.
+    secured["contract_version"] = "hosted-evidence-v3"
     if detail == "compact":
         secured = _compact_response(secured)
         secured["contract_version"] = "hosted-evidence-v3"
@@ -388,7 +391,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             "cloud_work_text": work_text_cloud.status(db, organization_id=organization_id, actor_id=actor_id),
         }
         context["server_capabilities"] = {
-            "contract_version": "hosted-evidence-v2",
+            "contract_version": "hosted-evidence-v3",
             "tool_count": 10,
             "optional_text_tools": ["search_work_text", "get_work_text_excerpt"],
             "goal_tool": "get_goal_context",
