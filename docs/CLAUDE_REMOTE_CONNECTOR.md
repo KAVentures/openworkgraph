@@ -63,6 +63,13 @@ The OWG remote server advertises MCP protected-resource metadata and uses an ext
 
 The hosted server must remain identity-scoped and read-only. **Never** use ChatGPT or Claude client names as user/tenant identifiers or treat observed work as permission to take future action. Do not commit tokens, user evidence or secrets.
 
+
+## Evidence quality and compact output
+
+For newer clients, `get_goal_context`, `get_current_work_context`, `search_work`, `get_workflow_trace` and `get_workflow_evidence` also accept `detail="minimal"` to reduce repetitive contract text without removing events or pagination. The existing `compact` default and `rich` detail remain supported.
+
+Hosted `find_repeated_workflows` now returns `cluster_quality` and filters weak click-only clusters by default; `include_low_specificity=true` restores them for auditing. For truncated `get_workflow_evidence` excerpts, follow each `trace_lookup` using paged `get_workflow_trace`. Structural surface IDs are paired with a best-effort `surface_labels` dictionary. The profile and all model-facing observed strings follow one owner-identity pseudonymization policy, including first-name suffixes: no raw profile email. See [Hosted evidence presentation and safety contract](HOSTED_EVIDENCE_PRESENTATION.md).
+
 ## Release smoke test / comparison
 
 These tests must be performed against an **isolated test user/tenant**, first in a real Claude session and then in ChatGPT against the same synthetic data:
