@@ -426,6 +426,28 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             raise ValueError("search query must not be empty")
         if len(needle) > 240:
             raise ValueError("search query must be at most 240 characters")
+        # If a term is itself private (person/company/owner), default search
+        # must not even SQL-filter the original title: that would expose a
+        # name-existence side channel through row counts or has_more.
+        if not include_private_matches and cleaner.target_label(query, token_kind="QUERY") != query:
+            _audit(db, organization_id, actor_id, "plugin.search.read", {
+                "returned": 0, "private_title_match_enabled": False,
+                "private_query_requires_opt_in": True,
+            })
+            return _protected({
+                "rows": [], "returned": 0, "has_more": False,
+                "next_cursor": None, "query": query,
+                "private_title_match_enabled": False,
+                "private_query_requires_opt_in": True,
+                "no_match_proves_absence": False,
+                "pagination_tool": "search_work",
+                "retrieval_notice": (
+                    "This query contains a potentially private identifier. "
+                    "Private title matching is disabled unless the caller "
+                    "explicitly chooses include_private_matches=true, which "
+                    "reveals the existence of matching private work."
+                ),
+            }, detail=detail)
         matched_fields: dict[str, list[str]] = {}
         pattern = re.compile((r"(?<!\d)" if needle[0].isdigit() else "")
             + re.escape(needle) + (r"(?!\d)" if needle[-1].isdigit() else ""))
