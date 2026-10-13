@@ -34,6 +34,10 @@ jobs:
           test -n "$PYTHON_RELATIVE"
           test -x "$PAYLOAD/$PYTHON_RELATIVE"
           test -f "$PAYLOAD/OFFLINE_RUNTIME"
+          for CONTROL in pvWorkTextSwitch pvWorkTextAiSwitch pvWorkTextCloudSwitch; do
+            /usr/bin/grep -q "$CONTROL" "$PAYLOAD/dashboard/basic_mode.js"
+          done
+          test -f "$PAYLOAD/connector/work_text_sync.py"
           plutil -lint dist/OpenWorkGraph.app/Contents/Info.plist
       - name: Build clickable macOS installer
         run: bash scripts/build_macos_installer_pkg.sh
@@ -148,6 +152,12 @@ jobs:
           $Version = (Get-Content VERSION -Raw).Trim()
           $EvalDir = Join-Path "dist/OpenWorkGraph-Windows-v$Version/.openworkgraph-src" "evals"
           if (Test-Path $EvalDir) { throw "Evaluation files unexpectedly bundled in Windows runtime" }
+          $Payload = "dist/OpenWorkGraph-Windows-v$Version/.openworkgraph-src"
+          $PrivacyUi = Get-Content (Join-Path $Payload "dashboard/basic_mode.js") -Raw
+          foreach ($Control in @("pvWorkTextSwitch", "pvWorkTextAiSwitch", "pvWorkTextCloudSwitch")) {
+            if (-not $PrivacyUi.Contains($Control)) { throw "Packaged Privacy control missing: $Control" }
+          }
+          if (-not (Test-Path (Join-Path $Payload "connector/work_text_sync.py"))) { throw "Packaged text sync worker missing" }
       - name: Embed offline runtime for installer
         shell: powershell
         run: ./scripts/embed_windows_runtime.ps1
@@ -428,6 +438,13 @@ jobs:
           ## OpenWorkGraph ${TAG}
 
           OpenWorkGraph is local-first, open-source context infrastructure for how human and AI-agent work actually happens.
+
+          ### v0.123.1: consented browser text and hosted fidelity
+
+          - **Current desktop Privacy controls:** separately enable visible browser text capture, local AI reading, and redacted cloud sharing. New installs keep these choices off, and cloud sharing also requires explicit approval of the enrolled computer.
+          - **Forward-only bounded text:** only new authorized browser excerpts synchronize, with page identity, observation timestamps, truncation coverage, expiry and actor isolation. Raw activity evidence stays intact.
+          - **Updated installers and browser sensor:** the patch release ships the tested changes merged after the October 9 v0.123.0 package. Upgrade the desktop and reload the matching browser sensor.
+          - **Cloud account callback fix:** email links opening another tab can recover the matching short-lived sign-in transaction.
 
           ### v0.123: personal ChatGPT connection
 
