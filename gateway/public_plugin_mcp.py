@@ -168,7 +168,28 @@ def _owner_names(claims: dict[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(candidates, key=lambda x: (-len(x), x.casefold())))
 
 
+_STATIC_CONTRACT_FIELDS = frozenset({
+    "privacy_representation", "_openworkgraph_security", "evidence_contract",
+    "raw_evidence_fallback", "navigation_hints", "interpretation_contract",
+    "interpretation", "suggested_followups", "ai_drafting_guidance",
+})
+
+
+def _minimal_response(value: Any) -> Any:
+    """Trim repeated explanation blocks, never evidence or pagination fields."""
+    if isinstance(value, dict):
+        return {
+            key: _minimal_response(item) for key, item in value.items()
+            if key not in _STATIC_CONTRACT_FIELDS
+        }
+    if isinstance(value, list):
+        return [_minimal_response(item) for item in value]
+    return value
+
+
 def _protected(value: Any, *, detail: str = "compact") -> Any:
+    if detail not in ("compact", "rich", "minimal"):
+        raise ValueError("detail must be compact, minimal or rich")
     # Model-facing responses are ALWAYS redacted by the hosted server, even if
     # a connected device mistakenly sends richer metadata. Rich mode only
     # changes structural detail, never the privacy boundary.
@@ -177,9 +198,14 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         _public_payload(value),
         secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
         principal=f"{organization_id}|{actor_id}",
-        detail=detail,
+        detail="compact" if detail == "minimal" else detail,
         owner_names=_owner_names(claims),
     )
+    if detail == "minimal":
+        safe = _minimal_response(safe)
+        safe["contract_version"] = "hosted-evidence-v3"
+        safe["privacy_level"] = "hosted_redacted"
+        safe["evidence_and_workflow_interpretation"] = "non_authoritative"
     return protect_observed_payload(safe)
 
 
@@ -267,8 +293,8 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     ) -> dict[str, Any]:
         """Use when a user's goal could be better accomplished using their previously observed human or agent work, even when they don't mention OpenWorkGraph. Find relevant example traces, applications and resource pointers with explicit unknowns. Match candidates are lexical navigation only; verify with query-free get_workflow_trace and live source connectors. Do NOT call for generic work-independent questions or infer permission from work history."""
         organization_id, actor_id, _claims = _identity()
-        if detail not in ("compact", "rich"):
-            raise ValueError("detail must be compact or rich")
+        if detail not in ("compact", "rich", "minimal"):
+            raise ValueError("detail must be compact, minimal or rich")
         result = gateway_goal_context(
             db, organization_id=organization_id, actor_id=actor_id,
             goal=goal, max_examples=max_examples, since=since, until=until,
@@ -435,10 +461,10 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             db, organization_id=organization_id, actor_id=actor_id,
             execution_ids=execution_ids, family_key=family_key,
             since=since, until=until, max_runs=max(1, min(int(max_runs), 25)),
-            max_events_per_run=12 if detail == "compact" else 100,
+            max_events_per_run=100 if detail == "rich" else 12,
         )
         _audit(db, organization_id, actor_id, "plugin.workflow_evidence.read", {"selected": result.get("selector", {}).get("selected_execution_count", 0)})
-        if detail == "compact":
+        if detail != "rich":
             align = result.get("structural_alignment") or {}
             result = {
                 key: result[key] for key in (
