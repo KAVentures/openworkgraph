@@ -161,3 +161,14 @@ def test_older_work_survives_tail_cap_and_more_than_180_lexical_hits(tmp_path):
     assert result["raw_evidence_is_independent_of_matches"] is True
     assert "foreign-private" not in str(result)
     assert result["coverage"]["complete_work_history"] is False
+
+
+def test_raw_first_benchmark_never_loses_raw_only_recall():
+    from evals.raw_first_recall import run_benchmark
+
+    report = run_benchmark()
+    assert report["evaluation_is_synthetic"] is True
+    assert report["raw_fallback_executed_by_test_policy"] is True
+    assert report["raw_only_recall"] == 1.0
+    assert report["combined_recall"] >= report["raw_only_recall"]
+    assert report["inference_only_recall"] < report["raw_only_recall"]
