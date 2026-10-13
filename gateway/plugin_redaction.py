@@ -78,6 +78,8 @@ documents file files folder folders sheet sheets spreadsheet quote quotation
 issue issues ticket tickets pull request requests branch commit github gmail
 chatgpt claude dashboard home account profile button tab link menu
 history work workflow trace help accept decline allow deny yes no
+contract invoice subject support calendar meeting release code oauth app browser terminal
+name account username password cloud github search console issue tracker
 customer project task tasks review apply merge pr read unread approve
 approval comment comments add openworkgraph
 """.split())
@@ -131,7 +133,7 @@ class PublicRedactor:
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
-    def target_label(self, value: str) -> str:
+    def target_label(self, value: str, *, token_kind: str = "TARGET") -> str:
         """Fail closed for unknown names/companies in free-form UI labels.
 
         Standard verbs/structural UI descriptions remain readable. Unknown
@@ -150,7 +152,7 @@ class PublicRedactor:
                     for word in words
                 )):
             return safe
-        return self._token("TARGET", str(value))
+        return self._token(token_kind, str(value))
 
     def metadata(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -175,7 +177,7 @@ class PublicRedactor:
                 continue
             safe = {k: (v if k in _IDS else self.target_label(v)
                          if key == "target" and k in {"label", "title"}
-                         else self.text(v)) if isinstance(v, str) else v
+                         else self.target_label(v) if key == "target" else self.text(v)) if isinstance(v, str) else v
                     for k, v in child.items() if k in allowed
                     and isinstance(v, (str, int, float, bool)) and v not in (None, "", 0, False)
                     and (k not in _IDS or isinstance(v, str) and _OPAQUE.fullmatch(v))}
@@ -201,6 +203,7 @@ class PublicRedactor:
                 )
                 else str(value) if key in _IDS or key == "observed_at"
                 else self.target_label(str(value)) if key == "target_label"
+                else self.target_label(str(value), token_kind="TITLE") if key == "window_title"
                 else self.text(str(value))
             )
         meta = self.metadata(raw.get("metadata"))
@@ -262,6 +265,8 @@ class PublicRedactor:
                 return value if _OPAQUE.fullmatch(value) else "[INVALID_REFERENCE]"
             if key == "target_label":
                 return self.target_label(value)
+            if key in {"window_title", "page_title"}:
+                return self.target_label(value, token_kind="TITLE")
             return value if key in _IDS or key in {"observed_at", "snapshot_until", "next_cursor"} else self.text(value)
         return value
 
