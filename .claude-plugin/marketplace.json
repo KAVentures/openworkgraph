@@ -8,6 +8,11 @@
       "name": "openworkgraph",
       "source": "./integrations/plugins/openworkgraph",
       "description": "Connect Claude Code to the local OpenWorkGraph context MCP, session checks, and /owg workflow skill."
+    },
+    {
+      "name": "openworkgraph-cloud",
+      "source": "./integrations/plugins/openworkgraph-cloud",
+      "description": "Connect Claude chat and Claude Code to the existing OAuth-protected OWG cloud MCP with a read-only work-continuity skill."
     }
   ]
 }

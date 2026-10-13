@@ -1,0 +1,18 @@
+{
+  "name": "openworkgraph-cloud",
+  "displayName": "OpenWorkGraph (Cloud)",
+  "description": "Give Claude continuity from your own previously observed work through OpenWorkGraph's secure, read-only cloud MCP. Supports implicit work-history lookups and optional opt-in work text.",
+  "version": "0.123.1",
+  "author": {
+    "name": "Kinvectum"
+  },
+  "homepage": "https://owg.kinvectum.com",
+  "repository": "https://github.com/KAVentures/openworkgraph",
+  "license": "Apache-2.0",
+  "keywords": [
+    "work context",
+    "agent memory",
+    "workflow evidence",
+    "MCP"
+  ]
+}
