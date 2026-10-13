@@ -206,7 +206,7 @@ def _window_event_refs(task: dict[str, Any], session_events: list[dict[str, Any]
     return refs[:8]
 
 
-def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _human_runs(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False) -> list[dict[str, Any]]:
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
         by_session[str(event.get("session_id") or "")].append(event)
@@ -220,7 +220,8 @@ def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         session_id = str(candidate.get("session_id") or "")
         session_events = by_session.get(session_id, [])
-        for task in memory.split_human_execution_windows(candidate, session_events):
+        for task in (memory.split_human_execution_windows(candidate, session_events)
+                     if split_human_hosts else [candidate]):
             structural_steps = memory._human_steps(task, session_events)
             if not structural_steps:
                 continue
