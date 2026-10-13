@@ -478,7 +478,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                     for key, value in align.items()
                     if key in ("high_support_steps", "less_common_observed_steps",
                                "high_support_adjacent_transitions", "observed_variations",
-                               "high_support_minimum_runs", "common_path_claimed")
+                               "high_support_minimum_runs", "common_path_claimed", "surface_labels")
                 },
                 "compact_projection": True,
                 "evidence_tool": "get_workflow_trace",
