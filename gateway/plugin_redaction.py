@@ -74,6 +74,7 @@ _SAFE_SINGLE_UI = frozenset("""
 open close save cancel continue retry settings next previous refresh
 new edit view search submit copy paste share help download upload
 openworkgraph owg github gmail chatgpt claude oneflow
+välkommen ring
 ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
@@ -86,7 +87,7 @@ _CONTACT_CUE = re.compile(
     r"(?=\s+(?i:at|hos|på|from|från|till|to|med|with|i|message|email)\b|[,;:–—-]|$)"
 )
 _LEADING_CONTACT = re.compile(
-    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?i:at|hos|på|from|från|till|to|med|with)\b)"
+    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?i:at|hos|på|from|från|to|med|with)\b)"
 )
 # Explicit grammatical identity and closing-signature cues cover unfamiliar
 # names missing from the first-name dictionary, including Swedish email bodies.
@@ -97,7 +98,7 @@ _SELF_NAME_CUE = re.compile(
     r"\s*[,:\-]?\s*([A-ZÅÄÖ][a-zåäö]{2,40})\b"
 )
 _SLASH_SIGNATURE = re.compile(
-    r"(?:(?<=\s)/\s*|(?<=\n)/\s*)([A-ZÅÄÖ][a-zåäö]{2,40})(?=\s*(?:$|[\n.,;]))"
+    r"(?<![\w/])/[ \t]+([A-ZÅÄÖ][a-zåäö]{2,40})(?=\s*(?:$|[\n.,;]))"
 )
 _EMPLOYER_CUE = re.compile(
     r"(?i:(?<!\w)(?:jag\s+jobbar|jag\s+arbetar|jobbar|arbetar|"
@@ -107,6 +108,9 @@ _EMPLOYER_CUE = re.compile(
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
+
+# Verified organization brand, disambiguated before generic person matching.
+_KNOWN_ORG_BRANDS = re.compile(r"(?<!\\w)(Capio)(?!\\w)", re.I)
 
 class PublicRedactor:
     def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
@@ -160,6 +164,7 @@ class PublicRedactor:
             return self._token("ORG", phrase)
 
         text = _COMPANY_NAME.sub(company, text)
+        text = _KNOWN_ORG_BRANDS.sub(lambda m: self._token("ORG", m.group(0)), text)
         # Strong employment context also identifies brands without AB/Ltd.
         text = _EMPLOYER_CUE.sub(
             lambda m: m.group(0)[:-len(m.group(1))] + self._token("ORG", m.group(1)),
