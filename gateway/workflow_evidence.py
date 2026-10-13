@@ -106,7 +106,7 @@ def workflow_evidence(
         until=until,
         limit=source_event_limit,
     )
-    def _build(*, split: bool) -> dict[str, Any]:
+    def _build(*, mode: str) -> dict[str, Any]:
         return build_workflow_evidence(
             family_key=family_key,
             execution_ids=execution_ids,
@@ -116,29 +116,35 @@ def workflow_evidence(
             max_runs=max_runs,
             max_events_per_run=max_events_per_run,
             include_canonical_evidence=True,
-            partition_host_switches=split,
-            partition_idle_gaps=not split,
+            partition_host_switches=mode == "host",
+            partition_idle_gaps=mode == "idle",
             _raw_events=raw,
         )
 
-    legacy_reference_used = False
-    try:
-        result = _build(split=True)
-    except WorkflowEvidenceError as exc:
-        # Previously issued opaque IDs/family keys must remain resolvable.
-        # This fallback is read-only and uses the SAME actor-scoped, bounded
-        # canonical rows. Never swallow malformed selector errors.
-        if not (execution_ids or family_key) or not (
-            "unavailable in this bounded" in str(exc)
-            or "workflow family was not found" in str(exc)
-        ):
-            raise
-        result = _build(split=False)
-        legacy_reference_used = True
+    # New discovery issues idle-partitioned IDs. Preserve older host-partition
+    # and original unsplit IDs so stored references do not silently disappear.
+    # All three modes operate on identical actor-scoped, bounded evidence.
+    partition_mode = "idle"
+    for candidate_mode in ("idle", "host", "unsplit"):
+        try:
+            result = _build(mode=candidate_mode)
+            partition_mode = candidate_mode
+            break
+        except WorkflowEvidenceError as exc:
+            recoverable = (
+                (execution_ids or family_key) and
+                ("unavailable in this bounded" in str(exc)
+                 or "workflow family was not found" in str(exc))
+            )
+            if not recoverable or candidate_mode == "unsplit":
+                raise
+    legacy_reference_used = partition_mode == "unsplit"
     provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
     provenance["source"] = "gateway_synced_privacy_hardened_evidence"
     provenance["canonical_local_store_may_be_richer"] = True
     provenance["legacy_unsplit_execution_reference_used"] = legacy_reference_used
+    provenance["legacy_host_partition_reference_used"] = partition_mode == "host"
+    provenance["execution_partition_mode"] = partition_mode
     result["provenance"] = provenance
     result["gateway_projection"] = True
     return result
