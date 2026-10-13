@@ -78,12 +78,31 @@ ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
 # High-precision cues for uncommon single names absent from the lexicon.
+# Make only the *cue* case insensitive. The name itself must start with an
+# uppercase letter: otherwise Swedish "till oss på..." can redact "oss".
 _CONTACT_CUE = re.compile(
-    r"(?i)(\b(?:for|from|to|with|contact|attn|för|från|till|med|private)\s+)"
-    r"([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with|i|message|email)\b|[,;:–—-]|$)"
+    r"(?i:(\b(?:for|from|to|with|contact|attn|för|från|till|med|private)\s+))"
+    r"([A-ZÅÄÖ][a-zåäö]{2,35})"
+    r"(?=\s+(?i:at|hos|på|from|från|till|to|med|with|i|message|email)\b|[,;:–—-]|$)"
 )
 _LEADING_CONTACT = re.compile(
-    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?:at|hos|på|from|från|till|to|med|with)\b)"
+    r"^([A-ZÅÄÖ][a-zåäö]{2,35})(?=\s+(?i:at|hos|på|from|från|till|to|med|with)\b)"
+)
+# Explicit grammatical identity and closing-signature cues cover unfamiliar
+# names missing from the first-name dictionary, including Swedish email bodies.
+_SELF_NAME_CUE = re.compile(
+    r"(?i:(?<!\w)(?:mitt\s+namn\s+är|jag\s+heter|namnet\s+är|"
+    r"my\s+name\s+is|vänliga\s+hälsningar|med\s+vänliga\s+hälsningar|"
+    r"hälsningar|best\s+regards|kind\s+regards|regards))"
+    r"\s*[,:\-]?\s*([A-ZÅÄÖ][a-zåäö]{2,40})\b"
+)
+_SLASH_SIGNATURE = re.compile(
+    r"(?:(?<=\s)/\s*|(?<=\n)/\s*)([A-ZÅÄÖ][a-zåäö]{2,40})(?=\s*(?:$|[\n.,;]))"
+)
+_EMPLOYER_CUE = re.compile(
+    r"(?i:(?<!\w)(?:jag\s+jobbar|jag\s+arbetar|jobbar|arbetar|"
+    r"anställd|employed|i\s+work|work)\s+(?:på|hos|at|for)\s+)"
+    r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö\-]{3,49})\b"
 )
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
@@ -95,6 +114,9 @@ class PublicRedactor:
             raise ValueError("public redaction requires a scoped secret")
         self.key = hmac.new(secret.encode(), principal.encode(), hashlib.sha256).digest()
         self.person_detector = Detector(token=self._token)
+        # Only aliases proven by organization suffixes in this one redaction
+        # request. Never persist personal/customer names across accounts.
+        self.organization_aliases: set[str] = set()
         # Authenticated identity hints redact owner names in all text surfaces.
         names = {str(name).strip() for name in owner_names
                  if isinstance(name, str) and 3 <= len(name.strip()) <= 100}
@@ -124,7 +146,25 @@ class PublicRedactor:
         # URLs with arbitrary paths/queries can carry names, tokens or email
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
-        text = _COMPANY_NAME.sub(lambda m: self._token("ORG", m.group(0)), text)
+        def company(match: re.Match[str]) -> str:
+            phrase = match.group(0)
+            first = phrase.split()[0]
+            if len(first) >= 5 and first.casefold() not in STOPWORDS:
+                self.organization_aliases.add(first)
+            return self._token("ORG", phrase)
+
+        text = _COMPANY_NAME.sub(company, text)
+        # Strong employment context also identifies brands without AB/Ltd.
+        text = _EMPLOYER_CUE.sub(
+            lambda m: m.group(0)[:-len(m.group(1))] + self._token("ORG", m.group(1)),
+            text,
+        )
+        for company_alias in sorted(self.organization_aliases, key=len, reverse=True):
+            text = re.sub(
+                r"(?<!\w)" + re.escape(company_alias) + r"(?!\w)",
+                lambda m: self._token("ORG", m.group(0)), text,
+                flags=re.IGNORECASE,
+            )
         text = _BARE_OWNER.sub(self.owner_token, text)
         # The same token must win for full owner name and first-name suffix,
         # even if the generic detector would otherwise use a PERSON token.
@@ -153,6 +193,18 @@ class PublicRedactor:
                 return match.group(0)
             return match.group(1) + self._token("PERSON", caption)
 
+        safe = _SELF_NAME_CUE.sub(
+            lambda m: m.group(0)[:-len(m.group(1))] + self._token("PERSON", m.group(1))
+            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)
+            else m.group(0),
+            safe,
+        )
+        safe = _SLASH_SIGNATURE.sub(
+            lambda m: m.group(0)[:-len(m.group(1))] + self._token("PERSON", m.group(1))
+            if m.group(1).casefold() not in (_SAFE_SINGLE_UI | STOPWORDS)
+            else m.group(0),
+            safe,
+        )
         safe = _CONTACT_CUE.sub(contact, safe)
         safe = _LEADING_CONTACT.sub(
             lambda m: self._token("PERSON", m.group(1))
