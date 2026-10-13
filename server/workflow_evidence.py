@@ -290,12 +290,38 @@ def _candidate_runs(
     except Exception:
         pass
 
+    # Only map an opaque surface key to a vetted product label when the
+    # underlying event proves that mapping. Never echo arbitrary window titles.
+    from .procedural_memory import _surface_key
+    allowed_labels = {
+        "ChatGPT", "Claude", "GitHub", "Gmail", "Google Drive", "Google Docs",
+        "Google Sheets", "Google Slides", "Jira", "Linear", "Notion",
+        "Salesforce", "Slack", "OpenWorkGraph", "VS Code", "Terminal",
+    }
+    known_labels: dict[str, str] = {}
+    for event in raw_events:
+        etype = str(event.get("event_type") or "")
+        if etype.startswith(("browser_", "screen_")):
+            try:
+                source = analytics._semantic_surface(event)
+            except Exception:
+                source = event.get("app")
+        else:
+            source = event.get("app")
+        label = _surface_for_event(event)
+        if label in allowed_labels:
+            known_labels[_surface_key(source)] = label
+
     projected: list[dict[str, Any]] = []
     for execution in executions:
         item = dict(execution)
         item["structural_steps"] = [
             str(step) for step in (execution.get("steps") or []) if str(step)
         ]
+        item["surface_labels"] = {
+            step: known_labels.get(step, "Other surface (redacted)")
+            for step in item["structural_steps"] if step.startswith("surface:")
+        }
         readable = readable_by_id.get(str(execution.get("execution_id") or ""))
         if readable:
             item["semantic_steps"] = readable
