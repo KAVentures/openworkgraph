@@ -534,8 +534,20 @@ def _evidence_excerpt(
         execution_id = str(execution.get("execution_id") or "")
         events = per_run_events.get(execution_id, [])
         projected = [_canonical_event_projection(event) for event in events[:cap]]
+        sessions = [str(v) for v in execution.get("_session_ids") or [] if str(v)]
+        drilldown = {
+            "tool": "get_workflow_trace",
+            "since": execution.get("started_at"),
+            "until": execution.get("ended_at"),
+            "omit_query": True,
+            "limit": 100,
+            "membership_is_inferred": execution.get("actor_kind") != "agent",
+        }
+        if len(sessions) == 1:
+            drilldown["session_id"] = sessions[0]
         rows.append({
             "execution_id": execution_id,
+            "trace_lookup": drilldown,
             "event_membership_basis": "native_agent_run" if execution.get("actor_kind") == "agent" else "inferred_time_and_session_window",
             "event_membership_verified": False,
             "nearby_events_may_be_unrelated": execution.get("actor_kind") != "agent",
