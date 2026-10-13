@@ -53,6 +53,9 @@ CLINICAL_CONTEXT = re.compile(
     r"prescription|recept|personnummer|vårdkontakt|remiss)(?!\w)"
 )
 HANDLE = re.compile(r"(?<![\w@])@[A-Za-zÅÄÖåäö0-9_][A-Za-zÅÄÖåäö0-9_.-]{0,63}")
+LOCAL_PATH = re.compile(r"(?i)(?:[a-z]:[\\\\]users[\\\\]|/(?:users|home)/|file:///)")
+MAX_STRUCTURAL_TITLE = 160
+MAX_TARGET_CAPTION = 100
 # High-precision social verb contexts complement (do not replace) the
 # general person detector. Never interpret ordinary sentence-start verbs as
 # people, and never include arbitrary remote preview text.
@@ -116,12 +119,16 @@ class DeviceUploadRedactor:
         self.secret = secret
         self.cleaner = PublicRedactor(secret=secret, principal="device-gateway-upload")
 
-    def label(self, value: Any) -> str:
+    def label(self, value: Any, *, max_chars: int = MAX_STRUCTURAL_TITLE) -> str:
         original = str(value or "")
         if not original:
             return ""
         if CLINICAL_CONTEXT.search(original):
             return "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
+        if LOCAL_PATH.search(original):
+            return "[LOCAL_FILE_PATH_WITHHELD]"
+        if len(original) > max_chars or "\\n" in original or "\\r" in original:
+            return "[LONG_FREE_TEXT_WITHHELD]"
         # Domain-specific safe context can be preserved around a masked handle.
         clean = self.cleaner.target_label(_ner_project(original, self.cleaner))
         clean = HANDLE.sub(lambda m: self.cleaner._token("HANDLE", m.group(0)), clean)
@@ -176,7 +183,7 @@ class DeviceUploadRedactor:
         if isinstance(target, dict):
             # Preview-like values, arbitrary descriptions, accessible help text
             # and message bodies are intentionally never copied.
-            safe = {k: self.label(v) for k, v in target.items()
+            safe = {k: self.label(v, max_chars=MAX_TARGET_CAPTION) for k, v in target.items()
                     if k in SAFE_TARGET_STRINGS and isinstance(v, str) and v}
             if safe:
                 result["target"] = safe
