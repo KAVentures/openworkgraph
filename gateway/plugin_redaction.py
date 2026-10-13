@@ -87,7 +87,7 @@ read grep write bash bashrc shell terminal visual studio finder
 work copy open click scroll file issue new issue save draft
 """.split())
 _SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—·()]{1,120}$")
-_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
+_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
 
