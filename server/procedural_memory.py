@@ -396,7 +396,7 @@ def split_human_execution_windows(
     blocks: list[list[dict[str, Any]]] = [[]]
     current = ""
     last_at: float | None = None
-    last_was_idle = False
+    last_idle_duration = 0.0
     for event in events:
         surface = _execution_surface(event)
         when = _ts(event.get("observed_at"))
@@ -410,7 +410,7 @@ def split_human_execution_windows(
             if mode == "host" else (
                 bool(last_at is not None and when is not None
                      and when - last_at >= idle_gap_seconds)
-                or bool(last_was_idle and duration >= idle_gap_seconds)
+                or bool(last_idle_duration >= idle_gap_seconds)
             )
         )
         if split and blocks[-1]:
@@ -420,7 +420,7 @@ def split_human_execution_windows(
             current = surface
         if when is not None:
             last_at = when
-        last_was_idle = is_idle
+        last_idle_duration = duration if is_idle else 0.0
     if len(blocks) == 1:
         return [task]
     result: list[dict[str, Any]] = []
@@ -432,8 +432,9 @@ def split_human_execution_windows(
             continue
         clone = dict(task)
         clone["started_at"], clone["ended_at"] = first, last
+        boundary_version = "surface-boundary-v1" if mode == "host" else "idle-gap-boundary-v1"
         clone["task_id"] = hashlib.sha256(
-            f"{task.get('task_id')}|surface-boundary-v1|{index}|{first}".encode()
+            f"{task.get('task_id')}|{boundary_version}|{index}|{first}".encode()
         ).hexdigest()[:16]
         clone["elapsed_seconds"] = max(0.0, (_ts(last) or 0) - (_ts(first) or 0))
         # The parent inferred task's family/outcome/anchors may refer to a
@@ -441,7 +442,8 @@ def split_human_execution_windows(
         clone["task_family"] = ""
         clone["completion_observed"] = False
         clone["anchor_event_ids"] = []
-        clone["host_switch_partitioned"] = True
+        clone["host_switch_partitioned"] = mode == "host"
+        clone["idle_gap_partitioned"] = mode == "idle"
         result.append(clone)
     return result or [task]
 
