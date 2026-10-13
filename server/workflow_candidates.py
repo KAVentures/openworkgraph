@@ -210,6 +210,16 @@ def cluster_runs(
         )
         candidate_id = "cluster:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
+        surface_labels: dict[str, str] = {}
+        for run in members:
+            for step in _sequence(run.get(structural_key) or run.get("steps")):
+                if not step.startswith("surface:"):
+                    continue
+                label = (run.get("surface_labels") or {}).get(step)
+                # The source adapter must provide a vetted label. Unknown or
+                # hashed custom names stay opaque in public results.
+                surface_labels[step] = str(label or "Other surface (redacted)")[:60]
+
         variant_rows: list[dict[str, Any]] = []
         for (variant_actor, structural), variant_members in sorted(
             group, key=lambda item: (-len(item[1]), item[0][1])
@@ -245,6 +255,7 @@ def cluster_runs(
                 if str(run.get("execution_id") or "")
             ],
             "core_structural_steps": core_structural,
+            "surface_labels": dict(sorted(surface_labels.items())),
             "core_steps": core_readable,
             "observed_variations": _support_rows(readable_sequences),
             "exact_variants": variant_rows[:MAX_VARIANTS],
