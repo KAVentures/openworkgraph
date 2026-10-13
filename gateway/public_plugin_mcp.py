@@ -437,25 +437,14 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 "Private title/target search requires your separate account "
                 "approval at /work-text, not only include_private_matches=true."
             )
-        if not include_private_matches and cleaner.target_label(query, token_kind="QUERY") != query:
-            _audit(db, organization_id, actor_id, "plugin.search.read", {
-                "returned": 0, "private_title_match_enabled": False,
-                "private_query_requires_opt_in": True,
-            })
-            return _protected({
-                "rows": [], "returned": 0, "has_more": False,
-                "next_cursor": None, "query": query,
-                "private_title_match_enabled": False,
-                "private_query_requires_opt_in": True,
-                "no_match_proves_absence": False,
-                "pagination_tool": "search_work",
-                "retrieval_notice": (
-                    "This query contains a potentially private identifier. "
-                    "Private title matching is disabled unless the caller "
-                    "explicitly chooses include_private_matches=true, which "
-                    "reveals the existence of matching private work."
-                ),
-            }, detail=detail)
+        # Private-looking terms are still useful for searching *visible*
+        # redacted fields (e.g. a place name such as Sollefteå). Do not
+        # pre-filter source SQL on a hidden name unless the account owner
+        # separately enabled private-name existence searches.
+        visible_only_scan = bool(
+            not include_private_matches
+            and cleaner.target_label(query, token_kind="QUERY") != query
+        )
         matched_fields: dict[str, list[str]] = {}
         pattern = re.compile((r"(?<!\d)" if needle[0].isdigit() else "")
             + re.escape(needle) + (r"(?!\d)" if needle[-1].isdigit() else ""))
@@ -484,13 +473,16 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             return bool(fields)
         result = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
-            query=query, cursor=cursor, limit=max(1, min(int(limit), 500)), row_matcher=visible_match,
+            query=None if visible_only_scan else query, cursor=cursor,
+            limit=max(1, min(int(limit), 500)), row_matcher=visible_match,
         )
         for row in result["rows"]:
             row["matched_fields"] = matched_fields[str(row["event_id"])]
         result["query"] = query
         result["private_title_match_enabled"] = bool(include_private_matches)
         result["private_match_discloses_term_existence"] = bool(include_private_matches)
+        result["private_query_scanned_visible_only"] = visible_only_scan
+        result["private_query_requires_opt_in"] = visible_only_scan
         result["pagination_tool"] = "search_work"
         result["local_evidence_may_be_richer"] = True
         result["retrieval_notice"] = (
@@ -508,6 +500,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         _audit(db, organization_id, actor_id, "plugin.search.read", {
             "returned": result.get("returned", 0),
             "private_title_match_enabled": bool(include_private_matches),
+            "private_query_scanned_visible_only": visible_only_scan,
         })
         return _protected(result, detail=detail)
 
