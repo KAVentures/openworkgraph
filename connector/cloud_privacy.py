@@ -13,7 +13,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
+import os
 import re
+from functools import lru_cache
 from typing import Any
 
 from gateway.plugin_redaction import PublicRedactor
@@ -67,6 +69,38 @@ _GENERIC_GREETING = frozenset("alla all everyone everybody team world tillbaka b
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$")
 
 
+@lru_cache(maxsize=2)
+def _load_local_ner(model_name: str):
+    """Load only an installed desktop model; never fetch a model/network asset.
+
+    Opting in without an installed compatible model raises and halts sync.
+    The redaction path NEVER silently reverts to regexes when NER fails.
+    """
+    if model_name not in {"sv_core_news_sm", "en_core_web_sm"}:
+        raise ValueError("unsupported local NER model")
+    try:
+        import spacy
+        return spacy.load(model_name)
+    except Exception as exc:
+        raise RuntimeError("configured local NER unavailable; Gateway sync blocked") from exc
+
+
+def _ner_project(text: str, cleaner: PublicRedactor) -> str:
+    model_name = os.environ.get("OWG_LOCAL_NER_MODEL", "").strip()
+    if not model_name:
+        return text
+    document = _load_local_ner(model_name)(text)
+    spans: list[tuple[int, int, str]] = []
+    for ent in document.ents:
+        label = str(ent.label_).upper()
+        if label in {"PER", "PERSON", "ORG"}:
+            kind = "ORG" if label == "ORG" else "PERSON"
+            spans.append((ent.start_char, ent.end_char, cleaner._token(kind, ent.text)))
+    for start, end, replacement in sorted(spans, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
 def _opaque_id(value: Any, *, secret: str, kind: str) -> str:
     raw = str(value or "")
     if SAFE_ID.fullmatch(raw):
@@ -89,7 +123,7 @@ class DeviceUploadRedactor:
         if CLINICAL_CONTEXT.search(original):
             return "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
         # Domain-specific safe context can be preserved around a masked handle.
-        clean = self.cleaner.target_label(original)
+        clean = self.cleaner.target_label(_ner_project(original, self.cleaner))
         clean = HANDLE.sub(lambda m: self.cleaner._token("HANDLE", m.group(0)), clean)
 
         def actor(match: re.Match[str]) -> str:
