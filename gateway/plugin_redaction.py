@@ -64,6 +64,27 @@ _ID_LISTS = frozenset({"evidence_event_ids", "event_ids", "ordered_event_ids",
 _OPAQUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$")
 _MAX_TEXT = 240
 
+_COMPANY_NAME = re.compile(
+    r"(?<![\w])(?:[A-ZÅÄÖ][\wÅÄÖåäö&.-]{1,45}\s+){1,4}"
+    r"(?:AB|Aktiebolag|Ltd|LLC|Inc|GmbH|Oy|PLC)\b"
+)
+_UI_WORDS = frozenset("""
+open close create new edit view preview save send reply forward delete remove
+copy paste cut submit search find select choose cancel confirm ok next back
+previous continue start stop finish upload download attach share archive move
+rename update refresh sync login sign signin log logout in out settings
+compose mail email message inbox sent drafts draft thread threads document
+documents file files folder folders sheet sheets spreadsheet quote quotation
+issue issues ticket tickets pull request requests branch commit github gmail
+chatgpt claude dashboard home account profile button tab link menu
+history work workflow trace help accept decline allow deny yes no
+customer project task tasks review apply merge pr read unread approve
+approval comment comments add openworkgraph
+""".split())
+_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-]{1,120}$")
+_PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
+_BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
+
 
 class PublicRedactor:
     def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
@@ -100,6 +121,8 @@ class PublicRedactor:
         # URLs with arbitrary paths/queries can carry names, tokens or email
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
+        text = _COMPANY_NAME.sub(lambda m: self._token("ORG", m.group(0)), text)
+        text = _BARE_OWNER.sub(self.owner_token, text)
         # The same token must win for full owner name and first-name suffix,
         # even if the generic detector would otherwise use a PERSON token.
         for pattern in self.owner_patterns:
@@ -107,6 +130,27 @@ class PublicRedactor:
         text = self.person_detector.redact(text)
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
+
+    def target_label(self, value: str) -> str:
+        """Fail closed for unknown names/companies in free-form UI labels.
+
+        Standard verbs/structural UI descriptions remain readable. Unknown
+        captions are owner-scoped tokens, not truncated leaked plaintext.
+        """
+        safe = self.text(str(value), max_chars=1200)
+        if _PSEUDONYM.fullmatch(safe):
+            return safe
+        words = re.findall(r"[\wÅÄÖåäö-]+|#[0-9]+", safe)
+        if (len(safe) <= 120 and _SAFE_UI_LABEL.fullmatch(safe)
+                and words and all(
+                    word.casefold() in _UI_WORDS
+                    or (word.startswith("#") and word[1:].isdigit())
+                    or (word.isdigit() and len(word) <= 5)
+                    or bool(_PSEUDONYM.fullmatch(word))
+                    for word in words
+                )):
+            return safe
+        return self._token("TARGET", str(value))
 
     def metadata(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
@@ -129,7 +173,9 @@ class PublicRedactor:
             child = raw.get(key)
             if not isinstance(child, dict):
                 continue
-            safe = {k: (v if k in _IDS else self.text(v)) if isinstance(v, str) else v
+            safe = {k: (v if k in _IDS else self.target_label(v)
+                         if key == "target" and k in {"label", "title"}
+                         else self.text(v)) if isinstance(v, str) else v
                     for k, v in child.items() if k in allowed
                     and isinstance(v, (str, int, float, bool)) and v not in (None, "", 0, False)
                     and (k not in _IDS or isinstance(v, str) and _OPAQUE.fullmatch(v))}
@@ -154,6 +200,7 @@ class PublicRedactor:
                     len(str(value)) > 160 or "@" in str(value) or "/" in str(value)
                 )
                 else str(value) if key in _IDS or key == "observed_at"
+                else self.target_label(str(value)) if key == "target_label"
                 else self.text(str(value))
             )
         meta = self.metadata(raw.get("metadata"))
@@ -213,6 +260,8 @@ class PublicRedactor:
         if isinstance(value, str):
             if key in _ID_LISTS:
                 return value if _OPAQUE.fullmatch(value) else "[INVALID_REFERENCE]"
+            if key == "target_label":
+                return self.target_label(value)
             return value if key in _IDS or key in {"observed_at", "snapshot_until", "next_cursor"} else self.text(value)
         return value
 
