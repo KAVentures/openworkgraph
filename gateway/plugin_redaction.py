@@ -74,7 +74,7 @@ _SAFE_SINGLE_UI = frozenset("""
 open close save cancel continue retry settings next previous refresh
 new edit view search submit copy paste share help download upload
 openworkgraph owg github gmail chatgpt claude oneflow
-välkommen ring jobbar arbetar
+välkommen ring jobbar arbetar svar uppdatering hälsa
 ny hämta spara sök avbryt fortsätt tillbaka inställningar rapportering
 """.split())
 _SINGLE_CAPTION = re.compile(r"^[A-ZÅÄÖ][A-Za-zÅÄÖåäö-]{2,49}$")
@@ -135,7 +135,7 @@ class PublicRedactor:
         # while continuing to redact adjacent names and all other PII.
         self.person_detector = Detector(
             token=self._token,
-            settings=Settings(never_redact=("Välkommen", "Ring", "Jobbar", "Arbetar")),
+            settings=Settings(never_redact=("Välkommen", "Ring", "Jobbar", "Arbetar", "Svar", "Uppdatering", "Hälsa")),
         )
         # Only aliases proven by organization suffixes in this one redaction
         # request. Never persist personal/customer names across accounts.

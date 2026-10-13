@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from typing import Any
@@ -492,6 +493,21 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             total_bytes += event_bytes
             if total_bytes > settings.max_batch_bytes:
                 raise HTTPException(status_code=413, detail=f"batch exceeds max {settings.max_batch_bytes} bytes")
+            # Migration control: operators can require evidence produced by
+            # the on-device privacy projector before accepting any upload.
+            # Default remains compatible with older managed device versions;
+            # enabling this gate is mandatory for a strict local-first claim.
+            if os.getenv("OWG_REQUIRE_DEVICE_REDACTION", "").strip().lower() in {"1", "true", "yes"}:
+                metadata = event.get("metadata")
+                sync_info = metadata.get("gateway_sync") if isinstance(metadata, dict) else None
+                if (not isinstance(sync_info, dict)
+                        or sync_info.get("device_redaction_version") != "device-v1"
+                        or sync_info.get("raw_metadata_preserved") is not False
+                        or sync_info.get("preview_text_dropped") is not True):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="device-side privacy projection required before upload",
+                    )
             violation = privacy_contract_violation(event)
             if violation:
                 raise HTTPException(status_code=400, detail=violation)
