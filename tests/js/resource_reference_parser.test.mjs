@@ -62,3 +62,29 @@ test('durable browser resource fingerprints use pairing-secret HMAC rather than 
   assert.match(source, /owg:e:/);
   assert.equal(source.includes('crypto.subtle.digest("SHA-256"'), false);
 });
+
+test('recognizes only known ChatGPT and Claude conversation UUID paths', () => {
+  const parse = parser();
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  const chat = parse('https://chatgpt.com/c/' + id);
+  const old = parse('https://chat.openai.com/c/' + id);
+  const claude = parse('https://claude.ai/chat/' + id);
+  assert.deepEqual(chat, {
+    provider: 'chatgpt', resource_kind: 'conversation',
+    resolver_locator: 'conversation:' + id, host: 'chatgpt.com',
+    resolution: 'observed',
+  });
+  assert.equal(old.provider, 'chatgpt');
+  assert.equal(claude.provider, 'claude');
+  assert.equal(claude.resolver_locator, 'conversation:' + id);
+  for (const ref of [chat, old, claude]) {
+    assert.equal(JSON.stringify(ref).includes('https://'), false);
+  }
+  assert.equal(parse('https://chatgpt.com/'), null);
+  assert.equal(parse('https://chatgpt.com/c/not-a-uuid'), null);
+  assert.equal(parse('https://chatgpt.com/c/' + id + '?query=patient'), null);
+  assert.equal(parse('https://chatgpt.com/share/' + id), null);
+  assert.equal(parse('https://claude.ai/chat/' + id + '#prompt'), null);
+  assert.equal(parse('https://claude.ai/settings'), null);
+  assert.equal(parse('https://evil.chatgpt.com/c/' + id), null);
+});

@@ -13,8 +13,8 @@ import json
 import os
 import re
 from typing import Any
-from datetime import datetime, timezone
 from urllib.parse import urlsplit
+from datetime import datetime, timezone
 
 import jwt
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -35,6 +35,7 @@ from .lifecycle import get_retention_policy
 from .workflow_evidence import repeated_workflows, workflow_evidence
 from .plugin_context import make_orientation
 from .goal_context import gateway_goal_context
+from .browser_ai_run_recall import browser_ai_agent_runs
 from .plugin_redaction import project as project_hosted, PublicRedactor
 from . import work_text_cloud, private_search_consent
 from .hardening import DistributedPrincipalRateLimiter
@@ -278,6 +279,9 @@ def _protected(value: Any, *, detail: str = "compact") -> Any:
         safe["privacy_level"] = "hosted_redacted"
         safe["evidence_and_workflow_interpretation"] = "non_authoritative"
     secured = protect_observed_payload(safe)
+    # One stable version across nested capability metadata and every detail
+    # mode, including rich. Avoid mixing top-level v3 with inner v2.
+    secured["contract_version"] = "hosted-evidence-v3"
     if detail == "compact":
         secured = _compact_response(secured)
         secured["contract_version"] = "hosted-evidence-v3"
@@ -418,15 +422,27 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             ]
         rich = [rich_evidence_row(row, include_identity=False) for row in source_rows]
         context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit)
+        latest_observed = max((str(row.get("observed_at") or "") for row in source_rows), default=None)
+        try:
+            when = datetime.fromisoformat(str(latest_observed).replace("Z", "+00:00"))
+            age_seconds = max(0, round((datetime.now(timezone.utc) - when).total_seconds())) if when.tzinfo else None
+        except (TypeError, ValueError, OverflowError):
+            age_seconds = None
         context["capture_status"] = {
             **_reported_recorder_state(db, organization_id=organization_id, actor_id=actor_id),
-            "latest_observed_at": max((str(row.get("observed_at") or "") for row in source_rows), default=None),
+            "latest_observed_at": latest_observed,
+            "last_evidence_age_seconds": age_seconds,
+            "evidence_freshness": (
+                "unknown" if age_seconds is None
+                else "recent" if age_seconds <= 900 else "stale"
+            ),
+            "freshness_is_not_recorder_liveness": True,
             "recent_evidence_latest_received_at": max((str(row.get("ingested_at") or "") for row in source_rows), default=None),
             "coverage": "bounded_recent_synced_evidence",
             "cloud_work_text": work_text_cloud.status(db, organization_id=organization_id, actor_id=actor_id),
         }
         context["server_capabilities"] = {
-            "contract_version": "hosted-evidence-v2",
+            "contract_version": "hosted-evidence-v3",
             "tool_count": 10,
             "optional_text_tools": ["search_work_text", "get_work_text_excerpt"],
             "goal_tool": "get_goal_context",
@@ -574,6 +590,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
         include_low_specificity: bool = True,
+        detail: str = "compact",
     ) -> dict[str, Any]:
         """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns ranked candidate patterns (including low-specificity patterns by default), not verified business workflows. Inspect raw chronology, including across applications, before drawing conclusions."""
         organization_id, actor_id, _claims = _identity()
@@ -592,8 +609,31 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             ),
             "no_inferred_family_required": True,
         }
+        if detail == "compact":
+            # Default navigation should not deliver full duplicate execution
+            # variants and lengthy instructional text. Drill down with
+            # get_workflow_evidence or detail=rich instead.
+            result["candidate_clusters"] = [{
+                key: val for key, val in row.items() if key in {
+                    "candidate_cluster_id", "execution_count", "execution_ids",
+                    "core_steps", "core_structural_steps", "surface_labels",
+                    "cluster_quality", "cluster_quality_is_task_confidence",
+                    "median_duration_seconds", "first_observed_at", "last_observed_at",
+                    "actor_kind", "derived", "authoritative",
+                    "cluster_is_business_workflow_ground_truth",
+                }
+            } for row in result.get("candidate_clusters") or []]
+            result["families"] = [{
+                key: val for key, val in row.items() if key in {
+                    "family_key", "execution_count", "execution_ids",
+                    "surface_labels", "high_support_display_steps",
+                    "median_execution_duration_seconds", "family_is_ground_truth",
+                }
+            } for row in result.get("families") or []]
+            result["response_projection"] = "compact_navigation"
+            result["rich_detail_available"] = True
         _audit(db, organization_id, actor_id, "plugin.repeated_work.read", {"returned": len(result.get("candidate_clusters") or [])})
-        return _protected(result)
+        return _protected(result, detail=detail)
 
     @server.tool(annotations=READ, meta=oauth_meta)
     def get_workflow_evidence(
@@ -650,11 +690,18 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             cursor = str(page.get("next_cursor") or "") or None
             if not cursor:
                 break
-        runs = [
+        native_runs = [
             {k: v for k, v in item.items() if not str(k).startswith("_")}
             for item in derive_executions(raw)
             if item.get("actor_kind") == "agent"
-        ][:bounded]
+        ]
+        # Browser ChatGPT/Claude UI lifecycle events are structurally observed
+        # separately from source='agent' native Claude Code/Codex events.
+        # Do not lose them just because derive_executions ignores browser_*.
+        runs = sorted(
+            native_runs + browser_ai_agent_runs(raw),
+            key=lambda item: str(item.get("started_at") or ""), reverse=True,
+        )[:bounded]
         _audit(db, organization_id, actor_id, "plugin.agent_runs.read", {"returned": len(runs)})
         return _protected({
             "executions": runs, "returned": len(runs), "derived": True,

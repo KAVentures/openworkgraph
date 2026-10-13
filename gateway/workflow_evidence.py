@@ -74,6 +74,8 @@ def repeated_workflows(
         min_runs=min_runs,
         limit=limit,
         min_cluster_quality=0.0 if include_low_specificity else LOW_SPECIFICITY_QUALITY_FLOOR,
+        require_multi_surface=True,
+        require_nonzero_duration=True,
         # Preserve cross-app sequences: host changes do not prove task changes.
         partition_host_switches=False,
         partition_idle_gaps=True,

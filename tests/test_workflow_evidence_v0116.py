@@ -306,3 +306,70 @@ def test_candidate_projection_reuses_central_readable_agent_steps(monkeypatch):
     )
     assert projected[0]["semantic_steps"] == ["Read", "Grep", "Edit", "Bash"]
     assert projected[0]["structural_steps"][0].startswith("tool:filesystem:")
+
+
+def test_gateway_discovery_requires_multi_surface_and_positive_duration(monkeypatch):
+    from gateway import workflow_evidence as gw
+
+    seen = {}
+    def fake_candidates(**kwargs):
+        seen.update(kwargs)
+        return {"candidate_clusters": [], "families": [], "returned": 0, "total": 0}
+    monkeypatch.setattr(gw, "load_gateway_evidence", lambda *_a, **_k: [])
+    monkeypatch.setattr(gw, "list_workflow_evidence_candidates", fake_candidates)
+    gw.repeated_workflows(object(), organization_id="org", actor_id="actor")
+    assert seen["require_multi_surface"] is True
+    assert seen["require_nonzero_duration"] is True
+    assert seen["rank_by_quality"] is True
+
+
+def test_filter_and_counter_consistency_for_candidate_clusters(monkeypatch):
+    from server import workflow_evidence as module
+
+    rows = [
+        {
+            "execution_id": "execution:" + "a" * 16,
+            "family_key": "family:demo",
+            "actor_kind": "human",
+            "duration_seconds": 180,
+            "steps": ["surface:gmail", "surface:github"],
+        },
+        {
+            "execution_id": "execution:" + "b" * 16,
+            "family_key": "family:demo",
+            "actor_kind": "human",
+            "duration_seconds": 200,
+            "steps": ["surface:gmail", "surface:github"],
+        },
+    ]
+    monkeypatch.setattr(module, "derive_executions", lambda *_a, **_k: rows)
+    monkeypatch.setattr(module, "_candidate_runs", lambda *_a, **_k: [
+        {**row, "structural_steps": row["steps"], "semantic_steps": row["steps"],
+         "surface_labels": {"surface:gmail": "Gmail", "surface:github": "GitHub"}}
+        for row in rows
+    ])
+
+    def candidate(cluster_id, steps, duration):
+        return {
+            "candidate_cluster_id": cluster_id, "cluster_quality": 0.6,
+            "execution_count": 2, "execution_ids": [x["execution_id"] for x in rows],
+            "core_structural_steps": steps,
+            "median_duration_seconds": duration,
+        }
+
+    monkeypatch.setattr(module, "cluster_runs", lambda *_a, **_k: [
+        candidate("cluster:multi", ["surface:gmail", "surface:github"], 190),
+        candidate("cluster:zero", ["surface:gmail", "surface:github"], 0),
+        candidate("cluster:single", ["surface:gmail"], 190),
+    ])
+    result = module.list_workflow_evidence_candidates(
+        _raw_events=[], require_multi_surface=True,
+        require_nonzero_duration=True,
+    )
+    assert result["returned"] == 1
+    assert result["total"] == 1
+    assert result["candidate_clusters"][0]["candidate_cluster_id"] == "cluster:multi"
+    assert result["suppressed_zero_or_single_surface_clusters"] == 2
+    assert result["families_total"] == len(result["families"])
+    assert result["families"][0]["surface_labels"]["surface:gmail"] == "Gmail"
+    assert result["families"][0]["high_support_display_steps"][0] in {"Gmail", "GitHub"}

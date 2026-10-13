@@ -156,6 +156,10 @@ def _events_for_execution(
 def _resource_surface(reference: dict[str, Any]) -> str:
     provider = str(reference.get("provider") or "").strip().lower()
     kind = str(reference.get("resource_kind") or "").strip().lower()
+    if provider == "chatgpt":
+        return "ChatGPT"
+    if provider == "claude":
+        return "Claude"
     if provider == "gmail":
         return "Gmail"
     if provider == "salesforce":
@@ -793,6 +797,8 @@ def list_workflow_evidence_candidates(
     min_runs: int = 2,
     limit: int = 20,
     min_cluster_quality: float = 0.0,
+    require_multi_surface: bool = False,
+    require_nonzero_duration: bool = False,
     partition_host_switches: bool = False,
     partition_idle_gaps: bool = False,
     rank_by_quality: bool = False,
@@ -809,15 +815,30 @@ def list_workflow_evidence_candidates(
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
+    projected_runs = _candidate_runs(
+        raw, executions, partition_host_switches=partition_host_switches,
+        partition_idle_gaps=partition_idle_gaps,
+    )
     all_clusters = cluster_runs(
-        _candidate_runs(raw, executions, partition_host_switches=partition_host_switches, partition_idle_gaps=partition_idle_gaps),
+        projected_runs,
         min_runs=threshold,
         structural_key="structural_steps",
         readable_key="semantic_steps",
         limit=100,
     )
-    candidate_clusters = [row for row in all_clusters
-                          if float(row.get("cluster_quality") or 0) >= min_cluster_quality]
+    def _eligible_cluster(row: dict[str, Any]) -> bool:
+        if float(row.get("cluster_quality") or 0) < min_cluster_quality:
+            return False
+        if require_nonzero_duration and float(row.get("median_duration_seconds") or 0) <= 0:
+            return False
+        if require_multi_surface:
+            surfaces = {str(step) for step in row.get("core_structural_steps") or []
+                        if str(step).startswith("surface:")}
+            if len(surfaces) < 2:
+                return False
+        return True
+
+    candidate_clusters = [row for row in all_clusters if _eligible_cluster(row)]
     if rank_by_quality:
         candidate_clusters.sort(key=lambda row: (
             -float(row.get("cluster_quality") or 0),
@@ -827,8 +848,13 @@ def list_workflow_evidence_candidates(
     qualifying_ids = {eid for row in candidate_clusters
                       for eid in row.get("execution_ids") or []}
     items: list[dict[str, Any]] = []
+    # Labels come only from vetted observed app/hostname structure, never from
+    # the arbitrary contents of a captured title.
+    known_surface_labels: dict[str, str] = {}
+    for projected in projected_runs:
+        known_surface_labels.update(projected.get("surface_labels") or {})
     for family_key, members in grouped.items():
-        if min_cluster_quality > 0:
+        if min_cluster_quality > 0 or require_multi_surface or require_nonzero_duration:
             members = [member for member in members
                        if member.get("execution_id") in qualifying_ids]
         if len(members) < threshold:
@@ -845,6 +871,12 @@ def list_workflow_evidence_candidates(
             "family_basis_counts": dict(sorted(basis_counts.items())),
             "family_is_ground_truth": False,
             "high_support_structural_steps": high,
+            "surface_labels": {step: known_surface_labels.get(step, "Other surface (redacted)")
+                               for step in high if step.startswith("surface:")},
+            "high_support_display_steps": [
+                known_surface_labels.get(step, "Other surface (redacted)") if step.startswith("surface:")
+                else step for step in high
+            ],
             "structural_variants": _structural_clusters(members, min_runs=1, limit=12),
             "median_execution_duration_seconds": _median(durations),
             "execution_ids": [str(member.get("execution_id") or "") for member in members[:12]],
@@ -865,7 +897,11 @@ def list_workflow_evidence_candidates(
         "candidate_clusters": candidate_clusters[:bounded],
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
-        "suppressed_low_specificity_clusters": len(all_clusters) - len(candidate_clusters),
+        "suppressed_low_specificity_clusters": sum(
+            float(row.get("cluster_quality") or 0) < min_cluster_quality for row in all_clusters
+        ),
+        "suppressed_zero_or_single_surface_clusters": len(all_clusters) - len(candidate_clusters)
+            - sum(float(row.get("cluster_quality") or 0) < min_cluster_quality for row in all_clusters),
         "low_specificity_cluster_count": sum(
             float(row.get("cluster_quality") or 0) < LOW_SPECIFICITY_QUALITY_FLOOR for row in all_clusters
         ),
@@ -873,8 +909,10 @@ def list_workflow_evidence_candidates(
         "returned_clusters_are_verified_tasks": False,
         "low_specificity_candidates_remain_in_raw_trace": True,
         "coarse_families_kept_for_compatibility": True,
-        "returned": min(len(candidate_clusters) if candidate_clusters else len(items), bounded),
-        "total": len(items),
+        "returned": len(candidate_clusters[:bounded]),
+        "total": len(candidate_clusters),
+        "families_returned": len(items[:bounded]),
+        "families_total": len(items),
         "minimum_runs": threshold,
         "source_event_rows_considered": len(raw),
         "source_limit_reached": len(raw) >= max(1, min(int(source_event_limit), MAX_SOURCE_EVENTS)),

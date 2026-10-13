@@ -273,3 +273,20 @@ def test_privacy_profiles_are_explicit_and_backwards_compatible(tmp_path, monkey
     assert browser_signal_settings.profile_for_settings(privacy) == "privacy_first"
     assert privacy["business_object_references"] is False
     assert privacy["resource_reference_locators"] is False
+
+
+def test_ai_conversation_resource_refs_are_local_only_and_privacy_scoped():
+    from resource_references import resource_reference_from_url
+    uuid = "123e4567-e89b-42d3-a456-426614174000"
+    chat = resource_reference_from_url(f"https://chatgpt.com/c/{uuid}")
+    claude = resource_reference_from_url(f"https://claude.ai/chat/{uuid}")
+    assert chat["provider"] == "chatgpt"
+    assert claude["provider"] == "claude"
+    assert chat["resource_kind"] == claude["resource_kind"] == "conversation"
+    assert re.fullmatch(r"owg:r:[0-9a-f]{32}", chat["resource_ref"])
+    assert "resolver_locator" not in chat
+    assert "123e4567" not in str(chat)
+    assert resource_reference_from_url(f"https://chatgpt.com/c/{uuid}?prompt=private") is None
+    assert resource_reference_from_url(f"https://claude.ai/chat/{uuid}#private") is None
+    assert resource_reference_from_url(f"https://chatgpt.com/share/{uuid}") is None
+    assert resource_reference_from_url(f"https://fakechatgpt.com/c/{uuid}") is None

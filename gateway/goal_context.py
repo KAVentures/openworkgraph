@@ -29,6 +29,39 @@ def _terms(value: Any) -> set[str]:
             if t not in _STOP and len(t) >= 3 and not t.isnumeric()}
 
 
+# These are navigation hints, never evidence that a particular app was used.
+# Apply only to goal intent, not to privately stored evidence contents.
+_APP_HINTS = {
+    "contract": ("oneflow", "docusign"),
+    "contracts": ("oneflow", "docusign"),
+    "agreement": ("oneflow",),
+    "agreements": ("oneflow",),
+    "avtal": ("oneflow",),
+    "signering": ("oneflow",),
+    "signature": ("oneflow",),
+    "pull": ("github",),
+    "merge": ("github",),
+    "commit": ("github",),
+    "repo": ("github",),
+    "repository": ("github",),
+    "pr": ("github",),
+    "issue": ("github", "jira", "linear"),
+    "ticket": ("jira", "linear"),
+    "chatgpt": ("chatgpt",),
+    "claude": ("claude",),
+    "codex": ("codex",),
+}
+_SHORT_INTENT = re.compile(r"(?<!\w)(?:PR|PRs)(?!\w)", re.I)
+
+
+def _goal_terms(goal: str) -> tuple[set[str], list[str]]:
+    base = _terms(goal)
+    hints = set()
+    for term in base | ({"pr"} if _SHORT_INTENT.search(goal) else set()):
+        hints.update(_APP_HINTS.get(term, ()))
+    return base | hints, sorted(hints)
+
+
 def _metadata(row: dict[str, Any]) -> dict[str, Any]:
     return row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
 
@@ -52,7 +85,8 @@ def _score(row: dict[str, Any], terms: set[str]) -> int:
     # Generic app switches alone must not create a goal match.
     return (
         4 * _match(terms, row.get("window_title"))
-        + 3 * _match(terms, target.get("title"))
+        + 3 * _match(terms, target.get("title") or target.get("label") or row.get("target_label"))
+        + 2 * _match(terms, page.get("title") or page.get("surface"))
         + 3 * _match(terms, row.get("page_host") or page.get("hostname"))
         + 2 * _match(terms, " ".join(str(resource.get(key) or "")
                                     for key in ("provider", "resource_kind", "host")))
@@ -103,7 +137,7 @@ def build_goal_context(
     if not isinstance(goal, str) or not 4 <= len(goal.strip()) <= 500:
         raise ValueError("goal must be 4-500 characters")
     limit = max(1, min(int(max_examples), 8))
-    terms = _terms(goal)
+    terms, app_hints = _goal_terms(goal)
     rows = sorted(
         (row for row in raw_events if isinstance(row, dict) and _iso(row.get("observed_at"))),
         key=lambda row: (_iso(row["observed_at"]), str(row.get("event_id") or "")),
@@ -159,9 +193,11 @@ def build_goal_context(
     return {
         "status": ("possible_matches" if examples else
                    "no_synced_evidence" if not rows else
-                   "insufficient_goal_terms" if not terms else "no_lexical_matches"),
+                   "insufficient_goal_terms" if not terms else "no_relevant_match"),
         "examples": examples,
         "returned": len(examples),
+        "app_surface_hints": app_hints,
+        "no_relevant_match_means": "not found in searched synced evidence, not absent from local or uncaptured history",
         "coverage": {
             "rows_considered": len(rows),
             "source_limit_reached": bool(source_limit_reached),
@@ -182,6 +218,8 @@ def build_goal_context(
         },
         "fallback": {
             "tool": "get_workflow_trace",
+            "secondary_tool": "search_work",
+            "strategy": "Search redacted titles, app and host first; then open query-free trace around plausible timestamps.",
             "instruction": (
                 "When nothing matches, retrieval is capped, or goal terms are generic, "
                 "page the query-free chronological trace with suitable date bounds. "
@@ -212,9 +250,9 @@ def gateway_goal_context(
     from shared.time_utils import normalize_optional_timestamp
 
     # Reject malformed requests *before* database reads.
-    terms = _terms(goal)
     if not isinstance(goal, str) or not 4 <= len(goal.strip()) <= 500:
         raise ValueError("goal must be 4-500 characters")
+    terms, app_hints = _goal_terms(goal)
     since = normalize_optional_timestamp(since)
     until = normalize_optional_timestamp(until)
     if since and until and _iso(since) >= _iso(until):
@@ -255,7 +293,10 @@ def gateway_goal_context(
 
     # Search older work by useful goal words. These are deliberately bounded
     # lexical probes, NOT a vector search or semantic guarantee.
-    for term_index, term in enumerate(sorted(terms, key=lambda x: (-len(x), x))[:4]):
+    # Test the inferred app host first, so a long goal about an agreement
+    # still probes Oneflow within a bounded lexical budget.
+    probes = sorted(app_hints) + sorted(terms - set(app_hints), key=lambda x: (-len(x), x))
+    for term_index, term in enumerate(probes[:4]):
         # A combined budget prevents four common-word LIKE probes from
         # scanning up to 2,400 rows. Stop explicitly and disclose incomplete
         # coverage; never pretend a capped search found all older history.
@@ -325,7 +366,7 @@ def gateway_goal_context(
     result["coverage"]["lexical_probes_cover_full_synced_time_range"] = True
     result["coverage"]["lexical_search_indexed"] = False
     result["coverage"]["uncaptured_or_unmatched_older_work_can_be_missed"] = True
-    result["coverage"]["keywords_searched"] = min(len(terms), 4)
+    result["coverage"]["keywords_searched"] = min(len(probes), 4)
     result["coverage"]["all_matching_history_found"] = False
     # Query-free events remain visible even when lexical/inferred selection
     # returns zero matches. They are the recent tail, NOT all older evidence.

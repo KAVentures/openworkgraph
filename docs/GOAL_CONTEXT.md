@@ -67,3 +67,49 @@ chronology and no OWG. Do not treat successful MCP transport or tool catalog
 initialization as evidence of automatic model invocation.
 
 The full read-only history tools and capture/sync paths remain unchanged.
+
+
+## AI conversation/run resource continuity (PR #197)
+
+OpenWorkGraph already records structural ChatGPT/Claude Web agent lifecycle
+signals (run started/finished and safe state) and separately opted-in native
+Claude Code/Codex session observation. **Conversation contents, user prompts,
+model responses, and code/terminal outputs are not required for this feature.**
+
+With the existing **business-object/resource-reference capture permission**
+enabled in the browser sensor, URL paths in the following specific shapes
+produce resource references:
+
+- `chatgpt.com/c/<UUID>` (also `chat.openai.com/c/<UUID>`)
+- `claude.ai/chat/<UUID>`
+
+The extension does not emit a whole browsing URL, fragments or queries as a
+resource record. An installation-keyed opaque `owg:r:` reference is stored
+with structured event evidence; the actual resolver locator remains
+device-local and is never included in default Gateway data. Titles are
+captured only by the separate ordinary browser-title mechanism and run through
+device-side redaction before cloud upload. Conversation content is **not**
+captured by the new reference parser. IDs are **not** proof of semantic
+task identity and are not automatically resolved by the AI.
+
+Host/goal hints are limited, lexical navigation suggestions, not new
+authority. For example, `contract/avtal` can suggest `oneflow` and
+`PR/pull request` can suggest `github` when those app hosts appear
+in already-authorized synced evidence. A `no_relevant_match` result means no
+candidate was found under current actor scope and bounded coverage, not proof
+that the work did not happen.
+
+The hosted repeated-workflow recommendation now suppresses clusters with
+zero median duration or fewer than two common distinct surfaces. Those records
+are still available from authorized canonical chronological evidence, and
+the local discovery default remains unchanged for compatibility.
+
+Default repeated-workflow MCP responses are compact navigation summaries;
+pass `detail="rich"` for full structure before drafting a procedure.
+The `total` and `returned` counters now both refer to candidate clusters,
+while `families_total` and `families_returned` describe coarse families.
+
+The live hosted connector can compute event freshness from the latest
+synchronized observation but **cannot assert that the desktop recorder is
+running** without a separately authenticated device heartbeat. Do not treat
+stale evidence as conclusive proof of a crash or as a live monitoring signal.

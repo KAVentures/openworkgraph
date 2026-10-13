@@ -31,6 +31,8 @@
     if (provider === "salesforce") return host.endsWith(".salesforce.com") || host.endsWith(".force.com");
     if (provider === "jira") return host.endsWith(".atlassian.net");
     if (provider === "linear") return host === "linear.app";
+    if (provider === "chatgpt") return host === "chatgpt.com" || host === "chat.openai.com";
+    if (provider === "claude") return host === "claude.ai";
     return false;
   }
 
