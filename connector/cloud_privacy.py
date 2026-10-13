@@ -205,6 +205,17 @@ class DeviceUploadRedactor:
         result: dict[str, Any] = {}
         for key in SAFE_META_STRINGS:
             v = metadata.get(key)
+            # Browser tab IDs arrive as integers. Preserve a keyed correlation
+            # token, not the raw browser-local tab number, across distinct
+            # navigation/resource and agent-lifecycle events in the same tab.
+            if key == "tab_id" and type(v) in (str, int) and str(v):
+                digest = hmac.new(
+                    self.secret.encode("utf-8"),
+                    ("browser-tab|" + str(v)).encode("utf-8"),
+                    hashlib.sha256,
+                ).hexdigest()[:24]
+                result[key] = "ref_" + digest
+                continue
             if isinstance(v, str) and v:
                 # References are opaque; unknown values should not be treated
                 # as safe just because their *key* normally holds a reference.
