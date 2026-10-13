@@ -76,7 +76,7 @@ class PublicRedactor:
                  if isinstance(name, str) and 3 <= len(name.strip()) <= 100}
         self.owner_token = self._token("OWNER", principal)
         self.owner_patterns = [
-            re.compile(r"(?<![\\w])" + re.escape(name) + r"(?![\\w])", re.I)
+            re.compile(r"(?<![\w])" + re.escape(name) + r"(?![\w])", re.I)
             for name in sorted(names, key=lambda name: (-len(name), name.casefold()))
         ]
 
