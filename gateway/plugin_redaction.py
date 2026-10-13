@@ -82,8 +82,11 @@ contract invoice subject support calendar meeting release code oauth app browser
 name account username password cloud github search console issue tracker
 customer project task tasks review apply merge pr read unread approve
 approval comment comments add openworkgraph
+zendesk salesforce jira linear slack notion outlook microsoft excel
+read grep write bash bashrc shell terminal visual studio finder
+work copy open click scroll file issue new issue save draft
 """.split())
-_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—]{1,120}$")
+_SAFE_UI_LABEL = re.compile(r"^[A-Za-zÅÄÖåäö0-9_# .:/+\-–—·()]{1,120}$")
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
@@ -267,6 +270,11 @@ class PublicRedactor:
                 return self.target_label(value)
             if key in {"window_title", "page_title"}:
                 return self.target_label(value, token_kind="TITLE")
+            if key in {"step", "readable_steps", "semantic_steps", "core_steps",
+                       "readable_step", "from_step", "to_step"}:
+                if value.startswith(("surface:", "action:", "tool:")) and _OPAQUE.fullmatch(value):
+                    return value
+                return self.target_label(value, token_kind="STEP")
             return value if key in _IDS or key in {"observed_at", "snapshot_until", "next_cursor"} else self.text(value)
         return value
 
