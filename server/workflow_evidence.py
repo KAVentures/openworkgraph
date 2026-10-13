@@ -786,6 +786,7 @@ def list_workflow_evidence_candidates(
     limit: int = 20,
     min_cluster_quality: float = 0.0,
     partition_host_switches: bool = False,
+    rank_by_quality: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
@@ -806,6 +807,12 @@ def list_workflow_evidence_candidates(
     )
     candidate_clusters = [row for row in all_clusters
                           if float(row.get("cluster_quality") or 0) >= min_cluster_quality]
+    if rank_by_quality:
+        candidate_clusters.sort(key=lambda row: (
+            -float(row.get("cluster_quality") or 0),
+            -int(row.get("execution_count") or 0),
+            str(row.get("candidate_cluster_id") or ""),
+        ))
     qualifying_ids = {eid for row in candidate_clusters
                       for eid in row.get("execution_ids") or []}
     items: list[dict[str, Any]] = []
@@ -848,6 +855,11 @@ def list_workflow_evidence_candidates(
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": len(all_clusters) - len(candidate_clusters),
+        "low_specificity_cluster_count": sum(
+            float(row.get("cluster_quality") or 0) < 0.45 for row in all_clusters
+        ),
+        "candidate_ranking": "specificity_then_support" if rank_by_quality else "support",
+        "returned_clusters_are_verified_tasks": False,
         "low_specificity_candidates_remain_in_raw_trace": True,
         "coarse_families_kept_for_compatibility": True,
         "returned": min(len(candidate_clusters) if candidate_clusters else len(items), bounded),
