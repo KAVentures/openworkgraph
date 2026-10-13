@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from server.contextual_redaction import Detector
 
@@ -66,11 +66,19 @@ _MAX_TEXT = 240
 
 
 class PublicRedactor:
-    def __init__(self, *, secret: str, principal: str):
+    def __init__(self, *, secret: str, principal: str, owner_names: Iterable[str] = ()):
         if not secret or not principal:
             raise ValueError("public redaction requires a scoped secret")
         self.key = hmac.new(secret.encode(), principal.encode(), hashlib.sha256).digest()
         self.person_detector = Detector(token=self._token)
+        # Authenticated identity hints redact owner names in all text surfaces.
+        names = {str(name).strip() for name in owner_names
+                 if isinstance(name, str) and 3 <= len(name.strip()) <= 100}
+        self.owner_token = self._token("OWNER", principal)
+        self.owner_patterns = [
+            re.compile(r"(?<![\\w])" + re.escape(name) + r"(?![\\w])", re.I)
+            for name in sorted(names, key=lambda name: (-len(name), name.casefold()))
+        ]
 
     def _token(self, kind: str, value: str) -> str:
         digest = hmac.new(self.key, value.casefold().strip().encode(), hashlib.sha256).hexdigest()[:10].upper()
@@ -93,6 +101,9 @@ class PublicRedactor:
         # addresses. Do not reconstruct them from source data in public MCP.
         text = _URL.sub("[LINK_WITHHELD]", text)
         text = self.person_detector.redact(text)
+        # Generic name detection can miss uncommon names and browser suffixes.
+        for pattern in self.owner_patterns:
+            text = pattern.sub(self.owner_token, text)
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
 
@@ -205,10 +216,10 @@ class PublicRedactor:
         return value
 
 
-def project(value: dict[str, Any], *, secret: str, principal: str, detail: str = "compact") -> dict[str, Any]:
+def project(value: dict[str, Any], *, secret: str, principal: str, detail: str = "compact", owner_names: Iterable[str] = ()) -> dict[str, Any]:
     if detail not in {"compact", "rich"}:
         raise ValueError("detail must be compact or rich")
-    safe = PublicRedactor(secret=secret, principal=principal).visit(value, detail=detail)
+    safe = PublicRedactor(secret=secret, principal=principal, owner_names=owner_names).visit(value, detail=detail)
     if not isinstance(safe, dict):
         raise ValueError("hosted projection requires an object")
     if safe.get("data_layer") == "privacy_hardened_raw_rich_evidence":
