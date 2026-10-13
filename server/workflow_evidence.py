@@ -811,8 +811,12 @@ def list_workflow_evidence_candidates(
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
+    projected_runs = _candidate_runs(
+        raw, executions, partition_host_switches=partition_host_switches,
+        partition_idle_gaps=partition_idle_gaps,
+    )
     all_clusters = cluster_runs(
-        _candidate_runs(raw, executions, partition_host_switches=partition_host_switches, partition_idle_gaps=partition_idle_gaps),
+        projected_runs,
         min_runs=threshold,
         structural_key="structural_steps",
         readable_key="semantic_steps",
@@ -843,10 +847,7 @@ def list_workflow_evidence_candidates(
     # Labels come only from vetted observed app/hostname structure, never from
     # the arbitrary contents of a captured title.
     known_surface_labels: dict[str, str] = {}
-    for projected in _candidate_runs(
-        raw, executions, partition_host_switches=partition_host_switches,
-        partition_idle_gaps=partition_idle_gaps,
-    ):
+    for projected in projected_runs:
         known_surface_labels.update(projected.get("surface_labels") or {})
     for family_key, members in grouped.items():
         if min_cluster_quality > 0 or require_multi_surface or require_nonzero_duration:
