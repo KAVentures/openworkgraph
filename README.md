@@ -107,6 +107,9 @@ employee OWG -> endpoint sharing policy -> customer-controlled Gateway/Postgres
 
 See **[Self-hosting](docs/SELF_HOSTING.md)** and the **[Enterprise Deployment Kit](platform/enterprise/README.md)**.
 
+
+The hosted ChatGPT/Claude MCP evidence projection uses account-scoped identity redaction, cautious candidate-workflow scoring, and a paginated raw-trace escape hatch. See **[Hosted evidence presentation](docs/HOSTED_EVIDENCE_PRESENTATION.md)** for the shared client contract.
+
 ## Evidence, not guesses
 
 OWG deliberately keeps observed evidence separate from interpretation.

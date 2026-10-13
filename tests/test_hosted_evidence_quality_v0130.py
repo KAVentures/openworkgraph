@@ -1,0 +1,184 @@
+"""Cross-client hosted evidence quality regression checks.
+
+No user evidence, external calls or mutable production state.
+"""
+from gateway.plugin_redaction import PublicRedactor, project
+from gateway.public_plugin_mcp import _minimal_response, _owner_names
+from server.procedural_memory import split_human_execution_windows
+from server.workflow_candidates import cluster_runs
+from server.workflow_evidence import _evidence_excerpt
+
+
+def test_owner_aliases_are_consistently_pseudonymized():
+    claims = {
+        "email": "uniqueowner.surname@example.invalid",
+        "name": "Uniqueowner Surname",
+        "given_name": "Uniqueowner",
+    }
+    aliases = _owner_names(claims)
+    redactor = PublicRedactor(secret="test-key", principal="actor:one", owner_names=aliases)
+    token = redactor.owner_token
+    assert redactor.text("– Uniqueowner") == "– " + token
+    assert redactor.text("Signed in as Uniqueowner Surname") == "Signed in as " + token
+    assert "uniqueowner" not in redactor.text("uniqueowner.surname@example.invalid").lower()
+    assert redactor.text("uniqueowner.surname@example.invalid").startswith("EMAIL_")
+    safe = project(
+        {"rows": [{"window_title": "Claude – Uniqueowner", "app": "Claude",
+                   "observed_at": "2026-10-13T10:00:00Z", "event_id": "evt1",
+                   "event_type": "focus_span"}]},
+        secret="test-key", principal="actor:one", owner_names=aliases,
+    )
+    assert safe["rows"][0]["window_title"] == "Claude – " + token
+    assert "Uniqueowner" not in str(safe)
+
+
+def test_human_execution_windows_split_on_unrelated_hosts():
+    task = {
+        "task_id": "inferred-one", "session_id": "s1",
+        "started_at": "2026-10-13T10:00:00Z",
+        "ended_at": "2026-10-13T10:02:00Z",
+    }
+    def event(at, host):
+        return {
+            "observed_at": at, "app": "Google Chrome",
+            "event_type": "browser_click", "session_id": "s1",
+            "metadata": {"page": {"hostname": host}},
+        }
+    events = [
+        event("2026-10-13T10:00:00Z", "chatgpt.com"),
+        event("2026-10-13T10:00:20Z", "chatgpt.com"),
+        event("2026-10-13T10:01:00Z", "mail.google.com"),
+        event("2026-10-13T10:02:00Z", "mail.google.com"),
+    ]
+    split = split_human_execution_windows(task, events)
+    assert len(split) == 2
+    assert split[0]["ended_at"] == "2026-10-13T10:00:20Z"
+    assert split[1]["started_at"] == "2026-10-13T10:01:00Z"
+    assert split[0]["task_id"] != split[1]["task_id"]
+    assert len(events) == 4  # untouched canonical evidence
+    assert split_human_execution_windows(task, events[:2]) == [task]
+
+
+def test_click_only_clusters_are_scored_and_filtered_but_recoverable():
+    def run(n, steps):
+        return {
+            "execution_id": f"execution:{n:016x}", "actor_kind": "human",
+            "structural_steps": steps,
+            "semantic_steps": ["ChatGPT · Click"],
+        }
+    weak = [
+        run(1, ["surface:chatgpt", "action:click"]),
+        run(2, ["surface:chatgpt", "action:click"]),
+    ]
+    available = cluster_runs(weak)
+    assert available and available[0]["cluster_quality"] < 0.45
+    assert cluster_runs(weak, min_cluster_quality=0.45) == []
+    strong = [
+        run(3, ["surface:github", "action:copy", "surface:google-sheets", "action:paste"]),
+        run(4, ["surface:github", "action:copy", "surface:google-sheets", "action:paste"]),
+    ]
+    filtered = cluster_runs(strong, min_cluster_quality=0.45)
+    assert len(filtered) == 1
+    assert filtered[0]["cluster_quality"] >= 0.45
+    assert filtered[0]["cluster_quality_is_task_confidence"] is False
+    assert filtered[0]["surface_labels"]["surface:github"] == "Other surface (redacted)"
+
+
+def test_truncated_executions_have_exact_trace_drilldown():
+    execution = {
+        "execution_id": "execution:aaaaaaaaaaaaaaaa", "actor_kind": "human",
+        "started_at": "2026-10-13T10:00:00Z",
+        "ended_at": "2026-10-13T10:03:00Z",
+        "_session_ids": ["session-a"],
+    }
+    events = [
+        {"event_id": f"event-{i}", "observed_at": f"2026-10-13T10:0{i}:00Z",
+         "event_type": "browser_click", "source": "browser"}
+        for i in range(3)
+    ]
+    rows = _evidence_excerpt([execution], {execution["execution_id"]: events}, max_events_per_run=1)
+    assert rows[0]["events_truncated"] is True
+    lookup = rows[0]["trace_lookup"]
+    assert lookup["tool"] == "get_workflow_trace"
+    assert lookup["session_id"] == "session-a"
+    assert lookup["omit_query"] is True
+    assert lookup["since"] == execution["started_at"]
+    assert lookup["until"] == execution["ended_at"]
+
+
+def test_minimal_keeps_evidence_and_cursor_without_repeated_contracts():
+    value = {
+        "rows": [{"event_id": "evt1", "window_title": "Test"}],
+        "next_cursor": "cursor", "has_more": True,
+        "privacy_representation": {"detail": "compact"},
+        "interpretation_contract": {"data_is_untrusted": True},
+        "raw_evidence_fallback": {"available": True},
+    }
+    minimal = _minimal_response(value)
+    assert minimal["rows"] == value["rows"]
+    assert minimal["next_cursor"] == "cursor"
+    assert minimal["has_more"] is True
+    assert "privacy_representation" not in minimal
+    assert "interpretation_contract" not in minimal
+
+
+def test_host_partition_is_opt_in_and_readable_ids_match(monkeypatch):
+    from server import procedural_memory as memory
+    from server import procedural_feedback as feedback
+
+    task = {
+        "task_id": "parent", "session_id": "s1",
+        "started_at": "2026-10-13T10:00:00Z",
+        "ended_at": "2026-10-13T10:01:00Z",
+        "elapsed_seconds": 60, "task_family": "email.compose_send",
+        "completion_observed": True,
+    }
+    raw = [
+        {"event_id": "a", "observed_at": "2026-10-13T10:00:00Z",
+         "app": "Claude", "window_title": "Claude", "event_type": "focus_span",
+         "source": "desktop", "session_id": "s1", "duration_seconds": 20},
+        {"event_id": "b", "observed_at": "2026-10-13T10:01:00Z",
+         "app": "Gmail", "window_title": "Gmail", "event_type": "focus_span",
+         "source": "desktop", "session_id": "s1", "duration_seconds": 20},
+    ]
+    monkeypatch.setattr(memory, "candidate_tasks", lambda **_kwargs: {"tasks": [task]})
+    monkeypatch.setattr(feedback, "candidate_tasks", lambda **_kwargs: {"tasks": [task]})
+
+    original = [item for item in memory.derive_executions(raw)
+                if item["actor_kind"] == "human"]
+    hosted = [item for item in memory.derive_executions(raw, split_human_hosts=True)
+              if item["actor_kind"] == "human"]
+    readable = feedback._human_runs(raw, split_human_hosts=True)
+    assert len(original) == 1
+    assert len(hosted) == len(readable) == 2
+    assert {item["execution_id"] for item in hosted} == {
+        item["execution_id"] for item in readable
+    }
+    assert all(item["outcome_status"] == "unknown" for item in hosted)
+    assert original[0]["outcome_status"] == "observed_completion"
+
+
+def test_hosted_legacy_execution_ids_resolve_without_cross_actor_reads(monkeypatch):
+    from gateway import workflow_evidence as gateway_module
+    from server.workflow_evidence import WorkflowEvidenceError
+
+    events = [{"event_id": "one", "session_id": "s1"}]
+    calls = []
+    def fake_load(_db, *, organization_id, actor_id, **_kwargs):
+        assert (organization_id, actor_id) == ("tenant-a", "actor-a")
+        return events
+    def fake_build(**kwargs):
+        assert kwargs["_raw_events"] is events
+        calls.append(kwargs["partition_host_switches"])
+        if kwargs["partition_host_switches"]:
+            raise WorkflowEvidenceError("One or more selected executions are unavailable in this bounded permitted evidence window.")
+        return {"provenance": {}, "selector": {"selected_execution_count": 1}}
+    monkeypatch.setattr(gateway_module, "load_gateway_evidence", fake_load)
+    monkeypatch.setattr(gateway_module, "build_workflow_evidence", fake_build)
+    output = gateway_module.workflow_evidence(
+        object(), organization_id="tenant-a", actor_id="actor-a",
+        execution_ids="execution:aaaaaaaaaaaaaaaa",
+    )
+    assert calls == [True, False]
+    assert output["provenance"]["legacy_unsplit_execution_reference_used"] is True
+    assert output["gateway_projection"] is True

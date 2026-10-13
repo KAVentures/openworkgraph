@@ -146,18 +146,79 @@ def _public_payload(value: Any) -> Any:
     return value
 
 
+def _owner_names(claims: dict[str, Any]) -> tuple[str, ...]:
+    """Identity-derived redaction hints only; never used for authorization."""
+    candidates: set[str] = set()
+    meta = claims.get("user_metadata")
+    sources = [claims, meta] if isinstance(meta, dict) else [claims]
+    for source in sources:
+        for field in ("name", "full_name", "given_name", "family_name",
+                      "first_name", "last_name", "preferred_username"):
+            value = source.get(field)
+            if isinstance(value, str) and 3 <= len(value.strip()) <= 100:
+                candidates.add(value.strip())
+                for part in re.split(r"\s+", value.strip()):
+                    if len(part) >= 3:
+                        candidates.add(part)
+    email = claims.get("email")
+    if isinstance(email, str) and "@" in email:
+        for part in re.split(r"[._+\-\d]+", email.split("@", 1)[0]):
+            if 3 <= len(part) <= 40:
+                candidates.add(part)
+    return tuple(sorted(candidates, key=lambda x: (-len(x), x.casefold())))
+
+
+_STATIC_CONTRACT_FIELDS = frozenset({
+    "privacy_representation", "_openworkgraph_security", "evidence_contract",
+    "raw_evidence_fallback", "navigation_hints", "interpretation_contract",
+    "interpretation", "suggested_followups", "ai_drafting_guidance",
+})
+
+
+def _minimal_response(value: Any) -> Any:
+    """Trim repeated explanation blocks, never evidence or pagination fields."""
+    if isinstance(value, dict):
+        return {
+            key: _minimal_response(item) for key, item in value.items()
+            if key not in _STATIC_CONTRACT_FIELDS
+        }
+    if isinstance(value, list):
+        return [_minimal_response(item) for item in value]
+    return value
+
+
 def _protected(value: Any, *, detail: str = "compact") -> Any:
+    if detail not in ("compact", "rich", "minimal"):
+        raise ValueError("detail must be compact, minimal or rich")
     # Model-facing responses are ALWAYS redacted by the hosted server, even if
     # a connected device mistakenly sends richer metadata. Rich mode only
     # changes structural detail, never the privacy boundary.
-    organization_id, actor_id, _claims = _identity()
+    organization_id, actor_id, claims = _identity()
     safe = project_hosted(
         _public_payload(value),
         secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
         principal=f"{organization_id}|{actor_id}",
-        detail=detail,
+        detail="compact" if detail == "minimal" else detail,
+        owner_names=_owner_names(claims),
     )
-    return protect_observed_payload(safe)
+    if detail == "minimal":
+        safe = _minimal_response(safe)
+        safe["contract_version"] = "hosted-evidence-v3"
+        safe["privacy_level"] = "hosted_redacted"
+        safe["evidence_and_workflow_interpretation"] = "non_authoritative"
+    secured = protect_observed_payload(safe)
+    if detail == "minimal":
+        # The hardener adds an intentionally verbose explanatory block on each
+        # invocation. Preserve its actionable counters and suppressed paths,
+        # while the invariant trust rule lives in MCP server instructions.
+        security = secured.pop("_openworkgraph_security", {})
+        secured["security_summary"] = {
+            "trust": "untrusted_observed_data",
+            "suppressed_fields": security.get("instruction_like_fields_suppressed", 0),
+            "suppressed_paths": security.get("suppressed_field_paths", []),
+            "normalized_fields": security.get("normalized_field_count", 0),
+        }
+    return secured
 
 
 def _audit(db: GatewayDB, organization_id: str, actor_id: str, action: str, details: dict[str, Any]) -> None:
@@ -223,10 +284,16 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         material = f"{organization_id}|{actor_id}".encode("utf-8")
         profile_id = "prf_" + hmac.new(profile_key.encode("utf-8"), material, hashlib.sha256).hexdigest()[:24]
         _audit(db, organization_id, actor_id, "plugin.profile.read", {})
+        cleaner = PublicRedactor(
+            secret=profile_key, principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
+        )
+        # Opaque ID remains stable for multi-account UX. Never return raw
+        # owner claims or a non-email placeholder in the email field.
         return Profile(
             id=profile_id,
-            name=claims["name"].strip() if isinstance(claims.get("name"), str) and claims["name"].strip() else None,
-            email=claims["email"].strip() if isinstance(claims.get("email"), str) and claims["email"].strip() else None,
+            name=cleaner.owner_token if _owner_names(claims) else None,
+            email=None,
             nickname="OpenWorkGraph",
         )
 
@@ -238,8 +305,8 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     ) -> dict[str, Any]:
         """Use when a user's goal could be better accomplished using their previously observed human or agent work, even when they don't mention OpenWorkGraph. Find relevant example traces, applications and resource pointers with explicit unknowns. Match candidates are lexical navigation only; verify with query-free get_workflow_trace and live source connectors. Do NOT call for generic work-independent questions or infer permission from work history."""
         organization_id, actor_id, _claims = _identity()
-        if detail not in ("compact", "rich"):
-            raise ValueError("detail must be compact or rich")
+        if detail not in ("compact", "rich", "minimal"):
+            raise ValueError("detail must be compact, minimal or rich")
         result = gateway_goal_context(
             db, organization_id=organization_id, actor_id=actor_id,
             goal=goal, max_examples=max_examples, since=since, until=until,
@@ -372,6 +439,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
     def find_repeated_workflows(
         since: str | None = None, until: str | None = None,
         min_runs: int = 2, limit: int = 8,
+        include_low_specificity: bool = False,
     ) -> dict[str, Any]:
         """Use when a user asks about their usual or repeated real work, or how to improve or automate an observed process. Returns heuristic structural candidates, not verified business rules or permission. Verify representative runs with get_workflow_evidence and raw traces."""
         organization_id, actor_id, _claims = _identity()
@@ -379,6 +447,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             db, organization_id=organization_id, actor_id=actor_id,
             since=since, until=until, min_runs=max(2, min(int(min_runs), 25)),
             limit=max(1, min(int(limit), 100)),
+            include_low_specificity=bool(include_low_specificity),
         )
         result["raw_evidence_fallback"] = {
             "tool": "get_workflow_trace",
@@ -404,10 +473,10 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
             db, organization_id=organization_id, actor_id=actor_id,
             execution_ids=execution_ids, family_key=family_key,
             since=since, until=until, max_runs=max(1, min(int(max_runs), 25)),
-            max_events_per_run=12 if detail == "compact" else 100,
+            max_events_per_run=100 if detail == "rich" else 12,
         )
         _audit(db, organization_id, actor_id, "plugin.workflow_evidence.read", {"selected": result.get("selector", {}).get("selected_execution_count", 0)})
-        if detail == "compact":
+        if detail != "rich":
             align = result.get("structural_alignment") or {}
             result = {
                 key: result[key] for key in (
@@ -421,7 +490,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                     for key, value in align.items()
                     if key in ("high_support_steps", "less_common_observed_steps",
                                "high_support_adjacent_transitions", "observed_variations",
-                               "high_support_minimum_runs", "common_path_claimed")
+                               "high_support_minimum_runs", "common_path_claimed", "surface_labels")
                 },
                 "compact_projection": True,
                 "evidence_tool": "get_workflow_trace",
@@ -459,10 +528,11 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
         })
 
     def _present_text(raw: dict[str, Any]) -> dict[str, Any]:
-        organization_id, actor_id, _claims = _identity()
+        organization_id, actor_id, claims = _identity()
         cleaner = PublicRedactor(
             secret=os.environ["OWG_PLUGIN_PROFILE_KEY"],
             principal=f"{organization_id}|{actor_id}",
+            owner_names=_owner_names(claims),
         )
         safe = dict(raw)
         if isinstance(safe.get("results"), list):

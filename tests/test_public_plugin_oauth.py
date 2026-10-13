@@ -859,3 +859,61 @@ def test_cloud_account_screen_is_scoped_and_nonce_protected(public_client, monke
     assert response.json()['devices'] == [{'device_id':'my-computer','approved':False}]
     assert 'foreign' not in response.text
     assert response.json()['operator_available'] is False
+
+
+def test_authenticated_owner_profile_and_window_titles_share_redaction_policy(public_client):
+    """Synthetic OAuth identity never leaks in either ChatGPT or Claude transport."""
+    from datetime import datetime, timezone
+
+    client, mint = public_client
+    token = mint(name="Uniqueowner Surname", given_name="Uniqueowner",
+                 email="uniqueowner.surname@example.invalid")
+    profile = rpc(client, token, "tools/call", {
+        "name": "get_profile", "arguments": {},
+    })
+    assert profile.status_code == 200, profile.text
+    info = profile.json()["result"]["structuredContent"]
+    assert info["id"].startswith("prf_")
+    assert info["name"].startswith("OWNER_")
+    assert info.get("email") is None
+    _insert_personal_events([{
+        "event_id": "owner-title-1", "observed_at": datetime.now(timezone.utc).isoformat(),
+        "app": "Chrome", "window_title": "Chrome – Uniqueowner",
+        "event_type": "focus_span", "session_id": "owner-title-s1", "source": "desktop",
+    }])
+    trace = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"limit": 10},
+    })
+    assert trace.status_code == 200, trace.text
+    row = next(item for item in trace.json()["result"]["structuredContent"]["rows"]
+               if item["event_id"] == "owner-title-1")
+    assert row["window_title"] == "Chrome – " + info["name"]
+    assert "Uniqueowner" not in trace.text
+
+
+def test_minimal_detail_is_additive_and_preserves_cursor(public_client):
+    from datetime import datetime, timezone
+    client, mint = public_client
+    token = mint()
+    _insert_personal_events([{
+        "event_id": f"minimal-{i}",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "app": "Editor", "window_title": "Synthetic test",
+        "event_type": "focus_span", "source": "desktop",
+    } for i in range(3)])
+    response = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace", "arguments": {"limit": 1, "detail": "minimal"},
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()["result"]["structuredContent"]
+    assert data["returned"] == 1
+    assert data["has_more"] is True
+    assert data["next_cursor"]
+    assert data["contract_version"] == "hosted-evidence-v3"
+    assert "privacy_representation" not in data
+    follow = rpc(client, token, "tools/call", {
+        "name": "get_workflow_trace",
+        "arguments": {"cursor": data["next_cursor"], "limit": 2, "detail": "minimal"},
+    })
+    assert follow.status_code == 200, follow.text
+    assert follow.json()["result"]["structuredContent"]["rows"]

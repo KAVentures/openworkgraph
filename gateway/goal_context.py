@@ -223,6 +223,8 @@ def gateway_goal_context(
     start_at, end_at, retention_at = _iso(since), _iso(until), _iso(policy_cutoff)
     rows_by_id: dict[str, dict[str, Any]] = {}
     source_limit_reached = False
+    recent_tail_capped = False
+    lexical_probes_capped = False
 
     # Recent tail complements chronological lexical lookups; it never claims
     # the tail covers all previous work.
@@ -230,7 +232,8 @@ def gateway_goal_context(
         organization_id=organization_id, actor_id=actor_id,
         device_id=None, limit=500,
     )
-    source_limit_reached |= len(recent) == 500
+    recent_tail_capped = len(recent) == 500
+    source_limit_reached |= recent_tail_capped
     for source in recent:
         when = _iso(source.get("observed_at"))
         if when is None:
@@ -246,10 +249,14 @@ def gateway_goal_context(
     # Search older work by useful goal words. These are deliberately bounded
     # lexical probes, NOT a vector search or semantic guarantee.
     for term in sorted(terms, key=lambda x: (-len(x), x))[:4]:
+        # Search from the start of retention, not just the last 500 rows.
+        # Lexical LIKE is not full-text indexed, and capped matches may omit
+        # older relevant evidence; expose the cap explicitly.
         page = workflow_trace(
             db, organization_id=organization_id, actor_id=actor_id,
-            since=since, until=until, query=term, limit=60,
+            since=since, until=until, query=term, limit=180,
         )
+        lexical_probes_capped |= bool(page["has_more"])
         source_limit_reached |= bool(page["has_more"])
         for row in page["rows"]:
             if row.get("event_id"):
@@ -281,7 +288,12 @@ def gateway_goal_context(
         goal, list(rows_by_id.values()),
         max_examples=max_examples, source_limit_reached=source_limit_reached,
     )
-    result["coverage"]["sampling"] = "most_recent_500_and_four_bounded_lexical_probes"
+    result["coverage"]["sampling"] = "most_recent_500_and_four_full_history_lexical_probes_up_to_180_each"
+    result["coverage"]["recent_tail_capped"] = recent_tail_capped
+    result["coverage"]["lexical_probes_capped"] = lexical_probes_capped
+    result["coverage"]["lexical_probes_cover_full_synced_time_range"] = True
+    result["coverage"]["lexical_search_indexed"] = False
+    result["coverage"]["uncaptured_or_unmatched_older_work_can_be_missed"] = True
     result["coverage"]["keywords_searched"] = min(len(terms), 4)
     result["coverage"]["all_matching_history_found"] = False
     result["data_layer"] = "gateway_synced_privacy_hardened_evidence"

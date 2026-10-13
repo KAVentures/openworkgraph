@@ -111,6 +111,28 @@ def _support_rows(sequences: list[tuple[str, ...]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _specificity(sequence: Iterable[Any] | None) -> float:
+    """Structural distinctiveness; never a verified task confidence score."""
+    steps = _sequence(sequence)
+    tools = [step for step in steps if step.startswith(("tool:", "approval_", "error:"))]
+    actions = {step for step in steps if step.startswith("action:")
+               and step not in {"action:click", "action:scroll", "action:right_click"}}
+    surfaces = {step for step in steps if step.startswith("surface:")
+                and step not in {"surface:browser", "surface:chrome", "surface:safari",
+                                 "surface:edge", "surface:firefox"}}
+    if tools:
+        return 0.85
+    if len(actions) >= 2:
+        return 0.8
+    if len(actions) == 1:
+        return 0.6
+    if len(surfaces) >= 2:
+        return 0.3
+    if len(surfaces) == 1:
+        return 0.15
+    return 0.05
+
+
 def cluster_runs(
     runs: list[dict[str, Any]],
     *,
@@ -119,6 +141,7 @@ def cluster_runs(
     structural_key: str = "structural_steps",
     readable_key: str = "semantic_steps",
     limit: int = 100,
+    min_cluster_quality: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Cluster exact variants conservatively, then expose core + variations.
 
@@ -175,6 +198,9 @@ def cluster_runs(
         ]
         core_structural = _core(structural_sequences)
         core_readable = _core(readable_sequences)
+        quality = _specificity(core_structural)
+        if quality < float(min_cluster_quality):
+            continue
         actor = str(members[0].get("actor_kind") or "human")
         variant_signatures = sorted("|".join(key[1]) for key, _rows in group)
         material = (
@@ -183,6 +209,16 @@ def cluster_runs(
             + "|variants=" + "||".join(variant_signatures)
         )
         candidate_id = "cluster:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+        surface_labels: dict[str, str] = {}
+        for run in members:
+            for step in _sequence(run.get(structural_key) or run.get("steps")):
+                if not step.startswith("surface:"):
+                    continue
+                label = (run.get("surface_labels") or {}).get(step)
+                # The source adapter must provide a vetted label. Unknown or
+                # hashed custom names stay opaque in public results.
+                surface_labels[step] = str(label or "Other surface (redacted)")[:60]
 
         variant_rows: list[dict[str, Any]] = []
         for (variant_actor, structural), variant_members in sorted(
@@ -219,6 +255,7 @@ def cluster_runs(
                 if str(run.get("execution_id") or "")
             ],
             "core_structural_steps": core_structural,
+            "surface_labels": dict(sorted(surface_labels.items())),
             "core_steps": core_readable,
             "observed_variations": _support_rows(readable_sequences),
             "exact_variants": variant_rows[:MAX_VARIANTS],
@@ -237,6 +274,9 @@ def cluster_runs(
             "cluster_is_business_workflow_ground_truth": False,
             "business_membership_verified": False,
             "similarity_basis": "structural_action_sequence",
+            "cluster_quality": quality,
+            "cluster_quality_is_task_confidence": False,
+            "specificity_basis": "shared_non_generic_structural_steps_v1",
             "generic_ui_repetition_may_be_unrelated": True,
             "canonical_evidence_overrides_cluster": True,
             "use": (
