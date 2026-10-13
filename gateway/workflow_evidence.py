@@ -75,6 +75,7 @@ def repeated_workflows(
         min_cluster_quality=0.0 if include_low_specificity else 0.45,
         # Preserve cross-app sequences: host changes do not prove task changes.
         partition_host_switches=False,
+        partition_idle_gaps=True,
         rank_by_quality=True,
         _raw_events=raw,
     )
@@ -116,6 +117,7 @@ def workflow_evidence(
             max_events_per_run=max_events_per_run,
             include_canonical_evidence=True,
             partition_host_switches=split,
+            partition_idle_gaps=not split,
             _raw_events=raw,
         )
 
