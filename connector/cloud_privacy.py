@@ -127,7 +127,7 @@ class DeviceUploadRedactor:
             return "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
         if LOCAL_PATH.search(original):
             return "[LOCAL_FILE_PATH_WITHHELD]"
-        if len(original) > max_chars or "\\n" in original or "\\r" in original:
+        if len(original) > max_chars or "\n" in original or "\r" in original:
             return "[LONG_FREE_TEXT_WITHHELD]"
         # Domain-specific safe context can be preserved around a masked handle.
         clean = self.cleaner.target_label(_ner_project(original, self.cleaner))
