@@ -27,6 +27,7 @@ def test_unknown_people_and_companies_do_not_leak_through_target_or_title():
     # Swedish UI and file/PR references must remain navigable, never opaque.
     for caption in ("Hämta igen", "Ny", "Adress- och sökfält",
                     "3. Rapportering", "Continue connecting",
+                    "OpenWorkGraph", "GitHub", "Oneflow",
                     "Pull requests · KAVentures/openworkgraph",
                     "Sync v31 … Pull Request #1"):
         assert redactor.target_label(caption) == caption
@@ -120,6 +121,7 @@ def test_compact_preserves_raw_cursor_and_security_diagnostics():
     assert compact["next_cursor"] == "cursor"
     assert compact["has_more"] is True
     assert compact["_openworkgraph_security"]["instruction_like_fields_suppressed"] == 1
+    assert compact["_openworkgraph_security"]["handling"] == base["_openworkgraph_security"]["handling"]
     assert compact["raw_evidence_fallback"]["no_inferred_task_required"] is True
     assert "navigation_hints" not in compact
     assert len(str(compact)) < len(str(base))
