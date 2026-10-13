@@ -418,7 +418,7 @@ def split_human_execution_windows(
     return result or [task]
 
 
-def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False) -> list[dict[str, Any]]:
     """Build privacy-minimized human and agent executions from canonical evidence."""
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
@@ -430,7 +430,8 @@ def derive_executions(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
     for candidate in task_data.get("tasks") or []:
         session_id = str(candidate.get("session_id") or "")
-        for task in split_human_execution_windows(candidate, by_session.get(session_id, [])):
+        for task in (split_human_execution_windows(candidate, by_session.get(session_id, []))
+                     if split_human_hosts else [candidate]):
             steps = _human_steps(task, by_session.get(session_id, []))
             if not steps:
                 continue
