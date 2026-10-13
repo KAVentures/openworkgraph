@@ -335,7 +335,7 @@ def run(config_path: Path, *, once: bool = False) -> int:
     # readable request metadata. A confident full name also masks its first
     # component, e.g. "Koyar / Emil"; bare OS usernames are not trusted.
     from .cloud_privacy import local_owner_names
-    owner_names = local_owner_names()
+    owner_names = local_owner_names(config_path)
     initial_local_policy = dict(settings.local_policy)
     initial_local_policy["allow_agent_session_messages"] = _agent_session_local_opt_in(data_dir)
     policy: dict[str, Any] = merge_policies(initial_local_policy, remote_policy)
