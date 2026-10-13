@@ -257,7 +257,7 @@ def _human_runs(raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "authoritative": False,
                 "needs_review": True,
             })
-        output.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+    output.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
     return output
 
 
