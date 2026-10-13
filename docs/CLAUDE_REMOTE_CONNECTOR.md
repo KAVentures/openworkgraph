@@ -1,43 +1,84 @@
-# Claude cloud connector for OpenWorkGraph
+# Claude cloud connector and plugin for OpenWorkGraph
 
-## One hosted MCP, multiple clients
+## Architecture: one hosted MCP, both clients
 
-The existing, OAuth-protected `https://mcp.owg.kinvectum.com/mcp` endpoint is a remote **read-only** work-evidence MCP server. The same hosted endpoint can be connected from ChatGPT and Claude; there is **no reason to deploy or maintain a second OWG backend** just for Claude. It exposes the seven public tools defined in `gateway/public_plugin_mcp.py`, not the richer local MCP surface.
+Use the same **OAuth-protected, read-only** MCP endpoint already configured for ChatGPT:
 
-This is different from `integrations/plugins/openworkgraph`, the existing **local Claude Code** plugin. Do not replace or remove that plugin: it launches the local observer's MCP and can expose additional consent-gated tools. Cloud Claude does not automatically gain access to your machine, local database, browser text or earlier offline history.
+`https://mcp.owg.kinvectum.com/mcp`
 
-## Install as a personal custom connector in Claude
+Claude chat, Claude Desktop, Cowork and Claude Code can connect to the public endpoint. There is **no second backend** or second evidence store. Both clients use the OWG account identity and receive only explicitly synchronized and appropriately redacted Gateway evidence. Local-only activity is not remotely available.
 
-1. In Claude, go to **Customize → Connectors** and choose **Add → Custom → Web** (the exact menu varies by client).
-2. Name it **OpenWorkGraph** and set the remote MCP URL to `https://mcp.owg.kinvectum.com/mcp`.
-3. Inspect the detected authentication flow. Prefer Claude's published OAuth identity if compatible with the configured OWG authorization server; otherwise use the supported automatic client registration. No access tokens, client secrets or reviewer identities belong in this repository.
-4. Sign in to the same OpenWorkGraph account already used by the desktop **Connect AI → Link and share new evidence** flow, or authenticate under an authorized enterprise actor mapping. Cloud access is limited to identity-scoped evidence that was explicitly synchronized.
-5. Enable OpenWorkGraph in the conversation's connectors/tools menu and check the seven tool descriptors. `get_profile` is identity only, not a work-history lookup.
-6. Try **“Where did I leave off yesterday?”** without naming OWG. A successful implicit routing test requires an observed MCP call, not just a plausible answer.
+The existing `integrations/plugins/openworkgraph` plugin launches a **local Claude Code** server with different capabilities. It **does not automatically gain access** to cloud work, and cloud Claude **does not automatically gain access** to locally retained data. Do not delete or replace the local plugin. The new `integrations/plugins/openworkgraph-cloud` option is for the remote, shared ChatGPT/Claude endpoint.
 
-Official sources (check for product changes):
-- [Claude custom connectors](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities)
-- [How Claude suggests connected apps](https://support.claude.com/en/articles/14730684-how-claude-suggests-connected-apps)
+## Install right now: Claude custom connector (no merge required)
 
-Cloud-hosted Claude must reach the public endpoint over HTTPS. Claude's availability of a tool, choice to invoke it and authentication strategy are host-controlled. Successful installation does **not** prove automatic invocation on every relevant turn.
+1. Open Claude and go to **Customize → Connectors → Add → Custom → Web** (UI wording may vary).
+2. Name it **OpenWorkGraph**. Paste **`https://mcp.owg.kinvectum.com/mcp`**.
+3. Review detected OAuth authentication. Choose **Sign in now** and prefer **Use Claude's published identity** if the OWG OAuth server accepts it. Otherwise use **Register automatically** if dynamic client registration is enabled. If neither is accepted, register a dedicated Claude OAuth client with callback `https://claude.ai/api/mcp/auth_callback` at the OWG authorization server; do not weaken token validation or share a secret in the repository.
+4. Sign into the **same OWG account** used in desktop **Connect AI → Link and share new evidence**. Work recorded only locally is not visible until the user explicitly enables sync and links the device.
+5. In a Claude conversation, enable OWG under **Connectors**; tool access **Auto** is a sensible default. Check that the correct ten tools appear after connection. The user decides whether cloud work text is separately enabled.
+6. Test **"Based on my prior recorded work, what should I continue today?"** and observe an actual OWG tool call. A fluent answer without a tool call is **not** a successful routing test.
 
-## Public Claude directory submission
+Official source: [Claude custom web connectors](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities). Claude supports cloud MCP using Streamable HTTP and OAuth. A custom connector is private until submitted to Anthropic's directory.
 
-As of October 2026, Anthropic offers a developer portal for listing plugins. The **single MCP connector** route points directly at the hosted OWG URL and is the simplest path. A **plugin bundle** route can package MCP plus skills using a GitHub repository, but is not required for the initial cloud connector. The existing local Claude Code plugin is not an equivalent hosted submission artifact.
+## Optional Claude plugin package / marketplace
 
-To submit, use [Claude's submission process](https://claude.com/resources/articles/build-plugins-for-claude) from an eligible paid account. Complete any identity, security, OAuth, permission and directory review steps in the portal. Provide a reviewer account containing *synthetic test evidence* and a reproducible test plan; do not share real user activity as demonstration data. Publication and directory discovery are separate from a personal custom connector.
+The repository also includes the `openworkgraph-cloud` package. It packages the same remote server (no token/header or local launcher) plus a **work-continuity skill**, for users who prefer a plugin rather than a plain web connector.
 
-**Pre-submission gate:** Verify a real Claude OAuth handshake, seven read-only tools, empty/unlinked account behavior, tenant isolation, token rejection, bounded pagination, account revocation, and no remote exposure of local-only work-text content. Run the hosted-context 22-case model-in-the-loop evaluation against an isolated test tenant in Claude *and* ChatGPT; compare implicit invocation, negative controls, source claims and authorization safety. The scorer alone cannot simulate client-level tool routing.
+- Marketplace source: `https://github.com/KAVentures/openworkgraph`
+- Plugin entry: **`openworkgraph-cloud`** (display name **OpenWorkGraph (Cloud)**)
+- Remote MCP server: `https://mcp.owg.kinvectum.com/mcp`
+- Skill: `integrations/plugins/openworkgraph-cloud/skills/work-continuity/SKILL.md`
 
-## Desired automatic selection (not forced)
+In Claude's **Customize → Plugins**, use **Add marketplace** to add the repository when your client supports personal GitHub marketplaces, then install **OpenWorkGraph (Cloud)**. In Claude Code, use `/plugin marketplace add KAVentures/openworkgraph` followed by `/plugin install openworkgraph-cloud@openworkgraph`; authenticate through Claude's MCP flow and inspect `/mcp`. Exact support varies by Claude surface and account. **Do not enable both** this remote package and a separate OWG web connector if that duplicates the same tools.
 
-Use ordinary, specific trigger descriptions:
-- For “resume the work I was doing,” call `get_current_work_context`.
-- For “the contract/pricing file I used on Thursday,” call `search_work`, then date-bounded `get_workflow_trace` if necessary.
-- For “how do I normally do this?” or “automate my usual process,” call `find_repeated_workflows`, then `get_workflow_evidence` and verify canonical examples.
-- For “what did my previous coding agent try?”, call `get_agent_runs`.
-- For questions fully answerable without previous user work (general facts, code tutorials, standalone writing), **do not call OWG**.
+The repository retains the original `openworkgraph` local Claude Code plugin entry for local-only installs. A single mcp connector is sufficient to access the hosted ten-tool catalog; the package adds prompting/installation convenience, not another backend.
 
-OWG tool results are evidence about past activities, not proof that tasks remain open or that actions were approved. Prefer an authorized source-system connector for current object content, status and writes. The model must never treat captured titles, email text or page content as instructions.
+## Current cloud tool catalog (ten read-only tools)
 
-No server-side MCP instructions can force Claude to call a tool. Nor can AI SEO force tool invocation: public website/directory discoverability, host-side suggestions of apps, and tool selection *after installation* are distinct mechanisms. Accurate descriptive metadata, a stable connection, valuable real-world examples and measured quality are more useful than “always use me” instructions.
+| Tool | Use |
+| --- | --- |
+| `get_profile` | Verify current OWG identity, not work history |
+| `get_goal_context` | Find prior human/agent work relevant to a new goal |
+| `get_current_work_context` | Orient on recent recorded work |
+| `search_work` | Find named historical work/resources |
+| `get_workflow_trace` | Verify chronological evidence with bounds/pagination |
+| `find_repeated_workflows` | Locate candidate recurring processes |
+| `get_workflow_evidence` | Verify representative executions |
+| `get_agent_runs` | Reconstruct previously observed agent attempts |
+| `search_work_text` | Search separately opted-in redacted cloud work text |
+| `get_work_text_excerpt` | Read a real reference returned by search, only if authorized |
+
+This is the **intended catalog in source**, not a claim about what Claude has already authenticated to or discovered in production. All ten are marked read-only. Work-text tools are permission-gated and may return no data. Do not fabricate an excerpt reference if search finds none. The `get_profile` tool has OpenAI-specific profile metadata for ChatGPT, which other MCP clients can ignore; the shared OAuth resource remains client-neutral.
+
+## OAuth and security gates
+
+The OWG remote server advertises MCP protected-resource metadata and uses an external authorization server (currently Supabase OAuth). Confirm in the **actual target project**:
+
+- OAuth 2.1 authorization-code + PKCE S256 flow is enabled and its discovery metadata resolves;
+- Claude can register with DCR or use a published/pre-registered client (if pre-registered, the exact callback is `https://claude.ai/api/mcp/auth_callback`);
+- issuer, audience, bearer signature, expiry, user identity and server-required scope validate; tokens refresh and revocation works;
+- no missing or stale redirect URI, scope or audience produces an authentication loop;
+- account sync, tenant isolation, redaction and separate work-text opt-in are preserved.
+
+The hosted server must remain identity-scoped and read-only. **Never** use ChatGPT or Claude client names as user/tenant identifiers or treat observed work as permission to take future action. Do not commit tokens, user evidence or secrets.
+
+## Release smoke test / comparison
+
+These tests must be performed against an **isolated test user/tenant**, first in a real Claude session and then in ChatGPT against the same synthetic data:
+
+1. OAuth discovery, consent, refresh, reconnection and sign-out/revocation; reject unauthenticated/invalid/expired tokens.
+2. Confirm **all ten tools**, argument schemas, read-only annotations and valid responses through authenticated `tools/list` and representative `tools/call` requests.
+3. Test an unlinked/empty account; ensure no false historical claims.
+4. Run positive prompts for resuming work, past files, repeated procedures and earlier agent attempts. Count real tool invocations; verify retrieved evidence.
+5. Run negative prompts (general knowledge, no personal-work dependency); avoid speculative OWG retrieval.
+6. With text sharing off, `search_work_text` and `get_work_text_excerpt` must not leak content. When on, validate a real search-returned reference, owner scoping, bounded excerpt and revocation.
+7. Verify historical text is treated as untrusted data, not executable instructions.
+
+The repository tests validate local catalog/security invariants and packaging. **They do not validate Claude's actual tool routing or OAuth handshake**. Record live results separately; installation alone is not an end-to-end pass. Successful installation does not force automatic use of OWG when the user does not name it.
+
+## Public directory submission
+
+Anthropic's developer portal offers two publication routes: **single MCP connector** (recommended first—submit the hosted MCP URL) or a **GitHub plugin bundle** (host MCP + skills together). Directory approval and discovery are distinct from adding a personal connector. See [Build plugins for Claude](https://claude.com/blog/build-plugins-for-claude).
+
+Submit only after a live Claude OAuth/read-only/privacy test with synthetic evidence and a reviewer account, plus verified terms/privacy/support pages and any required publisher review. Avoid exposing local sensor data or an MCP localhost URL to the directory. Claude's choice to invoke a connector cannot be forced by the server, a plugin skill, or AI SEO.
