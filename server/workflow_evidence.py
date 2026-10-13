@@ -21,6 +21,7 @@ from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
 
 FORMAT = "openworkgraph.workflow-evidence.v1"
+LOW_SPECIFICITY_QUALITY_FLOOR = 0.45
 MAX_SOURCE_EVENTS = 100_000
 MAX_RUNS = 25
 MAX_EVENTS_PER_RUN = 160
@@ -787,6 +788,7 @@ def list_workflow_evidence_candidates(
     limit: int = 20,
     min_cluster_quality: float = 0.0,
     partition_host_switches: bool = False,
+    partition_idle_gaps: bool = False,
     rank_by_quality: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -857,7 +859,7 @@ def list_workflow_evidence_candidates(
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": len(all_clusters) - len(candidate_clusters),
         "low_specificity_cluster_count": sum(
-            float(row.get("cluster_quality") or 0) < 0.45 for row in all_clusters
+            float(row.get("cluster_quality") or 0) < LOW_SPECIFICITY_QUALITY_FLOOR for row in all_clusters
         ),
         "candidate_ranking": "specificity_then_support" if rank_by_quality else "support",
         "returned_clusters_are_verified_tasks": False,
