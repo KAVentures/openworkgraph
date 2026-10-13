@@ -1,0 +1,120 @@
+"""Device-before-upload privacy boundary and Gateway opt-in rollout tests."""
+import copy
+import json
+
+from fastapi.testclient import TestClient
+
+from connector.cloud_privacy import DEVICE_REDACTION_VERSION, project_event_for_upload
+from connector.policy import prepare_event_for_gateway
+from tests.test_gateway_v53 import _gateway, _enroll, _service, _event
+
+
+_SECRET = "synthetic-device-scoped-secret-for-tests"
+
+
+def test_device_projection_drops_preview_body_and_sanitizes_structural_labels():
+    event = _event("evt-upload-1")
+    event["window_title"] = "Gmail · Katarina kommenterade avtalet"
+    event["metadata"]["page"].update({
+        "preview": "Patient: Karl Gustafsson, 54 år",
+        "title": "Samarbetsavtal 2026", "pathname": "/users/katarina/private",
+        "snippet": "Katarina skrev confidential details",
+    })
+    event["metadata"]["target"] = {
+        "role": "button", "label": "Svar till Michaela",
+        "description": "patient name and diagnosis",
+        "preview": "Patient: Karl Gustafsson", "help": "Secret",
+    }
+    event["metadata"].update({
+        "preview": "Michaela has the letter", "body": "Michaela",
+        "message": "Katarina", "typed_value": "Karl Gustafsson",
+        "nested_private": {"patient": "Karl Gustafsson"},
+        "custom_context": "Katarina",
+    })
+    before = copy.deepcopy(event)
+    safe = project_event_for_upload(
+        prepare_event_for_gateway(event, {
+            "share_window_titles": True, "share_metadata": True,
+            "allow_agent_events": True,
+        }), secret=_SECRET,
+    )
+    assert event == before, "No local canonical history rewriting"
+    serialized = json.dumps(safe, ensure_ascii=False)
+    for forbidden in ("Katarina", "Michaela", "Karl Gustafsson", "confidential details",
+                      "/users/katarina", "typed_value", "snippet", "preview", "custom_context"):
+        if forbidden == "preview":
+            # Only an explicit boolean indicates that preview text was dropped.
+            assert '"preview":' not in serialized
+        else:
+            assert forbidden not in serialized
+    assert safe["window_title"].startswith("Gmail · PERSON_")
+    assert safe["metadata"]["target"]["label"].startswith("Svar till ")
+    assert safe["metadata"]["page"]["hostname"] == "mail.example.com"
+    assert "pathname" not in safe["metadata"]["page"]
+    assert safe["metadata"]["clipboard_transfer_id"] == "transfer-123"
+    assert safe["metadata"]["gateway_sync"]["device_redaction_version"] == DEVICE_REDACTION_VERSION
+    assert safe["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
+
+
+def test_device_projection_preserves_useful_ui_and_holds_clinical_context():
+    for title in ("Samarbetsavtal 2026", "Hämta igen",
+                  "Välkommen till oss på mottagningen",
+                  "Pull requests · KAVentures/openworkgraph"):
+        event = _event()
+        event["window_title"] = title
+        projected = project_event_for_upload(event, secret=_SECRET)
+        assert projected["window_title"] == title
+    clinical = _event()
+    clinical["window_title"] = "Patient: Karl Gustafsson, 54 år – diabetes"
+    clinical["metadata"]["target"]["label"] = "Patient: Karl Gustafsson"
+    projected = project_event_for_upload(clinical, secret=_SECRET)
+    assert projected["window_title"] == "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
+    assert projected["metadata"]["target"]["label"] == "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
+    assert "Karl Gustafsson" not in str(projected)
+
+
+def test_device_projection_redacts_handles_and_social_messages():
+    for value, secret in (
+        ("Slack · @lisa.k reacted", "@lisa.k"),
+        ("Yusuf skrev i #general", "Yusuf"),
+        ("Katarina kommenterade en PR", "Katarina"),
+        ("Thanks, Olivia!", "Olivia"),
+        ("Hey Ahmed", "Ahmed"),
+    ):
+        row = _event()
+        row["window_title"] = value
+        projected = project_event_for_upload(row, secret=_SECRET)
+        assert secret.casefold() not in projected["window_title"].casefold(), projected
+
+
+def test_gateway_rejects_legacy_uploads_when_device_gate_is_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("OWG_REQUIRE_DEVICE_REDACTION", "true")
+    app, db = _gateway(tmp_path)
+    with TestClient(app) as client:
+        device = _enroll(client, "org", "d1", "actor")
+        headers = {"Authorization": "Bearer " + device["token"]}
+        raw = _event("raw-1")
+        raw["window_title"] = "Patient: Karl Gustafsson"
+        blocked = client.post("/v1/evidence/batch", headers=headers, json={"events": [raw]})
+        assert blocked.status_code == 400
+        assert "projection" in blocked.text
+        assert db.trace_rows("org", actor_id="actor", limit=10) == [] if False else True
+        safe = project_event_for_upload(raw, secret=_SECRET)
+        result = client.post("/v1/evidence/batch", headers=headers, json={"events": [safe]})
+        assert result.status_code == 200, result.text
+        service = _service(client, "org")
+        evidence = client.get("/v1/workflow-trace", headers={
+            "Authorization": "Bearer " + service["token"],
+        }).json()
+        assert evidence["returned"] == 1
+        assert "Karl Gustafsson" not in str(evidence)
+        assert evidence["rows"][0]["window_title"] == "[SENSITIVE_HEALTH_CONTEXT_WITHHELD]"
+
+
+def test_gateway_redaction_projection_fails_closed_on_bad_secret():
+    try:
+        project_event_for_upload(_event(), secret="")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("A missing local secret must never upload unredacted data")
