@@ -451,7 +451,11 @@ def split_human_execution_windows(
     return result or [task]
 
 
-def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False, split_human_idle: bool = False) -> list[dict[str, Any]]:
+def derive_executions(
+    raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False,
+    split_human_idle: bool = False,
+    _task_data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Build privacy-minimized human and agent executions from canonical evidence."""
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
