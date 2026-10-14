@@ -558,10 +558,13 @@ def get_workflow_trace(
     query: str | None = None,
     app_name: str | None = None,
     session_id: str | None = None,
+    order: str = "oldest",
 ):
     from .mcp_trace import workflow_trace
     from .privacy_pipeline import redact_for_display
-    return redact_for_display(workflow_trace(since=since, until=until, cursor=cursor, limit=limit, scope=scope, query=query, app_name=app_name, session_id=session_id))
+    if order not in {"oldest", "newest"}:
+        return _json_error("order must be oldest or newest", 422)
+    return redact_for_display(workflow_trace(since=since, until=until, cursor=cursor, limit=limit, scope=scope, query=query, app_name=app_name, session_id=session_id, order=order))
 
 
 @app.get("/v1/claude-mcpb")
