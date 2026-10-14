@@ -106,5 +106,5 @@ def test_first_authenticated_401_marks_revoked_and_stops_retry(tmp_path, monkeyp
     assert state.get("status") == "revoked"
     assert "SENSITIVE_INTERNAL_SERVER_DETAIL" not in state.get("last_error")
     assert state.get_int("last_local_event_id") == 0
-    assert calls == ["https://gateway.example/v1/organization/policy"]
+    assert calls == ["https://gateway.example/v1/device-policy"]
     assert (auth / ".gateway_device_token").exists()
