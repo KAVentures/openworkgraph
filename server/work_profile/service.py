@@ -10,8 +10,10 @@ from . import (
     add_self_tag,
     list_self_tags,
     compute_work_profile as _compute_work_profile,
+    _context_rows,
+    _scope_since,
 )
-from .accuracy import compute_today_work_profile
+from .accuracy import compute_today_work_profile, local_day_since
 from .signals import enrich_work_profile
 
 MIGRATION_KEY = "work_profile_clipboard_context_links_v1"
@@ -51,8 +53,17 @@ def backfill_clipboard_context_links() -> int:
 
 def compute_work_profile(*, scope: str = "current", now=None) -> dict[str, Any]:
     backfill_clipboard_context_links()
-    profile = compute_today_work_profile(now=now) if scope == "today" else _compute_work_profile(scope=scope, now=now)
-    return enrich_work_profile(profile, since=profile.get("since"))
+    since = local_day_since(now=now) if scope == "today" else _scope_since(scope, now=now)
+    # Read and decode canonical context once, then feed the same material to
+    # both core profile metrics and optional browser-signal enrichments.
+    # No derived results are cached across calls or deletion/consent changes.
+    context = _context_rows(since)
+    profile = (
+        compute_today_work_profile(now=now, _preloaded_context=context)
+        if scope == "today" else
+        _compute_work_profile(scope=scope, now=now, _preloaded_context=context)
+    )
+    return enrich_work_profile(profile, since=profile.get("since"), rows=context)
 
 
 __all__ = ["SELF_TAG_CATEGORIES","add_self_tag","list_self_tags","compute_work_profile","backfill_clipboard_context_links"]
