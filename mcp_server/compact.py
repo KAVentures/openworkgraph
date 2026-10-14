@@ -1292,14 +1292,52 @@ def get_agent_runs(
             raise ToolError("execution_id must be an opaque OpenWorkGraph execution ID")
         params["execution_id"] = opaque_id
         params["limit"] = 1
-        return core._finish(name, secure_runtime.secure_get("/v1/agent-execution-traces", params))
+        native = secure_runtime.secure_get("/v1/agent-execution-traces", params)
+        if list(native.get("executions") or []):
+            return core._finish(name, native)
+        # Content-free Web lifecycles have derived IDs and are not native traces.
+        # Old local servers lack this endpoint; keep native behavior available.
+        try:
+            web = secure_runtime.secure_get("/v1/browser-ai-runs", {
+                "execution_id": opaque_id, "limit": 1,
+                **({"since": since} if since else {}),
+            })
+            if list(web.get("executions") or []):
+                return core._finish(name, web)
+        except Exception:
+            pass
+        return core._finish(name, native)
     result = secure_runtime.secure_get("/v1/agent-execution-traces", params)
+    native = [_agent_run_summary(item) for item in list(result.get("executions") or [])]
+    web: list[dict[str, Any]] = []
+    web_available = False
+    if not family_key:
+        try:
+            projection = secure_runtime.secure_get("/v1/browser-ai-runs", {
+                "limit": _bounded(limit, maximum=100),
+                "evidence_limit": _bounded(evidence_limit, maximum=50_000),
+                **({"since": since} if since else {}),
+            })
+            web = [row for row in list(projection.get("executions") or [])
+                   if isinstance(row, dict)]
+            web_available = True
+        except Exception:
+            # Compatibility with older local installs; an empty Web run list
+            # must NOT be interpreted as evidence that no Web work occurred.
+            web_available = False
+    combined = sorted(
+        native + web, key=lambda item: str(item.get("started_at") or ""), reverse=True,
+    )[:_bounded(limit, maximum=100)]
     compact = {
         **{key: value for key, value in result.items() if key != "executions"},
-        "executions": [_agent_run_summary(item) for item in list(result.get("executions") or [])],
+        "executions": combined,
+        "returned": len(combined),
+        "web_ai_lifecycle_retrieval_available": web_available,
+        "web_ai_lifecycle_outcome_is_verified": False,
+        "web_ai_lifecycle_resource_links_are_opaque": True,
         "events_omitted_from_list_view": True,
         "token_semantics": "observed provider/SDK counts only; not_observed is unknown, never zero or estimated",
-        "detail": "call get_agent_runs again with execution_id for the structural trace",
+        "detail": "call get_agent_runs again with execution_id for the structural trace or Web lifecycle evidence",
     }
     return core._finish(name, compact)
 

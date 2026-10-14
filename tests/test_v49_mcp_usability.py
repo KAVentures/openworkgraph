@@ -23,17 +23,39 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait(url: str, process: subprocess.Popen, timeout: float = 15) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if process.poll() is not None:
+def _wait(
+    url: str,
+    process: subprocess.Popen,
+    timeout: float = 45,
+    log_path: Path | None = None,
+) -> None:
+    """Allow slow Windows CI startup without hiding actual server exceptions.
+
+    Using a file for child output avoids deadlocking uvicorn if the stdout/stderr
+    PIPE buffer fills before the fixture starts reading from it.
+    """
+    deadline = time.monotonic() + timeout
+    last_status = "no HTTP response"
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        if exit_code is not None:
+            last_status = f"server exited with code {exit_code}"
             break
         try:
-            if httpx.get(url, timeout=0.4).status_code < 500:
+            response = httpx.get(url, timeout=0.8)
+            if response.status_code == 200:
                 return
-        except Exception:
-            time.sleep(0.08)
-    raise AssertionError(f"process did not become ready: {url}")
+            last_status = f"health HTTP {response.status_code}"
+        except httpx.RequestError as exc:
+            last_status = type(exc).__name__
+        time.sleep(0.15)
+    log_tail = ""
+    if log_path is not None and log_path.exists():
+        log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+    raise AssertionError(
+        f"process did not become ready: {url}; {last_status}; "
+        f"startup output (tail): {log_tail or '(none)'}"
+    )
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -61,18 +83,26 @@ def v49_api(tmp_path):
         "WORKFLOW_OBSERVER_RUN_STARTED_AT": "2026-09-18T15:00:00+00:00",
         "WORKFLOW_OBSERVER_API": base,
     })
-    process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.secure_app:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    _wait(base + "/health", process)
-    login = httpx.post(base + "/v1/dashboard-session", json={"bootstrap": "v49-bootstrap"})
-    assert login.status_code == 200, login.text
-    dashboard_headers = {"Authorization": f"OWG-Session {login.json()['session']}"}
-    try:
-        yield {"base": base, "env": env, "auth": auth, "token": token, "headers": {"Authorization": f"Bearer {token}"}, "dashboard_headers": dashboard_headers}
-    finally:
-        _stop(process)
+    # The child runs in a real process; write its output to disk rather than
+    # unconsumed PIPEs, and retain the last logs if Windows CI startup fails.
+    log_path = tmp_path / "v49-uvicorn.log"
+    with log_path.open("w", encoding="utf-8") as server_log:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "server.secure_app:app", "--host", "127.0.0.1", "--port", str(port)],
+            cwd=ROOT, env=env, stdout=server_log, stderr=subprocess.STDOUT,
+        )
+        try:
+            _wait(base + "/health", process, log_path=log_path)
+            login = httpx.post(
+                base + "/v1/dashboard-session",
+                json={"bootstrap": "v49-bootstrap"},
+                timeout=10,
+            )
+            assert login.status_code == 200, login.text
+            dashboard_headers = {"Authorization": f"OWG-Session {login.json()['session']}"}
+            yield {"base": base, "env": env, "auth": auth, "token": token, "headers": {"Authorization": f"Bearer {token}"}, "dashboard_headers": dashboard_headers}
+        finally:
+            _stop(process)
 
 
 def _event(i: int, at: str, *, title: str | None = None, label: str = "") -> dict:
