@@ -106,8 +106,10 @@ def run(size: int, folder: Path) -> dict[str, object]:
     start = time.perf_counter()
     patterns = workflow_evidence.list_workflow_evidence_candidates(
         source_event_limit=25000, min_runs=2, limit=8,
+        rank_by_navigation=True, navigation_summary_only=True,
+        min_cluster_quality=0.0,
     )
-    timings["repeated_workflows"] = round(time.perf_counter() - start, 3)
+    timings["repeated_workflows_ranked_navigation"] = round(time.perf_counter() - start, 3)
 
     with db.connect() as conn:
         table_counts = {
@@ -130,6 +132,11 @@ def run(size: int, folder: Path) -> dict[str, object]:
         "agent_events_seen": len(agent_events),
         "agent_runs_returned": int(traces.get("returned") or 0),
         "workflow_clusters_returned": int(patterns.get("returned") or 0),
+        "workflow_ranked_top_observed_runs": (
+            int((patterns.get("candidate_clusters") or [{}])[0].get("execution_count") or 0)
+            if patterns.get("candidate_clusters") else 0
+        ),
+        "workflow_ranking_filters_low_scores": bool(patterns.get("ranking_filters_out_low_specificity")),
         "continuity_resources_returned": len(continuity.get("resources") or []),
         "synthetic_only": True,
         "mac_capture_and_transport_not_tested": True,
