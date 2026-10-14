@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import random
+import subprocess
+import sys
+from pathlib import Path
 
-import httpx
-import pytest
-
-from server.workflow_candidates import _lcs, _lcs_length, sequence_similarity
+from server.workflow_candidates import _lcs, _lcs_length, _sequence, sequence_similarity
 
 
 def _legacy_lcs(a, b):
@@ -30,24 +30,43 @@ def test_lcs_matches_prior_exact_subsequence_and_all_similarity_scores():
         expected = _legacy_lcs(a, b)
         assert _lcs(a, b) == expected
         assert _lcs_length(a, b) == len(expected)
-        if a and b:
-            score = 0.6 * len(expected) / max(len(a), len(b))
-            score += 0.4 * len(expected) / min(len(a), len(b))
+        # Public scoring intentionally removes immediate duplicate steps
+        # before LCS; compare against the same normalized sequences as before.
+        clean_a, clean_b = _sequence(a), _sequence(b)
+        normalized_expected = _legacy_lcs(clean_a, clean_b)
+        if clean_a and clean_b:
+            score = 0.6 * len(normalized_expected) / max(len(clean_a), len(clean_b))
+            score += 0.4 * len(normalized_expected) / min(len(clean_a), len(clean_b))
             assert sequence_similarity(a, b) == round(score, 6)
         else:
             assert sequence_similarity(a, b) == 0.0
 
 
-def test_mcp_timeout_is_actionable_and_omits_raw_parameters(monkeypatch):
-    from mcp_server import secure_runtime
-    monkeypatch.setattr(secure_runtime, "_headers", lambda: {})
-    def fail(*a, **kw):
-        raise httpx.ReadTimeout("simulated timeout")
-    monkeypatch.setattr(httpx.Client, "get", fail)
-    with pytest.raises(Exception) as exc:
-        secure_runtime.secure_get("/v1/workflow-evidence/families",
-                                  {"query": "private-secret-needle", "limit": 25000})
-    explanation = str(exc.value)
+def test_mcp_timeout_is_actionable_and_omits_raw_parameters():
+    # The full suite installs a history-permission wrapper on secure_get.
+    # Isolate transport behavior so the permission guard is never bypassed.
+    code = r'''
+import httpx
+from mcp_server import secure_runtime
+secure_runtime._headers = lambda: {}
+def fail(*args, **kwargs):
+    raise httpx.ReadTimeout("simulated timeout")
+httpx.Client.get = fail
+try:
+    secure_runtime.secure_get(
+        "/v1/workflow-evidence/families",
+        {"query": "private-secret-needle", "limit": 25000},
+    )
+    raise AssertionError("timeout did not raise")
+except Exception as exc:
+    explanation = str(exc)
     assert "15 seconds" in explanation
     assert "Narrow the date range" in explanation
     assert "private-secret-needle" not in explanation
+'''
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
