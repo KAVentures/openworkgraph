@@ -28,6 +28,7 @@ def local_web_ai_runs(
     limit: int = 20,
     evidence_limit: int = 25000,
     execution_id: str = "",
+    since: str | None = None,
 ) -> dict[str, Any]:
     mode = str(lease.get("mode") or "off")
     fences: list[str] = []
