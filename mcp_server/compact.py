@@ -448,6 +448,58 @@ def get_current_work_context(
             if _history_access_problem(exc):
                 fallback_hint = "Current app session is empty. Grant saved-history access to let this overview include earlier work today."
 
+    # A fresh Monday session should still locate Friday's unfinished work
+    # *only* if the user previously authorized saved-history access. Never
+    # make an unrestricted historical query just because current/today is empty.
+    if not list(trace.get("rows") or []) and cursor in (None, ""):
+        access_mode = "off"
+        granted_since: str | None = None
+        try:
+            access_response = secure_runtime.secure_get("/v1/history/ai-access")
+            access = access_response.get("access") if isinstance(access_response, dict) else None
+            if isinstance(access, dict):
+                access_mode = str(access.get("mode") or "off")
+                if access_mode == "selected_range":
+                    granted_since = str(access.get("since") or "") or None
+        except Exception:
+            # A missing/inaccessible access policy is not permission.
+            access_mode = "off"
+        if access_mode in {"all_saved", "selected_range"}:
+            # The selected-range guard still clamps this query to the user's
+            # granted timestamps; a separate scope prevents reading yesterday
+            # when saved-history disclosure is disabled.
+            start = granted_since if access_mode == "selected_range" else (
+                datetime.now().astimezone() - timedelta(days=14)
+            ).isoformat()
+            try:
+                recent = secure_runtime.secure_get(
+                    "/v1/workflow-trace",
+                    _trace_params(since=start, limit=limit, scope="all"),
+                )
+                if list(recent.get("rows") or []):
+                    trace = recent
+                    scope_used = "authorized_saved_history"
+                    fallback_hint = (
+                        "Current session and today were empty; showing prior "
+                        "retained evidence within the active saved-history grant."
+                    )
+                else:
+                    fallback_hint = (
+                        "No prior work was found in the permitted recent history window. "
+                        "This does not prove that older work was never recorded."
+                    )
+            except Exception as exc:
+                fallback_hint = (
+                    "Unable to read the authorized saved-history window; no previous "
+                    "work has been confirmed."
+                )
+        else:
+            fallback_hint = (
+                "Current recording and local today are empty. Saved history may "
+                "exist but has not been checked. To resume yesterday's work, "
+                "authorize an appropriate date range under OpenWorkGraph → History."
+            )
+
     # Continuity needs the latest tail, not the first page of a chronological
     # trace. Context Pulse's bootstrap mode returns the bounded newest evidence
     # while preserving the same AI-history authorization boundary.
