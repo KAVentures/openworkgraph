@@ -876,11 +876,16 @@ def approval_patterns(
     }
 
 
-def load_recent_evidence(*, limit: int = _DEFAULT_EVENTS, since: str | None = None, until: str | None = None) -> list[dict[str, Any]]:
+def load_recent_evidence(*, limit: int = _DEFAULT_EVENTS, since: str | None = None, until: str | None = None, agent_only: bool = False) -> list[dict[str, Any]]:
     from shared.time_utils import normalize_optional_timestamp
     since, until = normalize_optional_timestamp(since), normalize_optional_timestamp(until)
     page_limit = max(1, min(int(limit), _MAX_EVENTS))
     clauses, params = [], []
+    if agent_only:
+        # Keep legacy agent_* events even if an older adapter labelled source
+        # incorrectly, but do not deserialize thousands of unrelated human
+        # desktop/browser events when reconstructing only agent executions.
+        clauses.append("(source = 'agent' OR event_type LIKE 'agent_%')")
     if since:
         clauses.append("julianday(observed_at) >= julianday(?)")
         params.append(since)
