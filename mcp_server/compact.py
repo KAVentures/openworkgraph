@@ -543,6 +543,42 @@ def get_current_work_context(
                 "An empty result does not prove that no relevant prior work exists."
             )
 
+    # The general recent-evidence tail can be saturated by clicks/focus
+    # activity long after a resource was first observed. Recover only opaque
+    # references through the dedicated locally authenticated, consent-scoped
+    # endpoint. This returns no message bodies, arbitrary metadata or URLs.
+    if not any(extract_resource_pointers(row) for row in continuity_evidence):
+        try:
+            reference_tail = secure_runtime.secure_get(
+                "/v1/continuity-references",
+                {"limit": max(24, min(100, int(limit) * 6))},
+            )
+            tail_rows = [
+                item for item in list(reference_tail.get("recent_evidence") or [])
+                if isinstance(item, dict)
+            ]
+            seen_event_ids = {
+                str(item.get("event_id") or "") for item in continuity_evidence
+            }
+            continuity_evidence.extend(
+                item for item in tail_rows
+                if str(item.get("event_id") or "") not in seen_event_ids
+            )
+            if tail_rows and continuity_source_status != "available":
+                continuity_source_status = "partial_reference_only"
+                continuity_source_notice = (
+                    "Only previously observed, permission-scoped resource "
+                    "pointers were available; no task identity was inferred."
+                )
+        except Exception:
+            # Preserve the rest of the current-work overview; a reference
+            # lookup failure is not evidence that no files or threads exist.
+            if continuity_source_status == "available":
+                continuity_source_notice = (
+                    "Reference-only fallback could not be checked; an empty "
+                    "resource list does not prove no relevant resource exists."
+                )
+
     agent_executions: list[dict[str, Any]] = []
     if continuity_evidence:
         since = str(continuity_evidence[0].get("observed_at") or "") or None
