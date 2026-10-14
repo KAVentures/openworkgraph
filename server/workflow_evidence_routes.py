@@ -58,6 +58,10 @@ def get_workflow_evidence_families(
     source_event_limit: int = 25_000,
     min_runs: int = 2,
     limit: int = 20,
+    min_cluster_quality: float = 0.0,
+    require_multi_surface: bool = False,
+    require_nonzero_duration: bool = False,
+    rank_by_quality: bool = False,
 ) -> dict[str, Any]:
     try:
         return list_workflow_evidence_candidates(
@@ -66,6 +70,10 @@ def get_workflow_evidence_families(
             source_event_limit=source_event_limit,
             min_runs=min_runs,
             limit=limit,
+            min_cluster_quality=min_cluster_quality,
+            require_multi_surface=require_multi_surface,
+            require_nonzero_duration=require_nonzero_duration,
+            rank_by_quality=rank_by_quality,
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc

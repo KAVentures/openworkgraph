@@ -825,6 +825,9 @@ def list_workflow_evidence_candidates(
         structural_key="structural_steps",
         readable_key="semantic_steps",
         limit=100,
+        # Filter weak candidates BEFORE truncating at 100 clusters, otherwise
+        # high-volume single-app noise can hide valid multi-app workflows.
+        min_cluster_quality=min_cluster_quality,
     )
     def _eligible_cluster(row: dict[str, Any]) -> bool:
         if float(row.get("cluster_quality") or 0) < min_cluster_quality:

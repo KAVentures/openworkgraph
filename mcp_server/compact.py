@@ -986,6 +986,7 @@ def find_repeated_workflows(
     since: str | None = None,
     until: str | None = None,
     include_legacy: bool = False,
+    include_low_specificity: bool = False,
 ) -> dict[str, Any]:
     """Find repeated structural work in the permitted evidence window.
 
@@ -1001,6 +1002,17 @@ def find_repeated_workflows(
     core._begin(name)
     params = {"source_event_limit": _bounded(max_events, maximum=100_000),
               "limit": 100, "min_runs": 2}
+    if not include_low_specificity:
+        # Align the local AI default with the already available evidence
+        # quality filters: single-app focus noise and zero-duration click
+        # clusters should not dominate genuinely repeated multi-app work.
+        # Canonical evidence is never deleted by this navigation filter.
+        params.update({
+            "min_cluster_quality": 0.45,
+            "require_multi_surface": True,
+            "require_nonzero_duration": True,
+            "rank_by_quality": True,
+        })
     if since:
         params["since"] = since
     if until:
@@ -1046,7 +1058,11 @@ def find_repeated_workflows(
         "returned": len(compact_clusters),
         "candidate_total": len(clusters),
         "task_family": task_family,
-        "preferred_candidate_basis": "tolerant_structural_core_with_exact_variants",
+        "preferred_candidate_basis": "quality_ranked_multi_surface_runs" if not include_low_specificity else "unfiltered_structural_clusters",
+        "quality_filter_applied": not include_low_specificity,
+        "source_event_rows_considered": result.get("source_event_rows_considered"),
+        "source_limit_reached": result.get("source_limit_reached"),
+        "unfiltered_candidates_accessible": True,
         "search_semantics": (
             "lexical match over derived candidate clusters, coarse family tags, "
             "readable core steps and variations"
