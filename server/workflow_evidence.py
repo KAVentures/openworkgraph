@@ -272,9 +272,9 @@ def _candidate_runs(
         from .procedural_feedback import _human_runs
         for run in (
             _human_runs(raw_events, split_human_hosts=partition_host_switches,
-                        split_human_idle=partition_idle_gaps)
+                        split_human_idle=partition_idle_gaps, _task_data=_task_data)
             if (partition_host_switches or partition_idle_gaps)
-            else _human_runs(raw_events)
+            else _human_runs(raw_events, _task_data=_task_data)
         ):
             execution_id = str(run.get("execution_id") or "")
             if execution_id:
