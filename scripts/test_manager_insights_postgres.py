@@ -62,7 +62,7 @@ def main():
             rows=results["workflows"]
             assert len(rows)==1,results
             top=rows[0]
-            assert top["apps"]==list(apps),top
+            assert top["apps"]==["Gmail","Excel","Fortnox","Gmail"],top
             assert top["contributing_people"]==3,top
             assert top["observed_sessions"]==3,top
             assert top["automation_candidate"] is True
