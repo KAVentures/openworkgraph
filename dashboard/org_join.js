@@ -67,7 +67,9 @@
     try {
       const st = await call('/v1/gateway-status');
       const card = $('orgMeCard');
-      if (card) card.hidden = !st.enrolled;
+      if (card) card.hidden = !!st.enrolled;
+      // Enrollment survives reloads; the Join form should not reappear.
+      // When disconnected, the existing form remains available for rejoining.
     } catch (_) { /* local-only */ }
   }
 
