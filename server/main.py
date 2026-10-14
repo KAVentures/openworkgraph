@@ -46,7 +46,7 @@ except Exception:
 
 def _runtime_config() -> dict[str, Any]:
     cfg: dict[str, Any] = {
-        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
         "excluded_title_patterns": ["password", "private", "incognito", "bank"],
         "excluded_browser_host_patterns": [],
     }
@@ -260,7 +260,11 @@ def ingest(batch: EventBatch) -> dict[str, int]:
     from .capture_exclusions import apply_to_desktop_event
 
     config = _runtime_config()
-    events = [apply_to_desktop_event(e.model_dump(), config) for e in batch.events]
+    from shared.core.browser_title_privacy import cap_event_title_surfaces
+    events = [
+        cap_event_title_surfaces(apply_to_desktop_event(e.model_dump(), config))
+        for e in batch.events
+    ]
     learn_persistent_identities(events)
     return {"inserted": insert_events(events)}
 
@@ -347,6 +351,10 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "metadata": metadata,
     }
     safe_event = harden_browser_event(raw_event, _runtime_config())
+    # Browser ingestion learns identities before insert_events; apply the same
+    # title limit here so untrusted page text cannot stall that earlier pass.
+    from shared.core.browser_title_privacy import cap_event_title_surfaces
+    safe_event = cap_event_title_surfaces(safe_event)
     learn_persistent_identities(safe_event)
     inserted = insert_events([safe_event])
     safe_meta = safe_event.get("metadata") or {}

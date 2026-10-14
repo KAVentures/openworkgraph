@@ -289,6 +289,9 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_events_sensor ON events(sensor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_events_agent_instant
+                ON events(source, julianday(observed_at), event_id);
+            CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
             CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_norm_sensor ON normalized_events(sensor_id, observed_at);
             """
@@ -488,6 +491,11 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
         read_state as read_discovery_state,
     )
 
+    # Cap untrusted titles *before* identity learning and database processing,
+    # not just in the final privacy projection. An enormous web title must not
+    # stall all capture or become a persisted identity-learning input.
+    from shared.core.browser_title_privacy import cap_event_title_surfaces
+
     # Read once per insert batch. Normal capture must not turn Discovery's local
     # state file into per-event I/O when the feature is inactive.
     discovery_state = read_discovery_state()
@@ -495,7 +503,7 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
     for raw in events:
         prepared = prepare_discovery_event(dict(raw), state=discovery_state)
         if prepared is not None:
-            prepared_events.append(prepared)
+            prepared_events.append(cap_event_title_surfaces(prepared))
     events = prepared_events
     try:
         # Learn "Name <email>" links first, so every event (including the one that

@@ -21,7 +21,7 @@ from typing import Any
 from collector.privacy import should_exclude
 
 DEFAULTS: dict[str, list[str]] = {
-    "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+    "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
     "excluded_title_patterns": ["password", "private", "incognito", "bank"],
     "excluded_browser_host_patterns": [],
 }

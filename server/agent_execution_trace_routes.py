@@ -69,7 +69,10 @@ def get_agent_execution_traces(
     if until and end is None: raise HTTPException(status_code=422, detail="invalid until")
     hidden: set[str] = set()
     try:
-        raw = load_recent_evidence(limit=max(1, min(int(evidence_limit), 100_000)), since=since)
+        raw = load_recent_evidence(
+            limit=max(1, min(int(evidence_limit), 100_000)),
+            since=since, agent_only=True,
+        )
         if end is not None:
             raw = [row for row in raw if (_parse(row.get("observed_at")) is not None and _parse(row.get("observed_at")) < end)]
         if hide_disconnected:
