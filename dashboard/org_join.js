@@ -113,7 +113,9 @@
       yes(s.shares_window_titles, 'Window and page titles (can contain names and subjects)') +
       yes(s.shares_agent_activity, 'AI-agent activity, only if you also allow it locally') +
       yes(true, limited) +
-      yes(s.forces_redacted_ai_context, 'Organization requires Redacted AI context on this computer') +
+      '<li>🔒 ' + esc(s.forces_redacted_ai_context
+        ? 'Organization policy requires Redacted AI context on this computer'
+        : 'Organization does not require Redacted AI context') + '</li>' +
       '</ul>';
   }
 
@@ -174,13 +176,18 @@
         accept_sharing: true,
       });
       previewed = null;
-      $('orgJoinCard').innerHTML = `<h2>Joined ${esc(r.organization_name)}</h2><div class="muted">Sharing starts from enrollment forward. Anything recorded before joining stays on this computer. You can pause or disconnect in the Organization section.</div>`;
+      const card = $('orgJoinCard');
+      if (card) {
+        card.hidden = true;
+        card.replaceChildren();
+      }
       refreshMe();
       if (typeof window.refreshGatewayPanel === 'function') window.refreshGatewayPanel();
     } catch (e) {
       $('orgJoinResult').textContent = e.message;
     } finally {
-      $('orgJoinButton').disabled = false;
+      const joinButton = $('orgJoinButton');
+      if (joinButton) joinButton.disabled = false;
     }
   }
 
