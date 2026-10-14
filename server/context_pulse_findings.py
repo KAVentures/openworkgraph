@@ -114,7 +114,10 @@ def repeated_workflow_findings(raw_rows: list[dict[str, Any]], lookback_days: in
         })
     return findings
 
-def _frozen_context_rows(*, snapshot_context_max_id: int, snapshot_at: str, lookback_days: int) -> list[dict[str, Any]]:
+def _frozen_context_rows(
+    *, snapshot_context_max_id: int, snapshot_at: str, lookback_days: int,
+    source_event_budget: int = 100_000,
+) -> list[dict[str, Any]]:
     """Read the context-events table at the Pulse's own frozen context watermark."""
     try:
         end = datetime.fromisoformat(str(snapshot_at).replace("Z", "+00:00"))
@@ -130,12 +133,13 @@ def _frozen_context_rows(*, snapshot_context_max_id: int, snapshot_at: str, look
                    resource_title, resource_locator, target_label, metadata_json
             FROM context_events
             WHERE id <= ? AND observed_at >= ? AND observed_at <= ?
-            ORDER BY observed_at ASC, id ASC
+            ORDER BY observed_at DESC, id DESC LIMIT ?
             """,
-            (snapshot_context_max_id, since, end.isoformat()),
+            (snapshot_context_max_id, since, end.isoformat(),
+             source_event_budget),
         ).fetchall()
     result: list[dict[str, Any]] = []
-    for row in rows:
+    for row in reversed(rows):
         item = dict(row)
         try:
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
@@ -150,6 +154,7 @@ def manual_transfer_findings(
     snapshot_context_max_id: int,
     snapshot_at: str,
     lookback_days: int,
+    source_event_budget: int = 100_000,
 ) -> list[dict[str, Any]]:
     """Linked cross-surface transfers, using the Work Profile destination rollup."""
     try:
@@ -158,6 +163,7 @@ def manual_transfer_findings(
             snapshot_context_max_id=snapshot_context_max_id,
             snapshot_at=snapshot_at,
             lookback_days=lookback_days,
+            source_event_budget=source_event_budget,
         )
         for row in rows:
             row["surface"] = _canonical_surface(row.get("surface") or "Unknown")
