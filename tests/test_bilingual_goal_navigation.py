@@ -7,7 +7,7 @@ from gateway.goal_context import _goal_terms, build_goal_context
 def test_bilingual_goal_matches_retained_swedish_timesheet_or_invoice():
     terms, hints = _goal_terms("invoice my locum hours")
     assert {"invoice", "faktura", "hours", "tidrapport", "locum", "vikarie"} <= terms
-    assert not hints or isinstance(hints, list)
+    assert "faktura" not in hints and "tidrapport" not in hints
     example = [
         {"event_id":"a","observed_at":"2026-10-10T10:00:00Z",
          "window_title":"Tidrapport - September", "app":"Excel",
