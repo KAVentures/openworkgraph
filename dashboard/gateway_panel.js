@@ -182,7 +182,13 @@
   function renderRichPatterns(payload) {
     const host=document.querySelector('#patternList');
     if (!host) return;
-    const patterns=payload.patterns||[];
+    const patterns=Array.isArray(payload.patterns)?payload.patterns:[];
+    // One source for the headline count and the cards. Do not use the
+    // separate summary's older repeated_task_patterns projection.
+    const counter=document.querySelector('#completedRuns');
+    if(counter) counter.textContent=String(patterns.reduce(
+      (total,p)=>total+Number(p.observed_count||p.runs?.length||0),0
+    ));
     host.innerHTML=patterns.map((p,i)=>{
       const usable=(p.steps||[]).map(step=>String(step.surface||'')).filter(name=>name&&!/^[0-9a-f]{8,}$/i.test(name));
       const suggested=String(p.name||'').trim();
@@ -208,7 +214,13 @@
     try {
       const [timeline,patterns]=await Promise.all([gwCall('/v1/timeline?scope=current'),gwCall('/v1/dashboard-patterns?scope=current')]);
       renderTimeline(timeline); renderRichPatterns(patterns);
-    } catch (_) {}
+    } catch (_) {
+      // Unavailable is not the same as zero observed workflows.
+      const counter=document.querySelector('#completedRuns');
+      if(counter) counter.textContent='—';
+      const patternHost=document.querySelector('#patternList');
+      if(patternHost) patternHost.textContent='Current-run workflow summary is temporarily unavailable.';
+    }
   }
   window.refreshOverviewDerived=refreshOverviewDerived;
 
