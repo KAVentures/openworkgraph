@@ -137,7 +137,7 @@ async function loadInsights(){
   const [r] = await Promise.all([api('GET','/v1/admin/manager-insights/'+E(org))]);
   const overview=r.overview||{}, patterns=Array.isArray(r.workflows)?r.workflows:[];
   $('insightSummary').textContent=patterns.length
-    ? `${patterns.length} team-level patterns · at least ${overview.minimum_contributors||3} contributors each`
+    ? `${patterns.length} team-level patterns · at least ${overview.minimum_contributors||3} reported identities each`
     : `No cross-person patterns meet the ${overview.minimum_contributors||3}-person privacy threshold in available synchronized evidence.`;
   $('insightCards').innerHTML=patterns.map(item=>`<div class="card" style="margin:10px 0;padding:14px">
     <strong>${(item.apps||[]).map(esc).join(' → ')}</strong>
