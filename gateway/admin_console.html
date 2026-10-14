@@ -142,7 +142,7 @@ async function loadInsights(){
   $('insightCards').innerHTML=patterns.map(item=>`<div class="card" style="margin:10px 0;padding:14px">
     <strong>${(item.apps||[]).map(esc).join(' → ')}</strong>
     ${item.automation_candidate?'<span class="pill ok" style="margin-left:8px">Review for automation</span>':''}
-    <div class="muted">${Number(item.contributing_people)||0} contributing people · ${Number(item.observed_sessions)||0} observed sessions · ${Number(item.days_observed)||0} days · ${Number(item.observed_duration_hours)||0} hours of observed durations (may overlap)</div>
+    <div class="muted">${Number(item.contributing_people)||0} contributing identities · ${Number(item.observed_sessions)||0} observed sessions · ${Number(item.days_observed)||0} days · ${Number(item.observed_duration_hours)||0} hours of observed durations (may overlap)</div>
   </div>`).join('')||'<div class="muted">Nothing to show yet. Start a team pilot, confirm the employee sharing policy and check again after repeated workflows have been observed.</div>';
   if(overview.source_limit_may_be_reached) $('insightSummary').textContent+=' · Partial coverage (source row limit reached)';
 }
