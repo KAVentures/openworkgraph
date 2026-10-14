@@ -28,6 +28,55 @@ from .browser_utils import is_browser_app
 from .normalizer import safe_surface
 
 _TARGET_TEXT_KEYS = ("label", "name", "text", "title", "aria_label", "placeholder")
+MAX_CAPTURE_TITLE_CHARS = 2000
+
+
+def cap_title_text(value: Any) -> str:
+    """Bound an untrusted title before expensive privacy/learning passes.
+
+    Retain the start for document context and a small tail for app identity.
+    An explicit marker discloses that source content was discarded. This
+    applies only to titles/labels, not the separately opted-in work-text path.
+    """
+    raw = str(value or "")
+    if len(raw) <= MAX_CAPTURE_TITLE_CHARS:
+        return raw
+    # Never retain a partial opaque identifier at either cut edge: a fragment
+    # of a secret could evade the subsequent credential recognizer.
+    keep_head, keep_tail = 1750, 160
+    head_end = max(raw.rfind(char, 0, keep_head) for char in (" ", chr(10), chr(9), "|"))
+    head = raw[:head_end] if head_end >= 0 else ""
+    tail_start = min(
+        (pos + 1 for char in (" ", chr(10), chr(9), "|")
+         if (pos := raw.find(char, len(raw) - keep_tail)) >= 0),
+        default=len(raw),
+    )
+    tail = raw[tail_start:]
+    discarded = len(raw) - len(head) - len(tail)
+    return head + f" …[truncated {discarded} chars]… " + tail
+
+
+def cap_event_title_surfaces(event: dict[str, Any]) -> dict[str, Any]:
+    """Cap title-like ingest fields, preserving all ordinary event metadata."""
+    out = dict(event)
+    if isinstance(out.get("window_title"), str):
+        out["window_title"] = cap_title_text(out["window_title"])
+    meta = out.get("metadata")
+    if not isinstance(meta, dict):
+        return out
+    meta = dict(meta)
+    for group in ("page", "target"):
+        node = meta.get(group)
+        if not isinstance(node, dict):
+            continue
+        node = dict(node)
+        keys = ("title",) if group == "page" else _TARGET_TEXT_KEYS
+        for key in keys:
+            if isinstance(node.get(key), str):
+                node[key] = cap_title_text(node[key])
+        meta[group] = node
+    out["metadata"] = meta
+    return out
 
 
 def _protect_text(text: Any) -> str:
@@ -36,7 +85,7 @@ def _protect_text(text: Any) -> str:
     Fails closed: if any privacy pass raises, the text is dropped (stored as an
     empty string) rather than stored partly processed.
     """
-    raw = str(text or "")
+    raw = cap_title_text(text)
     if not raw.strip():
         return raw
     try:
@@ -79,7 +128,7 @@ def protect_titles_at_rest(event: dict[str, Any], *, cache: dict[str, str] | Non
             return cache[key]
     else:
         protect_text = _protect_text
-    e = copy.deepcopy(event)
+    e = copy.deepcopy(cap_event_title_surfaces(event))
     meta = e.get("metadata") if isinstance(e.get("metadata"), dict) else None
     if str(e.get("source") or (meta or {}).get("source") or "") == "agent":
         return e  # agent evidence carries no titles; its fields are allowlisted separately
@@ -126,4 +175,4 @@ protect_text = _protect_text
 # Kept for callers of the pre-v0.108 name.
 minimize_browser_title_at_rest = protect_titles_at_rest
 
-__all__ = ["minimize_browser_title_at_rest", "protect_path", "protect_text", "protect_titles_at_rest"]
+__all__ = ["cap_title_text", "cap_event_title_surfaces", "minimize_browser_title_at_rest", "protect_path", "protect_text", "protect_titles_at_rest"]

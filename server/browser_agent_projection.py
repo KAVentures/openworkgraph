@@ -24,7 +24,8 @@ _PROVIDER_MAP = {
 }
 _ACTION_MAP = {
     "agent_run_started": ("run_started", "running"),
-    "agent_run_finished": ("run_finished", "success"),
+    # A Web composer finishing is not proof the agent achieved its task.
+    "agent_run_finished": ("run_finished", "unknown"),
     "agent_run_cancelled": ("run_finished", "cancelled"),
     "agent_error": ("error", "error"),
     "agent_approval_requested": ("human_approval_requested", "running"),

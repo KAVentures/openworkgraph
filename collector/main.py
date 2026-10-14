@@ -82,7 +82,7 @@ def load_config(path: Path) -> dict:
         "screenshot_interval_seconds": 20,
         "screenshots_enabled": False,
         "upload_screenshots": False,
-        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
         "excluded_title_patterns": ["password", "private", "incognito", "bank"],
         "window_title_mode": "full",
         "screen_interactions_enabled": True,

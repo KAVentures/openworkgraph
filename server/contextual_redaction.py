@@ -275,6 +275,12 @@ class Detector:
         if not words:
             return []
         blocked = self._blocked_ranges(text)
+        # Standalone name-segment detection used to re-split the ENTIRE title
+        # for every name-shaped word (quadratic for large or hostile titles).
+        # A set retains the same any-segment matching semantics in constant time.
+        standalone_segments = {
+            piece.strip(" ,;()[]") for piece in _SEGMENT_SPLIT_RE.split(text)
+        }
         found: list[tuple[int, int]] = []
         taken = [False] * len(words)
 
@@ -290,7 +296,10 @@ class Detector:
             found.append((words[i].start, words[j - 1].end))
 
         def prefix(i: int) -> str:
-            return text[: words[i].start]
+            # Only immediate preceding cue words matter; avoid copying and
+            # repeatedly searching the growing full prefix (quadratic).
+            end = words[i].start
+            return text[max(0, end - 256):end]
 
         for i, w in enumerate(words):
             if not free(i) or not _is_capitalized(w.text):
@@ -343,7 +352,7 @@ class Detector:
                     add(i, end)
                     continue
                 # 4. A title segment that is just a first name: "Johan | Microsoft Teams".
-                if self._alone_in_segment(text, w):
+                if w.text in standalone_segments:
                     add(i, end)
                     continue
                 # 4b. Possessive first name: "Rachel's onboarding checklist".
@@ -447,14 +456,23 @@ class Detector:
             out,
         )
         spans = self.spans(out)
-        for start, end in reversed(spans):
+        # Build once rather than repeatedly copying the remaining full string.
+        # Existing token, punctuation and possessive semantics are unchanged.
+        fragments: list[str] = []
+        previous = 0
+        for start, end in spans:
+            fragments.append(out[previous:start])
             name = out[start:end]
             suffix = ""
             for poss in ("'s", "’s"):
                 if name.endswith(poss):
                     name, suffix = name[: -len(poss)], poss
-            out = out[:start] + self.person_token(name) + suffix + out[end:]
-        return out
+            fragments.append(self.person_token(name) + suffix)
+            previous = end
+        if not spans:
+            return out
+        fragments.append(out[previous:])
+        return "".join(fragments)
 
 
 class CachedRedactor:

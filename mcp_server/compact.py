@@ -38,6 +38,10 @@ def _trace_params(
     app_name: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
+    # The canonical trace endpoint supports only current/all. Reject typos
+    # explicitly rather than returning the current session as if it were history.
+    if scope not in {"current", "all"}:
+        raise ToolError("scope must be current or all; to search saved history, use scope='all' with authorized since/until dates")
     params: dict[str, Any] = {
         "limit": _bounded(limit, maximum=500),
         "scope": scope,
@@ -626,6 +630,8 @@ def search_work(
     name = "search_work"
     core._begin(name)
     selected = str(layer or "evidence").strip().lower()
+    if selected == "semantic" and scope not in {"current", "today", "week", "all"}:
+        raise ToolError("scope must be current, today, week, or all")
     if selected == "evidence":
         result = secure_runtime.secure_get(
             "/v1/workflow-trace",
