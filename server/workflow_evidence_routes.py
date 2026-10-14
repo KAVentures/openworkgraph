@@ -62,6 +62,7 @@ def get_workflow_evidence_families(
     require_multi_surface: bool = False,
     require_nonzero_duration: bool = False,
     rank_by_quality: bool = False,
+    rank_by_navigation: bool = False,
 ) -> dict[str, Any]:
     try:
         return list_workflow_evidence_candidates(
@@ -74,6 +75,7 @@ def get_workflow_evidence_families(
             require_multi_surface=require_multi_surface,
             require_nonzero_duration=require_nonzero_duration,
             rank_by_quality=rank_by_quality,
+            rank_by_navigation=rank_by_navigation,
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
