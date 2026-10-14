@@ -54,6 +54,8 @@ for mode in ("off", "selected_range", "all_saved"):
             assert calls[-1]["since"] == "2026-10-12T00:00:00Z"
         assert result["scope_used"] == "authorized_saved_history"
         assert result["trace"]["rows"], result
+        assert result["previous_work_trace"]["included_in_primary_trace"] is True
+        assert result["previous_work_trace"]["rows"] == []
 '''
 
 def test_current_work_history_fallback_requires_explicit_grant():
