@@ -7,7 +7,7 @@ help an external AI choose execution IDs worth inspecting. Similarity never
 asserts shared business intent, policy, permission, or a required procedure.
 """
 
-from collections import Counter
+from collections import Counter, defaultdict
 import hashlib
 from typing import Any, Iterable
 
@@ -197,11 +197,23 @@ def cluster_runs(
     )
 
     groups: list[list[tuple[tuple[str, tuple[str, ...]], list[dict[str, Any]]]]] = []
+    # Positive sequence similarity requires a shared structural step. The
+    # inverted index prunes only provably impossible groups. Complete-link
+    # checks, group order, exact scores and tie-breaks remain unchanged.
+    token_groups: dict[tuple[str, str], set[int]] = defaultdict(set)
     for variant in variants:
         (actor, sequence), members = variant
         best_index: int | None = None
         best_score = -1.0
-        for index, group in enumerate(groups):
+        if similarity_threshold <= 0:
+            eligible = range(len(groups))
+        else:
+            eligible = sorted({
+                index for step in set(sequence)
+                for index in token_groups.get((actor, step), ())
+            })
+        for index in eligible:
+            group = groups[index]
             if any(key[0] != actor for key, _members in group):
                 continue
             scores = [sequence_similarity(sequence, key[1]) for key, _members in group]
@@ -211,9 +223,12 @@ def cluster_runs(
             if score > best_score:
                 best_index, best_score = index, score
         if best_index is None:
+            best_index = len(groups)
             groups.append([variant])
         else:
             groups[best_index].append(variant)
+        for step in set(sequence):
+            token_groups[(actor, step)].add(best_index)
 
     threshold = max(1, int(min_runs))
     output: list[dict[str, Any]] = []
