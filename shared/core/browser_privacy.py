@@ -178,7 +178,8 @@ def sanitize_browser_page(page: dict[str, Any] | None) -> dict[str, Any]:
         out["hostname"] = str(page.get("hostname") or "").strip().lower()
     out["pathname"] = sanitize_pathname(str(page.get("pathname") or "/"))
     if page.get("title") is not None:
-        out["title"] = str(page.get("title") or "")[:240]
+        from .browser_title_privacy import cap_title_text
+        out["title"] = cap_title_text(page.get("title"), max_chars=240)
     return out
 
 
