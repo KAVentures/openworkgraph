@@ -149,8 +149,11 @@ def install_organization_admin(
             raise HTTPException(status_code=400, detail="organization_id must be 1-512 characters")
         from .manager_insights import manager_insights
         result = manager_insights(db, organization_id=org, event_limit=event_limit)
+        from .admin_accounts import current_admin
+        identity = current_admin()
         db.audit(
-            organization_id=org, principal_id="gateway-admin",
+            organization_id=org,
+            principal_id=identity.audit_id if identity else "gateway-admin",
             action="manager.aggregate_insights.read",
             details={"source_event_limit": result["overview"]["source_row_limit"],
                      "visible_patterns": result["overview"]["visible_patterns"]},
