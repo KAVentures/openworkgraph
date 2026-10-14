@@ -859,6 +859,7 @@ def list_workflow_evidence_candidates(
     partition_idle_gaps: bool = False,
     rank_by_quality: bool = False,
     rank_by_navigation: bool = False,
+    navigation_summary_only: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
@@ -932,6 +933,16 @@ def list_workflow_evidence_candidates(
                        if member.get("execution_id") in qualifying_ids]
         if len(members) < threshold:
             continue
+        if navigation_summary_only:
+            # Compact MCP uses only family_key/execution_count. Do not compute
+            # the expensive per-family step statistics and nested clustering
+            # it will discard. Full REST/legacy views remain unchanged.
+            items.append({
+                "family_key": family_key,
+                "execution_count": len(members),
+                "family_is_ground_truth": False,
+            })
+            continue
         steps, _transitions = _step_statistics(members)
         support_floor = _support_threshold(len(members))
         high = [row["step"] for row in steps if int(row["support_runs"]) >= support_floor][:12]
@@ -978,6 +989,7 @@ def list_workflow_evidence_candidates(
         "low_specificity_cluster_count": sum(
             float(row.get("cluster_quality") or 0) < LOW_SPECIFICITY_QUALITY_FLOOR for row in all_clusters
         ),
+        "navigation_summary_only": navigation_summary_only,
         "candidate_ranking": ("ordered_multi_app_days_duration_copy_paste"
             if rank_by_navigation else "specificity_then_support" if rank_by_quality else "support"),
         "ranking_is_task_confidence": False,
