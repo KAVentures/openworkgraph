@@ -14,6 +14,7 @@ import re
 from typing import Any, Iterable
 
 from server.contextual_redaction import Detector, Settings, STOPWORDS, ORGANIZATIONS
+from shared.core.identity_cues import redact_explicit_person_cues
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -195,23 +196,11 @@ class PublicRedactor:
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
         text = self.person_detector.redact(text)
-        # Apply explicit grammatical name and signature cues on EVERY hosted
-        # text surface, not just UI targets (also shared-text previews,
-        # metadata and search excerpts). The general detector above does not
-        # recognize all unfamiliar names, e.g. Swedish "Mitt namn är ...".
-        def name_cue(match: re.Match[str]) -> str:
-            name = match.group(1)
-            if name.casefold() in (_SAFE_SINGLE_UI | STOPWORDS):
-                return match.group(0)
-            return match.group(0)[:-len(name)] + self._token("PERSON", name)
-
-        text = _SELF_NAME_CUE.sub(name_cue, text)
-        text = _SLASH_SIGNATURE.sub(name_cue, text)
-        text = _GREETING_NAME_CUE.sub(
-            lambda m: name_cue(m)
-            if m.group(1).casefold() not in _GREETING_GENERIC
-            else m.group(0),
-            text,
+        # The high-precision identity/signature cues are shared with local
+        # at-rest redaction. Hosted tokens keep their existing account-scoped key.
+        text = redact_explicit_person_cues(
+            text, person_token=lambda name: self._token("PERSON", name),
+            blocked_names=_SAFE_SINGLE_UI | STOPWORDS,
         )
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text
