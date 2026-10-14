@@ -10,17 +10,17 @@ import re
 from collections.abc import Callable, Collection
 
 _SELF_NAME_CUE = re.compile(
-    r"(?i:(?<!\\w)(?:mitt\\s+namn\\s+är|jag\\s+heter|namnet\\s+är|"
-    r"my\\s+name\\s+is|vänliga\\s+hälsningar|med\\s+vänliga\\s+hälsningar|"
-    r"hälsningar|best\\s+regards|kind\\s+regards|regards))"
-    r"\\s*[, :\\-]?\\s*([A-ZÅÄÖ][a-zåäö]{2,40})\\b"
+    r"(?i:(?<!\w)(?:mitt\s+namn\s+är|jag\s+heter|namnet\s+är|"
+    r"my\s+name\s+is|vänliga\s+hälsningar|med\s+vänliga\s+hälsningar|"
+    r"hälsningar|best\s+regards|kind\s+regards|regards))"
+    r"\s*[, :\-]?\s*([A-ZÅÄÖ][a-zåäö]{2,40})\b"
 )
 _SLASH_SIGNATURE = re.compile(
-    r"(?<![\\w/])/[ \\t]+([A-ZÅÄÖ][a-zåäö]{2,40})(?=\\s*(?:$|[\\n.,;]))"
+    r"(?<![\w/])/[ \t]+([A-ZÅÄÖ][a-zåäö]{2,40})(?=\s*(?:$|[\n.,;]))"
 )
 _GREETING_NAME_CUE = re.compile(
-    r"(?i:(?<!\\w)(?:välkommen|hej|hejsan|hello|hi|dear|welcome))"
-    r"[ \\t]*[,!]?\\s+([A-ZÅÄÖ][a-zåäö]{2,40})(?=[\\s!,.?:;]|$)"
+    r"(?i:(?<!\w)(?:välkommen|hej|hejsan|hello|hi|dear|welcome))"
+    r"[ \t]*[,!]?\s+([A-ZÅÄÖ][a-zåäö]{2,40})(?=[\s!,.?:;]|$)"
 )
 _GENERIC_GREETING = frozenset(
     "alla all back everyone everybody team world there kollegor vänner tillbaka".split()
