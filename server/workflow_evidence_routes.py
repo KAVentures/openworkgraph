@@ -63,6 +63,7 @@ def get_workflow_evidence_families(
     require_nonzero_duration: bool = False,
     rank_by_quality: bool = False,
     rank_by_navigation: bool = False,
+    navigation_summary_only: bool = False,
 ) -> dict[str, Any]:
     try:
         return list_workflow_evidence_candidates(
