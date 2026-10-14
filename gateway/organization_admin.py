@@ -135,6 +135,28 @@ def install_organization_admin(
         )
         return result
 
+    @app.get("/v1/admin/manager-insights/{organization_id}")
+    def get_manager_insights(
+        organization_id: str,
+        authorization: str | None = Header(default=None),
+        event_limit: int = 25000,
+    ) -> dict[str, Any]:
+        # Same admin authentication as device inventory. The projection must
+        # not accept an employee/actor filter that defeats the privacy floor.
+        require_admin(authorization)
+        org = str(organization_id or "").strip()
+        if not org or len(org) > 512:
+            raise HTTPException(status_code=400, detail="organization_id must be 1-512 characters")
+        from .manager_insights import manager_insights
+        result = manager_insights(db, organization_id=org, event_limit=event_limit)
+        db.audit(
+            organization_id=org, principal_id="gateway-admin",
+            action="manager.aggregate_insights.read",
+            details={"source_event_limit": result["overview"]["source_row_limit"],
+                     "visible_patterns": result["overview"]["visible_patterns"]},
+        )
+        return result
+
     @app.get("/v1/admin/device-activity/{organization_id}")
     def get_device_activity(
         organization_id: str,
