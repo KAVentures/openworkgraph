@@ -44,10 +44,10 @@ def cap_title_text(value: Any) -> str:
     # Never retain a partial opaque identifier at either cut edge: a fragment
     # of a secret could evade the subsequent credential recognizer.
     keep_head, keep_tail = 1750, 160
-    head_end = max(raw.rfind(char, 0, keep_head) for char in (" ", "\\n", "\\t", "|"))
+    head_end = max(raw.rfind(char, 0, keep_head) for char in (" ", chr(10), chr(9), "|"))
     head = raw[:head_end] if head_end >= 0 else ""
     tail_start = min(
-        (pos + 1 for char in (" ", "\\n", "\\t", "|")
+        (pos + 1 for char in (" ", chr(10), chr(9), "|")
          if (pos := raw.find(char, len(raw) - keep_tail)) >= 0),
         default=len(raw),
     )
