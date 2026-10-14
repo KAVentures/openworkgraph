@@ -179,10 +179,12 @@
       });
       previewed = null;
       const card = $('orgJoinCard');
-      if (card) {
-        card.hidden = true;
-        card.replaceChildren();
-      }
+      if (card) card.hidden = true;
+      // Clear the one-time invite but preserve the form for explicit
+      // disconnect/re-enroll in the same tab.
+      if ($('orgJoinCode')) $('orgJoinCode').value = '';
+      if ($('orgJoinPreview')) $('orgJoinPreview').hidden = true;
+      if ($('orgJoinConsent')) $('orgJoinConsent').checked = false;
       refreshMe();
       if (typeof window.refreshGatewayPanel === 'function') window.refreshGatewayPanel();
     } catch (e) {
