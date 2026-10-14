@@ -62,3 +62,14 @@ def test_browser_date_bounds_and_dst_are_in_user_local_time():
     assert "new Date(year,month-1,day)" in html
     assert "new Date(year,month-1,day+1)" in html
     assert "new Date(year,month-1,day-1)" in html
+
+
+
+def test_today_pattern_count_and_card_share_one_authoritative_endpoint():
+    html=content("dashboard/index.html")
+    gateway=content("dashboard/gateway_panel.js")
+    assert "repeated_task_patterns||[]" not in html
+    assert "const patterns=Array.isArray(payload.patterns)?payload.patterns:[]" in gateway
+    assert "if(counter) counter.textContent=String(patterns.reduce(" in gateway
+    assert "renderRichPatterns(patterns)" in gateway
+    assert "temporarily unavailable" in gateway
