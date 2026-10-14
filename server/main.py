@@ -260,7 +260,11 @@ def ingest(batch: EventBatch) -> dict[str, int]:
     from .capture_exclusions import apply_to_desktop_event
 
     config = _runtime_config()
-    events = [apply_to_desktop_event(e.model_dump(), config) for e in batch.events]
+    from shared.core.browser_title_privacy import cap_event_title_surfaces
+    events = [
+        cap_event_title_surfaces(apply_to_desktop_event(e.model_dump(), config))
+        for e in batch.events
+    ]
     learn_persistent_identities(events)
     return {"inserted": insert_events(events)}
 
