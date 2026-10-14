@@ -74,11 +74,14 @@ _WORK_TERM_EQUIVALENTS = {
 
 def _goal_terms(goal: str) -> tuple[set[str], list[str]]:
     base = _terms(goal)
-    hints = set()
+    surface_hints: set[str] = set()
+    translations: set[str] = set()
     for term in base | ({"pr"} if _SHORT_INTENT.search(goal) else set()):
-        hints.update(_APP_HINTS.get(term, ()))
-        hints.update(_WORK_TERM_EQUIVALENTS.get(term, ()))
-    return base | hints, sorted(hints)
+        surface_hints.update(_APP_HINTS.get(term, ()))
+        translations.update(_WORK_TERM_EQUIVALENTS.get(term, ()))
+    # app_surface_hints must stay app names; Swedish synonym expansions are
+    # recall terms, not evidence that a particular app was visited.
+    return base | surface_hints | translations, sorted(surface_hints)
 
 
 def _metadata(row: dict[str, Any]) -> dict[str, Any]:
