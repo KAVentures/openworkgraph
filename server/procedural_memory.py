@@ -464,7 +464,8 @@ def derive_executions(
         events.sort(key=lambda e: str(e.get("observed_at") or ""))
 
     output: list[dict[str, Any]] = []
-    task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
+    task_data = (_task_data if _task_data is not None else
+                 candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events))
     for candidate in task_data.get("tasks") or []:
         session_id = str(candidate.get("session_id") or "")
         for task in (split_human_execution_windows(candidate, by_session.get(session_id, []),
