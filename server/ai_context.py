@@ -379,6 +379,11 @@ def _annotate_representation(value: Any, level: str) -> Any:
 
 def redact_for_ai(value: Any) -> tuple[Any, str]:
     """Return (payload, detail_level) for an AI-context response."""
+    from shared.core.personal_chat_privacy import suppress_personal_chat_evidence
+    # The never-capture rule also protects pre-upgrade retained evidence and
+    # deliberately applies in Full mode: a full-detail toggle is not consent
+    # to redisclose personal messaging excluded from capture.
+    value = suppress_personal_chat_evidence(value)
     detail = effective_detail()
     if detail["detail_level"] == DETAIL_FULL:
         return _annotate_representation(value, DETAIL_FULL), DETAIL_FULL
