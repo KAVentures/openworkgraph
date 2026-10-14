@@ -42,6 +42,8 @@ def test_source_events_use_newest_window_in_chronological_order(tmp_path, monkey
 def test_local_mcp_pulse_requests_8000_by_default_and_retains_full_optin():
     script=r'''
 from mcp_server import compact
+from mcp_server.compact_hardening import apply_compact_hardening
+apply_compact_hardening(compact)
 calls=[]
 compact.core._begin=lambda *_:None
 compact.core._finish=lambda name,x:x
