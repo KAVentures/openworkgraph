@@ -22,27 +22,36 @@
     if (s.mode==='demo_local_only') return 'Demo — local only';
     if (s.mode==='local_only') return 'Local only';
     if (s.mode==='configured_not_enrolled') return 'Configured, not enrolled';
+    if (s.mode==='revoked') return 'Removed from organization';
     if (s.mode==='connected_paused') return 'Connected — sharing paused';
     if (s.mode==='connected') return s.sync_status==='error' ? 'Connected — sync error' : 'Connected';
     return String(s.mode || 'Local only');
   }
 
   function statusHtml(s) {
-    const connected = !!s.enrolled && !!s.gateway_enabled;
+    const revoked = s.mode==='revoked' || !!s.device_revoked;
+    const connected = !revoked && !!s.enrolled && !!s.gateway_enabled;
     const url = s.gateway_url ? `<code>${e(s.gateway_url)}</code>` : 'No organization Gateway configured';
     const last = s.last_success_at ? `Last successful sync: ${e(String(s.last_success_at).replace('T',' ').slice(0,19))}` : 'No evidence has been synchronized yet';
     const quarantine = Number(s.quarantined_events || 0) > 0 ? `<div class="note" style="margin-top:8px"><strong>Sync quarantine:</strong> ${e(s.quarantined_events)} terminally invalid event(s) remain local and did not block later evidence.</div>` : '';
     const err = s.last_error ? `<div class="note" style="margin-top:8px"><strong>Sync error:</strong> ${e(s.last_error)}</div>` : '';
-    const controls = !connected
+    const controls = revoked
+      ? `<button class="green" onclick="continueLocallyAfterRevoke()">Continue locally</button>`
+      : !connected
       ? `<button class="green" onclick="openGatewaySetup()">Connect to organization</button>`
       : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>`;
-    return `<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
+    const revokedNotice = revoked
+      ? '<div class="note"><strong>Your organization removed this computer.</strong> Organization syncing has stopped. Your local recording, saved history and connected local AI apps remain available. To reconnect, request a new invitation from IT. Choose Continue locally to remove the old device credential from this computer.</div>'
+      : '';
+    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
   }
 
   function updateGatewayChip(s) {
     const chip=document.querySelector('#gatewayStatusChip');
     if (!chip) return;
-    if (s.mode==='connected_paused') {
+    if (s.mode==='revoked') {
+      chip.textContent='Organization access removed'; chip.classList.remove('on'); chip.classList.add('off');
+    } else if (s.mode==='connected_paused') {
       chip.textContent='Organization sharing: paused'; chip.classList.remove('on'); chip.classList.add('off');
     } else if (s.mode==='connected' && !s.last_error) {
       chip.textContent='Organization sharing: on'; chip.classList.add('on'); chip.classList.remove('off');
@@ -220,6 +229,17 @@
     if (!enabled && !confirm('Pause organization sharing? Local capture will continue, but evidence captured while sharing is paused will stay local permanently and will not be uploaded when you resume.')) return;
     try { await gwCall('/v1/gateway-sharing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})}); await refreshGatewayPanel(); }
     catch(err) { alert(err.message); }
+  };
+
+  window.continueLocallyAfterRevoke = async function() {
+    if (!confirm('Remove the revoked organization credential and continue using OpenWorkGraph locally? Your local evidence will remain unchanged.')) return;
+    try {
+      await gwCall('/v1/gateway-disconnect',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({force_local:true})});
+      await refreshGatewayPanel();
+      if (typeof window.refreshOrgJoin === 'function') window.refreshOrgJoin();
+    } catch(err) { alert(err.message); }
   };
 
   window.disconnectGateway = async function() {
