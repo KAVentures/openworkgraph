@@ -218,7 +218,8 @@ def _human_runs(
         events.sort(key=lambda item: str(item.get("observed_at") or ""))
 
     output: list[dict[str, Any]] = []
-    task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
+    task_data = (_task_data if _task_data is not None else
+                 candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events))
     for candidate in task_data.get("tasks") or []:
         if not isinstance(candidate, dict):
             continue
