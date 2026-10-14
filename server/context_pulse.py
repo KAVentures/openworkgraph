@@ -399,22 +399,30 @@ def context_pulse(
 
     rich_rows = [rich_evidence_row(dict(row), include_identity=False) for row in visible]
     recent_rows = rich_rows if recent_detail == "rich" else [_compact_row(row) for row in rich_rows]
-    findings, findings_truncated = _findings(
-        snapshot_max_id=snapshot_max_id,
-        snapshot_context_max_id=snapshot_context_max_id,
-        snapshot_at=snapshot_at,
-        lookback_days=lookback_days,
-    )
-    current_versions = {
-        str(item["finding_id"]): str(item["material_version"])
-        for item in findings
-    }
-
-    next_versions = {
-        finding_id: version
-        for finding_id, version in previous_versions.items()
-        if finding_id in current_versions
-    }
+    # The continuity overview requests finding_limit=0 because it only needs
+    # the newest canonical evidence tail. Do not compute/re-redact up to 100k
+    # historical rows to produce findings the caller explicitly disabled.
+    # Preserve cursor versions and pending-baseline state for future requests
+    # that DO ask for findings, rather than discarding their comparison state.
+    if output_finding_limit:
+        findings, findings_truncated = _findings(
+            snapshot_max_id=snapshot_max_id,
+            snapshot_context_max_id=snapshot_context_max_id,
+            snapshot_at=snapshot_at,
+            lookback_days=lookback_days,
+        )
+        current_versions = {
+            str(item["finding_id"]): str(item["material_version"])
+            for item in findings
+        }
+        next_versions = {
+            finding_id: version
+            for finding_id, version in previous_versions.items()
+            if finding_id in current_versions
+        }
+    else:
+        findings, findings_truncated = [], False
+        next_versions = dict(previous_versions)
     candidates: list[tuple[dict[str, Any], str]] = []
     if output_finding_limit > 0:
         for item in findings:
@@ -435,7 +443,10 @@ def context_pulse(
         next_versions[str(item["finding_id"])] = str(item["material_version"])
 
     findings_has_more = output_finding_limit > 0 and len(candidates) > len(selected)
-    next_baseline_pending = bool(baseline_pending and findings_has_more)
+    next_baseline_pending = (
+        baseline_pending if not output_finding_limit
+        else bool(baseline_pending and findings_has_more)
+    )
 
     if bootstrap:
         next_last_event_id = snapshot_max_id

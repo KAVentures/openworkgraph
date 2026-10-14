@@ -289,6 +289,9 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_events_sensor ON events(sensor_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_events_agent_instant
+                ON events(source, julianday(observed_at), event_id);
+            CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
             CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_norm_sensor ON normalized_events(sensor_id, observed_at);
             """
