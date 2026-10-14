@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+import statistics
 from pathlib import Path
 
 import pytest
@@ -175,12 +176,19 @@ def test_typical_title_redacts_in_under_a_millisecond(ai):
     detector = Detector(token=_token)
     for text in rows:  # warm-up
         detector.redact(text)
-    start = time.perf_counter()
+    # CI runners (especially shared macOS hosts) can be preempted for a
+    # substantial fraction of a single timing loop. Use the median of five
+    # independently warmed samples while retaining the same strict 1ms/title
+    # ceiling; do not silently relax the performance requirement.
+    timings = []
     for _ in range(5):
-        for text in rows:
-            detector.redact(text)
-    per_title = (time.perf_counter() - start) / (5 * len(rows))
-    print(f"uncached contextual redaction: {per_title * 1e6:.0f} us/title")
+        start = time.perf_counter()
+        for repeat in range(3):
+            for text in rows:
+                detector.redact(text)
+        timings.append((time.perf_counter() - start) / (3 * len(rows)))
+    per_title = statistics.median(timings)
+    print(f"uncached contextual redaction median: {per_title * 1e6:.0f} us/title")
     assert per_title < 0.001
 
     cached = ai.contextual_text_redactor()
