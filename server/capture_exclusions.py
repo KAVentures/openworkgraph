@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from collector.privacy import should_exclude
+from shared.core.personal_chat_privacy import personal_chat_surface
 
 DEFAULTS: dict[str, list[str]] = {
     "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
@@ -106,7 +107,13 @@ def apply_to_desktop_event(event: dict[str, Any], config: dict[str, Any]) -> dic
         return event
     if meta.get("excluded") or str(event.get("app") or "") == "Excluded":
         return event
-    if not should_exclude(
+    # Existing installations may have persisted an older default exclusion
+    # list. Never let personal chat evidence through just because the stored
+    # list predates the current release or Chrome reports a generic app name.
+    if not personal_chat_surface(
+        app=str(event.get("app") or ""),
+        title=str(event.get("window_title") or ""),
+    ) and not should_exclude(
         str(event.get("app") or ""),
         str(event.get("window_title") or ""),
         config.get("excluded_apps") or [],
