@@ -93,16 +93,19 @@ def _source_rows(
     snapshot_max_id: int,
     snapshot_at: str,
     lookback_days: int,
+    source_event_budget: int = _MAX_FINDING_SOURCE_EVENTS,
 ) -> tuple[list[dict[str, Any]], bool]:
     since = (_parse_datetime(snapshot_at).astimezone(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM events WHERE id <= ? AND observed_at >= ? "
-            "ORDER BY observed_at ASC, id ASC LIMIT ?",
-            (snapshot_max_id, since, _MAX_FINDING_SOURCE_EVENTS + 1),
+            "ORDER BY observed_at DESC, id DESC LIMIT ?",
+            (snapshot_max_id, since, source_event_budget + 1),
         ).fetchall()
-    truncated = len(rows) > _MAX_FINDING_SOURCE_EVENTS
-    return [_event_dict(row) for row in rows[:_MAX_FINDING_SOURCE_EVENTS]], truncated
+    truncated = len(rows) > source_event_budget
+    # Choose the newest bounded window, then restore chronological order for
+    # unchanged transitions/engagement and completion calculations.
+    return [_event_dict(row) for row in reversed(rows[:source_event_budget])], truncated
 
 
 def _compact_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -242,11 +245,13 @@ def _findings(
     snapshot_context_max_id: int,
     snapshot_at: str,
     lookback_days: int,
+    source_event_budget: int = _MAX_FINDING_SOURCE_EVENTS,
 ) -> tuple[list[dict[str, Any]], bool]:
     raw_rows, truncated = _source_rows(
         snapshot_max_id=snapshot_max_id,
         snapshot_at=snapshot_at,
         lookback_days=lookback_days,
+        source_event_budget=source_event_budget,
     )
     timeline = factual_context_timeline(_raw_events=raw_rows)
     from .context_pulse_findings import (
@@ -261,6 +266,7 @@ def _findings(
             snapshot_context_max_id=snapshot_context_max_id,
             snapshot_at=snapshot_at,
             lookback_days=lookback_days,
+            source_event_budget=source_event_budget,
         ),
         *agent_failure_findings(raw_rows, lookback_days),
         *_transition_findings(timeline, lookback_days),
@@ -342,6 +348,7 @@ def context_pulse(
     finding_limit: int = 10,
     lookback_days: int = 30,
     recent_detail: str = "compact",
+    source_event_budget: int = _MAX_FINDING_SOURCE_EVENTS,
 ) -> dict[str, Any]:
     """Return one incremental factual update and an opaque bookmark for the next check."""
     recent_detail = "rich" if str(recent_detail or "").strip().lower() == "rich" else "compact"
@@ -349,6 +356,7 @@ def context_pulse(
     bootstrap = not bool(state)
     page_limit = max(1, min(int(recent_limit), 500))
     output_finding_limit = max(0, min(int(finding_limit), 50))
+    source_event_budget = max(100, min(int(source_event_budget), _MAX_FINDING_SOURCE_EVENTS))
 
     if state:
         lookback_days = max(7, min(int(state.get("lookback_days") or 30), 90))
@@ -410,6 +418,7 @@ def context_pulse(
             snapshot_context_max_id=snapshot_context_max_id,
             snapshot_at=snapshot_at,
             lookback_days=lookback_days,
+            source_event_budget=source_event_budget,
         )
         current_versions = {
             str(item["finding_id"]): str(item["material_version"])
@@ -487,6 +496,8 @@ def context_pulse(
         "findings_has_more": findings_has_more,
         "findings_lookback_days": lookback_days,
         "findings_source_truncated": findings_truncated,
+        "findings_source_event_budget": source_event_budget,
+        "findings_are_recent_bounded_when_truncated": bool(findings_truncated),
         "next_cursor": next_cursor,
         "cursor_contract": "opaque_bookmark; pass next_cursor unchanged to the next get_context_pulse call",
         "canonical_evidence_tool": "get_workflow_trace",
