@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 from collector.privacy import should_exclude
+from .personal_chat_privacy import personal_chat_surface
 from .resource_references import normalize_resource_reference, remember_normalized_reference
 
 SENSITIVE_PATH_PREDECESSORS = {
@@ -183,6 +184,8 @@ def sanitize_browser_page(page: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def browser_event_is_excluded(*, app: str, title: str, hostname: str, config: dict[str, Any]) -> bool:
+    if personal_chat_surface(app=app, title=title, hostname=hostname):
+        return True
     if should_exclude(
         app,
         title,
