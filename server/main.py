@@ -46,7 +46,7 @@ except Exception:
 
 def _runtime_config() -> dict[str, Any]:
     cfg: dict[str, Any] = {
-        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access"],
+        "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
         "excluded_title_patterns": ["password", "private", "incognito", "bank"],
         "excluded_browser_host_patterns": [],
     }
