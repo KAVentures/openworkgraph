@@ -167,6 +167,56 @@ def _specificity(sequence: Iterable[Any] | None) -> float:
     return 0.05
 
 
+def _navigation_rank(
+    core: list[str],
+    members: list[dict[str, Any]],
+) -> tuple[float, dict[str, Any]]:
+    """Bounded evidence-navigation rank, never task confidence or success.
+
+    Prefer repeated, *ordered* multi-app work observed on separate days over
+    long passive focus spans. A linked clipboard transfer is rewarded only if
+    its copy and paste were actually observed in different surfaces. Durations
+    and dates are derived observations, not inferred productivity.
+    """
+    generic = {"surface:browser", "surface:chrome", "surface:safari",
+               "surface:firefox", "surface:edge"}
+    ordered = [step for step in core if step.startswith("surface:") and step not in generic]
+    sequence = [step for i, step in enumerate(ordered)
+                if i == 0 or step != ordered[i - 1]]
+    different_apps = len(set(sequence))
+    transitions = sum(a != b for a, b in zip(sequence, sequence[1:]))
+    days = len({str(run.get("started_at") or "")[:10] for run in members
+                if str(run.get("started_at") or "")[:10]})
+    durations = sorted(max(0.0, float(run.get("duration_seconds") or 0))
+                       for run in members)
+    median_duration = durations[len(durations) // 2] if durations else 0.0
+    clipboard_runs = sum(bool(run.get("cross_surface_clipboard_observed"))
+                         for run in members)
+    # The first 2 surface switches count more than incidental extra tabs.
+    score = (
+        0.32 * min(different_apps, 4) / 4
+        + 0.18 * min(transitions, 3) / 3
+        + 0.15 * min(days, 3) / 3
+        + 0.12 * min(len(members), 3) / 3
+        + 0.11 * min(median_duration, 180) / 180
+        + 0.12 * min(clipboard_runs, 2) / 2
+    )
+    # No surface/action evidence: never outrank observed multi-app workflow
+    # solely due to the number of idle days, long duration or repetitions.
+    if not core:
+        score *= 0.1
+    elif different_apps < 2:
+        score *= 0.45
+    return round(min(score, 1.0), 4), {
+        "distinct_ordered_apps": different_apps,
+        "observed_cross_app_transitions": transitions,
+        "observed_active_days": days,
+        "median_observed_duration_seconds": round(median_duration, 3),
+        "runs_with_linked_cross_app_clipboard": clipboard_runs,
+        "evidence_not_task_truth": True,
+    }
+
+
 def cluster_runs(
     runs: list[dict[str, Any]],
     *,
@@ -176,6 +226,7 @@ def cluster_runs(
     readable_key: str = "semantic_steps",
     limit: int = 100,
     min_cluster_quality: float = 0.0,
+    rank_by_navigation: bool = False,
 ) -> list[dict[str, Any]]:
     """Cluster exact variants conservatively, then expose core + variations.
 
@@ -250,6 +301,7 @@ def cluster_runs(
         quality = _specificity(core_structural)
         if quality < float(min_cluster_quality):
             continue
+        navigation_score, navigation_evidence = _navigation_rank(core_structural, members)
         actor = str(members[0].get("actor_kind") or "human")
         variant_signatures = sorted("|".join(key[1]) for key, _rows in group)
         material = (
@@ -325,6 +377,9 @@ def cluster_runs(
             "similarity_basis": "structural_action_sequence",
             "cluster_quality": quality,
             "cluster_quality_is_task_confidence": False,
+            "navigation_rank_score": navigation_score,
+            "navigation_rank_evidence": navigation_evidence,
+            "navigation_rank_is_task_confidence": False,
             "specificity_basis": "shared_non_generic_structural_steps_v1",
             "generic_ui_repetition_may_be_unrelated": True,
             "canonical_evidence_overrides_cluster": True,
@@ -334,13 +389,20 @@ def cluster_runs(
             ),
         })
 
-    output.sort(
-        key=lambda row: (
+    if rank_by_navigation:
+        output.sort(key=lambda row: (
+            -float(row.get("navigation_rank_score") or 0.0),
             -int(row["execution_count"]),
-            str(row.get("first_observed_at") or ""),
-            str(row["candidate_cluster_id"]),
+            str(row.get("candidate_cluster_id") or ""),
+        ))
+    else:
+        output.sort(
+            key=lambda row: (
+                -int(row["execution_count"]),
+                str(row.get("first_observed_at") or ""),
+                str(row["candidate_cluster_id"]),
+            )
         )
-    )
     return output[:max(1, min(int(limit), 100))]
 
 
