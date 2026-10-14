@@ -111,7 +111,7 @@ def manager_insights(
             "days_observed": len(value["days"]),
             "observed_duration_hours": round(float(value["seconds"]) / 3600, 1),
             "automation_candidate": len(set(apps)) >= 3 and observed_runs >= 3,
-            "why_review": "Repeated ordered app transitions across consenting employees",
+            "why_review": "Repeated ordered app transitions across distinct reported actors",
             "interpretation": "navigation candidate, not verified task identity or time savings",
         })
     results.sort(key=lambda item: (
