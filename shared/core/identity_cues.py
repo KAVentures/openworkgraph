@@ -29,9 +29,9 @@ _GENERIC_GREETING = frozenset(
 # observed social verb should not be stored/shown in clear text. Do not infer
 # arbitrary capitalized words as people without this grammatical context.
 _SOCIAL_ACTIVITY = re.compile(
-    r"(?<!\\w)([A-ZÅÄÖ][a-zåäö]{2,40})"
-    r"(?=\\s+(?i:kommenterade|gillade|delade|reagerade|svarade|"
-    r"skrev|commented|liked|shared|replied)\\b)"
+    r"(?<!\w)([A-ZÅÄÖ][a-zåäö]{2,40})"
+    r"(?=\s+(?i:kommenterade|gillade|delade|reagerade|svarade|"
+    r"skrev|commented|liked|shared|replied)\b)"
 )
 
 
