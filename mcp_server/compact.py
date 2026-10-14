@@ -1294,6 +1294,40 @@ def how_did_similar_runs_go(
     return core._finish(name, response)
 
 
+_WEB_FRAMEWORK_PROVIDER = {
+    "chatgpt_web": "chatgpt",
+    "claude_web": "claude",
+    "copilot_web": "microsoft_copilot",
+    "gemini_web": "gemini",
+    "lovable_web": "lovable",
+}
+
+
+def _same_web_lifecycle_as_native(native: dict[str, Any], web: dict[str, Any]) -> bool:
+    """Deduplicate only a provably matching mirrored browser run start.
+
+    The original local browser projection and newer Web lifecycle projector
+    record the same observed start event. Other native agent runs, other tabs,
+    and unmatched older browser runs must not be removed.
+    """
+    agent = native.get("agent") if isinstance(native.get("agent"), dict) else {}
+    framework = str(agent.get("framework") or "").casefold()
+    provider = _WEB_FRAMEWORK_PROVIDER.get(framework)
+    if provider is None or provider != str(web.get("provider") or "").casefold():
+        return False
+    if str(web.get("source") or "") != "browser_ai_lifecycle":
+        return False
+    try:
+        def ts(value: Any) -> datetime:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        a, b = ts(native.get("started_at")), ts(web.get("started_at"))
+        return a.tzinfo is not None and b.tzinfo is not None and abs(
+            (a - b).total_seconds()
+        ) <= 1.0
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def get_agent_runs(
     execution_id: str = "",
@@ -1357,14 +1391,24 @@ def get_agent_runs(
             # Compatibility with older local installs; an empty Web run list
             # must NOT be interpreted as evidence that no Web work occurred.
             web_available = False
+    # Browser ingestion already creates a legacy agent projection. When its
+    # same provider/start-time appears in the richer Web lifecycle projection,
+    # show the richer entry once. Do NOT discard unmatched native agent runs
+    # or rely on a loose provider-only match across simultaneous tabs.
+    matched_native = [
+        item for item in native
+        if not any(_same_web_lifecycle_as_native(item, candidate) for candidate in web)
+    ]
     combined = sorted(
-        native + web, key=lambda item: str(item.get("started_at") or ""), reverse=True,
+        matched_native + web,
+        key=lambda item: str(item.get("started_at") or ""), reverse=True,
     )[:_bounded(limit, maximum=100)]
     compact = {
         **{key: value for key, value in result.items() if key != "executions"},
         "executions": combined,
         "returned": len(combined),
         "web_ai_lifecycle_retrieval_available": web_available,
+        "duplicate_native_web_projections_suppressed": len(native) - len(matched_native),
         "web_ai_lifecycle_outcome_is_verified": False,
         "web_ai_lifecycle_resource_links_are_opaque": True,
         "events_omitted_from_list_view": True,
