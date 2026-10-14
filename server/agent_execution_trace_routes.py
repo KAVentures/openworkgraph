@@ -105,6 +105,7 @@ def get_local_browser_ai_runs(
     execution_id: str = "",
     limit: int = 20,
     evidence_limit: int = 25000,
+    since: str | None = None,
 ) -> dict[str, Any]:
     """Read-only local Web AI runs + opaque same-tab conversation references.
 
