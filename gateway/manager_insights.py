@@ -133,6 +133,7 @@ def manager_insights(
         "workflows": results[:20],
         "privacy": {
             "suppresses_groups_below_threshold": True,
+            "contributors_are_distinct_reported_actor_ids_not_necessarily_verified_people": True,
             "no_personnel_or_individual_performance_reporting": True,
             "contains_no_titles_or_transcripts": True,
             "time_is_sum_of_observed_durations_may_overlap": True,
