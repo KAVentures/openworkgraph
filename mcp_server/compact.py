@@ -1020,6 +1020,8 @@ def find_repeated_workflows(
             "min_cluster_quality": 0.0,
             "rank_by_navigation": True,
         })
+    if not include_legacy:
+        params["navigation_summary_only"] = True
     if since:
         params["since"] = since
     if until:
