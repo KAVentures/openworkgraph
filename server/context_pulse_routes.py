@@ -96,6 +96,7 @@ def get_context_pulse(
     finding_limit: int = 10,
     lookback_days: int = 30,
     recent_detail: str = "compact",
+    source_event_budget: int = 100_000,
 ) -> dict[str, Any]:
     """Return an incremental factual update for a connected AI client.
 
@@ -112,6 +113,7 @@ def get_context_pulse(
             finding_limit=finding_limit,
             lookback_days=lookback_days,
             recent_detail=recent_detail,
+            source_event_budget=source_event_budget,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

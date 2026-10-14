@@ -119,6 +119,7 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
         finding_limit: int = 10,
         lookback_days: int = 30,
         recent_detail: str = "compact",
+        full_findings: bool = False,
     ) -> dict[str, Any]:
         """Return what changed since the last check plus changed factual findings.
 
@@ -138,6 +139,10 @@ def apply_compact_hardening(compact_module: ModuleType) -> None:
             "finding_limit": min(max(0, int(finding_limit)), 50),
             "lookback_days": min(max(7, int(lookback_days)), 90),
             "recent_detail": "rich" if str(recent_detail).lower() == "rich" else "compact",
+            # Keep the old exhaustive mode opt-in. The default agent pulse
+            # is a recent, explicit partial-coverage update and must not
+            # attempt quadratic 100k-event clustering under a 15s MCP budget.
+            "source_event_budget": 100_000 if full_findings else 8_000,
         }
         if cursor not in (None, ""):
             params["cursor"] = cursor
