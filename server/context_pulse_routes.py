@@ -124,4 +124,23 @@ def get_context_pulse(
     return result
 
 
+@app.get("/v1/continuity-references")
+def get_continuity_references(request: Request, limit: int = 24) -> dict[str, Any]:
+    """Only opaque observed pointers, strictly within permitted saved history.
+
+    The secured local app authenticates this /v1 endpoint; consent is still
+    evaluated independently at read time. Never send whole metadata or URLs.
+    """
+    if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower() != "ai":
+        raise HTTPException(status_code=403, detail="AI-context access required")
+    from .db import connect
+    from .recent_resource_references import reference_tail
+    with connect() as connection:
+        return reference_tail(
+            connection, lease=active_ai_history_access(),
+            run_started_at=os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
+            limit=limit,
+        )
+
+
 __all__ = ["app", "get_context_pulse"]
