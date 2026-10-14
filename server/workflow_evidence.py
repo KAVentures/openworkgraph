@@ -863,26 +863,41 @@ def list_workflow_evidence_candidates(
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    from .context_layers import candidate_tasks
-    # Derive the 50k-event task index ONCE, sharing it between canonical
-    # structural runs and their readable human projection.
-    task_data = candidate_tasks(limit=max(1, len(raw)), _raw_events=raw)
-    executions = derive_executions(
-        raw, split_human_hosts=partition_host_switches,
-        split_human_idle=partition_idle_gaps, _task_data=task_data,
-    )
+    if rank_by_navigation:
+        from .context_layers import candidate_tasks
+        # This is the compact AI discovery path; share expensive task inference
+        # between its structural and readable projections, once per request.
+        task_data = candidate_tasks(limit=max(1, len(raw)), _raw_events=raw)
+        executions = derive_executions(
+            raw, split_human_hosts=partition_host_switches,
+            split_human_idle=partition_idle_gaps, _task_data=task_data,
+        )
+    else:
+        # Preserve the exact legacy call and compatibility with callers that
+        # override derive_executions without the new optional argument.
+        task_data = None
+        executions = (derive_executions(
+            raw, split_human_hosts=partition_host_switches,
+            split_human_idle=partition_idle_gaps)
+            if (partition_host_switches or partition_idle_gaps)
+            else derive_executions(raw))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
         key = str(execution.get("family_key") or "")
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
-    projected_runs = _candidate_runs(
-        raw, executions, partition_host_switches=partition_host_switches,
-        partition_idle_gaps=partition_idle_gaps, _task_data=task_data,
-    )
     if rank_by_navigation:
+        projected_runs = _candidate_runs(
+            raw, executions, partition_host_switches=partition_host_switches,
+            partition_idle_gaps=partition_idle_gaps, _task_data=task_data,
+        )
         _rank_clipboard_evidence(raw, projected_runs)
+    else:
+        projected_runs = _candidate_runs(
+            raw, executions, partition_host_switches=partition_host_switches,
+            partition_idle_gaps=partition_idle_gaps,
+        )
     all_clusters = cluster_runs(
         projected_runs,
         min_runs=threshold,
