@@ -96,6 +96,14 @@ def public_settings() -> dict[str, Any]:
         "profile": profile_for_settings(settings),
         "profiles": {name: dict(values) for name, values in PROFILES.items()},
         "defaults": dict(DEFAULTS),
+        "privacy_tradeoff": {
+            "default_profile": "privacy_first",
+            "business_references_off_by_default": True,
+            "conversation_linking_requires_business_references": True,
+            "context_profile_stores_opaque_local_correlation_tokens": True,
+            "connector_resolvable_locators_require_rich_enterprise": True,
+            "do_not_auto_enable_reference_capture": True,
+        },
         "captured_signals": {
             "performance_timing": {
                 "enabled": settings["performance_timing"],
