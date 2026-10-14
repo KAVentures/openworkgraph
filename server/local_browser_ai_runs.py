@@ -51,11 +51,18 @@ def local_web_ai_runs(
                 "history_access_limited": True, "outcome_is_verified": False}
     page = max(1, min(50000, int(evidence_limit)))
     clause = " OR ".join("(" + fragment + ")" for fragment in fences)
+    # An explicit narrower requested interval never overrides the grant.
+    requested_since = _utc(since) if since else None
+    if since and not requested_since:
+        raise ValueError("since must be timezone-aware ISO-8601")
+    extra_clause = " AND julianday(observed_at) >= julianday(?)" if requested_since else ""
+    if requested_since:
+        params.append(requested_since)
     rows = connection.execute(
         "SELECT event_id, observed_at, source, session_id, event_type, metadata_json "
         "FROM events WHERE source='browser_extension' AND "
         "(event_type GLOB 'browser_agent_*' OR event_type='browser_resource_reference_observed') "
-        f"AND ({clause}) ORDER BY julianday(observed_at) DESC, id DESC LIMIT ?",
+        f"AND ({clause}){extra_clause} ORDER BY julianday(observed_at) DESC, id DESC LIMIT ?",
         tuple(params + [page]),
     ).fetchall()
     events: list[dict[str, Any]] = []
