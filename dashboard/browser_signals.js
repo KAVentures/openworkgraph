@@ -79,7 +79,7 @@
         title.textContent='Browser sensor update available';
         const detail=document.createElement('span');
         detail.className='muted';
-        detail.textContent=`Open your browser's extensions page and reload the unpacked OpenWorkGraph extension. Running: ${current}. Expected: ${expected}. Capture continues, but new browser-context features stay unavailable until the sensor is reloaded.`;
+        detail.textContent='The browser sensor needs an update. Open your browser extensions page and reload or reinstall OpenWorkGraph. Desktop capture continues, but newer browser-context features may be unavailable.';
         el.replaceChildren(title,document.createElement('br'),detail);
       }else{
         clearVersionNotice(el);
