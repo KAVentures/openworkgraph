@@ -97,3 +97,32 @@ def get_agent_execution_traces(
         "read_only": True,
         "writes_performed": False,
     }
+
+
+@router.get("/v1/browser-ai-runs")
+def get_local_browser_ai_runs(
+    request: Request,
+    execution_id: str = "",
+    limit: int = 20,
+    evidence_limit: int = 25000,
+) -> dict[str, Any]:
+    """Read-only local Web AI runs + opaque same-tab conversation references.
+
+    The browser lifecycle must never assert a verified successful task. This
+    view uses the same saved-history grant as native agent runs.
+    """
+    _require_agent_report_read(request)
+    if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower() != "ai":
+        raise HTTPException(status_code=403, detail="AI-context access required")
+    import os
+    from shared.history_policy import active_ai_history_access
+    from .db import connect
+    from .local_browser_ai_runs import local_web_ai_runs
+
+    with connect() as conn:
+        return local_web_ai_runs(
+            conn,
+            lease=active_ai_history_access(),
+            run_started_at=os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
+            limit=limit, evidence_limit=evidence_limit, execution_id=execution_id,
+        )
