@@ -29,11 +29,14 @@ def local_day_since(*, now: datetime | None = None) -> str:
     return _iso(midnight)
 
 
-def compute_today_work_profile(*, now: datetime | None = None) -> dict[str, Any]:
+def compute_today_work_profile(
+    *, now: datetime | None = None,
+    _preloaded_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Same deterministic profile as the legacy helper, limited to local today."""
     since = local_day_since(now=now)
     focus = _focus_rows(since)
-    context = _context_rows(since)
+    context = _context_rows(since) if _preloaded_context is None else _preloaded_context
     transfers = _transfer_patterns(context)
     tags = list_self_tags(since=since)
     return {
