@@ -40,10 +40,10 @@ def local_web_ai_runs(
     if mode == "all_saved":
         fences, params = ["1=1"], []
     elif mode == "selected_range":
-        since, until = _utc(lease.get("since")), _utc(lease.get("until"))
-        if since and until and since < until:
+        grant_since, grant_until = _utc(lease.get("since")), _utc(lease.get("until"))
+        if grant_since and grant_until and grant_since < grant_until:
             fences.append("(julianday(observed_at) >= julianday(?) AND julianday(observed_at) < julianday(?))")
-            params.extend((since, until))
+            params.extend((grant_since, grant_until))
     elif mode != "off":
         mode = "off"
     if not fences:
