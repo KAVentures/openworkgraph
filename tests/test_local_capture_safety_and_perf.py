@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import time
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,10 +13,7 @@ from shared.core.browser_title_privacy import (
 )
 from server.capture_exclusions import DEFAULTS, apply_to_desktop_event
 from server.contextual_redaction import Detector
-from server.browser_agent_projection import _agent_payload
-from server.main import BrowserEvent
-from mcp.server.mcpserver.exceptions import ToolError
-from mcp_server.compact import _trace_params
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_normal_work_titles_and_opted_in_work_text_are_not_capped():
@@ -86,21 +86,45 @@ def test_personal_chat_apps_default_to_excluded_without_excluding_work_chat():
     assert "Microsoft Teams" not in DEFAULTS["excluded_apps"]
 
 
-def test_browser_finish_does_not_assert_success():
-    event = BrowserEvent(
-        observed_at="2026-10-14T08:00:00Z",
-        action="agent_run_finished",
-        metadata={"agent_provider": "chatgpt", "agent_run_id": "web-abcdef1234567890"},
+def _child_check(source: str):
+    """Exercise imports that install FastAPI routes in a separate process.
+
+    Importing the live local secured app during pytest collection mutates the
+    singleton app and contaminates unrelated legacy auth tests.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", source], cwd=ROOT,
+        capture_output=True, text=True, timeout=30,
     )
-    projected = _agent_payload(event)
-    assert projected is not None
-    assert projected["operation"] == "run_finished"
-    assert projected["status"] == "unknown"
-    assert "message_body" not in projected
+    assert result.returncode == 0, result.stderr
+
+
+def test_browser_finish_does_not_assert_success():
+    _child_check('''
+from server.browser_agent_projection import _agent_payload
+from server.main import BrowserEvent
+event = BrowserEvent(
+    observed_at="2026-10-14T08:00:00Z",
+    action="agent_run_finished",
+    metadata={"agent_provider": "chatgpt", "agent_run_id": "web-abcdef1234567890"},
+)
+projected = _agent_payload(event)
+assert projected is not None
+assert projected["operation"] == "run_finished"
+assert projected["status"] == "unknown"
+assert "message_body" not in projected
+''')
 
 
 def test_invalid_history_scope_fails_explicitly():
-    for invalid in ("history", "last-session", "yesterday", "typo"):
-        with pytest.raises(ToolError, match="scope must be current or all"):
-            _trace_params(scope=invalid)
-    assert _trace_params(scope="all", limit=10)["scope"] == "all"
+    _child_check('''
+from mcp_server.compact import _trace_params
+from mcp.server.mcpserver.exceptions import ToolError
+for invalid in ("history", "last-session", "yesterday", "typo"):
+    try:
+        _trace_params(scope=invalid)
+        raise AssertionError("invalid scope was accepted")
+    except ToolError as exc:
+        assert "scope must be current or all" in str(exc)
+assert _trace_params(scope="all", limit=10)["scope"] == "all"
+''')
