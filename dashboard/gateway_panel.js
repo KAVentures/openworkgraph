@@ -18,6 +18,13 @@
     return h ? `${h}h ${String(m).padStart(2,'0')}m ${String(r).padStart(2,'0')}s` : `${m}m ${String(r).padStart(2,'0')}s`;
   }
 
+  function localDate(value) {
+    const time = new Date(String(value || ''));
+    return Number.isFinite(time.getTime())
+      ? time.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'})
+      : 'unavailable';
+  }
+
   function modeLabel(s) {
     if (s.mode==='demo_local_only') return 'Demo — local only';
     if (s.mode==='local_only') return 'Local only';
@@ -30,7 +37,7 @@
   function statusHtml(s) {
     const connected = !!s.enrolled && !!s.gateway_enabled;
     const url = s.gateway_url ? `<code>${e(s.gateway_url)}</code>` : 'No organization Gateway configured';
-    const last = s.last_success_at ? `Last successful sync: ${e(String(s.last_success_at).replace('T',' ').slice(0,19))}` : 'No evidence has been synchronized yet';
+    const last = s.last_success_at ? `Last successful sync: ${e(localDate(s.last_success_at))} (your local time)` : 'No evidence has been synchronized yet';
     const quarantine = Number(s.quarantined_events || 0) > 0 ? `<div class="note" style="margin-top:8px"><strong>Sync quarantine:</strong> ${e(s.quarantined_events)} terminally invalid event(s) remain local and did not block later evidence.</div>` : '';
     const err = s.last_error ? `<div class="note" style="margin-top:8px"><strong>Sync error:</strong> ${e(s.last_error)}</div>` : '';
     const controls = !connected
