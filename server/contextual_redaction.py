@@ -29,6 +29,7 @@ person cue. App/site names, UI vocabulary, month/day names and the user's
 import functools
 import re
 import threading
+from shared.core.identity_cues import redact_explicit_person_cues
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -454,7 +455,10 @@ class Detector:
                 if name.endswith(poss):
                     name, suffix = name[: -len(poss)], poss
             out = out[:start] + self.person_token(name) + suffix + out[end:]
-        return out
+        return redact_explicit_person_cues(
+            out, person_token=self.person_token,
+            blocked_names=STOPWORDS | self._never_words,
+        )
 
 
 class CachedRedactor:
