@@ -41,9 +41,19 @@ def cap_title_text(value: Any) -> str:
     raw = str(value or "")
     if len(raw) <= MAX_CAPTURE_TITLE_CHARS:
         return raw
+    # Never retain a partial opaque identifier at either cut edge: a fragment
+    # of a secret could evade the subsequent credential recognizer.
     keep_head, keep_tail = 1750, 160
-    discarded = len(raw) - keep_head - keep_tail
-    return raw[:keep_head] + f" …[truncated {discarded} chars]… " + raw[-keep_tail:]
+    head_end = max(raw.rfind(char, 0, keep_head) for char in (" ", "\\n", "\\t", "|"))
+    head = raw[:head_end] if head_end >= 0 else ""
+    tail_start = min(
+        (pos + 1 for char in (" ", "\\n", "\\t", "|")
+         if (pos := raw.find(char, len(raw) - keep_tail)) >= 0),
+        default=len(raw),
+    )
+    tail = raw[tail_start:]
+    discarded = len(raw) - len(head) - len(tail)
+    return head + f" …[truncated {discarded} chars]… " + tail
 
 
 def cap_event_title_surfaces(event: dict[str, Any]) -> dict[str, Any]:
