@@ -200,7 +200,7 @@ class PublicRedactor:
         # at-rest redaction. Hosted tokens keep their existing account-scoped key.
         text = redact_explicit_person_cues(
             text, person_token=lambda name: self._token("PERSON", name),
-            blocked_names=_SAFE_SINGLE_UI | STOPWORDS,
+            blocked_names=_SAFE_SINGLE_UI | STOPWORDS | ORGANIZATIONS,
         )
         max_chars = max(40, min(int(max_chars), 1200))
         return text[:max_chars] + "…[truncated]" if len(text) > max_chars else text

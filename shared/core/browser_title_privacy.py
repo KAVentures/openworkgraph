@@ -31,7 +31,7 @@ _TARGET_TEXT_KEYS = ("label", "name", "text", "title", "aria_label", "placeholde
 MAX_CAPTURE_TITLE_CHARS = 2000
 
 
-def cap_title_text(value: Any) -> str:
+def cap_title_text(value: Any, *, max_chars: int = MAX_CAPTURE_TITLE_CHARS) -> str:
     """Bound an untrusted title before expensive privacy/learning passes.
 
     Retain the start for document context and a small tail for app identity.
@@ -39,11 +39,15 @@ def cap_title_text(value: Any) -> str:
     applies only to titles/labels, not the separately opted-in work-text path.
     """
     raw = str(value or "")
-    if len(raw) <= MAX_CAPTURE_TITLE_CHARS:
+    budget = max(80, min(int(max_chars), MAX_CAPTURE_TITLE_CHARS))
+    if len(raw) <= budget:
         return raw
     # Never retain a partial opaque identifier at either cut edge: a fragment
     # of a secret could evade the subsequent credential recognizer.
-    keep_head, keep_tail = 1750, 160
+    # The 240-char browser page-title budget has the same explicit marker as
+    # the normal 2,000-char desktop title budget.
+    keep_head = min(1750, budget - 65)
+    keep_tail = min(160, budget - keep_head - 40)
     head_end = max(raw.rfind(char, 0, keep_head) for char in (" ", chr(10), chr(9), "|"))
     head = raw[:head_end] if head_end >= 0 else ""
     tail_start = min(

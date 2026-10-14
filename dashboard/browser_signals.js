@@ -15,6 +15,7 @@
     card.innerHTML=`<h2>Capture & privacy</h2>
       <div class="muted">Choose how much browser business context OpenWorkGraph may keep on this computer. Privacy-first keeps business-object references off and masks known SaaS object IDs in stored browser paths.</div>
       <div id="browserSensorVersionStatus" style="margin-top:10px"></div>
+      <div class="note" style="margin-top:12px"><strong>Important: privacy vs. AI continuity</strong><br><span class="muted"><strong>Privacy-first is the default.</strong> It does not save business-object references, so an AI can see that you used ChatGPT, Gmail, GitHub or Docs but cannot reliably link a run to its exact conversation, document or issue. To enable continuity between sessions, choose <strong>Context</strong> below: it keeps opaque, installation-keyed object-reference tokens locally, not the original conversation URLs. <strong>Rich enterprise</strong> additionally permits carefully validated locator references for authorized source connectors. You control this; it is never enabled automatically.</span></div>
       <div class="note" style="margin-top:12px"><strong>What is captured</strong><br><span class="muted">Only the bounded browser signals enabled below. Richer business-object context stays opt-in.</span></div>
       <div style="display:grid;gap:10px;margin-top:12px">
         <label class="note"><strong>Privacy profile</strong><br>

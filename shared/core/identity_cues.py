@@ -25,6 +25,14 @@ _GREETING_NAME_CUE = re.compile(
 _GENERIC_GREETING = frozenset(
     "alla all back everyone everybody team world there kollegor vänner tillbaka".split()
 )
+# A high-precision social-activity cue: an unknown first name followed by an
+# observed social verb should not be stored/shown in clear text. Do not infer
+# arbitrary capitalized words as people without this grammatical context.
+_SOCIAL_ACTIVITY = re.compile(
+    r"(?<!\w)([A-ZÅÄÖ][a-zåäö]{2,40})"
+    r"(?=\s+(?i:kommenterade|gillade|delade|reagerade|svarade|"
+    r"skrev|commented|liked|shared|replied)\b)"
+)
 
 
 def redact_explicit_person_cues(
@@ -56,6 +64,7 @@ def redact_explicit_person_cues(
         else match.group(0),
         text,
     )
+    text = _SOCIAL_ACTIVITY.sub(replace, text)
     return text
 
 

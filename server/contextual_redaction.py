@@ -477,7 +477,7 @@ class Detector:
         # cues as the hosted projection, retaining local token identity.
         return redact_explicit_person_cues(
             out, person_token=self.person_token,
-            blocked_names=STOPWORDS | self._never_words,
+            blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
         )
 
 
