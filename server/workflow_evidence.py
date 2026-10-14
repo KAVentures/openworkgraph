@@ -263,6 +263,8 @@ def _candidate_runs(
     raw_events: list[dict[str, Any]],
     executions: list[dict[str, Any]],
     *, partition_host_switches: bool = False, partition_idle_gaps: bool = False,
+    _task_data: dict[str, Any] | None = None,
+    include_clipboard_rank_evidence: bool = False,
 ) -> list[dict[str, Any]]:
     """Overlay the one privacy-safe readable projection onto structural runs."""
     readable_by_id: dict[str, list[str]] = {}
