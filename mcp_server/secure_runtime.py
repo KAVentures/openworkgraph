@@ -41,11 +41,20 @@ def detail_level() -> str | None:
 
 
 def secure_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    with httpx.Client(timeout=15, headers=_headers()) as client:
-        response = client.get(f"{API_URL}{path}", params=params)
-        response.raise_for_status()
-        _record_detail(response)
-        return response.json()
+    try:
+        with httpx.Client(timeout=15, headers=_headers()) as client:
+            response = client.get(f"{API_URL}{path}", params=params)
+            response.raise_for_status()
+            _record_detail(response)
+            return response.json()
+    except httpx.TimeoutException as exc:
+        # Do not reflect arbitrary query text, URLs, credentials or titles.
+        # The endpoint alone is enough to explain this recoverable failure.
+        raise ToolError(
+            "OpenWorkGraph local evidence lookup exceeded 15 seconds "
+            f"({path}). Narrow the date range or requested evidence window "
+            "and retry. No absence of work was established."
+        ) from exc
 
 
 def secure_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:

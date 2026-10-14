@@ -30,20 +30,54 @@ def _sequence(value: Iterable[Any] | None) -> tuple[str, ...]:
 
 
 def _lcs(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the same tie-stable LCS as before, without copying tuples per cell."""
     if not left or not right:
         return ()
-    rows = len(left) + 1
-    cols = len(right) + 1
-    table: list[list[tuple[str, ...]]] = [[() for _ in range(cols)] for _ in range(rows)]
+    rows, cols = len(left) + 1, len(right) + 1
+    lengths = [[0] * cols for _ in range(rows)]
+    # 1: diagonal match; 2: prefer up on ties; 3: left.
+    parents = [bytearray(cols) for _ in range(rows)]
     for i in range(1, rows):
         for j in range(1, cols):
             if left[i - 1] == right[j - 1]:
-                table[i][j] = table[i - 1][j - 1] + (left[i - 1],)
+                lengths[i][j] = lengths[i - 1][j - 1] + 1
+                parents[i][j] = 1
+            elif lengths[i - 1][j] >= lengths[i][j - 1]:
+                lengths[i][j] = lengths[i - 1][j]
+                parents[i][j] = 2
             else:
-                a = table[i - 1][j]
-                b = table[i][j - 1]
-                table[i][j] = a if len(a) >= len(b) else b
-    return table[-1][-1]
+                lengths[i][j] = lengths[i][j - 1]
+                parents[i][j] = 3
+    result: list[str] = []
+    i, j = rows - 1, cols - 1
+    while i and j:
+        direction = parents[i][j]
+        if direction == 1:
+            result.append(left[i - 1])
+            i -= 1
+            j -= 1
+        elif direction == 2:
+            i -= 1
+        else:
+            j -= 1
+    result.reverse()
+    return tuple(result)
+
+
+def _lcs_length(left: tuple[str, ...], right: tuple[str, ...]) -> int:
+    """Exact LCS length using O(min(len(left), len(right))) working memory."""
+    if not left or not right:
+        return 0
+    if len(right) > len(left):
+        left, right = right, left
+    previous = [0] * (len(right) + 1)
+    for word in left:
+        current = [0] * len(previous)
+        for j, other in enumerate(right, start=1):
+            current[j] = (previous[j - 1] + 1 if word == other
+                          else max(previous[j], current[j - 1]))
+        previous = current
+    return previous[-1]
 
 
 def sequence_similarity(left: Iterable[Any] | None, right: Iterable[Any] | None) -> float:
@@ -56,7 +90,7 @@ def sequence_similarity(left: Iterable[Any] | None, right: Iterable[Any] | None)
     a, b = _sequence(left), _sequence(right)
     if not a or not b:
         return 0.0
-    common = len(_lcs(a, b))
+    common = _lcs_length(a, b)
     longer = max(len(a), len(b))
     shorter = min(len(a), len(b))
     return round((0.6 * common / longer) + (0.4 * common / shorter), 6)
