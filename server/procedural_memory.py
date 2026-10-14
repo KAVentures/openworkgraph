@@ -885,7 +885,7 @@ def load_recent_evidence(*, limit: int = _DEFAULT_EVENTS, since: str | None = No
         # Keep legacy agent_* events even if an older adapter labelled source
         # incorrectly, but do not deserialize thousands of unrelated human
         # desktop/browser events when reconstructing only agent executions.
-        clauses.append("(source = 'agent' OR event_type LIKE 'agent_%')")
+        clauses.append("(source = 'agent' OR event_type GLOB 'agent_*')")
     if since:
         clauses.append("julianday(observed_at) >= julianday(?)")
         params.append(since)
