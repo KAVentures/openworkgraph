@@ -92,8 +92,11 @@ def test_compact_agent_tool_uses_optional_execution_id_for_detail(monkeypatch):
 
     listed = compact.get_agent_runs(limit=5)
     assert listed["events_omitted_from_list_view"] is True
-    assert calls[-1][1]["max_events_per_execution"] == 1
-    assert "execution_id" not in calls[-1][1]
+    native_call = next(params for path, params in calls
+                       if path == "/v1/agent-execution-traces")
+    assert native_call["max_events_per_execution"] == 1
+    assert "execution_id" not in native_call
+    assert listed["web_ai_lifecycle_retrieval_available"] is True
 
     detailed = compact.get_agent_runs(execution_id="execution:abc", max_events=37)
     assert detailed["executions"][0]["events"][0]["operation"] == "tool_call"
