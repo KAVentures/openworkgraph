@@ -53,13 +53,35 @@ _APP_HINTS = {
 }
 _SHORT_INTENT = re.compile(r"(?<!\w)(?:PR|PRs)(?!\w)", re.I)
 
+# Narrow, transparent bilingual navigation vocabulary, NOT a translation or
+# statement that two observed actions represent the same business task.
+# Terms expand goal queries only: captured evidence remains unchanged.
+_WORK_TERM_EQUIVALENTS = {
+    "invoice": ("faktura", "fakturering"),
+    "invoices": ("faktura", "fakturor"),
+    "faktura": ("invoice",),
+    "fakturor": ("invoices",),
+    "hours": ("tidrapport", "timmar"),
+    "timesheet": ("tidrapport",),
+    "tidrapport": ("timesheet", "hours"),
+    "locum": ("vikarie", "vikariat"),
+    "vikariat": ("locum",),
+    "contract": ("avtal",),
+    "agreement": ("avtal",),
+    "avtal": ("contract",),
+}
+
 
 def _goal_terms(goal: str) -> tuple[set[str], list[str]]:
     base = _terms(goal)
-    hints = set()
+    surface_hints: set[str] = set()
+    translations: set[str] = set()
     for term in base | ({"pr"} if _SHORT_INTENT.search(goal) else set()):
-        hints.update(_APP_HINTS.get(term, ()))
-    return base | hints, sorted(hints)
+        surface_hints.update(_APP_HINTS.get(term, ()))
+        translations.update(_WORK_TERM_EQUIVALENTS.get(term, ()))
+    # app_surface_hints must stay app names; Swedish synonym expansions are
+    # recall terms, not evidence that a particular app was visited.
+    return base | surface_hints | translations, sorted(surface_hints)
 
 
 def _metadata(row: dict[str, Any]) -> dict[str, Any]:
