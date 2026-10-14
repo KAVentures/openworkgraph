@@ -732,24 +732,45 @@ def get_goal_context(
         raise ToolError("scope must be current or all")
     name = "get_goal_context"
     core._begin(name)
-    from gateway.goal_context import build_goal_context
-    response = secure_runtime.secure_get(
+    from gateway.goal_context import build_goal_context, _goal_terms
+    bounded = _bounded(event_limit, maximum=500)
+    # A local goal must not silently inspect the OLDEST 400 events of a
+    # multi-day history. Also search short goal keywords across the granted
+    # history so a busy morning does not bury an older relevant agreement.
+    # Use the existing server-side history gate for EVERY query.
+    terms, _hints = _goal_terms(goal)
+    specific = sorted((word for word in terms if len(word) >= 4),
+                      key=lambda word: (-len(word), word))[:2]
+    sample = secure_runtime.secure_get(
         "/v1/workflow-trace",
-        _trace_params(
-            scope=scope, since=since, until=until,
-            limit=_bounded(event_limit, maximum=500),
-        ),
+        _trace_params(scope=scope, since=since, until=until,
+                      limit=bounded, order="newest"),
     )
-    evidence = [
-        row for row in list(response.get("rows") or [])
-        if isinstance(row, dict)
-    ]
+    evidence = [row for row in list(sample.get("rows") or [])
+                if isinstance(row, dict)]
+    seen = {str(row.get("event_id") or "") for row in evidence}
+    incomplete = bool(sample.get("has_more"))
+    for term in specific:
+        targeted = secure_runtime.secure_get(
+            "/v1/workflow-trace",
+            _trace_params(scope=scope, since=since, until=until, query=term,
+                          limit=min(120, bounded), order="newest"),
+        )
+        incomplete = incomplete or bool(targeted.get("has_more"))
+        for row in list(targeted.get("rows") or []):
+            if not isinstance(row, dict):
+                continue
+            event_id = str(row.get("event_id") or "")
+            if event_id and event_id not in seen:
+                evidence.append(row)
+                seen.add(event_id)
     result = build_goal_context(
-        goal, evidence,
-        max_examples=_bounded(max_examples, maximum=8),
-        source_limit_reached=bool(response.get("has_more"))
-            or len(evidence) >= _bounded(event_limit, maximum=500),
+        goal, evidence, max_examples=_bounded(max_examples, maximum=8),
+        source_limit_reached=incomplete,
     )
+    result["retrieval_strategy"] = "newest_first_plus_authorized_keyword_windows"
+    result["keyword_windows_tried"] = len(specific)
+    result["coverage"]["rows_considered"] = len(evidence)
     result["source"] = "authorized_local_canonical_workflow_trace"
     result["scope_used"] = scope
     result["history_access_not_bypassed"] = True
