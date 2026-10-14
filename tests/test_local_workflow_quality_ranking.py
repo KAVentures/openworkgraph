@@ -51,15 +51,20 @@ def fake_get(path,params):
     return {"families":[],"candidate_clusters":[],
             "source_event_rows_considered":12000,"source_limit_reached":True}
 compact.secure_runtime.secure_get=fake_get
-filtered=compact.find_repeated_workflows()
-assert params_seen[-1]["min_cluster_quality"] == .45
-assert params_seen[-1]["require_multi_surface"] is True
-assert params_seen[-1]["require_nonzero_duration"] is True
-assert params_seen[-1]["rank_by_quality"] is True
-assert filtered["source_limit_reached"] is True
+ranked=compact.find_repeated_workflows()
+assert params_seen[-1]["min_cluster_quality"] == 0.0
+assert params_seen[-1]["rank_by_navigation"] is True
+assert params_seen[-1]["navigation_summary_only"] is True
+assert "require_multi_surface" not in params_seen[-1]
+assert "require_nonzero_duration" not in params_seen[-1]
+assert ranked["quality_filter_applied"] is False
+assert ranked["navigation_ranking_applied"] is True
+assert ranked["source_limit_reached"] is True
 unfiltered=compact.find_repeated_workflows(include_low_specificity=True)
 assert "min_cluster_quality" not in params_seen[-1]
+assert "rank_by_navigation" not in params_seen[-1]
 assert not unfiltered["quality_filter_applied"]
+assert not unfiltered["navigation_ranking_applied"]
 '''
     root=Path(__file__).resolve().parents[1]
     run=subprocess.run([sys.executable,"-c",code],cwd=root,
