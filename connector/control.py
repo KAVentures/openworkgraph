@@ -117,6 +117,8 @@ def status(config_path: Path) -> dict[str, Any]:
     paused = state.get_bool("sharing_paused", False)
     if not settings.enabled:
         mode = "local_only"
+    elif state.get("status") == "revoked":
+        mode = "revoked"
     elif not enrolled:
         mode = "configured_not_enrolled"
     elif paused:
@@ -131,6 +133,8 @@ def status(config_path: Path) -> dict[str, Any]:
         "sharing_paused": paused,
         "pause_semantics": "evidence captured while paused remains local and is never backfilled",
         "sync_status": state.get("status", "not_started"),
+        "device_revoked": bool(settings.enabled and state.get("status") == "revoked"),
+        "revoke_requires_new_enrollment": True,
         "last_success_at": state.get("last_success_at", "") or None,
         "last_error": state.get("last_error", "") or None,
         "last_local_event_id": state.get_int("last_local_event_id", 0),
