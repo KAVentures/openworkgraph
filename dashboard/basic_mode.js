@@ -197,7 +197,7 @@
           <div class="pv-control"><a href="https://mcp.owg.kinvectum.com/work-text" target="_blank" rel="noopener noreferrer">Account approval and deletion</a><button type="button" class="sw" role="switch" id="pvWorkTextCloudSwitch" aria-checked="false" aria-label="Allow cloud AI to retrieve captured work text"></button></div>
         </div>
         <div class="pv-row" id="pvBrowserRow">
-          <div><h3>Browser detail</h3><div class="muted" id="pvBrowserText">How much the browser sensor keeps about the pages you use.</div></div>
+          <div><h3>Browser detail</h3><div class="muted" id="pvBrowserText">How much the browser sensor keeps about the pages you use.</div><div class="muted" style="margin-top:6px"><strong>Standard (default)</strong> protects document and conversation IDs, but an AI cannot reliably return to the exact ChatGPT/Claude conversation, document or issue. <strong>More context (optional)</strong> stores installation-keyed, opaque local object references so agents can link related work; it does not store full conversation URLs or page contents. This does not grant an AI access to older history or new apps. You can change it later.</div></div>
           <div class="pv-control"><div class="seg" role="radiogroup" aria-label="Browser detail">
             <button type="button" role="radio" data-profile="privacy_first">Standard</button><button type="button" role="radio" data-profile="context">More context</button></div></div>
         </div>
