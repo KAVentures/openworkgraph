@@ -474,10 +474,13 @@ def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(results, key=lambda x: (-int(x["visit_count"]), str(x["surface"])))[:50]
 
 
-def compute_work_profile(*, scope: str = "current", now: datetime | None = None) -> dict[str, Any]:
+def compute_work_profile(
+    *, scope: str = "current", now: datetime | None = None,
+    _preloaded_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     since = _scope_since(scope, now=now)
     focus = _focus_rows(since)
-    context = _context_rows(since)
+    context = _context_rows(since) if _preloaded_context is None else _preloaded_context
     transfers = _transfer_patterns(context)
     transfer_destinations = _transfer_destinations(transfers)
     tags = list_self_tags(since=since)

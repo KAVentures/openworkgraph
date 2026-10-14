@@ -132,8 +132,13 @@ def _file_upload_categories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"surface":s,"category":c,"file_count":n} for (s,c),n in sorted(totals.items(),key=lambda x:-x[1])]
 
 
-def enrich_work_profile(profile: dict[str, Any], *, since: str | None) -> dict[str, Any]:
-    rows=_rows(since)
+def enrich_work_profile(
+    profile: dict[str, Any], *, since: str | None,
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    # Core work-profile calculations already parsed these exact context rows.
+    # Reuse that read rather than repeating a 50k-row SQLite+JSON scan.
+    rows = _rows(since) if rows is None else rows
     profile=dict(profile)
     profile["rapid_click_candidates"]=_rapid_click_candidates(rows)
     profile["auth_flow_candidates"]=_auth_flow_candidates(rows)
