@@ -126,4 +126,5 @@ def get_local_browser_ai_runs(
             lease=active_ai_history_access(),
             run_started_at=os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
             limit=limit, evidence_limit=evidence_limit, execution_id=execution_id,
+            since=since,
         )
