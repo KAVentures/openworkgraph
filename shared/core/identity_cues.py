@@ -31,7 +31,14 @@ _GENERIC_GREETING = frozenset(
 _SOCIAL_ACTIVITY = re.compile(
     r"(?<!\w)([A-ZÅÄÖ][a-zåäö]{2,40})"
     r"(?=\s+(?i:kommenterade|gillade|delade|reagerade|svarade|"
-    r"skrev|commented|liked|shared|replied)\b)"
+    r"skrev|commented|liked|shared|replied|har\s+lagt\s+till|"
+    r"är\s+frånvarande|is\s+absent|is\s+away)\b)"
+)
+# Imperative requests name the addressee but are not a generic invitation
+# to classify every capitalized UI noun as a person's name.
+_DIRECT_ADDRESS = re.compile(
+    r"(?i:(?<!\w)(?:hälsa|hälsa\s+på|greet|say\s+hello\s+to))"
+    r"\s+([A-ZÅÄÖ][a-zåäö]{2,40})\b"
 )
 
 
@@ -65,6 +72,7 @@ def redact_explicit_person_cues(
         text,
     )
     text = _SOCIAL_ACTIVITY.sub(replace, text)
+    text = _DIRECT_ADDRESS.sub(replace, text)
     return text
 
 
