@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_TOOLS = {
     "get_current_work_context",
+    "get_goal_context",
     "get_context_pulse",
     "list_history",
     "search_work",

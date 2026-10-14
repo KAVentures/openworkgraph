@@ -662,6 +662,55 @@ def get_current_work_context(
     })
 
 
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def get_goal_context(
+    goal: str,
+    max_examples: int = 4,
+    scope: str = "current",
+    since: str | None = None,
+    until: str | None = None,
+    event_limit: int = 400,
+) -> dict[str, Any]:
+    """Find authorized work relevant to a goal (not verified task identity).
+
+    This reuses the same pure ranking/provenance function as hosted OWG, but
+    the local trace transport enforces its own recording and saved-history
+    permissions. It cannot query a broader historical window than permitted.
+    No new capture, uploaded text, or arbitrary tool execution is involved.
+    """
+    if not isinstance(goal, str) or not 4 <= len(goal.strip()) <= 500:
+        raise ToolError("goal must contain 4 to 500 characters")
+    if scope not in {"current", "all"}:
+        raise ToolError("scope must be current or all")
+    name = "get_goal_context"
+    core._begin(name)
+    from gateway.goal_context import build_goal_context
+    response = secure_runtime.secure_get(
+        "/v1/workflow-trace",
+        _trace_params(
+            scope=scope, since=since, until=until,
+            limit=_bounded(event_limit, maximum=500),
+        ),
+    )
+    evidence = [
+        row for row in list(response.get("rows") or [])
+        if isinstance(row, dict)
+    ]
+    result = build_goal_context(
+        goal, evidence,
+        max_examples=_bounded(max_examples, maximum=8),
+        source_limit_reached=bool(response.get("has_more"))
+            or len(evidence) >= _bounded(event_limit, maximum=500),
+    )
+    result["source"] = "authorized_local_canonical_workflow_trace"
+    result["scope_used"] = scope
+    result["history_access_not_bypassed"] = True
+    result["event_limit"] = _bounded(event_limit, maximum=500)
+    result["privacy"] = "local_secure_trace_AI_projection"
+    return core._finish(name, result)
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def search_work(
     query: str = "",
