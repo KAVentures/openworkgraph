@@ -138,7 +138,7 @@ async function loadInsights(){
   const overview=r.overview||{}, patterns=Array.isArray(r.workflows)?r.workflows:[];
   $('insightSummary').textContent=patterns.length
     ? `${patterns.length} team-level patterns · at least ${overview.minimum_contributors||3} reported identities each`
-    : `No cross-person patterns meet the ${overview.minimum_contributors||3}-person privacy threshold in available synchronized evidence.`;
+    : `No cross-person patterns meet the ${overview.minimum_contributors||3}-identity minimum display threshold in available synchronized evidence.`;
   $('insightCards').innerHTML=patterns.map(item=>`<div class="card" style="margin:10px 0;padding:14px">
     <strong>${(item.apps||[]).map(esc).join(' → ')}</strong>
     ${item.automation_candidate?'<span class="pill ok" style="margin-left:8px">Review for automation</span>':''}
