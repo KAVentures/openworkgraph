@@ -142,6 +142,18 @@
         <div id="loopView" hidden><div class="table-wrap"><table><thead><tr><th>Observed navigation loop</th><th>Count</th></tr></thead><tbody id="seqTable"></tbody></table></div></div>
         <div id="transitionView" hidden><div class="table-wrap"><table><thead><tr><th>Transition</th><th>Count</th></tr></thead><tbody id="transitionsTable"></tbody></table></div></div>
       </div>
+      <div class="card" id="savedDayCard">
+        <h2>Browse saved days</h2>
+        <div class="muted">Activity above shows this recording run. Choose a previous date to inspect your <strong>locally retained</strong> work without changing what connected AI apps can read. Deletion and retention settings still apply.</div>
+        <div class="row" style="align-items:end;margin-top:10px">
+          <div><label for="savedDayPicker">Day</label><input type="date" id="savedDayPicker" /></div>
+          <button type="button" class="secondary" id="savedDayLoad">Show this day</button>
+          <button type="button" class="secondary" id="savedDayPrevious">Previous day</button>
+        </div>
+        <div id="savedDayStatus" class="muted" role="status" aria-live="polite"></div>
+        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Tool</th><th>Observed action</th></tr></thead><tbody id="savedDayRows"></tbody></table></div>
+        <button type="button" id="savedDayNext" class="secondary" hidden>Load older events from this day</button>
+      </div>
     </section>
 
     <section class="tabpanel" role="tabpanel" id="panel-connect" aria-labelledby="tab-connect" data-panel="connect" hidden>
@@ -215,6 +227,52 @@ function renderActive(d){const active=document.querySelector('[role="tab"][aria-
 let summaryLoading=false,summaryTimer=null;
 function scheduleSummaryRefresh(){if(summaryTimer)clearTimeout(summaryTimer);summaryTimer=setTimeout(()=>{if(!document.hidden)load();},5000);}
 async function load(){if(summaryLoading)return;summaryLoading=true;try{const r=await fetch('/v1/summary?limit=25000&scope=current');if(!r.ok)throw new Error('summary unavailable');const d=await r.json();renderGlobal(d);renderActive(d);}catch(_){toast('Could not reach the local observer. Is the launcher still running?');}finally{summaryLoading=false;scheduleSummaryRefresh();}}
+let savedDayCursor=null, savedDayBusy=false;
+function savedDayBounds(dateString){
+  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(dateString||'')) return null;
+  const [year,month,day]=dateString.split('-').map(Number);
+  const start=new Date(year,month-1,day), end=new Date(year,month-1,day+1);
+  if(start.getFullYear()!==year||start.getMonth()!==month-1||start.getDate()!==day)return null;
+  return {since:start.toISOString(), until:end.toISOString()};
+}
+async function showSavedDay(append=false){
+  const picker=document.querySelector('#savedDayPicker');
+  const status=document.querySelector('#savedDayStatus');
+  const rows=document.querySelector('#savedDayRows');
+  const more=document.querySelector('#savedDayNext');
+  if(savedDayBusy||!picker||!status||!rows||!more)return;
+  const bounds=savedDayBounds(picker.value);
+  if(!bounds){status.textContent='Choose a valid date.';return;}
+  savedDayBusy=true;
+  status.textContent='Reading this day’s retained local activity…';
+  try{
+    if(!append){savedDayCursor=null;rows.replaceChildren();}
+    await window.__owgAuthReady;
+    const params=new URLSearchParams({scope:'all',order:'newest',since:bounds.since,until:bounds.until,limit:'100'});
+    if(append&&savedDayCursor)params.set('cursor',savedDayCursor);
+    const response=await fetch('/v1/workflow-trace?'+params.toString(),{cache:'no-store'});
+    if(!response.ok)throw new Error('Could not read this day. Check the local history/retention settings.');
+    const data=await response.json();
+    const events=Array.isArray(data.rows)?data.rows:[];
+    for(const event of events){
+      const row=document.createElement('tr');
+      const values=[
+        event.observed_at?new Date(event.observed_at).toLocaleTimeString():'',
+        event.app||event.work_surface||'Other app',
+        event.action||event.event_type||'Observed activity',
+      ];
+      for(const value of values){const cell=document.createElement('td');cell.textContent=String(value||'');row.appendChild(cell);}
+      rows.appendChild(row);
+    }
+    savedDayCursor=data.next_cursor||null;
+    more.hidden=!savedDayCursor;
+    status.textContent=rows.children.length
+      ? rows.children.length+' retained events shown'+(savedDayCursor?' (more available)':'')
+      : 'No retained activity for this date. History may have expired or been deleted.';
+  }catch(err){status.textContent=err.message||'Saved history unavailable.';}
+  finally{savedDayBusy=false;}
+}
+document.addEventListener('DOMContentLoaded',()=>{const picker=document.querySelector('#savedDayPicker');if(!picker)return;const now=new Date();picker.value=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');document.querySelector('#savedDayLoad')?.addEventListener('click',()=>showSavedDay(false));document.querySelector('#savedDayNext')?.addEventListener('click',()=>showSavedDay(true));document.querySelector('#savedDayPrevious')?.addEventListener('click',()=>{const b=savedDayBounds(picker.value);if(!b)return;const prior=new Date(Date.parse(b.since));prior.setDate(prior.getDate()-1);picker.value=[prior.getFullYear(),String(prior.getMonth()+1).padStart(2,'0'),String(prior.getDate()).padStart(2,'0')].join('-');showSavedDay(false);});});
 document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=document.querySelector('.tabs');tabBar?.addEventListener('scroll',updateTabScrollHint,{passive:true});window.addEventListener('resize',updateTabScrollHint);new MutationObserver(updateTabScrollHint).observe(tabBar,{childList:true});updateTabScrollHint();document.querySelector('#evidenceSearch').addEventListener('input',()=>{if(window.__owgLastSummary)renderEvidence(window.__owgLastSummary);});document.querySelectorAll('[data-evidence-view]').forEach(b=>b.onclick=()=>setEvidenceView(b.dataset.evidenceView));document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});load();});document.addEventListener('visibilitychange',()=>{if(!document.hidden)load();});
 </script>
 </body>
