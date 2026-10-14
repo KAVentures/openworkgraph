@@ -490,6 +490,9 @@ def get_current_work_context(
                         # Without any new work, the latest previous session is
                         # more useful than a misleading empty overview.
                         trace = previous_trace
+                        # The same page must not be serialized twice in the
+                        # primary and prior-work sections on a quiet morning.
+                        previous_trace = {"rows": [], "returned": 0}
                         scope_used = "authorized_saved_history"
                         fallback_hint = "Showing most recent previously authorized work."
                     else:
@@ -681,7 +684,11 @@ def get_current_work_context(
     return core._finish(name, {
         "continuity_context": continuity_context,
         "trace": _slim_trace(trace),
-        "previous_work_trace": _slim_trace(previous_trace),
+        "previous_work_trace": (
+            {"included_in_primary_trace": True, "rows": [], "returned": 0}
+            if scope_used == "authorized_saved_history"
+            else _slim_trace(previous_trace)
+        ),
         "previous_work_access": saved_history_mode,
         "previous_work_covers_only_authorized_history": True,
         "task_hints": task_hints,
@@ -1007,12 +1014,14 @@ def find_repeated_workflows(
         # quality filters: single-app focus noise and zero-duration click
         # clusters should not dominate genuinely repeated multi-app work.
         # Canonical evidence is never deleted by this navigation filter.
+        # A real multi-surface workflow may have structural specificity 0.30.
+        # Rank ALL observed candidates instead of discarding them at 0.45.
         params.update({
-            "min_cluster_quality": 0.45,
-            "require_multi_surface": True,
-            "require_nonzero_duration": True,
-            "rank_by_quality": True,
+            "min_cluster_quality": 0.0,
+            "rank_by_navigation": True,
         })
+    if not include_legacy:
+        params["navigation_summary_only"] = True
     if since:
         params["since"] = since
     if until:
@@ -1043,6 +1052,9 @@ def find_repeated_workflows(
             "core_steps": list(row.get("core_steps") or [])[:10],
             "variations": list(row.get("observed_variations") or [])[:6],
             "exact_variant_count": row.get("exact_variant_count", 0),
+            "navigation_rank_score": row.get("navigation_rank_score"),
+            "navigation_rank_evidence": row.get("navigation_rank_evidence"),
+            "navigation_rank_is_task_confidence": False,
             "coarse_family_keys": list(row.get("coarse_family_keys") or [])[:8],
             "median_duration_seconds": row.get("median_duration_seconds"),
             "first_observed_at": row.get("first_observed_at"),
@@ -1058,8 +1070,10 @@ def find_repeated_workflows(
         "returned": len(compact_clusters),
         "candidate_total": len(clusters),
         "task_family": task_family,
-        "preferred_candidate_basis": "quality_ranked_multi_surface_runs" if not include_low_specificity else "unfiltered_structural_clusters",
-        "quality_filter_applied": not include_low_specificity,
+        "preferred_candidate_basis": "observed_ordered_multi_app_navigation_rank" if not include_low_specificity else "unranked_structural_clusters",
+        "quality_filter_applied": False,
+        "navigation_ranking_applied": not include_low_specificity,
+        "low_scoring_candidates_are_not_hidden": True,
         "source_event_rows_considered": result.get("source_event_rows_considered"),
         "source_limit_reached": result.get("source_limit_reached"),
         "unfiltered_candidates_accessible": True,

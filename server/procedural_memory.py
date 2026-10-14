@@ -451,22 +451,62 @@ def split_human_execution_windows(
     return result or [task]
 
 
-def derive_executions(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False, split_human_idle: bool = False) -> list[dict[str, Any]]:
+def _window_time_index(events: list[dict[str, Any]]) -> list[float] | None:
+    """Cache timestamps once; retain a safe fallback for mixed-offset input."""
+    stamps = [_ts(event.get("observed_at")) for event in events]
+    if any(ts is None for ts in stamps):
+        return None
+    if any(a > b for a, b in zip(stamps, stamps[1:])):
+        return None
+    return stamps
+
+
+def _task_window_events(
+    task: dict[str, Any],
+    session_events: list[dict[str, Any]],
+    time_index: list[float] | None,
+) -> list[dict[str, Any]]:
+    """Same ±1ms inclusive window used by the legacy human step projection."""
+    from bisect import bisect_left, bisect_right
+    start, end = _ts(task.get("started_at")), _ts(task.get("ended_at"))
+    if start is None or end is None:
+        return session_events
+    if time_index is not None:
+        return session_events[
+            bisect_left(time_index, start - .001):bisect_right(time_index, end + .001)
+        ]
+    # Out-of-order/invalid historical timestamp formats retain legacy behavior.
+    return [row for row in session_events
+            if (when := _ts(row.get("observed_at"))) is not None
+            and start - .001 <= when <= end + .001]
+
+
+def derive_executions(
+    raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False,
+    split_human_idle: bool = False,
+    _task_data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Build privacy-minimized human and agent executions from canonical evidence."""
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
         by_session[str(event.get("session_id") or "")].append(event)
     for events in by_session.values():
         events.sort(key=lambda e: str(e.get("observed_at") or ""))
+    time_indexes = {sid: _window_time_index(events)
+                    for sid, events in by_session.items()}
 
     output: list[dict[str, Any]] = []
-    task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
+    task_data = (_task_data if _task_data is not None else
+                 candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events))
     for candidate in task_data.get("tasks") or []:
         session_id = str(candidate.get("session_id") or "")
         for task in (split_human_execution_windows(candidate, by_session.get(session_id, []),
                        mode="idle" if split_human_idle else "host")
                      if (split_human_hosts or split_human_idle) else [candidate]):
-            steps = _human_steps(task, by_session.get(session_id, []))
+            steps = _human_steps(
+                task, _task_window_events(task, by_session.get(session_id, []),
+                                          time_indexes.get(session_id))
+            )
             if not steps:
                 continue
             family_key, family_basis = _human_family(task, steps)

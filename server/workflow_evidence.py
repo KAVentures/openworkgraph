@@ -259,10 +259,66 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return step_rows, transition_rows
 
 
+def _rank_clipboard_evidence(
+    raw_events: list[dict[str, Any]],
+    projected_runs: list[dict[str, Any]],
+) -> None:
+    """Only verified cross-app clipboard ID pairs contribute to navigation.
+
+    Reuses canonical metadata, never text; index per session once to avoid
+    scanning 50,000 events separately for every candidate run.
+    """
+    from bisect import bisect_left, bisect_right
+    by_session: dict[str, list[tuple[float, str, str, str]]] = defaultdict(list)
+    for event in raw_events:
+        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        transfer = str(meta.get("clipboard_transfer_id") or "")
+        if not transfer:
+            continue
+        action = str(meta.get("action") or "").casefold()
+        if not action and str(event.get("event_type") or "").startswith("clipboard_"):
+            action = str(event["event_type"]).split("clipboard_", 1)[1].casefold()
+        if action not in {"copy", "cut", "paste"}:
+            continue
+        at = _ts(event.get("observed_at"))
+        if at is None:
+            continue
+        by_session[str(event.get("session_id") or "")].append(
+            (at, transfer, action, _surface_for_event(event))
+        )
+    timestamps: dict[str, list[float]] = {}
+    for sid, events in by_session.items():
+        events.sort(key=lambda item: item[0])
+        timestamps[sid] = [item[0] for item in events]
+    for run in projected_runs:
+        run["cross_surface_clipboard_observed"] = False
+        start, end = _ts(run.get("started_at")), _ts(run.get("ended_at"))
+        if start is None or end is None:
+            continue
+        transfer_pairs: dict[str, dict[str, set[str]]] = defaultdict(
+            lambda: {"sources": set(), "pastes": set()}
+        )
+        for session_id in run.get("_session_ids") or []:
+            sid = str(session_id)
+            events, stamps = by_session.get(sid, []), timestamps.get(sid, [])
+            if not events:
+                continue
+            for _at, transfer, action, surface in events[
+                bisect_left(stamps, start - 0.001):bisect_right(stamps, end + 0.001)
+            ]:
+                transfer_pairs[transfer]["pastes" if action == "paste" else "sources"].add(surface)
+        run["cross_surface_clipboard_observed"] = any(
+            source != destination
+            for pair in transfer_pairs.values()
+            for source in pair["sources"] for destination in pair["pastes"]
+        )
+
+
 def _candidate_runs(
     raw_events: list[dict[str, Any]],
     executions: list[dict[str, Any]],
     *, partition_host_switches: bool = False, partition_idle_gaps: bool = False,
+    _task_data: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Overlay the one privacy-safe readable projection onto structural runs."""
     readable_by_id: dict[str, list[str]] = {}
@@ -270,9 +326,9 @@ def _candidate_runs(
         from .procedural_feedback import _human_runs
         for run in (
             _human_runs(raw_events, split_human_hosts=partition_host_switches,
-                        split_human_idle=partition_idle_gaps)
+                        split_human_idle=partition_idle_gaps, _task_data=_task_data)
             if (partition_host_switches or partition_idle_gaps)
-            else _human_runs(raw_events)
+            else _human_runs(raw_events, _task_data=_task_data)
         ):
             execution_id = str(run.get("execution_id") or "")
             if execution_id:
@@ -802,23 +858,46 @@ def list_workflow_evidence_candidates(
     partition_host_switches: bool = False,
     partition_idle_gaps: bool = False,
     rank_by_quality: bool = False,
+    rank_by_navigation: bool = False,
+    navigation_summary_only: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
-    executions = (derive_executions(raw, split_human_hosts=partition_host_switches,
-                                   split_human_idle=partition_idle_gaps)
-                  if (partition_host_switches or partition_idle_gaps)
-                  else derive_executions(raw))
+    if rank_by_navigation:
+        from .context_layers import candidate_tasks
+        # This is the compact AI discovery path; share expensive task inference
+        # between its structural and readable projections, once per request.
+        task_data = candidate_tasks(limit=max(1, len(raw)), _raw_events=raw)
+        executions = derive_executions(
+            raw, split_human_hosts=partition_host_switches,
+            split_human_idle=partition_idle_gaps, _task_data=task_data,
+        )
+    else:
+        # Preserve the exact legacy call and compatibility with callers that
+        # override derive_executions without the new optional argument.
+        task_data = None
+        executions = (derive_executions(
+            raw, split_human_hosts=partition_host_switches,
+            split_human_idle=partition_idle_gaps)
+            if (partition_host_switches or partition_idle_gaps)
+            else derive_executions(raw))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for execution in executions:
         key = str(execution.get("family_key") or "")
         if key:
             grouped[key].append(execution)
     threshold = max(2, min(int(min_runs), MAX_RUNS))
-    projected_runs = _candidate_runs(
-        raw, executions, partition_host_switches=partition_host_switches,
-        partition_idle_gaps=partition_idle_gaps,
-    )
+    if rank_by_navigation:
+        projected_runs = _candidate_runs(
+            raw, executions, partition_host_switches=partition_host_switches,
+            partition_idle_gaps=partition_idle_gaps, _task_data=task_data,
+        )
+        _rank_clipboard_evidence(raw, projected_runs)
+    else:
+        projected_runs = _candidate_runs(
+            raw, executions, partition_host_switches=partition_host_switches,
+            partition_idle_gaps=partition_idle_gaps,
+        )
     all_clusters = cluster_runs(
         projected_runs,
         min_runs=threshold,
@@ -828,6 +907,7 @@ def list_workflow_evidence_candidates(
         # Filter weak candidates BEFORE truncating at 100 clusters, otherwise
         # high-volume single-app noise can hide valid multi-app workflows.
         min_cluster_quality=min_cluster_quality,
+        rank_by_navigation=rank_by_navigation,
     )
     def _eligible_cluster(row: dict[str, Any]) -> bool:
         if float(row.get("cluster_quality") or 0) < min_cluster_quality:
@@ -842,7 +922,13 @@ def list_workflow_evidence_candidates(
         return True
 
     candidate_clusters = [row for row in all_clusters if _eligible_cluster(row)]
-    if rank_by_quality:
+    if rank_by_navigation:
+        candidate_clusters.sort(key=lambda row: (
+            -float(row.get("navigation_rank_score") or 0),
+            -int(row.get("execution_count") or 0),
+            str(row.get("candidate_cluster_id") or ""),
+        ))
+    elif rank_by_quality:
         candidate_clusters.sort(key=lambda row: (
             -float(row.get("cluster_quality") or 0),
             -int(row.get("execution_count") or 0),
@@ -861,6 +947,16 @@ def list_workflow_evidence_candidates(
             members = [member for member in members
                        if member.get("execution_id") in qualifying_ids]
         if len(members) < threshold:
+            continue
+        if navigation_summary_only:
+            # Compact MCP uses only family_key/execution_count. Do not compute
+            # the expensive per-family step statistics and nested clustering
+            # it will discard. Full REST/legacy views remain unchanged.
+            items.append({
+                "family_key": family_key,
+                "execution_count": len(members),
+                "family_is_ground_truth": False,
+            })
             continue
         steps, _transitions = _step_statistics(members)
         support_floor = _support_threshold(len(members))
@@ -908,7 +1004,11 @@ def list_workflow_evidence_candidates(
         "low_specificity_cluster_count": sum(
             float(row.get("cluster_quality") or 0) < LOW_SPECIFICITY_QUALITY_FLOOR for row in all_clusters
         ),
-        "candidate_ranking": "specificity_then_support" if rank_by_quality else "support",
+        "navigation_summary_only": navigation_summary_only,
+        "candidate_ranking": ("ordered_multi_app_days_duration_copy_paste"
+            if rank_by_navigation else "specificity_then_support" if rank_by_quality else "support"),
+        "ranking_is_task_confidence": False,
+        "ranking_filters_out_low_specificity": bool(min_cluster_quality),
         "returned_clusters_are_verified_tasks": False,
         "low_specificity_candidates_remain_in_raw_trace": True,
         "coarse_families_kept_for_compatibility": True,

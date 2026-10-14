@@ -206,15 +206,22 @@ def _window_event_refs(task: dict[str, Any], session_events: list[dict[str, Any]
     return refs[:8]
 
 
-def _human_runs(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False, split_human_idle: bool = False) -> list[dict[str, Any]]:
+def _human_runs(
+    raw_events: list[dict[str, Any]], *, split_human_hosts: bool = False,
+    split_human_idle: bool = False,
+    _task_data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in raw_events:
         by_session[str(event.get("session_id") or "")].append(event)
     for events in by_session.values():
         events.sort(key=lambda item: str(item.get("observed_at") or ""))
+    time_indexes = {sid: memory._window_time_index(events)
+                    for sid, events in by_session.items()}
 
     output: list[dict[str, Any]] = []
-    task_data = candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events)
+    task_data = (_task_data if _task_data is not None else
+                 candidate_tasks(limit=max(1, len(raw_events)), _raw_events=raw_events))
     for candidate in task_data.get("tasks") or []:
         if not isinstance(candidate, dict):
             continue
@@ -223,11 +230,14 @@ def _human_runs(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = F
         for task in (memory.split_human_execution_windows(candidate, session_events,
                          mode="idle" if split_human_idle else "host")
                      if (split_human_hosts or split_human_idle) else [candidate]):
-            structural_steps = memory._human_steps(task, session_events)
+            window_events = memory._task_window_events(
+                task, session_events, time_indexes.get(session_id)
+            )
+            structural_steps = memory._human_steps(task, window_events)
             if not structural_steps:
                 continue
             family_key, family_basis = memory._human_family(task, structural_steps)
-            semantic_steps = _semantic_steps(task, session_events)
+            semantic_steps = _semantic_steps(task, window_events)
             observed_completion = bool(task.get("completion_observed"))
             started_at = task.get("started_at")
             ended_at = task.get("ended_at")
@@ -247,7 +257,7 @@ def _human_runs(raw_events: list[dict[str, Any]], *, split_human_hosts: bool = F
                 "positive_example": observed_completion,
                 "structural_steps": structural_steps[:_MAX_STEPS],
                 "semantic_steps": semantic_steps[:_MAX_STEPS],
-                "evidence_refs": _window_event_refs(task, session_events),
+                "evidence_refs": _window_event_refs(task, window_events),
                 "evidence_window": {"started_at": started_at, "ended_at": ended_at},
                 "trace_lookup": {
                     "tool": "get_workflow_trace",
