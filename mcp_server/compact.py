@@ -37,14 +37,18 @@ def _trace_params(
     query: str | None = None,
     app_name: str | None = None,
     session_id: str | None = None,
+    order: str = "oldest",
 ) -> dict[str, Any]:
     # The canonical trace endpoint supports only current/all. Reject typos
     # explicitly rather than returning the current session as if it were history.
     if scope not in {"current", "all"}:
         raise ToolError("scope must be current or all; to search saved history, use scope='all' with authorized since/until dates")
+    if order not in {"oldest", "newest"}:
+        raise ToolError("order must be oldest or newest")
     params: dict[str, Any] = {
         "limit": _bounded(limit, maximum=500),
         "scope": scope,
+        "order": order,
     }
     for key, value in {
         "since": since,
@@ -435,73 +439,77 @@ def get_current_work_context(
     core._begin(name)
     trace = secure_runtime.secure_get(
         "/v1/workflow-trace",
-        _trace_params(cursor=cursor, limit=limit, scope="current"),
+        _trace_params(cursor=cursor, limit=limit, scope="current", order="newest"),
     )
     scope_used = "current"
     fallback_hint = None
-    if not list(trace.get("rows") or []) and cursor in (None, ""):
-        try:
-            trace = secure_runtime.secure_get(
-                "/v1/workflow-trace",
-                _trace_params(since=_today_since(), limit=limit, scope="all"),
-            )
-            if list(trace.get("rows") or []):
-                scope_used = "today"
-                fallback_hint = "Current app session was empty; showing retained evidence from local today."
-        except Exception as exc:
-            if _history_access_problem(exc):
-                fallback_hint = "Current app session is empty. Grant saved-history access to let this overview include earlier work today."
+    previous_trace: dict[str, Any] = {"rows": [], "returned": 0}
+    saved_history_mode = "off"
+    if cursor in (None, ""):
+        today_start = _today_since()
+        if not list(trace.get("rows") or []):
+            try:
+                today = secure_runtime.secure_get(
+                    "/v1/workflow-trace",
+                    _trace_params(since=today_start, limit=limit, scope="all", order="newest"),
+                )
+                if list(today.get("rows") or []):
+                    trace = today
+                    scope_used = "today"
+                    fallback_hint = "Current session was empty; showing the latest authorized work from today."
+            except Exception as exc:
+                if _history_access_problem(exc):
+                    fallback_hint = "Current session is empty; earlier work requires an explicit saved-history grant."
 
-    # A fresh Monday session should still locate Friday's unfinished work
-    # *only* if the user previously authorized saved-history access. Never
-    # make an unrestricted historical query just because current/today is empty.
-    if not list(trace.get("rows") or []) and cursor in (None, ""):
-        access_mode = "off"
+        # Even if the user checked email this morning, their unfinished prior
+        # work still matters. Keep current evidence separate from older evidence.
+        # Do not read prior sessions at all without an explicit active grant.
         granted_since: str | None = None
         try:
-            access_response = secure_runtime.secure_get("/v1/history/ai-access")
-            access = access_response.get("access") if isinstance(access_response, dict) else None
+            response = secure_runtime.secure_get("/v1/history/ai-access")
+            access = response.get("access") if isinstance(response, dict) else None
             if isinstance(access, dict):
-                access_mode = str(access.get("mode") or "off")
-                if access_mode == "selected_range":
+                saved_history_mode = str(access.get("mode") or "off")
+                if saved_history_mode == "selected_range":
                     granted_since = str(access.get("since") or "") or None
         except Exception:
-            # A missing/inaccessible access policy is not permission.
-            access_mode = "off"
-        if access_mode in {"all_saved", "selected_range"}:
-            # The selected-range guard still clamps this query to the user's
-            # granted timestamps; a separate scope prevents reading yesterday
-            # when saved-history disclosure is disabled.
-            start = granted_since if access_mode == "selected_range" else (
+            saved_history_mode = "off"
+        if saved_history_mode in {"selected_range", "all_saved"}:
+            since = granted_since if saved_history_mode == "selected_range" else (
                 datetime.now().astimezone() - timedelta(days=14)
             ).isoformat()
             try:
-                recent = secure_runtime.secure_get(
+                previous_trace = secure_runtime.secure_get(
                     "/v1/workflow-trace",
-                    _trace_params(since=start, limit=limit, scope="all"),
+                    _trace_params(since=since, until=today_start, scope="all",
+                                  limit=max(12, min(100, int(limit) * 8)),
+                                  order="newest"),
                 )
-                if list(recent.get("rows") or []):
-                    trace = recent
-                    scope_used = "authorized_saved_history"
-                    fallback_hint = (
-                        "Current session and today were empty; showing prior "
-                        "retained evidence within the active saved-history grant."
-                    )
+                if list(previous_trace.get("rows") or []):
+                    if not list(trace.get("rows") or []):
+                        # Without any new work, the latest previous session is
+                        # more useful than a misleading empty overview.
+                        trace = previous_trace
+                        scope_used = "authorized_saved_history"
+                        fallback_hint = "Showing most recent previously authorized work."
+                    else:
+                        fallback_hint = (
+                            "Recent current work is shown with separate latest prior "
+                            "work evidence; today’s activity does not hide unfinished work."
+                        )
                 else:
-                    fallback_hint = (
-                        "No prior work was found in the permitted recent history window. "
-                        "This does not prove that older work was never recorded."
+                    fallback_hint = fallback_hint or (
+                        "No earlier work was found in the permitted time window; "
+                        "older or uncaptured work may still exist."
                     )
-            except Exception as exc:
-                fallback_hint = (
-                    "Unable to read the authorized saved-history window; no previous "
-                    "work has been confirmed."
+            except Exception:
+                fallback_hint = fallback_hint or (
+                    "Previous-work lookup unavailable; no absence of past work was established."
                 )
-        else:
+        elif not list(trace.get("rows") or []):
             fallback_hint = (
-                "Current recording and local today are empty. Saved history may "
-                "exist but has not been checked. To resume yesterday's work, "
-                "authorize an appropriate date range under OpenWorkGraph → History."
+                "Current work is empty. Older work was not checked because saved-history "
+                "AI access is off. To resume a previous day, grant access under History."
             )
 
     # Continuity needs the latest tail, not the first page of a chronological
@@ -673,6 +681,9 @@ def get_current_work_context(
     return core._finish(name, {
         "continuity_context": continuity_context,
         "trace": _slim_trace(trace),
+        "previous_work_trace": _slim_trace(previous_trace),
+        "previous_work_access": saved_history_mode,
+        "previous_work_covers_only_authorized_history": True,
         "task_hints": task_hints,
         "repeated_patterns": repeated_patterns,
         "semantic_activity": semantic_activity,
@@ -721,24 +732,45 @@ def get_goal_context(
         raise ToolError("scope must be current or all")
     name = "get_goal_context"
     core._begin(name)
-    from gateway.goal_context import build_goal_context
-    response = secure_runtime.secure_get(
+    from gateway.goal_context import build_goal_context, _goal_terms
+    bounded = _bounded(event_limit, maximum=500)
+    # A local goal must not silently inspect the OLDEST 400 events of a
+    # multi-day history. Also search short goal keywords across the granted
+    # history so a busy morning does not bury an older relevant agreement.
+    # Use the existing server-side history gate for EVERY query.
+    terms, _hints = _goal_terms(goal)
+    specific = sorted((word for word in terms if len(word) >= 4),
+                      key=lambda word: (-len(word), word))[:2]
+    sample = secure_runtime.secure_get(
         "/v1/workflow-trace",
-        _trace_params(
-            scope=scope, since=since, until=until,
-            limit=_bounded(event_limit, maximum=500),
-        ),
+        _trace_params(scope=scope, since=since, until=until,
+                      limit=bounded, order="newest"),
     )
-    evidence = [
-        row for row in list(response.get("rows") or [])
-        if isinstance(row, dict)
-    ]
+    evidence = [row for row in list(sample.get("rows") or [])
+                if isinstance(row, dict)]
+    seen = {str(row.get("event_id") or "") for row in evidence}
+    incomplete = bool(sample.get("has_more"))
+    for term in specific:
+        targeted = secure_runtime.secure_get(
+            "/v1/workflow-trace",
+            _trace_params(scope=scope, since=since, until=until, query=term,
+                          limit=min(120, bounded), order="newest"),
+        )
+        incomplete = incomplete or bool(targeted.get("has_more"))
+        for row in list(targeted.get("rows") or []):
+            if not isinstance(row, dict):
+                continue
+            event_id = str(row.get("event_id") or "")
+            if event_id and event_id not in seen:
+                evidence.append(row)
+                seen.add(event_id)
     result = build_goal_context(
-        goal, evidence,
-        max_examples=_bounded(max_examples, maximum=8),
-        source_limit_reached=bool(response.get("has_more"))
-            or len(evidence) >= _bounded(event_limit, maximum=500),
+        goal, evidence, max_examples=_bounded(max_examples, maximum=8),
+        source_limit_reached=incomplete,
     )
+    result["retrieval_strategy"] = "newest_first_plus_authorized_keyword_windows"
+    result["keyword_windows_tried"] = len(specific)
+    result["coverage"]["rows_considered"] = len(evidence)
     result["source"] = "authorized_local_canonical_workflow_trace"
     result["scope_used"] = scope
     result["history_access_not_bypassed"] = True

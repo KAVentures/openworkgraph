@@ -95,8 +95,9 @@ def workflow_trace(
     query: str | None = None,
     app_name: str | None = None,
     session_id: str | None = None,
+    order: str = "oldest",
 ) -> dict[str, Any]:
-    """Return a stable chronological page of canonical rich local evidence.
+    """Return a stable page of canonical rich local evidence.
 
     The event metadata is intentionally preserved so an AI can reconstruct work
     directly from observed evidence rather than being limited by OpenWorkGraph's
@@ -108,6 +109,8 @@ def workflow_trace(
     the real identity is never returned to or supplied by the caller.
     """
     page_limit = max(1, min(int(limit), 500))
+    if order not in {"oldest", "newest"}:
+        raise ValueError("order must be oldest or newest")
     state = _decode_cursor(cursor or "") if cursor else {}
 
     if state:
@@ -123,6 +126,10 @@ def workflow_trace(
         except Exception:
             after_id = 0
         effective_scope = str(state.get("scope") or "current")
+        # Cursor records its direction. An old cursor remains oldest-first.
+        effective_order = str(state.get("order") or "oldest")
+        if effective_order not in {"oldest", "newest"}:
+            raise ValueError("invalid workflow-trace order cursor")
     else:
         snapshot_until = until or datetime.now(timezone.utc).isoformat()
         effective_since = since
@@ -133,6 +140,7 @@ def workflow_trace(
         after_at = None
         after_id = 0
         effective_scope = scope if scope in {"current", "all"} else "current"
+        effective_order = order
         if effective_scope == "current" and not effective_since:
             effective_since = os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") or None
 
@@ -145,6 +153,9 @@ def workflow_trace(
     if until:
         effective_until = min(filter(None, [effective_until, until]), key=instant)
 
+    newest = effective_order == "newest"
+    direction = "DESC" if newest else "ASC"
+    comparison = "<" if newest else ">"
     token_query = _redacted_token_query(effective_query)
     clauses, params = _filter_clauses(
         snapshot_until=snapshot_until,
@@ -161,7 +172,7 @@ def workflow_trace(
         # locally, then paginate the matching canonical rows by (time,id).
         with connect() as conn:
             candidates = conn.execute(
-                f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY observed_at ASC, id ASC",
+                f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY observed_at {direction}, id {direction}",
                 tuple(params),
             ).fetchall()
         matches = [row for row in candidates if _matches_redacted_token(row, str(effective_query))]
@@ -169,8 +180,9 @@ def workflow_trace(
         if after_at:
             matches = [
                 row for row in matches
-                if str(row["observed_at"]) > after_at
-                or (str(row["observed_at"]) == after_at and int(row["id"]) > after_id)
+                if (str(row["observed_at"]) < after_at if newest else str(row["observed_at"]) > after_at)
+                or (str(row["observed_at"]) == after_at
+                    and (int(row["id"]) < after_id if newest else int(row["id"]) > after_id))
             ]
         has_more = len(matches) > page_limit
         visible = matches[:page_limit]
@@ -178,7 +190,7 @@ def workflow_trace(
         count_clauses = list(clauses)
         count_params = list(params)
         if after_at:
-            clauses.append("(observed_at > ? OR (observed_at = ? AND id > ?))")
+            clauses.append(f"(observed_at {comparison} ? OR (observed_at = ? AND id {comparison} ?))")
             params.extend([after_at, after_at, after_id])
 
         with connect() as conn:
@@ -187,7 +199,7 @@ def workflow_trace(
                 tuple(count_params),
             ).fetchone()[0])
             db_rows = conn.execute(
-                f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY observed_at ASC, id ASC LIMIT ?",
+                f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY observed_at {direction}, id {direction} LIMIT ?",
                 tuple(params + [page_limit + 1]),
             ).fetchall()
         has_more = len(db_rows) > page_limit
@@ -205,6 +217,7 @@ def workflow_trace(
             "app_name": effective_app or "",
             "session_id": effective_session or "",
             "scope": effective_scope,
+            "order": effective_order,
             "after_at": last.get("observed_at"),
             "after_id": last.get("id"),
         })
@@ -217,6 +230,7 @@ def workflow_trace(
         "next_cursor": next_cursor,
         "snapshot_until": snapshot_until,
         "scope": effective_scope,
+        "order": effective_order,
         "since": effective_since,
         "until": effective_until,
         "query_applied": bool(effective_query),
