@@ -73,8 +73,7 @@
       const sensor=d?.browser_sensor;
       if(!sensor){clearVersionNotice(el);return;}
       if(sensor.version_ok===false){
-        const current=String(sensor.sensor_version||'older version');
-        const expected=String(sensor.expected_sensor_version||d?.expected_browser_sensor_version||'the current version');
+        // Keep protocol/build identifiers in debug logs, not user-facing copy.
         el.className='note';
         const title=document.createElement('strong');
         title.textContent='Browser sensor update available';
