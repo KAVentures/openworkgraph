@@ -114,7 +114,8 @@ def _motifs(events: list[tuple[float, str, float]]):
     for event in sorted(events):
         if event[1] in _IGNORED_APPS:
             continue
-        if sequence and sequence[-1][1] == event[1]:
+        if (sequence and sequence[-1][1] == event[1]
+                and event[0] - sequence[-1][0] <= 300):
             at, name, duration = sequence[-1]
             sequence[-1] = (at, name, min(duration + event[2], 3600.0))
         else:
@@ -215,7 +216,7 @@ def manager_insights(
             "interpretation": "navigation candidate, not verified task identity or time savings",
         })
     results.sort(key=lambda item: (
-        # Returning to the origin app is a strong structural completion cue
+        # Returning to the origin app is a structural navigation cue, not proof of completion
         # for document-send workflows and outranks incidental Slack detours.
         -int(item["apps"][0] == item["apps"][-1]),
         -len(set(item["apps"])),
