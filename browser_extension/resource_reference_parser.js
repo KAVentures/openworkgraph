@@ -74,6 +74,21 @@
     return null;
   }
 
+  function parseStripe(u) {
+    if (u.hostname !== "dashboard.stripe.com" || u.search || u.hash) return null;
+    const chunks = u.pathname.split("/").filter(Boolean);
+    const parts = chunks[0] === "test" ? chunks.slice(1) : chunks;
+    if (parts.length !== 2) return null;
+    const [section, id] = parts;
+    if (section === "invoices" && /^in_[A-Za-z0-9]{10,90}$/.test(id)) {
+      return candidate("stripe", "invoice", "invoice:" + id, u.hostname);
+    }
+    if (section === "refunds" && /^re_[A-Za-z0-9]{10,90}$/.test(id)) {
+      return candidate("stripe", "refund", "refund:" + id, u.hostname);
+    }
+    return null;
+  }
+
   function parseSalesforce(u) {
     const host = u.hostname.toLowerCase();
     if (!(host.endsWith(".salesforce.com") || host.endsWith(".force.com"))) return null;
@@ -134,7 +149,7 @@
       return null;
     }
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u) || parseAIConversation(u);
+    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseStripe(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u) || parseAIConversation(u);
   }
 
   const api = {parse};

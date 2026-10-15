@@ -88,3 +88,18 @@ test('recognizes only known ChatGPT and Claude conversation UUID paths', () => {
   assert.equal(parse('https://claude.ai/settings'), null);
   assert.equal(parse('https://evil.chatgpt.com/c/' + id), null);
 });
+
+
+test('Stripe dashboard native invoice/refund references are opaque and exact', () => {
+  const parse = parser();
+  const inv = parse('https://dashboard.stripe.com/invoices/in_1234567890ABCDEF');
+  const refund = parse('https://dashboard.stripe.com/test/refunds/re_1234567890ABCDEF');
+  assert.equal(inv.provider, 'stripe');
+  assert.equal(inv.resource_kind, 'invoice');
+  assert.equal(inv.resolver_locator, 'invoice:in_1234567890ABCDEF');
+  assert.equal(refund.resource_kind, 'refund');
+  assert.equal(refund.resolver_locator, 'refund:re_1234567890ABCDEF');
+  assert.equal(parse('https://dashboard.stripe.com/invoices/in_1234567890ABCDEF?key=PRIVATE'), null);
+  assert.equal(parse('https://invoice.stripe.com/i/acct_private/live_token'), null);
+  assert.equal(parse('https://dashboard.stripe.com/customers/cus_123456789012'), null);
+});
