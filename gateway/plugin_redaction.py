@@ -110,9 +110,9 @@ _EMPLOYER_CUE = re.compile(
 # name is absent from the first-name lexicon. Only identity-field assignments
 # are matched; ordinary workflow copy and UI labels remain unchanged.
 _CUSTOMER_NAME_FIELD = re.compile(
-    r"(?i:(?<!\\w)(?:customer|client|requester|recipient|contact|kund|"
-    r"kundnamn|kontaktperson)\\s*(?:name|namn)?\\s*[:=]\\s*)"
-    r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}(?:[ \\t]+[A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}){0,2})"
+    r"(?i:(?<!\w)(?:customer|client|requester|recipient|contact|kund|"
+    r"kundnamn|kontaktperson)\s*(?:name|namn)?\s*[:=]\s*)"
+    r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}(?:[ \t]+[A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}){0,2})"
 )
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
