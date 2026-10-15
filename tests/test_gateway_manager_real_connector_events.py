@@ -138,3 +138,14 @@ def test_single_long_session_motifs_skip_only_incidental_steps():
     motifs = insights._motifs(events)
     assert ("Gmail", "Excel", "Fortnox", "Gmail") in motifs
     assert ("Excel", "Slack", "Excel", "Slack") not in motifs
+
+
+def test_separated_same_app_activity_does_not_hide_later_invoicing():
+    ts = datetime(2026, 10, 8, tzinfo=timezone.utc).timestamp()
+    # The employee checked Gmail early in the day, returned six hours later,
+    # then completed the four-stage invoicing navigation in the same session.
+    events = [(ts, "Gmail", 30.0)] + [
+        (ts + 6 * 3600 + i * 60, app, 75.0)
+        for i, app in enumerate(("Gmail", "Excel", "Fortnox", "Gmail"))
+    ]
+    assert ("Gmail", "Excel", "Fortnox", "Gmail") in insights._motifs(events)
