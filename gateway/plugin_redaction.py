@@ -106,6 +106,14 @@ _EMPLOYER_CUE = re.compile(
     r"anställd|employed|i\s+work|work)\s+(?:på|hos|at|for)\s+)"
     r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö\-]{3,49})\b"
 )
+# Mask explicitly labelled customer/contact identities even when an uncommon
+# name is absent from the first-name lexicon. Only identity-field assignments
+# are matched; ordinary workflow copy and UI labels remain unchanged.
+_CUSTOMER_NAME_FIELD = re.compile(
+    r"(?i:(?<!\\w)(?:customer|client|requester|recipient|contact|kund|"
+    r"kundnamn|kontaktperson)\\s*(?:name|namn)?\\s*[:=]\\s*)"
+    r"([A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}(?:[ \\t]+[A-ZÅÄÖ][A-Za-zÅÄÖåäö'-]{1,39}){0,2})"
+)
 _PSEUDONYM = re.compile(r"^(?:OWNER|EMAIL|PERSON|ORG|TARGET|STEP|QUERY|ID|PHONE|SECRET)_[A-Z0-9]{8,24}$")
 _BARE_OWNER = re.compile(r"(?<![\w])OWNER(?![\w])")
 
@@ -195,6 +203,11 @@ class PublicRedactor:
         # even if the generic detector would otherwise use a PERSON token.
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
+        text = _CUSTOMER_NAME_FIELD.sub(
+            lambda match: match.group(0)[:-len(match.group(1))]
+            + self._token("PERSON", match.group(1)),
+            text,
+        )
         text = self.person_detector.redact(text)
         # The high-precision identity/signature cues are shared with local
         # at-rest redaction. Hosted tokens keep their existing account-scoped key.
