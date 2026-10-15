@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 from fastapi import HTTPException, Request, Response
@@ -39,8 +40,38 @@ class AIHistoryAccessRequest(BaseModel):
     expires_minutes: int | None = 60
 
 
-def _history_startup() -> None: initialize_history_retention()
-def _history_shutdown() -> None: cleanup_expired_history(startup=True)
+_retention_stop = threading.Event()
+_retention_thread: threading.Thread | None = None
+
+
+def _retention_loop() -> None:
+    # Periodic enforcement even if start-at-login keeps one recording session
+    # open for months. No timer per HTTP request and no per-event cleanup.
+    while not _retention_stop.wait(3600):
+        try:
+            cleanup_expired_history(startup=False)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("hourly local retention cleanup failed")
+
+
+def _history_startup() -> None:
+    global _retention_thread
+    initialize_history_retention()
+    _retention_stop.clear()
+    _retention_thread = threading.Thread(
+        target=_retention_loop, name="openworkgraph-retention", daemon=True
+    )
+    _retention_thread.start()
+
+
+def _history_shutdown() -> None:
+    _retention_stop.set()
+    if _retention_thread is not None:
+        _retention_thread.join(timeout=2)
+    cleanup_expired_history(startup=True)
+
+
 extend_lifespan(app, startup=_history_startup, shutdown=_history_shutdown)
 
 
