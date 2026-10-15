@@ -668,6 +668,47 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         )
         return result
 
+    @app.get("/v1/record-graph/export")
+    def export_record_graph(
+        resource_ref: str,
+        since: str | None = None,
+        until: str | None = None,
+        actor_id: str | None = None,
+        source_event_limit: int = Query(default=5_000, ge=1, le=25_000),
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        """Portable, read-only exact-ref evidence scoped by token and retention.
+
+        Device credentials are not a broad organization search capability;
+        only explicitly issued evidence:read integration tokens can use this
+        endpoint. A token restricted to one actor never sees anyone else's
+        record evidence. No external provider adapter is invoked here.
+        """
+        require(p, "evidence:read")
+        if p.token_type != "integration":
+            raise HTTPException(status_code=403, detail="integration read scope required")
+        selected_actor = effective_actor(p, actor_id)
+        from .record_export import organization_record_export
+        try:
+            result = organization_record_export(
+                db, organization_id=p.organization_id,
+                resource_ref=resource_ref, actor_id=selected_actor,
+                since=since, until=until,
+                source_event_limit=source_event_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.audit(
+            organization_id=p.organization_id, principal_id=p.token_id,
+            action="record_graph.export.read",
+            details={
+                "observed_event_count": result["observed_event_count"],
+                "record_observed": result["record_observed"],
+                "actor_restricted": bool(selected_actor),
+            },
+        )
+        return result
+
     @app.post("/v1/search")
     def search(request: SearchRequest, p: Principal = Depends(principal)) -> dict[str, Any]:
         require(p, "evidence:read")
