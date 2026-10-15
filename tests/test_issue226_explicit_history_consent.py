@@ -181,3 +181,40 @@ for fn in (gateway_history_preview, gateway_history_confirm):
     result = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
                             capture_output=True, text=True, timeout=40)
     assert result.returncode == 0, result.stderr[-1800:]
+
+
+def test_real_device_privacy_projection_used_for_historical_rows(tmp_path, monkeypatch):
+    import json
+    data=tmp_path/"data";auth=tmp_path/"auth"
+    data.mkdir();auth.mkdir()
+    st=SyncState(data/"gateway_sync_state.db")
+    db=data/"workflow_observer.db"
+    event_metadata={
+        "action":"click",
+        "page":{"hostname":"mail.example.com","pathname":"/users/katarina/private",
+                "preview":"Patient: Karl Gustafsson, 54 år"},
+        "target":{"role":"button","label":"Svar till Michaela"},
+        "typed_value":"Karl Gustafsson",
+        "custom_context":"Katarina",
+    }
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY,event_id TEXT,observed_at TEXT,event_type TEXT,source TEXT,app TEXT,window_title TEXT,metadata_json TEXT,session_id TEXT)")
+        conn.execute("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?)",(
+            1,"historical-private-1","2026-10-12T08:00:00Z","browser_click",
+            "browser_extension","Google Chrome","Gmail · Katarina kommenterade avtalet",
+            json.dumps(event_metadata),"historical-private-session",
+        ))
+    monkeypatch.setattr(hb,"local_owner_names",lambda _config: [])
+    monkeypatch.setattr(hb,"load_or_create_upload_privacy_key",lambda _auth: "a"*64)
+    monkeypatch.setattr(hb,"read_discovery_state",lambda **kw:{"enabled":False})
+    settings=SimpleNamespace(local_policy={"share_window_titles":True, "share_metadata":True})
+    ctx=dict(data_dir=data,auth_dir=auth,settings=settings,state=st,boundary=1)
+    rows,counters=hb._eligible(tmp_path/"config.json",ctx,
+        "2026-10-12T00:00:00+00:00","2026-10-13T00:00:00+00:00",{})
+    assert counters["eligible"]==1
+    result=json.dumps(rows[0],ensure_ascii=False)
+    for private in ("Karl Gustafsson","Katarina","Michaela","/users/katarina",
+                    "typed_value","custom_context","preview"):
+        assert private not in result
+    assert rows[0]["metadata"]["page"]["hostname"]=="mail.example.com"
+    assert rows[0]["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
