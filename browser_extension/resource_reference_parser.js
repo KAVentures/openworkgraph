@@ -74,6 +74,25 @@
     return null;
   }
 
+  function parseStripe(u) {
+    if (u.hostname !== "dashboard.stripe.com" || u.search || u.hash) return null;
+    const chunks = u.pathname.split("/").filter(Boolean);
+    // Stripe's Dashboard can prefix a selected account; accept only a
+    // well-formed account ID, never arbitrary tenant or session path segments.
+    let parts = chunks;
+    if (/^acct_[A-Za-z0-9]{8,90}$/.test(parts[0] || "")) parts = parts.slice(1);
+    if (parts[0] === "test") parts = parts.slice(1);
+    if (parts.length !== 2) return null;
+    const [section, id] = parts;
+    if (section === "invoices" && /^in_[A-Za-z0-9]{10,90}$/.test(id)) {
+      return candidate("stripe", "invoice", "invoice:" + id, u.hostname);
+    }
+    if (section === "refunds" && /^re_[A-Za-z0-9]{10,90}$/.test(id)) {
+      return candidate("stripe", "refund", "refund:" + id, u.hostname);
+    }
+    return null;
+  }
+
   function parseSalesforce(u) {
     const host = u.hostname.toLowerCase();
     if (!(host.endsWith(".salesforce.com") || host.endsWith(".force.com"))) return null;
@@ -134,7 +153,7 @@
       return null;
     }
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u) || parseAIConversation(u);
+    return parseGoogleWorkspace(u) || parseGmail(u) || parseGithub(u) || parseStripe(u) || parseSalesforce(u) || parseJira(u) || parseLinear(u) || parseAIConversation(u);
   }
 
   const api = {parse};

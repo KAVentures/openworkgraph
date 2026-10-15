@@ -18,6 +18,8 @@ from .local_reference_lookup import resolve_resource_reference
 from .workflow_evidence import _load
 from . import outcome_tracker
 from .gh_cli import find_gh_cli
+from .jira_source_evidence import jira_issue_receipt
+from .stripe_source_evidence import stripe_record_receipt
 
 _RESOURCE = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _GITHUB_PR = re.compile(r"^([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})/pull/([1-9][0-9]{0,9})$")
@@ -195,10 +197,17 @@ def record_graph(
     if include_source_status:
         if not matched:
             source = _source_unknown("record_not_observed_in_permitted_evidence_window")
-        elif identity != ("github", "pull_request", "github.com"):
-            source = _source_unknown("no_approved_source_adapter_for_record_type")
-        else:
+        elif identity == ("github", "pull_request", "github.com"):
             source = (source_reader or _gh_pr_snapshot)(resource_ref)
+        elif identity and identity[0] == "jira" and identity[1] == "issue" and identity[2].endswith(".atlassian.net"):
+            # A Jira status read requires a second, provider-specific opt-in,
+            # and a strict match against the configured tenant. The source
+            # client never broadens this permission via API parameters.
+            source = (source_reader or jira_issue_receipt)(resource_ref)
+        elif identity and identity[0] == "stripe" and identity[1] in {"invoice", "refund"} and identity[2] == "dashboard.stripe.com":
+            source = (source_reader or stripe_record_receipt)(resource_ref)
+        else:
+            source = _source_unknown("no_approved_source_adapter_for_record_type")
     return {
         "format": "openworkgraph.record-graph.v1",
         "resource_ref": resource_ref,
@@ -213,7 +222,9 @@ def record_graph(
         "source_event_limit_reached": len(raw) >= max_rows,
         "source_window": {"since": since, "until": until},
         "observed_same_record_not_verified_handoff": True,
-        "source_log_join_supported": identity == ("github", "pull_request", "github.com"),
+        "source_log_join_supported": bool(identity and (identity == ("github", "pull_request", "github.com") or
+            (identity[0] == "jira" and identity[1] == "issue" and identity[2].endswith(".atlassian.net")) or
+            (identity[0] == "stripe" and identity[1] in {"invoice", "refund"} and identity[2] == "dashboard.stripe.com"))),
         "verified_customer_outcome": False,
         "no_event_means_not_observed_not_no_work": True,
         "structural_evidence_only": True,

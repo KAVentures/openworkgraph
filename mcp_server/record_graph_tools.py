@@ -30,15 +30,18 @@ def register_record_graph_tools(mcp: Any, runtime_module: Any) -> None:
         until: str | None = None,
         source_event_limit: int = 5000,
     ) -> dict[str, Any]:
-        """Read exact-record OWG activity, optionally corroborated with GitHub.
+        """Read exact-record OWG activity, optionally corroborated with GitHub/Jira.
 
         Use only when the task needs evidence about a specific previously
         observed business record. Select an opaque owg:r: reference from prior
         authorized OWG evidence; do not guess IDs or match by customer name.
         An optional GitHub refresh requires the user's existing local GitHub
-        outcome-tracking opt-in. A source-reported merge is not customer success.
+        outcome-tracking opt-in. Optional Jira issue outcomes and assignee
+        transitions require separate, explicit tenant-pinned local Jira read
+        authorization. Source-reported merges or resolved issues are not
+        proof of customer satisfaction or a successful refund.
         Missing references or unavailable logs mean 'unknown', not no work.
-        Other source systems and proven cross-person handoffs aren't supported.
+        Other source systems and proven human work acceptance are not supported.
         """
         if not _REF.fullmatch(str(resource_ref or "")):
             raise ToolError("A normalized owg:r: reference from observed evidence is required.")

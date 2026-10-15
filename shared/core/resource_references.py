@@ -23,6 +23,7 @@ _ALLOWED_KINDS: dict[str, set[str]] = {
     "gmail": {"thread_locator"},
     "google_drive": {"document", "spreadsheet", "presentation", "file"},
     "github": {"pull_request", "issue"},
+    "stripe": {"invoice", "refund"},
     "salesforce": {"record"},
     "jira": {"issue"},
     "linear": {"issue"},
@@ -37,6 +38,7 @@ _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,200}$")
 _ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
 _SALESFORCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}:[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$")
 _GITHUB_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}/(?:pull|issues)/[1-9][0-9]{0,9}$")
+_STRIPE_ID_RE = re.compile(r"^(?:invoice:in_|refund:re_)[A-Za-z0-9]{10,90}$")
 _LINEAR_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}:[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
 
 _SENSOR_NAMESPACE = "openworkgraph-resource-reference-sensor-v1:"
@@ -52,6 +54,8 @@ def _host_allowed(provider: str, host: str) -> bool:
         return host in {"docs.google.com", "drive.google.com"}
     if provider == "github":
         return host == "github.com"
+    if provider == "stripe":
+        return host == "dashboard.stripe.com"
     if provider == "salesforce":
         return host.endswith(".salesforce.com") or host.endswith(".force.com")
     if provider == "jira":
@@ -80,6 +84,8 @@ def _locator_valid(provider: str, kind: str, locator: str) -> bool:
         return bool(prefix and locator.startswith(prefix) and _SAFE_ID_RE.fullmatch(locator[len(prefix):]))
     if provider == "github":
         return bool(_GITHUB_RE.fullmatch(locator))
+    if provider == "stripe" and kind in {"invoice", "refund"}:
+        return bool(_STRIPE_ID_RE.fullmatch(locator) and locator.startswith(kind + ":"))
     if provider == "salesforce" and kind == "record":
         return bool(_SALESFORCE_RE.fullmatch(locator))
     if provider == "jira" and kind == "issue":
@@ -244,6 +250,20 @@ def resource_reference_from_url(
         provider = "github"
         kind = "pull_request" if parts[2] == "pull" else "issue"
         locator = f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}"
+    elif host == "dashboard.stripe.com" and not parsed.query and not parsed.fragment:
+        # Native Stripe dashboard references only, never customer-hosted
+        # invoice URLs or receipt tokens. Do not accept arbitrary path tails.
+        stripe_parts = parts
+        if stripe_parts and re.fullmatch(r"acct_[A-Za-z0-9]{8,90}", stripe_parts[0]):
+            stripe_parts = stripe_parts[1:]
+        if stripe_parts and stripe_parts[0] == "test":
+            stripe_parts = stripe_parts[1:]
+        if len(stripe_parts) == 2 and stripe_parts[0] == "invoices":
+            if re.fullmatch(r"in_[A-Za-z0-9]{10,90}", stripe_parts[1]):
+                provider, kind, locator = "stripe", "invoice", "invoice:" + stripe_parts[1]
+        elif len(stripe_parts) == 2 and stripe_parts[0] == "refunds":
+            if re.fullmatch(r"re_[A-Za-z0-9]{10,90}", stripe_parts[1]):
+                provider, kind, locator = "stripe", "refund", "refund:" + stripe_parts[1]
     elif (host.endswith(".salesforce.com") or host.endswith(".force.com")) and "r" in parts:
         index = parts.index("r")
         if index + 2 < len(parts):
