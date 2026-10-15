@@ -242,18 +242,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openPrivacyPage(_ section: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\\(section)") {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\(section)") {
             NSWorkspace.shared.open(url)
         }
     }
 
     @objc private func showPermissions() {
         let state = runPermissionProbe("status")
-        let accessOK = state.contains("\\"accessibility\\": true")
-        let inputOK = state.contains("\\"input_monitoring\\": true")
+        let accessOK = state.contains("\"accessibility\": true")
+        let inputOK = state.contains("\"input_monitoring\": true")
         let alert = NSAlert()
         alert.messageText = "OpenWorkGraph macOS permissions"
-        alert.informativeText = "Accessibility: \\(accessOK ? "granted" : "not confirmed")\\nInput Monitoring: \\(inputOK ? "granted" : "not confirmed")\\n\\nAccessibility enables foreground window titles and safe UI labels. Input Monitoring enables activity counts; OpenWorkGraph never stores typed keys or passwords. After granting permission, return to this menu to check again. macOS may require restarting OpenWorkGraph."
+        alert.informativeText = "Accessibility: \(accessOK ? "granted" : "not confirmed")\nInput Monitoring: \(inputOK ? "granted" : "not confirmed")\n\nAccessibility enables foreground window titles and safe UI labels. Input Monitoring enables activity counts; OpenWorkGraph never stores typed keys or passwords. After granting permission, return to this menu to check again. macOS may require restarting OpenWorkGraph."
         alert.addButton(withTitle: "Request Accessibility")
         alert.addButton(withTitle: "Request Input Monitoring")
         alert.addButton(withTitle: "Close")
@@ -276,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() != .alertFirstButtonReturn { return }
         let script = installRoot.appendingPathComponent("UNINSTALL_OPENWORKGRAPH.command")
-        let source = "#!/bin/bash\\nexec /bin/bash \\(String(reflecting: installRoot.appendingPathComponent("uninstall.sh").path))\\n"
+        let source = "#!/bin/bash\nexec /bin/bash \(String(reflecting: installRoot.appendingPathComponent("uninstall.sh").path))\n"
         do {
             try source.write(to: script, atomically: true, encoding: .utf8)
             _ = chmod(script.path, 0o700)
