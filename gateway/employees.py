@@ -313,6 +313,55 @@ def import_csv(db: GatewayDB, organization_id: str, text: str) -> dict[str, Any]
     return {"created": created, "updated": updated, "errors": errors[:200], "error_count": len(errors), "changed": changed}
 
 
+def revoke_enrolled_device_and_its_invitation(
+    db: GatewayDB, *, organization_id: str, device_id: str,
+) -> dict[str, Any]:
+    """IT-admin revocation also invalidates the *issuing personal invitation*.
+
+    Do not revoke shared organization invitations: a group code may still be
+    legitimately used by other workers. Both changes occur in one transaction
+    so the old device cannot rejoin via an unused seat if IT revokes it.
+    """
+    org = _org(organization_id)
+    device = str(device_id or "").strip()
+    if not device or len(device) > 512:
+        raise EmployeeError("device_id must be 1-512 characters", status_code=400)
+    now = _now()
+    with db.connect() as conn:
+        source = _one(
+            db, conn,
+            """SELECT employee_id, identity_source, linked_by
+               FROM gateway_device_identity
+               WHERE organization_id = ? AND device_id = ?""",
+            (org, device),
+        )
+        updated = db._execute(
+            conn,
+            "UPDATE access_tokens SET revoked_at = ? "
+            "WHERE organization_id = ? AND device_id = ? "
+            "AND token_type = 'device' AND revoked_at IS NULL",
+            (now, org, device),
+        )
+        count = max(0, int(updated.rowcount or 0))
+        invite_id = str(source.get("linked_by") or "")
+        revoked_invitation = False
+        if count and source.get("identity_source") in ("personal_invite", "sso_verified") and invite_id:
+            invite = db._execute(
+                conn,
+                """UPDATE gateway_personal_invites SET revoked_at = ?
+                   WHERE organization_id = ? AND employee_id = ?
+                     AND invite_id = ? AND revoked_at IS NULL""",
+                (now, org, str(source.get("employee_id") or ""), invite_id),
+            )
+            revoked_invitation = bool(invite.rowcount)
+    return {
+        "revoked_credentials": count,
+        "personal_invitation_revoked": revoked_invitation,
+        "new_personal_invitation_required": revoked_invitation,
+        "shared_organization_invitation_unaffected": True,
+    }
+
+
 def offboard_employee(db: GatewayDB, organization_id: str, employee_id: str) -> dict[str, Any]:
     from .human_access import set_actor_teams
 
