@@ -23,7 +23,9 @@ if [ "$YES" -ne 1 ]; then
 fi
 
 # Never mistake an unrelated process on 8787 for an OWG process and kill it.
-if /usr/bin/lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
+LSOF=/usr/sbin/lsof
+if [ ! -x "$LSOF" ]; then LSOF=/usr/bin/lsof; fi
+if [ -x "$LSOF" ] && "$LSOF" -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Port 8787 is in use. Quit OpenWorkGraph before uninstalling." >&2
   exit 2
 fi
@@ -34,6 +36,24 @@ if [ -f "$CONNECT" ]; then
   if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
     for candidate in "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/.runtime/bin/python" /usr/bin/python3; do
       if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+    done
+  fi
+  if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    # Signed offline bundles keep their actual Python under
+    # Contents/Resources/openworkgraph/.runtime, not ~/.venv.
+    for bundle in "$SYSTEM_APPLICATIONS/OpenWorkGraph.app" "$USER_APPLICATIONS/OpenWorkGraph.app"; do
+      marker="$bundle/Contents/Resources/openworkgraph/EMBEDDED_PYTHON.txt"
+      if [ -f "$marker" ]; then
+        relative="$(head -n 1 "$marker")"
+        case "$relative" in
+          .runtime/*) candidate="$bundle/Contents/Resources/openworkgraph/$relative" ;;
+          *) candidate="" ;;
+        esac
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+          PYTHON="$candidate"
+          break
+        fi
+      fi
     done
   fi
   if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
