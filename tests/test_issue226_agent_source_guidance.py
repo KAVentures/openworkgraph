@@ -1,8 +1,9 @@
 """MCP tool guidance stays aligned with implemented, consent-gated source readers."""
-from mcp_server.record_graph_tools import register_record_graph_tools
+from mcp_server import record_graph_tools
 
 
-def test_local_mcp_record_graph_explains_stripe_jira_and_github_limits():
+def test_local_mcp_record_graph_explains_stripe_jira_and_github_limits(monkeypatch):
+    monkeypatch.setattr(record_graph_tools, "_REGISTERED", set())
     handlers = []
     class FakeMCP:
         def tool(self, **kwargs):
@@ -11,7 +12,7 @@ def test_local_mcp_record_graph_explains_stripe_jira_and_github_limits():
                 return fn
             return register
     server = FakeMCP()
-    register_record_graph_tools(server, object())
+    record_graph_tools.register_record_graph_tools(server, object())
     assert len(handlers) == 1
     description = handlers[0].__doc__ or ""
     for expected in ("GitHub", "Jira", "Stripe", "default-off",
