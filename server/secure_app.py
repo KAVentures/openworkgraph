@@ -671,7 +671,10 @@ async def change_mcp_http(request: Request):
 
 @app.post("/v1/gateway-history/preview")
 async def gateway_history_preview(request: Request):
-    """Read-only aggregate preview; never causes an upload."""
+    """Dashboard-session-only preview; no background AI bearer consent."""
+    from fastapi import HTTPException
+    if not _dashboard_authenticated(request):
+        raise HTTPException(status_code=403, detail="explicit dashboard session required for historical sharing")
     from .main import CONFIG_PATH
     from connector.history_backfill import preview
     from fastapi import HTTPException
@@ -689,7 +692,10 @@ async def gateway_history_preview(request: Request):
 
 @app.post("/v1/gateway-history/confirm")
 async def gateway_history_confirm(request: Request):
-    """Explicitly confirmed, date-bounded older sharing, rollout-disabled."""
+    """Dashboard-session-only historical consent; automation bearer forbidden."""
+    from fastapi import HTTPException
+    if not _dashboard_authenticated(request):
+        raise HTTPException(status_code=403, detail="explicit dashboard session required for historical sharing")
     from .main import CONFIG_PATH
     from connector.history_backfill import confirm
     from fastapi import HTTPException
