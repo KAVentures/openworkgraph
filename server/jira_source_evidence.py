@@ -252,6 +252,22 @@ def jira_issue_receipt(
                 reversed_transitions += 1
             seen_transitions.add((frm, to))
 
+        routing_edges = [
+            {
+                "from_actor_ref": row["from_actor_ref"],
+                "to_actor_ref": row["to_actor_ref"],
+                "source_audit_ref": row["source_event_ref"],
+                "source_observed_at": row["observed_at"],
+                "evidence": "authoritative_jira_assignee_transition",
+                "same_source_issue": True,
+                "accepted_by_new_assignee": False,
+                "work_completed_by_new_assignee": False,
+            }
+            for row in audit if row["action"] == "assignee_transition"
+            and row.get("from_actor_ref") and row.get("to_actor_ref")
+            and row["from_actor_ref"] != row["to_actor_ref"]
+        ]
+
         return {
             "availability": "source_reported",
             "provider": "jira",
@@ -279,6 +295,8 @@ def jira_issue_receipt(
                 1 for row in audit if row["action"] == "assignee_transition"
             ),
             "verified_human_handoffs": 0,
+            "source_verified_routing_edges": routing_edges,
+            "source_verified_routing_edges_complete": audit_available and not audit_truncated,
             "observed_structural_status_reversals": reversed_transitions,
             "status_reversal_means_business_failure": False,
             "missing_status_reversals_means_no_rework": False,
