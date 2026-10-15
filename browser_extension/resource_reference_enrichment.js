@@ -28,6 +28,7 @@
     if (provider === "gmail") return host === "mail.google.com";
     if (provider === "google_drive") return host === "docs.google.com" || host === "drive.google.com";
     if (provider === "github") return host === "github.com";
+    if (provider === "stripe") return host === "dashboard.stripe.com";
     if (provider === "salesforce") return host.endsWith(".salesforce.com") || host.endsWith(".force.com");
     if (provider === "jira") return host.endsWith(".atlassian.net");
     if (provider === "linear") return host === "linear.app";
