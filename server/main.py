@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from shared.core.browser_privacy import harden_browser_event, sanitize_browser_page, browser_event_is_excluded
@@ -148,9 +149,52 @@ class Event(BaseModel):
     screenshot_path: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("observed_at")
+    @classmethod
+    def valid_time(cls, value: str) -> str:
+        try:
+            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                raise ValueError("timestamp must include timezone")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("observed_at must be a timezone-aware ISO-8601 timestamp") from exc
+        if moment.astimezone(timezone.utc) > datetime.now(timezone.utc) + timedelta(minutes=10):
+            raise ValueError("observed_at is too far in the future")
+        return value
+
+    @field_validator("duration_seconds")
+    @classmethod
+    def valid_duration(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0 <= value <= 86400:
+            raise ValueError("duration_seconds must be finite and between 0 and 86400")
+        return value
+
+    @field_validator("metadata")
+    @classmethod
+    def valid_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        def check(item: Any, depth: int = 0) -> None:
+            if depth > 16:
+                raise ValueError("metadata nesting exceeds 16 levels")
+            if isinstance(item, dict):
+                if len(item) > 1024:
+                    raise ValueError("metadata has too many keys")
+                for entry in item.values():
+                    check(entry, depth + 1)
+            elif isinstance(item, list):
+                if len(item) > 1024:
+                    raise ValueError("metadata array too long")
+                for entry in item:
+                    check(entry, depth + 1)
+            elif isinstance(item, float) and not math.isfinite(item):
+                raise ValueError("metadata contains a non-finite number")
+        check(value)
+        if len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 131072:
+            raise ValueError("metadata exceeds 128 KiB")
+        return value
+
 
 class EventBatch(BaseModel):
-    events: list[Event]
+    events: list[Event] = Field(max_length=500)
 
 
 class Heartbeat(BaseModel):
