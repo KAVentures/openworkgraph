@@ -438,8 +438,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func localPortInUse() -> Bool {
+        // Refuse to send capture to a different localhost listener, even when
+        // it presents an HTTP /health route that resembles OpenWorkGraph.
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        probe.arguments = ["-nP", "-iTCP:8787", "-sTCP:LISTEN"]
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        do {
+            try probe.run()
+            probe.waitUntilExit()
+            return probe.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     private func startChild(openDashboard: Bool) {
         if child?.isRunning == true || isQuitting { return }
+        if localPortInUse() {
+            let alert = NSAlert()
+            alert.messageText = "Port 8787 is already in use"
+            alert.informativeText = "OpenWorkGraph did not start or send evidence to that process. Another copy of OpenWorkGraph or a developer server (such as wrangler dev) may be using port 8787. Quit that process, then choose Restart OpenWorkGraph from this menu."
+            alert.runModal()
+            return
+        }
 
         let process = Process()
         process.terminationHandler = { [weak self, weak process] _ in
