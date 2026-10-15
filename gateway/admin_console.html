@@ -50,8 +50,10 @@ body.readonly .write{display:none!important}
 <h2>Set up your administrator account</h2>
 <p class="help" id="setupWho"></p>
 <h3>1. Add this Gateway to your authenticator app</h3>
-<p class="help">In Google Authenticator, Microsoft Authenticator, 1Password or similar, choose “enter a setup key” and type this key (account: your email, time-based).</p>
+<p class="help">Scan the QR code with Google Authenticator, Microsoft Authenticator, 1Password or another authenticator app. The code is generated on this page, without sending the secret to an external QR service. Or enter the setup key manually (time-based; account: your email).</p>
+<div id="setupQr" role="img" aria-label="Authenticator setup QR code" style="margin:12px 0;max-width:192px"></div>
 <div class="secret" id="setupSecret"></div><p><a id="setupUri" class="muted">Open in authenticator app</a></p>
+<p class="help">This setup is recoverable after reloading this tab, and the same pending secret stays valid until activation or the invitation expires. Keep this code private.</p>
 <h3>2. Choose a password</h3>
 <label for="suPw">Password <span class="muted">(at least 12 characters)</span></label><input id="suPw" type="password" autocomplete="new-password" style="width:100%">
 <label for="suPw2">Repeat password</label><input id="suPw2" type="password" autocomplete="new-password" style="width:100%">
@@ -106,6 +108,7 @@ body.readonly .write{display:none!important}
 <section id="audit"><div class="card"><h2>Audit log</h2><p class="help">Admin actions, enrollment and evidence reads on this Gateway. Actions by administrators show their email.</p><table><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody id="aud"></tbody></table></div></section>
 </main></div>
 <div id="msg" role="status" aria-live="polite"></div>
+<script nonce="__NONCE__" src="/admin/qrcode.js"></script>
 <script nonce="__NONCE__">
 (() => {
 const $=id=>document.getElementById(id), S=sessionStorage;
@@ -126,8 +129,23 @@ async function signIn(){const o=$('orgIn').value.trim();if(!needOrg(o))return;tr
 async function tokenSignIn(){const o=$('orgIn').value.trim();if(!needOrg(o))return;const t=$('tokenIn').value.trim();try{await raw('GET','/v1/admin/auth/me',undefined,t);$('tokenIn').value='';saveOrg(o,$('orgNameIn').value.trim());begin(t)}catch(e){toast('Sign-in failed: '+e.message)}}
 async function ssoIn(){const o=$('orgIn').value.trim();if(!needOrg(o))return;saveOrg(o,$('orgNameIn').value.trim());try{const r=await raw('POST','/v1/sso/start',{purpose:'admin'});location.href=r.redirect_url}catch(e){toast(e.message)}}
 async function bootstrapGo(){try{const r=await raw('POST','/v1/admin/auth/bootstrap',{bootstrap_token:$('bsToken').value.trim(),email:$('bsEmail').value,display_name:$('bsName').value});$('bsToken').value='';openSetup(r.setup_token)}catch(e){toast(e.message)}}
-async function openSetup(t){setupToken=t;try{const s=await raw('POST','/v1/admin/auth/setup/start',{setup_token:t});$('setupWho').textContent=`${s.display_name||s.email} · ${s.email} · role: ${s.role}`;$('setupSecret').textContent=s.totp_secret.replace(/(.{4})/g,'$1 ').trim();$('setupUri').href=s.otpauth_uri;$('suOrg').value=org;$('suOrgName').value=orgName;screen('setup')}catch(e){toast(e.message);showAuth()}}
-async function setupGo(){if($('suPw').value!==$('suPw2').value){toast('The passwords do not match');return}const o=$('suOrg').value.trim();if(!needOrg(o))return;try{const r=await raw('POST','/v1/admin/auth/setup/complete',{setup_token:setupToken,password:$('suPw').value,totp_code:$('suCode').value});$('suPw').value=$('suPw2').value='';saveOrg(o,$('suOrgName').value.trim());begin(r.session_token);toast('Account activated')}catch(e){toast(e.message)}}
+async function openSetup(t){
+  setupToken=t;
+  S.setItem('owg_admin_pending_setup',t); // tab-only, never localStorage or URL query
+  try{
+    const s=await raw('POST','/v1/admin/auth/setup/start',{setup_token:t});
+    $('setupWho').textContent=`${s.display_name||s.email} · ${s.email} · role: ${s.role}`;
+    $('setupSecret').textContent=s.totp_secret.replace(/(.{4})/g,'$1 ').trim();
+    $('setupUri').href=s.otpauth_uri;
+    const qr=$('setupQr');if(qr){qr.replaceChildren();try{
+      if(typeof QRCode==='function')new QRCode(qr,{text:s.otpauth_uri,width:184,height:184,
+        correctLevel:QRCode.CorrectLevel.M});
+      else qr.textContent='QR unavailable; enter the key below.';
+    }catch(_){qr.textContent='QR unavailable; enter the key below.';}}
+    $('suOrg').value=org;$('suOrgName').value=orgName;screen('setup');
+  }catch(e){S.removeItem('owg_admin_pending_setup');setupToken='';toast(e.message);showAuth();}
+}
+async function setupGo(){if($('suPw').value!==$('suPw2').value){toast('The passwords do not match');return}const o=$('suOrg').value.trim();if(!needOrg(o))return;try{const r=await raw('POST','/v1/admin/auth/setup/complete',{setup_token:setupToken,password:$('suPw').value,totp_code:$('suCode').value});$('suPw').value=$('suPw2').value='';saveOrg(o,$('suOrgName').value.trim());S.removeItem('owg_admin_pending_setup');setupToken='';begin(r.session_token);toast('Account activated')}catch(e){toast(e.message)}}
 async function begin(t){token=t;S.setItem('owg_admin_token',t);try{me=await api('GET','/v1/admin/auth/me')}catch(e){return}document.body.classList.toggle('readonly',!me.can_write);$('adminsTab').hidden=!me.is_owner;$('orgLabel').innerHTML=`${esc(orgName)} (${esc(org)})<br><span style="opacity:.8">${esc(me.email||me.display_name)} · ${esc(me.role)}${me.can_write?'':' (read-only)'}</span>`;$('lnUrl').value=location.origin;$('meUrl').textContent=location.origin+'/me';screen('app');show('overview')}
 function show(tab){document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===tab)));document.querySelectorAll('main section').forEach(s=>s.classList.toggle('on',s.id===tab));const fn={overview:loadOverview,insights:loadInsights,people:loadPeople,invite:loadLinks,policy:loadPolicy,retention:loadRetention,tokens:loadTokens,admins:loadAdmins,identity:loadIdentity,audit:loadAudit}[tab];if(fn)fn().catch(e=>toast(e.message))}
 async function loadOverview(){const[rt,pp,links]=await Promise.all([api('GET','/v1/admin/runtime'),api('GET','/v1/admin/people/'+E(org)),api('GET','/v1/admin/enrollment-links/'+E(org))]);const devs=[...pp.employees.flatMap(e=>e.devices),...pp.unlinked_devices];const recent=devs.filter(d=>d.last_evidence_at&&Date.now()-new Date(d.last_evidence_at)<86400000).length;const unverified=pp.unlinked_devices.length+pp.employees.flatMap(e=>e.devices).filter(d=>d.identity_source==='self_reported').length;$('stats').innerHTML=[['Employees',pp.employees.length],['Enrolled computers',devs.length],['Sent evidence in last 24 h',recent],['Silent > 24 h',devs.length-recent],['Unverified identities',unverified],['Open group invitations',(links.items||[]).filter(l=>l.status==='active').length]].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');$('runtime').innerHTML=`Version <b>${esc(rt.version)}</b> · storage <b>${esc(rt.storage)}</b>`+(String(rt.storage).includes('sqlite')?' · <span class="pill warn">development storage: use PostgreSQL for a real rollout</span>':'')+(location.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(location.hostname)?' · <span class="pill bad">not HTTPS</span>':'')+(pp.settings.require_verified_identity?' · <span class="pill ok">verified identities required</span>':'')}
@@ -194,6 +212,7 @@ const frag=new URLSearchParams(location.hash.slice(1));if(location.hash)history.
 // A link pasted into this already-open tab only changes the fragment; reload so it is read and removed.
 addEventListener('hashchange',()=>location.reload());
 if(frag.get('setup'))openSetup(frag.get('setup'));
+else if(S.getItem('owg_admin_pending_setup'))openSetup(S.getItem('owg_admin_pending_setup'));
 else if(frag.get('session')){begin(frag.get('session'))}
 else if(frag.get('error')){toast(frag.get('error'));showAuth()}
 else if(token&&org)begin(token);else showAuth();

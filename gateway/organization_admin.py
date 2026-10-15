@@ -252,6 +252,16 @@ def install_organization_admin(
             raise HTTPException(status_code=400, detail="organization_id must be 1-512 characters")
         return {"organization_id": org, "policy": db.get_policy(org)}
 
+    @app.get("/admin/qrcode.js", include_in_schema=False)
+    def admin_qrcode_script() -> Response:
+        # Bundled MIT-licensed generator, fully offline. Do not send an
+        # authenticator URI/seed to any third-party QR web service.
+        code = Path(__file__).with_name("qrcode.min.js").read_text(encoding="utf-8")
+        return Response(content=code, media_type="application/javascript",
+                        headers={"Cache-Control": "no-store",
+                                 "X-Content-Type-Options": "nosniff",
+                                 "Referrer-Policy": "no-referrer"})
+
     @app.get("/admin", include_in_schema=False)
     def admin_console() -> Response:
         """Public shell only; every data/action request still needs admin auth."""

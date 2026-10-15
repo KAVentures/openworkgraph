@@ -390,10 +390,23 @@ def _setup_row(db: GatewayDB, conn: Any, setup_token: str) -> dict[str, Any]:
 
 
 def start_setup(db: GatewayDB, setup_token: str) -> dict[str, Any]:
-    secret = new_totp_secret()
     with db.connect() as conn:
         row = _setup_row(db, conn, setup_token)
-        db._execute(conn, "UPDATE gateway_admins SET totp_pending_secret = ? WHERE admin_id = ?", (secret, row["admin_id"]))
+        # Re-opening setup after a refresh MUST NOT rotate the pending TOTP
+        # seed and invalidate a QR code already scanned into the authenticator.
+        # The conditional update prevents concurrent tabs from replacing it.
+        secret = str(row.get("totp_pending_secret") or "")
+        if not secret:
+            candidate = new_totp_secret()
+            db._execute(
+                conn,
+                "UPDATE gateway_admins SET totp_pending_secret = ? WHERE admin_id = ? AND (totp_pending_secret = '' OR totp_pending_secret IS NULL)",
+                (candidate, row["admin_id"]),
+            )
+            refreshed = _one(db, conn, "SELECT totp_pending_secret FROM gateway_admins WHERE admin_id = ?", (row["admin_id"],))
+            secret = str((refreshed or {}).get("totp_pending_secret") or "")
+            if not secret:
+                raise AdminAuthError("could not initialize authenticator setup; retry")
     return {
         "email": row["email"],
         "display_name": row.get("display_name") or "",
