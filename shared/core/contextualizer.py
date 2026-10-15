@@ -126,8 +126,24 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
             "clipboard_source_observed",
             "clipboard_source_tab_context_id",
         ):
-            if key in meta:
-                context_metadata[key] = meta[key]
+            if key not in meta:
+                continue
+            value = meta[key]
+            if key in {"clipboard_transfer_id", "linked_copy_event_id", "clipboard_source_tab_context_id"}:
+                # Restrict opaque identifiers rather than promoting an
+                # untrusted value (such as a URL or message) to AI context.
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value):
+                    context_metadata[key] = value
+            elif key in {"clipboard_source_observed", "clipboard_contents_captured"}:
+                if isinstance(value, bool):
+                    context_metadata[key] = value
+            elif key == "clipboard_link_age_seconds":
+                try:
+                    seconds = float(value)
+                    if 0 <= seconds <= 7200:
+                        context_metadata[key] = seconds
+                except (TypeError, ValueError):
+                    pass
 
     # The extension already collects a browser/tab context ID locally. Keep
     # only a bounded opaque reference to distinguish tabs during read-time
