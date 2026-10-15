@@ -240,7 +240,7 @@ function savedDaySurface(event){
   // privacy-hardened browser hostname, never an untrusted page title.
   const page=(event.metadata&&event.metadata.page)||{};
   const host=String(event.page_host||event.browser_hostname||page.hostname||'')
-    .trim().toLowerCase().replace(/\\.$/,'');
+    .trim().toLowerCase().replace(/\.$/,'');
   const sites=[
     ['mail.google.com','Gmail'],['gmail.com','Gmail'],
     ['fortnox.se','Fortnox'],['atlassian.net','Jira'],
@@ -258,6 +258,11 @@ function savedDaySurface(event){
 function savedDayAction(event){
   const actions={
     focus_span:'Focused on application',
+    focus:'Focused on application',
+    navigate:'Visited page',
+    copy:'Copied (contents not recorded)',
+    paste:'Pasted (contents not recorded)',
+    click:'Clicked',
     resource_reference_observed:'Viewed work reference',
     browser_navigation:'Visited page',
     browser_click:'Clicked',
