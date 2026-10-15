@@ -213,8 +213,12 @@ def test_real_device_privacy_projection_used_for_historical_rows(tmp_path, monke
         "2026-10-12T00:00:00+00:00","2026-10-13T00:00:00+00:00",{})
     assert counters["eligible"]==1
     result=json.dumps(rows[0],ensure_ascii=False)
-    for private in ("Karl Gustafsson","Katarina","Michaela","/users/katarina",
-                    "typed_value","custom_context","preview"):
+    # Privacy audit flags such as preview_text_dropped are safe, and SHOULD
+    # remain visible. Forbid the actual raw "preview" field and private values.
+    for private in ("Karl Gustafsson", "Katarina", "Michaela",
+                    "/users/katarina", "typed_value", "custom_context"):
         assert private not in result
+    assert '"preview":' not in result
+    assert rows[0]["metadata"]["gateway_sync"]["preview_text_dropped"] is True
     assert rows[0]["metadata"]["page"]["hostname"]=="mail.example.com"
     assert rows[0]["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
