@@ -29,7 +29,7 @@ person cue. App/site names, UI vocabulary, month/day names and the user's
 import functools
 import re
 import threading
-from shared.core.identity_cues import redact_explicit_person_cues
+from shared.core.identity_cues import redact_explicit_person_cues, redact_labeled_person_fields
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -475,6 +475,10 @@ class Detector:
             out = "".join(fragments)
         # Use the same high-precision explicit Swedish/English personal-name
         # cues as the hosted projection, retaining local token identity.
+        out = redact_labeled_person_fields(
+            out, person_token=self.person_token,
+            blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
+        )
         return redact_explicit_person_cues(
             out, person_token=self.person_token,
             blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
