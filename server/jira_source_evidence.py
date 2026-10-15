@@ -3,8 +3,8 @@ from __future__ import annotations
 """Opt-in, local-only Jira Cloud source receipts for an observed issue.
 
 No new credential or raw-activity storage, no default network calls, and no
-cross-tenant lookup. A user's per-installation environment provides an explicit
-Jira tenant and restricted read access; the existing browser's opaque issue ref
+cross-tenant lookup. A provisioned, revocable OAuth 3LO grant provides an explicit
+Jira tenant and read scope verified against Atlassian for every read; the existing browser's opaque issue ref
 must have been observed in retained evidence before record_graph calls us.
 
 The source issues API is authoritative only for Jira's *current issue state*.
@@ -173,12 +173,12 @@ def jira_issue_receipt(
         return _unknown("invalid_opaque_record_reference")
 
     host = str(env.get("OWG_JIRA_HOST") or "").strip().lower()
-    email = str(env.get("OWG_JIRA_ACCOUNT_EMAIL") or "").strip()
-    token = str(env.get("OWG_JIRA_API_TOKEN") or "").strip()
-    if not _TENANT.fullmatch(host) or not email or not token:
-        return _unknown("jira_source_configuration_missing")
-    if any(c in email for c in "\r\n") or len(email) > 254 or len(token) > 1024:
-        return _unknown("jira_source_configuration_invalid")
+    cloud_id = str(env.get("OWG_JIRA_CLOUD_ID") or "").strip().lower()
+    token = str(env.get("OWG_JIRA_OAUTH_ACCESS_TOKEN") or "").strip()
+    if not _TENANT.fullmatch(host) or not _CLOUD_ID.fullmatch(cloud_id) or not token:
+        return _unknown("jira_oauth_source_configuration_missing")
+    if any(ch in token for ch in "\r\n") or len(token) > 4096:
+        return _unknown("jira_oauth_source_configuration_invalid")
 
     info = resolver(resource_ref)
     if not isinstance(info, dict) or (
@@ -189,10 +189,25 @@ def jira_issue_receipt(
     if not _ISSUE.fullmatch(issue_key):
         return _unknown("invalid_jira_issue_key")
 
-    auth = httpx.BasicAuth(email, token)
-    base = f"https://{host}/rest/api/3/issue/{issue_key}"
+    # Check site-level consent on every read. OAuth grants can be revoked,
+    # changed, or cover other sites; never trust only a configured cloud ID.
+    base = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{issue_key}"
     try:
-        issue = reader(base, {"fields": "status,resolution,resolutiondate,updated"}, auth)
+        resources = reader("https://api.atlassian.com/oauth/token/accessible-resources", {}, token)
+        if not isinstance(resources, list):
+            return _unknown("jira_oauth_site_authorization_unavailable")
+        matches = [
+            item for item in resources if isinstance(item, dict)
+            and str(item.get("id") or "").lower() == cloud_id
+            and str(item.get("url") or "").rstrip("/").lower() == f"https://{host}"
+            and isinstance(item.get("scopes"), list)
+            and "read:jira-work" in item["scopes"]
+        ]
+        if len(matches) != 1:
+            return _unknown("jira_oauth_site_or_read_scope_not_granted")
+        issue = reader(base, {"fields": "status,resolution,resolutiondate,updated"}, token)
+        if not isinstance(issue, dict):
+            return _unknown("invalid_jira_issue_response")
         if str(issue.get("key") or "").upper() != issue_key:
             return _unknown("jira_issue_identity_mismatch")
         fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
@@ -216,7 +231,7 @@ def jira_issue_receipt(
         audit_available = False
         audit_count = 0
         try:
-            changes = reader(base + "/changelog", {"startAt": 0, "maxResults": _MAX_AUDIT}, auth)
+            changes = reader(base + "/changelog", {"startAt": 0, "maxResults": _MAX_AUDIT}, token)
             audit, audit_truncated, audit_count = _safe_audit(
                 changes, issue_key, key=key_factory().encode("utf-8"),
             )
@@ -244,7 +259,7 @@ def jira_issue_receipt(
             "source_state": state,
             "source_state_reported": True,
             "verified_at": observed_at,
-            "verification_method": "explicit_opt_in_authenticated_jira_issue_status_read",
+            "verification_method": "explicit_opt_in_site_verified_oauth_jira_issue_status_read",
             # Jira can verify its own issue resolution, never a wider
             # customer/business result. The generic boolean must stay false
             # so agent clients do not treat ticket closure as customer success.
