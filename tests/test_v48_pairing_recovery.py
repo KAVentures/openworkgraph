@@ -53,15 +53,26 @@ def test_manual_browser_pairing_is_short_lived_one_time_and_extension_scoped(tmp
     )
     base = f"http://127.0.0.1:{port}"
     try:
-        deadline = time.time() + 12
-        while time.time() < deadline:
+        # Loading the secured API on a busy Windows CI runner can take longer
+        # than twelve seconds. Distinguish a crashed server from slow startup
+        # instead of failing an otherwise functional pairing integration test.
+        deadline = time.monotonic() + (45 if sys.platform == "win32" else 15)
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise AssertionError(
+                    f"secured API exited before readiness (code {process.returncode})"
+                )
             try:
-                if httpx.get(base + "/health", timeout=0.4).status_code == 200:
+                if httpx.get(base + "/health", timeout=0.75).status_code == 200:
                     break
-            except Exception:
-                time.sleep(0.1)
+            except httpx.RequestError:
+                pass
+            time.sleep(0.2)
         else:
-            raise AssertionError("secured API did not start")
+            raise AssertionError(
+                f"secured API did not become ready within startup budget "
+                f"(process exit code: {process.poll()})"
+            )
 
         headers = {"Authorization": f"Bearer {api_token}"}
         issued = httpx.post(base + "/v1/browser-pairing-code", headers=headers)
