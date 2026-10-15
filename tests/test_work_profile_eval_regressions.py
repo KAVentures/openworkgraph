@@ -38,7 +38,7 @@ def test_hunting_counts_distinct_entries_not_individual_events():
     assert candidate["surface"] == "Internal Sheets"
     assert candidate["visit_count"] == 2
     assert candidate["observed_event_count"] == 201
-    assert candidate["visit_count_basis"] == "observed_resource_entry_episodes_lower_bound"
+    assert candidate["visit_count_basis"] == "observed_active_resource_entries_across_tabs_and_desktop_lower_bound"
     # An uninterrupted page with 200 events isn't 200 visits.
     assert _hunting_candidates(rows[:200]) == []
 
@@ -77,3 +77,38 @@ def test_no_clipboard_events_means_not_observed_not_no_real_world_transfers():
     assert summary["paste_events_observed"] == 0
     assert summary["manual_transfer_count_is_observed_lower_bound"] is True
     assert summary["scope"] == "recorded_context_events_only"
+
+
+def test_visits_count_back_and_forth_between_tabs_on_same_session():
+    rows = []
+    n = 0
+    for _ in range(10):
+        n += 1
+        rows.extend(_row(n * 100 + i, resource="sheets.test/s1",
+                         metadata={"tab_context_id": "tab-sheet"}) for i in range(12))
+        n += 1
+        rows.extend(_row(n * 100 + i, resource="mail.test/inbox", surface="Mail",
+                         metadata={"tab_context_id": "tab-mail"}) for i in range(12))
+    counts = {v["resource_locator"]: v["visit_count"] for v in _hunting_candidates(rows)}
+    assert counts["sheets.test/s1"] == 10
+    assert counts["mail.test/inbox"] == 10
+
+
+def test_desktop_focus_without_resource_breaks_browser_visit_episode():
+    rows = [
+        _row(1, action="click", metadata={"tab_context_id": "tab-a"}),
+        _row(2, action="focus_span", surface="Excel", resource=""),
+        _row(3, action="click", metadata={"tab_context_id": "tab-a"}),
+    ]
+    candidates = _hunting_candidates(rows)
+    assert candidates[0]["visit_count"] == 2
+
+
+def test_background_navigation_noise_does_not_create_phantom_visits():
+    rows = [
+        _row(1, action="click", resource="sheet.example"),
+        _row(2, action="navigation_requested", resource="mail.example"),
+        _row(3, action="navigation_started", resource="mail.example"),
+        _row(4, action="click", resource="sheet.example"),
+    ]
+    assert _hunting_candidates(rows) == []
