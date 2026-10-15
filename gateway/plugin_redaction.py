@@ -14,7 +14,7 @@ import re
 from typing import Any, Iterable
 
 from server.contextual_redaction import Detector, Settings, STOPWORDS, ORGANIZATIONS
-from shared.core.identity_cues import redact_explicit_person_cues
+from shared.core.identity_cues import redact_explicit_person_cues, redact_labeled_person_fields
 
 _EMAIL = re.compile(r"(?<![\w.])([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})(?![\w.])")
 _SWEDISH_ID = re.compile(r"\b(?:\d{8}[-+]?\d{4}|\d{6}[-+]\d{4})\b")
@@ -195,6 +195,10 @@ class PublicRedactor:
         # even if the generic detector would otherwise use a PERSON token.
         for pattern in self.owner_patterns:
             text = pattern.sub(self.owner_token, text)
+        text = redact_labeled_person_fields(
+            text, person_token=lambda name: self._token("PERSON", name),
+            blocked_names=STOPWORDS | ORGANIZATIONS,
+        )
         text = self.person_detector.redact(text)
         # The high-precision identity/signature cues are shared with local
         # at-rest redaction. Hosted tokens keep their existing account-scoped key.

@@ -76,4 +76,46 @@ def redact_explicit_person_cues(
     return text
 
 
-__all__ = ["redact_explicit_person_cues"]
+
+# Deliberately field-scoped, never a general capitalized-words detector.
+# The final (?![\w]) prevents matching just "EMAIL" in EMAIL_A1B2...,
+# or a prefix of a previously tokenized PERSON/OWNER identifier.
+_LABELED_PERSON = re.compile(
+    r"(?i:(?<!\w)(?:customer|client|requester|recipient|contact|"
+    r"kund|kundnamn|kontaktperson|mottagare)\s*(?:name|namn)?\s*[:=]\s*)"
+    r"([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’-]{1,39}"
+    r"(?:[ \t]+[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’-]{1,39})?)(?![\w])"
+)
+_FIELD_NON_NAMES = frozenset(
+    "none unknown pending refund refunds status paid unpaid open closed "
+    "new unassigned empty redacted withheld unavailable loading approved rejected "
+    "sent error failed processing draft email person owner org phone".split()
+)
+
+
+def redact_labeled_person_fields(
+    value: str,
+    *,
+    person_token: Callable[[str], str],
+    blocked_names: Collection[str] = (),
+) -> str:
+    """Redact a one/two-word customer/contact name in an explicit identity field.
+
+    Works for unlisted and lowercase names without classifying arbitrary
+    multiword UI prose as people. Email, OWNER, PERSON and other pre-tokenized
+    values are immutable; callers supply their own stable token function.
+    """
+    blocked = _FIELD_NON_NAMES | frozenset(str(v).casefold() for v in blocked_names)
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        words = name.split()
+        if any(word.casefold() in blocked for word in words):
+            return match.group(0)
+        if "_" in name or any(re.fullmatch(r"[A-Z][A-Z_]*_[0-9A-F]{4,}", w) for w in words):
+            return match.group(0)
+        return match.group(0)[:match.start(1)-match.start()] + person_token(name)
+
+    return _LABELED_PERSON.sub(replace, str(value or ""))
+
+__all__ = ["redact_explicit_person_cues", "redact_labeled_person_fields"]

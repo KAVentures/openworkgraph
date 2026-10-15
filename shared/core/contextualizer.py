@@ -115,15 +115,43 @@ def contextualize_event(event: dict[str, Any]) -> dict[str, Any]:
         })
 
     event_type = str(e.get("event_type") or "")
-    if event_type.startswith("clipboard_"):
+    # Browser DOM copy/paste uses browser_copy/browser_paste, not clipboard_*.
+    # Preserve only structural link IDs in derived context, never values.
+    if event_type.startswith("clipboard_") or event_type in {"browser_copy", "browser_cut", "browser_paste"}:
         for key in (
             "clipboard_transfer_id",
             "linked_copy_event_id",
             "clipboard_link_age_seconds",
             "clipboard_contents_captured",
+            "clipboard_source_observed",
+            "clipboard_source_tab_context_id",
         ):
-            if key in meta:
-                context_metadata[key] = meta[key]
+            if key not in meta:
+                continue
+            value = meta[key]
+            if key in {"clipboard_transfer_id", "linked_copy_event_id", "clipboard_source_tab_context_id"}:
+                # Restrict opaque identifiers rather than promoting an
+                # untrusted value (such as a URL or message) to AI context.
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value):
+                    context_metadata[key] = value
+            elif key in {"clipboard_source_observed", "clipboard_contents_captured"}:
+                if isinstance(value, bool):
+                    context_metadata[key] = value
+            elif key == "clipboard_link_age_seconds":
+                try:
+                    seconds = float(value)
+                    if 0 <= seconds <= 7200:
+                        context_metadata[key] = seconds
+                except (TypeError, ValueError):
+                    pass
+
+    # The extension already collects a browser/tab context ID locally. Keep
+    # only a bounded opaque reference to distinguish tabs during read-time
+    # visit counting; never include a raw tab URL or page/clipboard content.
+    if event_type.startswith("browser_"):
+        tab_context_id = str(meta.get("tab_context_id") or "")
+        if re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", tab_context_id):
+            context_metadata["tab_context_id"] = tab_context_id
 
     if event_type == "browser_performance_timing":
         for key in ("response_wait_ms", "dom_ready_ms", "load_complete_ms", "rounded_to_ms"):

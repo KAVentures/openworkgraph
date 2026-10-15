@@ -8,6 +8,7 @@ from typing import Any
 from . import (
     _ai_usage,
     _communication_actions,
+    _clipboard_observation_summary,
     _context_rows,
     _focus_rows,
     _fragmentation,
@@ -46,6 +47,7 @@ def compute_today_work_profile(
         "data_layer": "derived_local_work_profile",
         "fragmentation": _fragmentation(focus),
         "manual_transfer_patterns": transfers,
+        "clipboard_observation_summary": _clipboard_observation_summary(context),
         "manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers),
         "cross_surface_manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers if x.get("cross_surface")),
         "daily_rhythm": _rhythm(focus),

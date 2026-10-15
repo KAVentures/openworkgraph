@@ -29,7 +29,7 @@ person cue. App/site names, UI vocabulary, month/day names and the user's
 import functools
 import re
 import threading
-from shared.core.identity_cues import redact_explicit_person_cues
+from shared.core.identity_cues import redact_explicit_person_cues, redact_labeled_person_fields
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -455,6 +455,13 @@ class Detector:
         out = _LONG_ID_RE.sub(
             lambda m: m.group(0) if any(a <= m.start() < b for a, b in blocked) else self._token("ID", m.group(0)),
             out,
+        )
+        # Field identity cues run before generic span detection so an
+        # unrelated status word (e.g. "Refund Approved") isn't swallowed
+        # as a third component of an uncommon name.
+        out = redact_labeled_person_fields(
+            out, person_token=self.person_token,
+            blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
         )
         spans = self.spans(out)
         # Build once rather than repeatedly copying the remaining full string.

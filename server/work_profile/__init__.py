@@ -67,7 +67,7 @@ def _canonical_surface(value: Any) -> str:
             break
     mappings = (
         (("mail.google.com", "gmail"), "Gmail"),
-        (("google sheets", "sheets", "docs.google.com/spreadsheets"), "Google Sheets"),
+        (("google sheets", "docs.google.com/spreadsheets", "sheets.google.com"), "Google Sheets"),
         (("google docs", "docs.google.com/document"), "Google Docs"),
         (("salesforce",), "Salesforce"),
         (("chatgpt", "chat.openai.com", "openai"), "ChatGPT"),
@@ -272,7 +272,7 @@ def _transfer_patterns(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in context:
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         transfer_id = str(meta.get("clipboard_transfer_id") or "").strip()
-        action = str(row.get("action") or "").lower()
+        action = _clipboard_action(row)
         if not transfer_id or action not in {"copy", "cut", "paste"}:
             continue
         slot = by_id.setdefault(transfer_id, {"sources": [], "pastes": []})
@@ -449,23 +449,112 @@ def _rhythm(focus: list[dict[str, Any]]) -> dict[str, Any]:
     return {"days": day_rows, "activity_by_local_hour": hour_rows, "gap_threshold_seconds": 300, "interpretation": "Observed timing and gaps only; gaps are not automatically classified as breaks."}
 
 
-def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    visits: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+def _clipboard_action(row: dict[str, Any]) -> str:
+    """Canonicalize observed clipboard action names, not clipboard contents."""
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    action = str(row.get("action") or meta.get("event_type") or "").strip().lower()
+    for prefix in ("clipboard_", "browser_"):
+        if action.startswith(prefix) and action[len(prefix):] in {"copy", "cut", "paste"}:
+            return action[len(prefix):]
+    return action
+
+
+def _clipboard_observation_summary(context: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report what was actually observed; absent links do not imply no transfers."""
+    counts = Counter()
     for row in context:
-        locator = str(row.get("resource_locator") or "").strip()
-        if not locator:
+        action = _clipboard_action(row)
+        if action not in {"copy", "cut", "paste"}:
             continue
-        visits[(str(row.get("surface") or "Unknown"), locator)].append(row)
+        counts[action] += 1
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if action == "paste":
+            counts["linked_paste" if str(meta.get("clipboard_transfer_id") or "").strip()
+                   else "unlinked_paste"] += 1
+    return {
+        "copy_events_observed": counts["copy"],
+        "cut_events_observed": counts["cut"],
+        "paste_events_observed": counts["paste"],
+        "pastes_with_transfer_id": counts["linked_paste"],
+        "pastes_without_transfer_id": counts["unlinked_paste"],
+        "scope": "recorded_context_events_only",
+        "manual_transfer_count_is_observed_lower_bound": True,
+        "zero_does_not_prove_no_real_world_copy_paste": True,
+        "clipboard_contents_captured": False,
+    }
+
+
+def _active_entry_action(action: str) -> bool:
+    """Only foreground evidence establishes a resource visit.
+
+    Navigation/timing/page-load signals can fire in background tabs. Treat
+    them as observations, not evidence the user switched focus.
+    """
+    raw = str(action or "").strip().lower().replace(" ", "_")
+    if raw.startswith("browser_"):
+        raw = raw[len("browser_"):]
+    return raw in {
+        "tab_activated", "focus", "focus_span", "focus_period",
+        "click", "dblclick", "double_click", "pointerdown", "mousedown",
+        "keydown", "key_press", "keypress", "keyboard_shortcut",
+        "input", "change", "submit", "copy", "paste", "cut", "scroll",
+        "clipboard_copy", "clipboard_paste", "clipboard_cut",
+        "text_input", "text_edit", "form_submit",
+    }
+
+
+def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Count active resource-entry episodes, not events and not per-tab lifetimes.
+
+    A switch from tab A to B and back to A is two visits to A even if A never
+    navigated. A desktop focus interval without a URL can interrupt the browser
+    episode. Duplicate events in the same active context are not new visits.
+    This remains a lower-bound heuristic when active focus wasn't observed.
+    """
+    visits: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    entry_counts: Counter[tuple[str, str]] = Counter()
+    last_by_session: dict[str, tuple[str, str, str]] = {}
+    for row in context:
+        session = str(row.get("session_id") or "")
+        surface = str(row.get("surface") or "Unknown")
+        locator = str(row.get("resource_locator") or "").strip()
+        action = str(row.get("action") or "").casefold().strip()
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        tab = str(meta.get("tab_context_id") or "")
+
+        if not locator:
+            # Desktop focus is still an observed surface transition. Ignore
+            # anonymous heartbeats or browser sensor noise with no page URL.
+            if action in {"focus_span", "focus", "focus_period"} and surface.casefold() not in {
+                "", "unknown", "browser", "chrome", "google chrome",
+            }:
+                last_by_session[session] = (surface, "", "")
+            continue
+        # Background navigation requests may fire for a tab that was never
+        # displayed; only meaningful/committed/activated observations count.
+        key = (surface, locator)
+        visits[key].append(row)
+        if not _active_entry_action(action):
+            # Keep observed telemetry in the event count, but never let
+            # background navigation, timing or load events cause a switch.
+            continue
+        signature = (surface, locator, tab)
+        if last_by_session.get(session) != signature:
+            entry_counts[key] += 1
+        last_by_session[session] = signature
     results = []
     for (surface, locator), rows in visits.items():
-        if len(rows) < 3:
+        entries = entry_counts[(surface, locator)]
+        if entries < 2:
             continue
-        actions = [str(row.get("action") or "").lower() for row in rows]
+        actions = [_clipboard_action(row) for row in rows]
         meaningful = sum(1 for action in actions if action not in PASSIVE_ACTIONS)
         results.append({
             "surface": surface,
             "resource_locator": locator,
-            "visit_count": len(rows),
+            "visit_count": entries,
+            "observed_event_count": len(rows),
+            "visit_count_basis": "observed_active_resource_entries_across_tabs_and_desktop_lower_bound",
             "meaningful_action_count": meaningful,
             "candidate_reason": "repeated_resource_visits",
             "needs_review": True,
@@ -492,6 +581,7 @@ def compute_work_profile(
         "fragmentation": _fragmentation(focus),
         "manual_transfer_patterns": transfers,
         "manual_transfer_destinations": transfer_destinations,
+        "clipboard_observation_summary": _clipboard_observation_summary(context),
         "manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers),
         "cross_surface_manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers if x.get("cross_surface")),
         "daily_rhythm": _rhythm(focus),

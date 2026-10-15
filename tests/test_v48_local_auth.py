@@ -189,7 +189,15 @@ def test_browser_requires_server_proof_and_signed_request(secured_api):
     assert httpx.post(f"{base}/v1/browser-events", json=payload, headers={"Origin": origin}).status_code == 401
     body = json.dumps(payload, separators=(",", ":"))
     auth = _signed_browser_header(secured_api["browser_secret"], "POST", "/v1/browser-events", body)
-    accepted = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
+    # This authenticated ingest performs first-use sensor/DB setup. Windows CI
+    # occasionally saturates this worker late in the full suite; allow bounded
+    # read headroom without relaxing the signed-browser authorization check.
+    ci_read_timeout = 25.0 if os.name == "nt" and os.getenv("CI") else 5.0
+    accepted = httpx.post(
+        f"{base}/v1/browser-events", content=body,
+        headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth},
+        timeout=httpx.Timeout(ci_read_timeout, connect=5.0),
+    )
     assert accepted.status_code == 200 and accepted.json()["status"] == "ok"
     replay = httpx.post(f"{base}/v1/browser-events", content=body, headers={"Origin": origin, "Content-Type": "application/json", "Authorization": auth})
     assert replay.status_code == 401
