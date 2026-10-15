@@ -685,6 +685,11 @@ from .agent_routes import router as _agent_router
 app.include_router(_agent_router)
 
 
+# Register authenticated workflow-evidence/record-graph routes for the
+# production secure API as well as unit-test imports. This must run before
+# the AI-context middleware import that transforms all MCP-visible JSON.
+from . import workflow_evidence_routes as _workflow_evidence_routes  # noqa: E402,F401
+
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
 from . import discovery_routes as _discovery_routes  # noqa: E402,F401

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from .ai_context import redact_contextually
 from .secure_app import app
+from .record_graph import record_graph
 from .workflow_evidence import (
     WorkflowEvidenceError,
     build_workflow_evidence,
@@ -49,6 +50,29 @@ def _build(
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
+
+
+@app.get("/v1/record-graph")
+def get_record_graph(
+    resource_ref: str,
+    since: str | None = None,
+    until: str | None = None,
+    include_source_status: bool = False,
+    source_event_limit: int = 25_000,
+) -> dict[str, Any]:
+    """Read local record-linked observations and optionally opt-in source audit.
+
+    The existing secure_app auth middleware protects this path; no API client
+    can enable the user's GitHub opt-in by setting a query parameter.
+    """
+    try:
+        return record_graph(
+            resource_ref, since=since, until=until,
+            include_source_status=include_source_status,
+            source_event_limit=source_event_limit,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) or "invalid record-graph query") from exc
 
 
 @app.get("/v1/workflow-evidence/families")
