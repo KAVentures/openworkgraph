@@ -101,3 +101,23 @@ def test_it_revoke_does_not_revoke_unrelated_personal_invitations(tmp_path):
         assert enroll(client, invite_a["token"], "anna-device").status_code == 200
         assert client.delete("/v1/admin/devices/acme/anna-device", headers=owner).status_code == 200
         assert enroll(client, invite_b["token"], "bo-device").status_code == 200
+
+
+def test_admin_relinked_device_still_invalidates_original_invitation(tmp_path):
+    app, _db = make_app(tmp_path)
+    with TestClient(app) as client:
+        owner, _totp = bootstrap_owner(client)
+        first = add_employee(client, owner, "first@acme.se")
+        second = add_employee(client, owner, "second@acme.se")
+        issued = personal_invite(client, owner, first["employee_id"], max_devices=2)
+        assert enroll(client, issued["token"], "relinked-device").status_code == 200
+        moved = client.post(
+            "/v1/admin/devices/acme/relinked-device/link",
+            headers=owner,
+            json={"employee_id": second["employee_id"], "reattribute_history": False},
+        )
+        assert moved.status_code == 200, moved.text
+        revoked = client.delete("/v1/admin/devices/acme/relinked-device", headers=owner)
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json()["personal_invitation_revoked"] is True
+        assert enroll(client, issued["token"], "spoofed-new-id").status_code == 401
