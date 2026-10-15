@@ -126,6 +126,14 @@ def test_python_dashboard_reference_parsing_excludes_hosted_invoice_tokens():
         "server.local_auth.ensure_api_token", return_value="b" * 60,
     ):
         valid = resource_reference_from_url("https://dashboard.stripe.com/invoices/"+ID)
+        scoped = resource_reference_from_url("https://dashboard.stripe.com/acct_1234567890ABCDEF/invoices/"+ID)
+        assert scoped is not None
+        assert scoped["provider"] == "stripe"
+        scoped_test = resource_reference_from_url("https://dashboard.stripe.com/acct_1234567890ABCDEF/test/refunds/"+REFUND)
+        assert scoped_test is not None
+        assert scoped_test["resource_kind"] == "refund"
+        assert resource_reference_from_url("https://dashboard.stripe.com/acct_INVALID/invoices/"+ID) is None
+        assert resource_reference_from_url("https://dashboard.stripe.com/acct_1234567890ABCDEF/invoices/"+ID+"?token=private") is None
         assert valid["provider"] == "stripe"
         assert valid["resource_kind"] == "invoice"
         assert valid["resource_ref"].startswith("owg:r:")
