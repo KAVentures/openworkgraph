@@ -152,3 +152,32 @@ def test_eligibility_excludes_paused_ids_and_uses_sqlite_utc_offsets(tmp_path,mo
                            "2026-10-12T12:00:00+00:00",{})
     assert [x["event_id"] for x in rows] == ["one"]
     assert count["scanned"]==2 and count["excluded"]==1
+
+
+def test_generic_ai_bearer_cannot_authorize_historical_upload(tmp_path):
+    """Run the secure-app import in a fresh process to prevent route state leaks."""
+    import os
+    import subprocess
+    import sys
+    script = """
+import asyncio
+from fastapi import HTTPException
+from starlette.requests import Request
+from server.secure_app import gateway_history_preview, gateway_history_confirm
+for fn in (gateway_history_preview, gateway_history_confirm):
+    request = Request({"type": "http", "method": "POST", "path": "/",
+                       "headers": [(b"authorization", b"Bearer ordinary-local-api-token")]})
+    try:
+        asyncio.run(fn(request))
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "dashboard session" in exc.detail
+    else:
+        raise AssertionError("generic bearer must not count as historical consent")
+"""
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "fresh"),
+           "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth")}
+    result = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=40)
+    assert result.returncode == 0, result.stderr[-1800:]
