@@ -160,6 +160,7 @@ def enroll_endpoint(
     state.delete("pause_started_after_id")
     state.set_bool("sharing_paused", False)
     state.set("status", "not_started")
+    state.delete("last_success_at")
     state.delete("revoked_at")
     state.set("last_error", "")
     state.set("gateway_url", gateway_url)
