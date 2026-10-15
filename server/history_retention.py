@@ -133,7 +133,17 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
     user_deleted = reason.startswith("user_")
 
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
+        # Match only the requested sessions using the existing session index.
+        # A 300k-event database must not materialize all rows for one expiry.
+        rows = []
+        ordered = sorted(ids)
+        for offset in range(0, len(ordered), 400):
+            chunk = ordered[offset:offset + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(conn.execute(
+                f"SELECT * FROM events WHERE session_id IN ({placeholders}) ORDER BY id ASC",
+                tuple(chunk),
+            ).fetchall())
         chosen = []
         for raw in rows:
             item = _event(raw)
