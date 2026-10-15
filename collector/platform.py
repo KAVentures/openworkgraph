@@ -12,24 +12,37 @@ class ActiveWindow:
 
 
 def _macos_active_window() -> ActiveWindow:
-    script = r'''
-    tell application "System Events"
-      set frontApp to first application process whose frontmost is true
-      set appName to name of frontApp
-      try
-        set winTitle to name of front window of frontApp
-      on error
-        set winTitle to ""
-      end try
-      return appName & "\n" & winTitle
-    end tell
-    '''
+    """Native AppKit + Accessibility, never AppleScript/System Events.
+
+    NSWorkspace gives the frontmost app without an Automation entitlement.
+    AXFocusedWindow/AXTitle require Accessibility approval, and must not read
+    typed values, password fields or other contents. If AX is not permitted,
+    retain the app name and omit its window title instead of reporting Unknown.
+    """
     try:
-        out = subprocess.check_output(["osascript", "-e", script], text=True, stderr=subprocess.DEVNULL, timeout=2)
-        parts = out.rstrip("\n").split("\n", 1)
-        return ActiveWindow(parts[0] if parts else "Unknown", parts[1] if len(parts) > 1 else "")
+        from AppKit import NSWorkspace  # type: ignore
+        current = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if current is None:
+            return ActiveWindow("Unknown", "")
+        app = str(current.localizedName() or "Unknown")
+        pid = int(current.processIdentifier())
     except Exception:
         return ActiveWindow("Unknown", "")
+
+    try:
+        import ApplicationServices as AX  # type: ignore
+        if not AX.AXIsProcessTrusted():
+            return ActiveWindow(app, "")
+        root = AX.AXUIElementCreateApplication(pid)
+        status, focused = AX.AXUIElementCopyAttributeValue(root, "AXFocusedWindow", None)
+        if status != 0 or focused is None:
+            return ActiveWindow(app, "")
+        status, value = AX.AXUIElementCopyAttributeValue(focused, "AXTitle", None)
+        if status == 0 and value is not None:
+            return ActiveWindow(app, str(value).strip()[:240])
+    except Exception:
+        pass
+    return ActiveWindow(app, "")
 
 
 def _windows_active_window() -> ActiveWindow:

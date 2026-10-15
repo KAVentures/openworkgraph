@@ -54,7 +54,7 @@ def port_is_open(host: str, port: int, timeout: float = 0.2) -> bool:
         return False
 
 
-def wait_for_api(process: subprocess.Popen, timeout: float = 15.0) -> bool:
+def wait_for_api(process: subprocess.Popen, timeout: float = 60.0) -> bool:
     """Wait only for the API process we launched; never accept a replacement listener."""
     deadline = time.time() + timeout
     while time.time() < deadline:

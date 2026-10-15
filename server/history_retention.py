@@ -133,7 +133,17 @@ def delete_sessions(kind: str, session_ids: list[str], *, reason: str) -> dict[s
     user_deleted = reason.startswith("user_")
 
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM events ORDER BY id ASC").fetchall()
+        # Match only the requested sessions using the existing session index.
+        # A 300k-event database must not materialize all rows for one expiry.
+        rows = []
+        ordered = sorted(ids)
+        for offset in range(0, len(ordered), 400):
+            chunk = ordered[offset:offset + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(conn.execute(
+                f"SELECT * FROM events WHERE session_id IN ({placeholders}) ORDER BY id ASC",
+                tuple(chunk),
+            ).fetchall())
         chosen = []
         for raw in rows:
             item = _event(raw)
@@ -207,30 +217,137 @@ def initialize_history_retention() -> dict[str, Any]:
     return policy
 
 
+def _rewrite_jsonl_expired(cutoffs: dict[str, datetime]) -> int:
+    """One atomic streaming pass, not one file rewrite per expired event."""
+    removed = 0
+    for path in (DATA_DIR / "events.jsonl", DATA_DIR / "events.jsonl.1"):
+        if not path.is_file():
+            continue
+        fd, temporary = tempfile.mkstemp(
+            prefix=path.name + ".retention-", suffix=".tmp", dir=path.parent
+        )
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as source, os.fdopen(
+                fd, "w", encoding="utf-8"
+            ) as target:
+                for line in source:
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, TypeError):
+                        target.write(line)
+                        continue
+                    if isinstance(event, dict):
+                        kind = "agent" if _is_agent(event) else "human"
+                        at = _parse(event.get("observed_at"))
+                        if at is not None and kind in cutoffs and at < cutoffs[kind]:
+                            removed += 1
+                            continue
+                    target.write(line)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, path)
+            os.chmod(path, 0o600)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    return removed
+
+
+def _cleanup_expired_rows(cutoffs: dict[str, datetime]) -> dict[str, Any]:
+    """Delete expired *individual* events even while their session stays active.
+
+    Stream indexed/id-bounded SQLite batches so neither startup nor hourly
+    cleanup materializes hundreds of thousands of evidence rows in Python.
+    Do not tombstone an active session, whose newer events must survive.
+    """
+    if not cutoffs:
+        return {"events_deleted": 0}
+    greatest = max(cutoffs.values()).isoformat()
+    after_id = 0
+    deleted = 0
+    screenshots: list[str] = []
+    references: set[str] = set()
+    outbox = EventOutbox(DATA_DIR / "collector_outbox.db")
+    state = SyncState(DATA_DIR / "gateway_sync_state.db")
+    while True:
+        with connect() as conn:
+            batch = conn.execute(
+                "SELECT id, event_id, observed_at, session_id, source, "
+                "metadata_json, screenshot_path FROM events "
+                "WHERE id > ? AND julianday(observed_at) < julianday(?) "
+                "ORDER BY id ASC LIMIT 500",
+                (after_id, greatest),
+            ).fetchall()
+            if not batch:
+                break
+            after_id = int(batch[-1]["id"])
+            selected = []
+            for raw in batch:
+                event = _event(raw)
+                kind = "agent" if _is_agent(event) else "human"
+                at = _parse(event.get("observed_at"))
+                if at is not None and kind in cutoffs and at < cutoffs[kind]:
+                    selected.append(raw)
+            if selected:
+                ids = [str(r["event_id"]) for r in selected]
+                for table in ("context_events", "normalized_events", "events"):
+                    _delete_ids(conn, table, ids)
+                for row in selected:
+                    references.update(_LOCAL_REFERENCE_RE.findall(str(row["metadata_json"] or "")))
+                    if row["screenshot_path"]:
+                        screenshots.append(str(row["screenshot_path"]))
+                local_ids = [int(r["id"]) for r in selected]
+        if selected:
+            # Do not upload any deleted local row if the user enrolled a
+            # Gateway and synchronization has not caught up yet.
+            state.add_skip_ids(local_ids, "retention_expired")
+            outbox.acknowledge(ids)
+            deleted += len(selected)
+
+    removable = set()
+    if references:
+        with connect() as conn:
+            for ref in references:
+                if conn.execute(
+                    "SELECT 1 FROM events WHERE metadata_json LIKE ? LIMIT 1",
+                    (f"%{ref}%",),
+                ).fetchone() is None:
+                    removable.add(ref)
+    if removable:
+        forget_references(removable)
+    if screenshots:
+        remove_local_screenshots(screenshots)
+    if deleted:
+        _rewrite_jsonl_expired(cutoffs)
+        analytics.clear_summary_cache()
+    return {"events_deleted": deleted, "active_sessions_preserved": True}
+
+
 def cleanup_expired_history(*, startup: bool = False) -> dict[str, Any]:
-    rows = _all_rows()
     now = datetime.now(timezone.utc)
     results: list[dict[str, Any]] = []
+    cutoffs: dict[str, datetime] = {}
+    ephemeral: list[str] = []
     for kind in ("human", "agent"):
         retention = retention_for_kind(kind)
-        by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in _kind_rows(kind, rows):
-            sid = str(row.get("session_id") or "")
-            if sid:
-                by_session[sid].append(row)
-        delete_ids: list[str] = []
-        if retention.get("mode") == "ephemeral" and startup:
-            # No current-run evidence exists when called from lifespan startup, so
-            # every surviving ephemeral session is a stale/crash-recovery session.
-            delete_ids = sorted(by_session)
-        elif retention.get("mode") == "days":
-            cutoff = now - timedelta(days=int(retention.get("days") or 1))
-            for sid, members in by_session.items():
-                latest = max((_parse(row.get("observed_at")) for row in members), default=None)
-                if latest is not None and latest < cutoff:
-                    delete_ids.append(sid)
-        if delete_ids:
-            results.append(delete_sessions(kind, delete_ids, reason="retention_expired"))
+        if retention.get("mode") == "days":
+            cutoffs[kind] = now - timedelta(days=int(retention.get("days") or 1))
+        elif retention.get("mode") == "ephemeral" and startup:
+            ephemeral.append(kind)
+
+    # Startup-only ephemeral cleanup retains its existing session tombstones.
+    # Do not scan any history at all for 'forever' retention.
+    if ephemeral:
+        rows = _all_rows()
+        for kind in ephemeral:
+            ids = _session_ids(kind, rows)
+            if ids:
+                results.append(delete_sessions(kind, ids, reason="retention_expired"))
+
+    if cutoffs:
+        changed = _cleanup_expired_rows(cutoffs)
+        if changed["events_deleted"]:
+            results.append({"kind": "mixed", **changed})
     try:
         memory_pruned = run_memory.prune(now=now)
     except Exception:

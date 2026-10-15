@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS privacy_migrations (
 @contextmanager
 def connect():
     conn = sqlite3.connect(DB_PATH, timeout=10)
+    # sqlite3 otherwise creates the database using the caller's umask,
+    # often 0644, exposing a user's private observations to other local
+    # accounts. Restrict the database and WAL/SHM sidecars on POSIX.
+    if os.name == "posix":
+        for candidate in (DB_PATH, Path(str(DB_PATH) + "-wal"), Path(str(DB_PATH) + "-shm")):
+            try:
+                if candidate.exists():
+                    os.chmod(candidate, 0o600)
+            except OSError:
+                pass
     conn.row_factory = sqlite3.Row
     try:
         yield conn

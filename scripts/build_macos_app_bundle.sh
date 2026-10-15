@@ -95,6 +95,8 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAccessibilityUsageDescription</key><string>OpenWorkGraph needs Accessibility permission for foreground window names. It does not read typed text or passwords.</string>
+  <key>NSInputMonitoringUsageDescription</key><string>OpenWorkGraph counts keyboard interactions without recording keys or typed text. You can decline this permission.</string>
   <key>NSHumanReadableCopyright</key><string>Copyright 2026 Koyar Afrasyab (Kinvectum)</string>
 </dict>
 </plist>
@@ -118,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let crashWindow: TimeInterval = 5 * 60
     private let maxCrashRestarts = 5
     private let loginPreferenceKey = "openworkgraph.startAtLoginConfigured"
+    private let permissionPreferenceKey = "openworkgraph.permissionOnboardingShown.v1"
 
     private var bundlePayload: URL {
         Bundle.main.resourceURL!.appendingPathComponent("openworkgraph", isDirectory: true)
@@ -170,7 +173,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "OWG"
+        if let symbol = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted",
+                                accessibilityDescription: "OpenWorkGraph") {
+            symbol.isTemplate = true
+            statusItem.button?.image = symbol
+        } else {
+            statusItem.button?.title = "OWG"
+        }
         statusItem.button?.toolTip = "OpenWorkGraph"
 
         let menu = NSMenu()
@@ -182,6 +191,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let restart = NSMenuItem(title: "Restart OpenWorkGraph", action: #selector(restartApp), keyEquivalent: "r")
         restart.target = self
         menu.addItem(restart)
+
+        let permissions = NSMenuItem(title: "Permissions…", action: #selector(showPermissions), keyEquivalent: "")
+        permissions.target = self
+        menu.addItem(permissions)
+
+        let uninstall = NSMenuItem(title: "Uninstall OpenWorkGraph…", action: #selector(uninstallApp), keyEquivalent: "")
+        uninstall.target = self
+        menu.addItem(uninstall)
 
         menu.addItem(.separator())
 
@@ -207,6 +224,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         configureStartAtLogin()
         startChild(openDashboard: !launchedAsLoginItem)
+        if !UserDefaults.standard.bool(forKey: permissionPreferenceKey) && !launchedAsLoginItem {
+            UserDefaults.standard.set(true, forKey: permissionPreferenceKey)
+            DispatchQueue.main.async { [weak self] in self?.showPermissions() }
+        }
+    }
+
+    private func runPermissionProbe(_ action: String) -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = python
+        process.currentDirectoryURL = installRoot
+        process.arguments = ["-m", "collector.permissions", action]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        } catch {
+            return ""
+        }
+    }
+
+    private func openPrivacyPage(_ section: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\(section)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func showPermissions() {
+        let state = runPermissionProbe("status")
+        let accessOK = state.contains("\"accessibility\": true")
+        let inputOK = state.contains("\"input_monitoring\": true")
+        let alert = NSAlert()
+        alert.messageText = "OpenWorkGraph macOS permissions"
+        alert.informativeText = "Accessibility: \(accessOK ? "granted" : "not confirmed")\nInput Monitoring: \(inputOK ? "granted" : "not confirmed")\n\nAccessibility enables foreground window titles and safe UI labels. Input Monitoring enables activity counts; OpenWorkGraph never stores typed keys or passwords. After granting permission, return to this menu to check again. macOS may require restarting OpenWorkGraph."
+        alert.addButton(withTitle: "Request Accessibility")
+        alert.addButton(withTitle: "Request Input Monitoring")
+        alert.addButton(withTitle: "Close")
+        let choice = alert.runModal()
+        if choice == .alertFirstButtonReturn {
+            _ = runPermissionProbe("request-accessibility")
+            openPrivacyPage("Accessibility")
+        } else if choice == .alertSecondButtonReturn {
+            _ = runPermissionProbe("request-input-monitoring")
+            openPrivacyPage("ListenEvent")
+        }
+    }
+
+    @objc private func uninstallApp() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Uninstall OpenWorkGraph?"
+        alert.informativeText = "This removes locally recorded history and OpenWorkGraph-managed hooks and MCP connections from your AI clients. It preserves unrelated client settings. The Terminal uninstaller asks you to type DELETE before continuing."
+        alert.addButton(withTitle: "Continue to uninstaller")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() != .alertFirstButtonReturn { return }
+        let script = installRoot.appendingPathComponent("UNINSTALL_OPENWORKGRAPH.command")
+        let source = "#!/bin/bash\nexec /bin/bash \(String(reflecting: installRoot.appendingPathComponent("uninstall.sh").path))\n"
+        do {
+            try source.write(to: script, atomically: true, encoding: .utf8)
+            _ = chmod(script.path, 0o700)
+        } catch {
+            let errorAlert = NSAlert()
+            errorAlert.messageText = "Cannot prepare uninstaller"
+            errorAlert.informativeText = error.localizedDescription
+            errorAlert.runModal()
+            return
+        }
+        isQuitting = true
+        terminateTree()
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = ["-a", "Terminal", script.path]
+        do {
+            try launcher.run()
+        } catch {
+            isQuitting = false
+            let errorAlert = NSAlert()
+            errorAlert.messageText = "Cannot open Terminal uninstaller"
+            errorAlert.informativeText = error.localizedDescription
+            errorAlert.runModal()
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     private func configureStartAtLogin() {
@@ -342,8 +444,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func localPortInUse() -> Bool {
+        // Refuse to send capture to a different localhost listener, even when
+        // it presents an HTTP /health route that resembles OpenWorkGraph.
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        probe.arguments = ["-nP", "-iTCP:8787", "-sTCP:LISTEN"]
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        do {
+            try probe.run()
+            probe.waitUntilExit()
+            return probe.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     private func startChild(openDashboard: Bool) {
         if child?.isRunning == true || isQuitting { return }
+        if localPortInUse() {
+            let alert = NSAlert()
+            alert.messageText = "Port 8787 is already in use"
+            alert.informativeText = "OpenWorkGraph did not start or send evidence to that process. Another copy of OpenWorkGraph or a developer server (such as wrangler dev) may be using port 8787. Quit that process, then choose Restart OpenWorkGraph from this menu."
+            alert.runModal()
+            return
+        }
 
         let process = Process()
         process.terminationHandler = { [weak self, weak process] _ in

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from shared.core.browser_privacy import harden_browser_event, sanitize_browser_page, browser_event_is_excluded
@@ -83,6 +85,22 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION, lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Starlette's default error body includes raw invalid input. That can
+    # contain NaN/Infinity, which JSON cannot serialize and previously turned
+    # a rejected event into a 500. Never echo untrusted capture payloads.
+    safe = [
+        {
+            "loc": [str(part) for part in item.get("loc", ())][:12],
+            "msg": str(item.get("msg") or "invalid value")[:200],
+            "type": str(item.get("type") or "value_error")[:80],
+        }
+        for item in exc.errors()[:20]
+    ]
+    return JSONResponse({"detail": safe}, status_code=422)
 # Host validation closes DNS-rebinding requests whose Host header is not the
 # loopback endpoint. testserver is retained solely for FastAPI/Starlette tests.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
@@ -148,9 +166,52 @@ class Event(BaseModel):
     screenshot_path: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("observed_at")
+    @classmethod
+    def valid_time(cls, value: str) -> str:
+        try:
+            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                raise ValueError("timestamp must include timezone")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("observed_at must be a timezone-aware ISO-8601 timestamp") from exc
+        if moment.astimezone(timezone.utc) > datetime.now(timezone.utc) + timedelta(minutes=10):
+            raise ValueError("observed_at is too far in the future")
+        return value
+
+    @field_validator("duration_seconds")
+    @classmethod
+    def valid_duration(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0 <= value <= 86400:
+            raise ValueError("duration_seconds must be finite and between 0 and 86400")
+        return value
+
+    @field_validator("metadata")
+    @classmethod
+    def valid_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        def check(item: Any, depth: int = 0) -> None:
+            if depth > 16:
+                raise ValueError("metadata nesting exceeds 16 levels")
+            if isinstance(item, dict):
+                if len(item) > 1024:
+                    raise ValueError("metadata has too many keys")
+                for entry in item.values():
+                    check(entry, depth + 1)
+            elif isinstance(item, list):
+                if len(item) > 1024:
+                    raise ValueError("metadata array too long")
+                for entry in item:
+                    check(entry, depth + 1)
+            elif isinstance(item, float) and not math.isfinite(item):
+                raise ValueError("metadata contains a non-finite number")
+        check(value)
+        if len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 131072:
+            raise ValueError("metadata exceeds 128 KiB")
+        return value
+
 
 class EventBatch(BaseModel):
-    events: list[Event]
+    events: list[Event] = Field(max_length=500)
 
 
 class Heartbeat(BaseModel):
