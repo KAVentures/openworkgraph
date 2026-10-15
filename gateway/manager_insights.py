@@ -124,6 +124,12 @@ def _motifs(events: list[tuple[float, str, float]]):
     # when it is the longest observed span. Different source sessions must
     # never be joined into an invented execution.
     for width in (4, 3):
+        # Build a constant-time lookup from four-step motifs so a long work
+        # day does not cause quadratic prefix/suffix checks.
+        covered_triples = {
+            triple for key in found if len(key) == 4
+            for triple in (key[:3], key[1:])
+        } if width == 3 else set()
         for start in range(len(sequence)):
             for gaps in product((1, 2), repeat=width - 1):
                 indices = [start]
@@ -138,19 +144,13 @@ def _motifs(events: list[tuple[float, str, float]]):
                 if len(set(key)) < 3:
                     continue
                 # A 4-step motif is more informative than its 3-step slices.
-                if width == 3 and any(
-                    len(other) == 4 and other[:3] == key or
-                    len(other) == 4 and other[1:] == key for other in found
-                ):
+                if width == 3 and key in covered_triples:
                     continue
                 duration = sum(item[2] for item in selected)
                 found[key] = max(found.get(key, 0), duration)
     # Compact existing full four-stage patterns to avoid duplicate cards.
-    return {key: value for key, value in found.items() if
-            len(key) == 4 or not any(
-                len(other) == 4 and (other[:3] == key or other[1:] == key)
-                for other in found
-            )}
+    return {key: value for key, value in found.items()
+            if len(key) == 4 or key not in covered_triples}
 
 
 def manager_insights(
