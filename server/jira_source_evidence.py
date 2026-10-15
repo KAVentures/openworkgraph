@@ -17,6 +17,7 @@ import hmac
 import json
 import os
 import re
+from urllib.parse import urlsplit
 from typing import Any, Callable
 
 import httpx
@@ -27,6 +28,7 @@ from .local_reference_lookup import resolve_resource_reference
 _ISSUE = re.compile(r"^[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
 _TENANT = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$")
 _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
+_CLOUD_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ACTOR = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 _EVENT = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _UTC_CATEGORIES = frozenset({"new", "indeterminate", "done"})
@@ -57,10 +59,14 @@ def _fingerprint(category: str, value: str, *, key: bytes) -> str:
     return f"{category}:{digest}"
 
 
-def _jira_get(url: str, params: dict[str, Any], auth: httpx.BasicAuth) -> dict[str, Any]:
+def _jira_get(url: str, params: dict[str, Any], token: str) -> Any:
     """Bound network responses; don't follow a redirect that might receive auth."""
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme != "https" or parsed_url.netloc != "api.atlassian.com":
+        raise ValueError("untrusted_atlassian_api_target")
     with httpx.Client(
-        auth=auth, follow_redirects=False, trust_env=False, timeout=8.0,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        follow_redirects=False, trust_env=False, timeout=8.0,
     ) as client:
         with client.stream("GET", url, params=params, headers={"Accept": "application/json"}) as response:
             if response.status_code != 200:
@@ -71,7 +77,7 @@ def _jira_get(url: str, params: dict[str, Any], auth: httpx.BasicAuth) -> dict[s
                 if len(data) > _MAX_BYTES:
                     raise ValueError("source_response_too_large")
     parsed = json.loads(data)
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed, (dict, list)):
         raise ValueError("invalid_source_response")
     return parsed
 
@@ -151,7 +157,7 @@ def jira_issue_receipt(
     resource_ref: str, *,
     environment: dict[str, str] | None = None,
     resolver: Callable[[str], dict[str, Any] | None] = resolve_resource_reference,
-    reader: Callable[[str, dict[str, Any], httpx.BasicAuth], dict[str, Any]] = _jira_get,
+    reader: Callable[[str, dict[str, Any], str], Any] = _jira_get,
     key_factory: Callable[[], str] = ensure_api_token,
 ) -> dict[str, Any]:
     """Return only bounded source-derived state and metadata-free audit receipts.
