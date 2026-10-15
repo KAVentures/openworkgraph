@@ -484,6 +484,25 @@ def _clipboard_observation_summary(context: list[dict[str, Any]]) -> dict[str, A
     }
 
 
+def _active_entry_action(action: str) -> bool:
+    """Only foreground evidence establishes a resource visit.
+
+    Navigation/timing/page-load signals can fire in background tabs. Treat
+    them as observations, not evidence the user switched focus.
+    """
+    raw = str(action or "").strip().lower().replace(" ", "_")
+    if raw.startswith("browser_"):
+        raw = raw[len("browser_"):]
+    return raw in {
+        "tab_activated", "focus", "focus_span", "focus_period",
+        "click", "dblclick", "double_click", "pointerdown", "mousedown",
+        "keydown", "key_press", "keypress", "keyboard_shortcut",
+        "input", "change", "submit", "copy", "paste", "cut", "scroll",
+        "clipboard_copy", "clipboard_paste", "clipboard_cut",
+        "text_input", "text_edit", "form_submit",
+    }
+
+
 def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Count active resource-entry episodes, not events and not per-tab lifetimes.
 
@@ -513,15 +532,16 @@ def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         # Background navigation requests may fire for a tab that was never
         # displayed; only meaningful/committed/activated observations count.
-        if action in {"navigation_requested", "navigation_started", "heartbeat"}:
-            continue
-
         key = (surface, locator)
+        visits[key].append(row)
+        if not _active_entry_action(action):
+            # Keep observed telemetry in the event count, but never let
+            # background navigation, timing or load events cause a switch.
+            continue
         signature = (surface, locator, tab)
         if last_by_session.get(session) != signature:
             entry_counts[key] += 1
         last_by_session[session] = signature
-        visits[key].append(row)
     results = []
     for (surface, locator), rows in visits.items():
         entries = entry_counts[(surface, locator)]
