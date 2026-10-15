@@ -233,7 +233,7 @@ function savedDayBounds(dateString){
   const [year,month,day]=dateString.split('-').map(Number);
   const start=new Date(year,month-1,day), end=new Date(year,month-1,day+1);
   if(start.getFullYear()!==year||start.getMonth()!==month-1||start.getDate()!==day)return null;
-  return {since:start.toISOString(), until:end.toISOString()};
+  return {since:start.toISOString(), until:new Date(end.getTime()-1).toISOString()};
 }
 async function showSavedDay(append=false){
   const picker=document.querySelector('#savedDayPicker');
