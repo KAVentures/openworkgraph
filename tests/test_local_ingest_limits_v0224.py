@@ -43,11 +43,11 @@ with TestClient(app) as client:
     cases[-1]['metadata']=nested
     for n,overrides in enumerate(cases):
         event={**baseline,**overrides,'event_id':f'invalid-{n}'}
-        response=client.post('/v1/events',headers=headers,
+        response=client.post('/v1/events',
             data=json.dumps({'events':[event]},allow_nan=True),
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         assert response.status_code==422,(n,response.status_code,response.text[:400])
-    huge=client.post('/v1/events',headers=headers,data=b' '* (5*1024*1024+128),
+    huge=client.post('/v1/events',data=b' '* (5*1024*1024+128),
                      headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
     assert huge.status_code==413,huge.status_code
     with connect() as db:
