@@ -10,11 +10,13 @@ from server.record_graph import record_graph
 REF_JIRA = "owg:r:" + "c" * 32
 REF_OTHER = "owg:r:" + "d" * 32
 HOST = "private-team.atlassian.net"
+CLOUD_ID = "12345678-1234-1234-1234-123456789abc"
+API_BASE = f"https://api.atlassian.com/ex/jira/{CLOUD_ID}/rest/api/3/issue/TASK-12"
 ENV = {
     "OWG_JIRA_SOURCE_READ_ENABLED": "true",
     "OWG_JIRA_HOST": HOST,
-    "OWG_JIRA_ACCOUNT_EMAIL": "fictional@example.org",
-    "OWG_JIRA_API_TOKEN": "synthetic-not-real-token",
+    "OWG_JIRA_CLOUD_ID": CLOUD_ID,
+    "OWG_JIRA_OAUTH_ACCESS_TOKEN": "synthetic-not-real-oauth-access-token",
 }
 INFO = {
     "provider": "jira", "resource_kind": "issue",
@@ -39,7 +41,10 @@ def _reader(*, state="done", resolution=True, history=True):
     calls = []
     def fetch(url, params, auth):
         calls.append((url, params, auth))
-        assert url.startswith(f"https://{HOST}/rest/api/3/issue/TASK-12")
+        if url.endswith("/oauth/token/accessible-resources"):
+            return [{"id": CLOUD_ID, "url": f"https://{HOST}",
+                     "scopes": ["read:jira-work"]}]
+        assert url.startswith(API_BASE)
         if url.endswith("/changelog"):
             if not history:
                 raise ValueError("source_unavailable")
@@ -105,9 +110,10 @@ def test_jira_resolution_is_verified_while_customer_success_is_not():
         REF_JIRA, environment=ENV, resolver=lambda *_: INFO,
         reader=reader, key_factory=lambda: "local-synthetic-hmac-secret",
     )
-    assert len(calls) == 2
-    assert calls[0][1] == {"fields": "status,resolution,resolutiondate,updated"}
-    assert calls[1][1] == {"startAt": 0, "maxResults": 40}
+    assert len(calls) == 3
+    assert calls[0][0] == "https://api.atlassian.com/oauth/token/accessible-resources"
+    assert calls[1][1] == {"fields": "status,resolution,resolutiondate,updated"}
+    assert calls[2][1] == {"startAt": 0, "maxResults": 40}
     assert receipt["availability"] == "source_reported"
     assert receipt["source_state"] == "done"
     assert receipt["verified_business_outcome"] is False
@@ -120,7 +126,7 @@ def test_jira_resolution_is_verified_while_customer_success_is_not():
     safe = json.dumps(receipt, sort_keys=True)
     for secret in ("TASK-12", HOST, "SENSITIVE", "SECRET", "PRIVATE USER",
                    "acct-old", "acct-new", "acct-final", "patient notes",
-                   "fictional@example.org", "synthetic-not-real-token"):
+                   "synthetic-not-real-oauth-access-token"):
         assert secret not in safe
 
 
@@ -161,6 +167,9 @@ def test_partial_audit_does_not_claim_no_handoffs_or_rework():
 
 def test_stale_wrong_issue_identity_cannot_borrow_another_record_outcome():
     def fetch(url, params, auth):
+        if url.endswith("/oauth/token/accessible-resources"):
+            return [{"id": CLOUD_ID, "url": f"https://{HOST}",
+                     "scopes": ["read:jira-work"]}]
         return {"key": "TASK-99", "fields": {"status": {
             "statusCategory": {"key": "done"}}, "resolution": {"name": "Fixed"},
             "resolutiondate": "2026-10-15T10:00:00Z"}}
@@ -217,3 +226,46 @@ def test_status_reversal_is_structural_evidence_not_verified_failed_work():
     assert result["status_reversal_means_business_failure"] is False
     assert result["missing_status_reversals_means_no_rework"] is False
     assert "SECRET" not in str(result)
+
+
+def test_oauth_missing_site_or_scope_prevents_any_record_read():
+    for resources in [
+        [],
+        [{"id": CLOUD_ID, "url": "https://other-team.atlassian.net",
+          "scopes": ["read:jira-work"]}],
+        [{"id": CLOUD_ID, "url": f"https://{HOST}",
+          "scopes": ["write:jira-work"]}],
+        [{"id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+          "url": f"https://{HOST}", "scopes": ["read:jira-work"]}],
+    ]:
+        urls = []
+        def reader(url, params, token):
+            urls.append(url)
+            return resources
+        receipt = jira_issue_receipt(REF_JIRA, environment=ENV,
+                    resolver=lambda *_: INFO, reader=reader)
+        assert receipt["reason"] == "jira_oauth_site_or_read_scope_not_granted"
+        assert urls == ["https://api.atlassian.com/oauth/token/accessible-resources"]
+
+
+def test_revoked_oauth_token_fails_closed_without_issue_read():
+    urls = []
+    def reader(url, params, token):
+        urls.append(url)
+        raise ValueError("401 revoke")
+    r = jira_issue_receipt(REF_JIRA, environment=ENV,
+                           resolver=lambda *_: INFO, reader=reader)
+    assert r["availability"] == "unknown"
+    assert urls == ["https://api.atlassian.com/oauth/token/accessible-resources"]
+
+
+def test_old_personal_api_token_does_not_enable_oauth_adapter():
+    env = {**ENV}
+    env.pop("OWG_JIRA_OAUTH_ACCESS_TOKEN")
+    env["OWG_JIRA_API_TOKEN"] = "legacy-secret"
+    env["OWG_JIRA_ACCOUNT_EMAIL"] = "user@example.invalid"
+    calls = []
+    r = jira_issue_receipt(REF_JIRA, environment=env, resolver=lambda *_: INFO,
+                            reader=lambda *_: calls.append("read"))
+    assert r["availability"] == "unknown"
+    assert calls == []
