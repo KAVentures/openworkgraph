@@ -35,6 +35,9 @@ def register_record_graph_tools(mcp: Any, runtime_module: Any) -> None:
         Use only when the task needs evidence about a specific previously
         observed business record. Select an opaque owg:r: reference from prior
         authorized OWG evidence; do not guess IDs or match by customer name.
+        For a requested current provider outcome, set include_source_status=true
+        only if the user wants a source refresh; local provider consent remains
+        a separate hard permission gate. For chronology only, leave it false.
         An optional GitHub refresh requires the user's existing local GitHub
         outcome-tracking opt-in. Optional Jira issue outcomes and assignee
         transitions require separate, explicit tenant-pinned local Jira read
