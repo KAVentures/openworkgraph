@@ -18,6 +18,13 @@
     return h ? `${h}h ${String(m).padStart(2,'0')}m ${String(r).padStart(2,'0')}s` : `${m}m ${String(r).padStart(2,'0')}s`;
   }
 
+  function localDate(value) {
+    const time = new Date(String(value || ''));
+    return Number.isFinite(time.getTime())
+      ? time.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'})
+      : 'unavailable';
+  }
+
   function modeLabel(s) {
     if (s.mode==='demo_local_only') return 'Demo — local only';
     if (s.mode==='local_only') return 'Local only';
@@ -32,7 +39,7 @@
     const revoked = s.mode==='revoked' || !!s.device_revoked;
     const connected = !revoked && !!s.enrolled && !!s.gateway_enabled;
     const url = s.gateway_url ? `<code>${e(s.gateway_url)}</code>` : 'No organization Gateway configured';
-    const last = s.last_success_at ? `Last successful sync: ${e(String(s.last_success_at).replace('T',' ').slice(0,19))}` : 'No evidence has been synchronized yet';
+    const last = s.last_success_at ? `Last successful sync: ${e(localDate(s.last_success_at))} (your local time)` : 'No evidence has been synchronized yet';
     const quarantine = Number(s.quarantined_events || 0) > 0 ? `<div class="note" style="margin-top:8px"><strong>Sync quarantine:</strong> ${e(s.quarantined_events)} terminally invalid event(s) remain local and did not block later evidence.</div>` : '';
     const err = s.last_error ? `<div class="note" style="margin-top:8px"><strong>Sync error:</strong> ${e(s.last_error)}</div>` : '';
     const controls = revoked
@@ -184,12 +191,22 @@
   function renderRichPatterns(payload) {
     const host=document.querySelector('#patternList');
     if (!host) return;
-    const patterns=payload.patterns||[];
+    const patterns=Array.isArray(payload.patterns)?payload.patterns:[];
+    // One source for the headline count and the cards. Do not use the
+    // separate summary's older repeated_task_patterns projection.
+    const counter=document.querySelector('#completedRuns');
+    if(counter) counter.textContent=String(patterns.reduce(
+      (total,p)=>total+Number(p.observed_count||p.runs?.length||0),0
+    ));
     host.innerHTML=patterns.map((p,i)=>{
+      const usable=(p.steps||[]).map(step=>String(step.surface||'')).filter(name=>name&&!/^[0-9a-f]{8,}$/i.test(name));
+      const suggested=String(p.name||'').trim();
+      const safeName=usable.length>=2?usable.slice(0,5).join(' → '):
+        (suggested&&!/[0-9a-f]{8,}/i.test(suggested)?suggested:'Observed workflow');
       const steps=(p.steps||[]).map(step=>`<span class="pill"><span class="surface-dot" style="--surface:${typeof window.surfaceColor==='function'?window.surfaceColor(step.surface):'#657'}"></span>${e(step.surface)}${step.action?` · ${e(String(step.action).replaceAll('_',' '))}`:''}</span>`).join('');
       const runs=(p.runs||[]).map(run=>`<tr><td>${e(String(run.started_at||'').replace('T',' ').slice(0,16))}–${e(String(run.ended_at||'').slice(11,16))}</td><td>${(run.surfaces||[]).map(e).join(' → ')}</td><td>${fmtDuration(run.engaged_seconds)}</td><td>${e(String((run.boundary||{}).end_reason||'').replace(/_/g,' '))}</td></tr>`).join('');
       const data=encodeURIComponent(JSON.stringify({name:p.name,signature:p.signature,event_ids:(p.runs||[]).flatMap(r=>r.event_ids||[])}));
-      return `<div class="pattern" id="rich-pattern-${i}"><div class="pattern-head"><div><strong>${e(p.name)}</strong> <span class="badge">Needs review · ${e(p.confidence||'low')}</span><div style="margin-top:7px">${steps}</div></div><div><strong>×${Number(p.observed_count||p.runs?.length||0)}</strong><div class="muted">median ${fmtDuration(p.median_engaged_seconds)} · total ${fmtDuration(p.total_engaged_seconds)}</div></div></div><div class="pattern-actions"><button class="secondary" data-show-runs="${i}">Show the ${Number(p.runs?.length||p.observed_count||0)} runs</button><button class="secondary" data-automation="${i}">Prepare automation context</button><button class="secondary" data-pattern-export="${data}">Export evidence IDs</button></div><div class="pattern-runs"><div class="table-wrap"><table><thead><tr><th>When</th><th>Steps</th><th>Engaged time</th><th>How it ended</th></tr></thead><tbody>${runs||'<tr><td colspan="4">Execution windows are unavailable for this pattern.</td></tr>'}</tbody></table></div></div></div>`;
+      return `<div class="pattern" id="rich-pattern-${i}"><div class="pattern-head"><div><strong>${e(safeName)}</strong> <span class="badge">Needs review · ${e(p.confidence||'low')}</span><div style="margin-top:7px">${steps}</div></div><div><strong>×${Number(p.observed_count||p.runs?.length||0)}</strong><div class="muted">median ${fmtDuration(p.median_engaged_seconds)} · total ${fmtDuration(p.total_engaged_seconds)}</div></div></div><div class="pattern-actions"><button class="secondary" data-show-runs="${i}">Show the ${Number(p.runs?.length||p.observed_count||0)} runs</button><button class="secondary" data-automation="${i}">Prepare automation context</button><button class="secondary" data-pattern-export="${data}">Export evidence IDs</button></div><div class="pattern-runs"><div class="table-wrap"><table><thead><tr><th>When</th><th>Steps</th><th>Engaged time</th><th>How it ended</th></tr></thead><tbody>${runs||'<tr><td colspan="4">Execution windows are unavailable for this pattern.</td></tr>'}</tbody></table></div></div></div>`;
     }).join('') || (typeof window.emptyState==='function' ? window.emptyState('No repeated workflow yet','When you do the same sequence of steps across tools at least twice, it appears here with how long each run took.') : '<div class="muted">No repeated workflow yet.</div>');
     host.querySelectorAll('[data-show-runs]').forEach(btn=>btn.onclick=()=>document.querySelector(`#rich-pattern-${btn.dataset.showRuns}`)?.classList.toggle('expanded'));
     host.querySelectorAll('[data-automation]').forEach(btn=>btn.onclick=()=>{if(typeof window.activateTab==='function')window.activateTab('connect');if(typeof window.toast==='function')window.toast('Connect your AI, then ask it to inspect this repeated workflow through OpenWorkGraph MCP.');});
@@ -206,7 +223,13 @@
     try {
       const [timeline,patterns]=await Promise.all([gwCall('/v1/timeline?scope=current'),gwCall('/v1/dashboard-patterns?scope=current')]);
       renderTimeline(timeline); renderRichPatterns(patterns);
-    } catch (_) {}
+    } catch (_) {
+      // Unavailable is not the same as zero observed workflows.
+      const counter=document.querySelector('#completedRuns');
+      if(counter) counter.textContent='—';
+      const patternHost=document.querySelector('#patternList');
+      if(patternHost) patternHost.textContent='Current-run workflow summary is temporarily unavailable.';
+    }
   }
   window.refreshOverviewDerived=refreshOverviewDerived;
 

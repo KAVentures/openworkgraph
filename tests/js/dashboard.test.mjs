@@ -11,6 +11,20 @@ test('dashboard inline JavaScript parses', () => {
   for (const script of scripts) new Function(script);
 });
 
+test('saved local history uses calendar dates and excludes next-day midnight', () => {
+  const source = scripts.find(text => text.includes('function savedDayBounds(dateString)'));
+  assert.ok(source, 'date browser is installed');
+  const match = source.match(/function savedDayBounds\(dateString\)\{[\s\S]*?\n\}/);
+  assert.ok(match, 'date bounds helper is available');
+  const bounds = new Function(match[0] + '; return savedDayBounds;')();
+  assert.equal(bounds('2026-02-30'), null, 'invalid calendar date must be rejected');
+  assert.equal(bounds('2026-13-01'), null, 'invalid month must be rejected');
+  assert.equal(bounds('2024-02-29').since, new Date(2024, 1, 29).toISOString());
+  assert.equal(bounds('2024-02-29').until, new Date(new Date(2024, 1, 30).getTime() - 1).toISOString());
+  assert.match(source, /scope:'all',order:'newest'/, 'saved-day browsing is newest-first and local');
+  assert.match(source, /if\(append&&savedDayCursor\)params\.set\('cursor',savedDayCursor\)/);
+});
+
 test('dashboard is data-first with persistent accessible tabs', () => {
   for (const name of ['overview', 'evidence', 'connect', 'organization', 'export']) {
     assert.match(html, new RegExp(`role="tab"[^>]+data-tab="${name}"`));

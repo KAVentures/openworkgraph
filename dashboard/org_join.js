@@ -67,7 +67,9 @@
     try {
       const st = await call('/v1/gateway-status');
       const card = $('orgMeCard');
-      if (card) card.hidden = !st.enrolled;
+      if (card) card.hidden = !!st.enrolled;
+      // Enrollment survives reloads; the Join form should not reappear.
+      // When disconnected, the existing form remains available for rejoining.
     } catch (_) { /* local-only */ }
   }
 
@@ -113,7 +115,9 @@
       yes(s.shares_window_titles, 'Window and page titles (can contain names and subjects)') +
       yes(s.shares_agent_activity, 'AI-agent activity, only if you also allow it locally') +
       yes(true, limited) +
-      yes(s.forces_redacted_ai_context, 'Organization requires Redacted AI context on this computer') +
+      '<li>🔒 ' + esc(s.forces_redacted_ai_context
+        ? 'Organization policy requires Redacted AI context on this computer'
+        : 'Organization does not require Redacted AI context') + '</li>' +
       '</ul>';
   }
 
@@ -174,13 +178,20 @@
         accept_sharing: true,
       });
       previewed = null;
-      $('orgJoinCard').innerHTML = `<h2>Joined ${esc(r.organization_name)}</h2><div class="muted">Sharing starts from enrollment forward. Anything recorded before joining stays on this computer. You can pause or disconnect in the Organization section.</div>`;
+      const card = $('orgJoinCard');
+      if (card) card.hidden = true;
+      // Clear the one-time invite but preserve the form for explicit
+      // disconnect/re-enroll in the same tab.
+      if ($('orgJoinCode')) $('orgJoinCode').value = '';
+      if ($('orgJoinPreview')) $('orgJoinPreview').hidden = true;
+      if ($('orgJoinConsent')) $('orgJoinConsent').checked = false;
       refreshMe();
       if (typeof window.refreshGatewayPanel === 'function') window.refreshGatewayPanel();
     } catch (e) {
       $('orgJoinResult').textContent = e.message;
     } finally {
-      $('orgJoinButton').disabled = false;
+      const joinButton = $('orgJoinButton');
+      if (joinButton) joinButton.disabled = false;
     }
   }
 
