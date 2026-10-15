@@ -154,8 +154,12 @@ def _plan(config_path: Path, since: str, until: str, *,
                          separators=(",", ":")).encode("utf-8")
     fingerprint = hashlib.sha256(encoded).hexdigest()
     key = load_or_create_upload_privacy_key(ctx["auth_dir"])
+    policy_fingerprint = hashlib.sha256(json.dumps(
+        policy, ensure_ascii=False, sort_keys=True, default=str,
+    ).encode("utf-8")).hexdigest()
     identity = "|".join([str(settings.url), str(ctx["boundary"]), start, end,
-                         fingerprint, hashlib.sha256(ctx["token"].encode()).hexdigest()])
+                         fingerprint, policy_fingerprint,
+                         hashlib.sha256(ctx["token"].encode()).hexdigest()])
     digest = hmac.new(key.encode() if isinstance(key, str) else key,
                       identity.encode(), hashlib.sha256).hexdigest()
     return {
