@@ -42,6 +42,11 @@ def test_browser_copy_and_paste_preserve_linkage_without_clipboard_value():
 def test_invalid_tab_context_is_not_forwarded_to_derivative_evidence():
     raw = _event(1, "copy", "example-crm.test")
     raw["metadata"]["tab_context_id"] = "browser:https://secret.example/?token=private"
+    raw["metadata"]["clipboard_transfer_id"] = "https://secret.example/?token=private"
+    raw["metadata"]["clipboard_source_tab_context_id"] = "customer@example.com"
     result = contextualize_event(raw)
     assert "tab_context_id" not in result["metadata"]
+    assert "clipboard_transfer_id" not in result["metadata"]
+    assert "clipboard_source_tab_context_id" not in result["metadata"]
     assert "private" not in str(result)
+    assert "customer@example.com" not in str(result)
