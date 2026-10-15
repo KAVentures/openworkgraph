@@ -112,3 +112,27 @@ def test_background_navigation_noise_does_not_create_phantom_visits():
         _row(4, action="click", resource="sheet.example"),
     ]
     assert _hunting_candidates(rows) == []
+
+
+def test_passive_background_tab_timing_cannot_create_false_resource_visits():
+    rows = []
+    for n in range(20):
+        rows.append(_row(n * 2, resource="sheet.example",
+                         action="click" if n == 0 else "browser_performance_timing",
+                         metadata={"tab_context_id": "tab-sheet"}))
+        rows.append(_row(n * 2 + 1, resource="mail.example",
+                         action="browser_performance_timing",
+                         metadata={"tab_context_id": "tab-mail"}))
+    assert _hunting_candidates(rows) == []
+    # Explicit tab activation (as opposed to background page timing) is a
+    # reliable visit boundary even if the tab was already open.
+    rows += [
+        _row(200, resource="mail.example", action="browser_tab_activated",
+             metadata={"tab_context_id": "tab-mail"}),
+        _row(201, resource="sheet.example", action="browser_tab_activated",
+             metadata={"tab_context_id": "tab-sheet"}),
+        _row(202, resource="mail.example", action="browser_tab_activated",
+             metadata={"tab_context_id": "tab-mail"}),
+    ]
+    counted = {x["resource_locator"]: x["visit_count"] for x in _hunting_candidates(rows)}
+    assert counted == {"mail.example": 2, "sheet.example": 2}
