@@ -366,6 +366,11 @@ def run(config_path: Path, *, once: bool = False) -> int:
         raise RuntimeError("Gateway is enabled but no device token exists. Enroll from the dashboard or run `python -m connector.enroll` first.")
 
     state = SyncState(data_dir / "gateway_sync_state.db")
+    # A server-confirmed revoked credential must never be retried forever.
+    # New enrollment explicitly resets this marker and starts from its new
+    # forward-only evidence boundary.
+    if state.get("status") == "revoked":
+        return 0
     db_path = data_dir / "workflow_observer.db"
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
@@ -518,6 +523,23 @@ def run(config_path: Path, *, once: bool = False) -> int:
                 delay = settings.poll_seconds
                 if once:
                     return len(acknowledged) + shared_messages
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 401:
+                    state.set("status", "revoked")
+                    state.set("last_error", "Organization access removed or device credential invalid")
+                    state.set("revoked_at", _now())
+                    state.set("org_force_redacted_ai_context", "")
+                    # No more network requests using the revoked credential.
+                    # Local capture remains untouched; no failed batch cursor
+                    # advances, so nothing accidentally uploads on reconnect.
+                    return 0
+                message = f"Gateway HTTP {exc.response.status_code}"
+                state.set("status", "error")
+                state.set("last_error", message)
+                if once:
+                    raise
+                time.sleep(delay)
+                delay = min(30.0, max(settings.poll_seconds, delay * 1.8))
             except Exception as exc:
                 message = str(exc)[:500]
                 state.set("status", "error")
