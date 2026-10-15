@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
@@ -84,6 +85,22 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION, lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Starlette's default error body includes raw invalid input. That can
+    # contain NaN/Infinity, which JSON cannot serialize and previously turned
+    # a rejected event into a 500. Never echo untrusted capture payloads.
+    safe = [
+        {
+            "loc": [str(part) for part in item.get("loc", ())][:12],
+            "msg": str(item.get("msg") or "invalid value")[:200],
+            "type": str(item.get("type") or "value_error")[:80],
+        }
+        for item in exc.errors()[:20]
+    ]
+    return JSONResponse({"detail": safe}, status_code=422)
 # Host validation closes DNS-rebinding requests whose Host header is not the
 # loopback endpoint. testserver is retained solely for FastAPI/Starlette tests.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
