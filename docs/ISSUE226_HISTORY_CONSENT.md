@@ -31,6 +31,12 @@ evidence, org policy, device credential or date window invalidate consent.
 Historical agent transcripts/text, screenshots, clipboard values and
 other disallowed raw content are not included.
 
+A confirmation token is consumed using one SQLite transaction, including its
+associated preview digest/expiry/date-range state, **before** network upload.
+Concurrent confirmations with the same token cannot each upload the same
+historical data. Expiry is rechecked after the policy/evidence revalidation;
+partially failed uploads still require a fresh explicit preview and consent.
+
 A pause/revocation blocks the operation; previously defined sync skip
 ranges remain excluded. Discovery-held events remain local. Upload retries
 require a new preview and explicit confirmation. Gateway event-ID
