@@ -18,6 +18,7 @@ from .lifecycle import get_retention_policy, init_lifecycle_schema, set_retentio
 from .policy import privacy_contract_violation
 from .query import workflow_trace
 from .workflow_evidence import WorkflowEvidenceError, repeated_workflows, workflow_evidence
+from .record_links import init_record_links, approve_record_link, revoke_record_link, list_record_links
 from .settings import PRODUCT_VERSION, GatewaySettings
 from . import work_text_cloud
 from .hardening import DistributedPrincipalRateLimiter
@@ -40,6 +41,12 @@ class IntegrationTokenRequest(BaseModel):
     actor_id: str = ""
     scopes: list[str] = Field(default_factory=lambda: ["evidence:read"])
     label: str = ""
+
+
+class AdminRecordLinkRequest(BaseModel):
+    organization_id: str
+    first_ref: str
+    second_ref: str
 
 
 class PolicyRequest(BaseModel):
@@ -118,6 +125,7 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
         db.init()
         init_enrollment_schema(db)
         init_lifecycle_schema(db)
+        init_record_links(db)
         work_text_cloud.init_schema(db)
         # Cloud-only throttle. Existing structural evidence requests and
         # Gateway rate-limit settings are not changed.
@@ -707,6 +715,60 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
                 "actor_restricted": bool(selected_actor),
             },
         )
+        return result
+
+    @app.post("/v1/admin/record-links")
+    def approve_record_mapping(
+        request: AdminRecordLinkRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        try:
+            result = approve_record_link(
+                db, organization_id=request.organization_id,
+                first_ref=request.first_ref, second_ref=request.second_ref,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.audit(organization_id=request.organization_id,
+                 principal_id="gateway-admin", action="record_link.approved",
+                 details={"link_id": result["link_id"]})
+        return result
+
+    @app.delete("/v1/admin/record-links/{organization_id}/{link_id}")
+    def revoke_record_mapping(
+        organization_id: str, link_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        revoked = revoke_record_link(db, organization_id=organization_id, link_id=link_id)
+        if revoked:
+            db.audit(organization_id=organization_id,
+                     principal_id="gateway-admin", action="record_link.revoked",
+                     details={"link_id": link_id})
+        return {"revoked": revoked}
+
+    @app.get("/v1/record-graph/links")
+    def get_record_links(
+        resource_ref: str,
+        actor_id: str | None = None,
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "evidence:read")
+        if p.token_type != "integration":
+            raise HTTPException(status_code=403, detail="integration read scope required")
+        selected_actor = effective_actor(p, actor_id)
+        try:
+            result = list_record_links(
+                db, organization_id=p.organization_id, resource_ref=resource_ref,
+                actor_id=selected_actor,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.audit(organization_id=p.organization_id, principal_id=p.token_id,
+                 action="record_link.list.read",
+                 details={"returned": result["returned"],
+                          "actor_restricted": bool(selected_actor)})
         return result
 
     @app.post("/v1/search")

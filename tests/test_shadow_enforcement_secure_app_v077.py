@@ -153,11 +153,17 @@ def test_production_shadow_analytics_are_aggregate_read_only_and_write_token_can
         write_headers = {"Authorization": f"Bearer {agent_token}"}
         api_headers = {"Authorization": f"Bearer {api_token}"}
 
+        # The first authenticated ingest also initializes local storage.
+        # Under a saturated Windows Actions runner it can take more than
+        # HTTPX's default 5-second read budget, even after /health is ready.
+        # Keep the production behavior and every access-control assertion
+        # unchanged; only give this local subprocess test bounded CI headroom.
+        ci_read_timeout = 30.0 if os.name == "nt" and os.getenv("CI") else 5.0
         accepted = httpx.post(
             base + "/agent-ingest/v1/events",
             json={"events": events},
             headers=write_headers,
-            timeout=5,
+            timeout=httpx.Timeout(ci_read_timeout, connect=5.0),
         )
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["inserted"] == len(events)

@@ -237,7 +237,13 @@ def delete_evidence(db: GatewayDB, organization_id: str, **filters: Any) -> int:
     where, params = _evidence_filter(organization_id, **filters)
     with db.connect() as conn:
         cur = db._execute(conn, f"DELETE FROM evidence_events WHERE {where}", params)
-        return max(0, int(cur.rowcount or 0))
+        deleted = max(0, int(cur.rowcount or 0))
+    if deleted:
+        # Never keep record relations after the last retained evidence is gone.
+        # The cleanup refuses to purge when the bounded source scan is partial.
+        from .record_links import prune_record_links
+        prune_record_links(db, organization_id=organization_id)
+    return deleted
 
 
 def apply_retention(db: GatewayDB, organization_id: str, *, dry_run: bool = False) -> dict[str, Any]:
