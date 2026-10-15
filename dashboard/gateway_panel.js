@@ -46,14 +46,14 @@
       ? `<button class="green" onclick="continueLocallyAfterRevoke()">Continue locally</button>`
       : !connected
       ? `<button class="green" onclick="openGatewaySetup()">Connect to organization</button>`
-      : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>`;
+      : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>${s.history_backfill_available?'<button class="secondary" onclick="openHistoricalGatewayPreview()">Review older history…</button>':''}`;
     const rejoinHelp = !connected && !revoked
       ? '<div class="muted" style="margin-top:7px">Have a new invitation? Choose Connect to organization here, or open Advanced → Organization → Join your organization.</div>'
       : '';
     const revokedNotice = revoked
       ? '<div class="note"><strong>Your organization removed this computer.</strong> Organization syncing has stopped. Your local recording, saved history and connected local AI apps remain available. To reconnect, request a new invitation from IT. Choose Continue locally to remove the old device credential from this computer.</div>'
       : '';
-    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${rejoinHelp}${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
+    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${rejoinHelp}${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local by default unless you separately preview and confirm a specific older date range when that feature is enabled. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
   }
 
   function updateGatewayChip(s) {
@@ -71,6 +71,55 @@
       chip.textContent='Organization sharing: off'; chip.classList.remove('on','off');
     }
   }
+
+  window.openHistoricalGatewayPreview = function() {
+    openModal('Optional older history','Preview before sharing',
+      '<p>Normally only work captured after enrollment is shared. Sharing older retained work requires a separate review of the exact date range. This action never includes saved AI conversations, typed text, clipboard contents or screenshots.</p>'+
+      '<label>Start (your local time)</label><input id="owgHistStart" type="datetime-local" style="width:100%;margin:5px 0 12px">'+
+      '<label>End (your local time)</label><input id="owgHistEnd" type="datetime-local" style="width:100%;margin:5px 0 12px">'+
+      '<div id="owgHistPreview" role="status" class="note">No data is uploaded by a preview.</div>'+
+      '<div class="modal-actions"><button id="owgHistPreviewBtn">Preview eligible history</button><button class="secondary" onclick="closeModal()">Cancel</button></div>'
+    );
+    const button=document.getElementById('owgHistPreviewBtn');
+    if (!button) return;
+    button.onclick=async()=>{
+      const report=document.getElementById('owgHistPreview');
+      try {
+        const start=document.getElementById('owgHistStart').value;
+        const end=document.getElementById('owgHistEnd').value;
+        if (!start || !end) throw new Error('Choose both date and time boundaries.');
+        const since=new Date(start).toISOString();
+        const until=new Date(end).toISOString();
+        button.disabled=true;
+        const result=await gwCall('/v1/gateway-history/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({since,until})
+        });
+        if (report) report.textContent='Eligible privacy-hardened events: '+result.eligible+
+          '. Excluded by privacy/org policy: '+result.excluded+
+          '. Range: '+new Date(result.since).toLocaleString()+' – '+
+          new Date(result.until).toLocaleString()+'.';
+        if (!result.eligible) return;
+        if (!window.confirm('Share exactly these '+result.eligible+
+            ' older privacy-hardened events with your organization Gateway? You can cancel; no earlier data has been shared.')) return;
+        button.textContent='Sending confirmed older evidence…';
+        const sent=await gwCall('/v1/gateway-history/confirm',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({since,until,
+            confirmation_token:result.confirmation_token,
+            explicit_confirmation:'I explicitly consent to share the previewed older evidence'})
+        });
+        if (report) report.textContent='Confirmed older history: '+sent.acknowledged+
+          ' events accepted, '+sent.rejected+' rejected. Ordinary sync was not rewound.';
+        button.textContent='Preview another range';
+        window.refreshGatewayPanel?.();
+      } catch(err) {
+        if (report) report.textContent='Not shared: '+String(err.message||err);
+      } finally {
+        button.disabled=false;
+      }
+    };
+  };
 
   window.refreshGatewayPanel = async function() {
     const panel=document.querySelector('#gatewayPanel');

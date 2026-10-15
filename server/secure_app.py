@@ -669,6 +669,51 @@ async def change_mcp_http(request: Request):
     return _json_error("action must be start, stop, or status", 400)
 
 
+@app.post("/v1/gateway-history/preview")
+async def gateway_history_preview(request: Request):
+    """Dashboard-session-only preview; no background AI bearer consent."""
+    from fastapi import HTTPException
+    if not _dashboard_authenticated(request):
+        raise HTTPException(status_code=403, detail="explicit dashboard session required for historical sharing")
+    from .main import CONFIG_PATH
+    from connector.history_backfill import preview
+    from fastapi import HTTPException
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("invalid preview payload")
+        return preview(CONFIG_PATH, str(body.get("since") or ""),
+                       str(body.get("until") or ""))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/gateway-history/confirm")
+async def gateway_history_confirm(request: Request):
+    """Dashboard-session-only historical consent; automation bearer forbidden."""
+    from fastapi import HTTPException
+    if not _dashboard_authenticated(request):
+        raise HTTPException(status_code=403, detail="explicit dashboard session required for historical sharing")
+    from .main import CONFIG_PATH
+    from connector.history_backfill import confirm
+    from fastapi import HTTPException
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("invalid confirmation payload")
+        return confirm(
+            CONFIG_PATH, str(body.get("since") or ""), str(body.get("until") or ""),
+            confirmation_token=str(body.get("confirmation_token") or ""),
+            explicit_confirmation=str(body.get("explicit_confirmation") or ""),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def stop_optional_http_mcp() -> None:
     try:
         from .mcp_http_control import stop_http_mcp

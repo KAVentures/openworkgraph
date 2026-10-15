@@ -157,6 +157,11 @@ def enroll_endpoint(
     # evidence captured before the user/organization established this connection.
     enrollment_boundary = _max_local_event_id(data_dir)
     state.set_int("last_local_event_id", enrollment_boundary)
+    # Immutable boundary for optional, separately consented historical preview.
+    # Legacy enrollments without this marker cannot silently enable backfill.
+    state.set_int("history_enrollment_boundary_event_id", enrollment_boundary)
+    state.delete("history_backfill_preview_token")
+    state.delete("history_backfill_preview_expiry")
     state.delete("pause_started_after_id")
     state.set_bool("sharing_paused", False)
     state.set("status", "not_started")
