@@ -145,7 +145,7 @@ def test_uninstall_prefers_signed_bundle_python_over_system_python(tmp_path):
     runtime_python.parent.mkdir(parents=True)
     log = tmp_path / "signed-python-calls.txt"
     runtime_python.write_text(
-        "#!/bin/sh\n" + "echo called >> " + repr(str(log)) + "\n"
+        "#!/bin/sh\n" + "echo \"$3\" >> " + repr(str(log)) + "\n"
     )
     runtime_python.chmod(0o700)
     (payload / "EMBEDDED_PYTHON.txt").write_text(
