@@ -48,8 +48,13 @@ def _event(person: int, day: int, n: int, app: str, hostname: str = "") -> dict:
     prepared = prepare_event_for_gateway(event, POLICY)
     assert prepared is not None
     public = project_event_for_upload(prepared, secret=SECRET)
-    assert "PRIVATE_CUSTOMER" not in str(public)
+    # Existing connector policy explicitly allows bounded UI target labels.
+    # It does NOT share window titles when disabled, or page URL paths.
+    # Manager insights must never disclose even an allowed target label.
+    assert "PRIVATE_CUSTOMER_IDENTIFIER" not in str(public)
     assert "private-quote" not in str(public)
+    if hostname:
+        assert public["metadata"]["page"]["hostname"] == hostname
     return public
 
 
