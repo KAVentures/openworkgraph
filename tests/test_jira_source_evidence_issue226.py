@@ -121,6 +121,12 @@ def test_jira_resolution_is_verified_while_customer_success_is_not():
     assert receipt["verified_operational_outcome"]["verified"] is True
     assert receipt["verified_human_handoffs"] == 0
     assert receipt["assignment_transitions_verified"] == 2
+    assert len(receipt["source_verified_routing_edges"]) == 2
+    assert receipt["source_verified_routing_edges_complete"] is True
+    assert all(edge["accepted_by_new_assignee"] is False
+               for edge in receipt["source_verified_routing_edges"])
+    assert all(edge["same_source_issue"] is True
+               for edge in receipt["source_verified_routing_edges"])
     assert receipt["audit_complete"] is True
     assert all("actor:" in str(row) for row in receipt["review_audit_events"] if row["action"] == "assignee_transition")
     safe = json.dumps(receipt, sort_keys=True)
@@ -153,6 +159,7 @@ def test_optional_audit_failure_keeps_only_authoritative_status():
     assert r["audit_available"] is False
     assert r["audit_complete"] is False
     assert r["verified_human_handoffs"] == 0
+    assert r["source_verified_routing_edges_complete"] is False
 
 
 def test_partial_audit_does_not_claim_no_handoffs_or_rework():
