@@ -86,9 +86,20 @@ for dir in "$USER_APPLICATIONS" "$SYSTEM_APPLICATIONS"; do
     continue
   fi
   if ! /bin/rm -rf "$app" 2>/dev/null; then
-    echo "Unable to remove $app (possibly requires administrator permission)." >&2
-    echo "Remove the app manually, then rerun this uninstaller to finish cleanup." >&2
-    exit 1
+    # A signed .pkg installs /Applications/OpenWorkGraph.app as root-owned.
+    # Elevate only for this verified, exact bundle path, from an interactive
+    # Terminal. Do not elevate to edit AI app settings or user evidence.
+    if [ -t 0 ] && [ "$app" = "$SYSTEM_APPLICATIONS/OpenWorkGraph.app" ] && [ -x /usr/bin/sudo ]; then
+      echo "Administrator permission is required to remove the signed app at $app."
+      if ! /usr/bin/sudo /bin/rm -rf "$app"; then
+        echo "App removal cancelled. The local runtime was preserved." >&2
+        exit 1
+      fi
+    else
+      echo "Unable to remove $app (administrator permission may be needed)." >&2
+      echo "Remove the app manually, then rerun this uninstaller." >&2
+      exit 1
+    fi
   fi
 done
 
