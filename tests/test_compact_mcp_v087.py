@@ -20,6 +20,7 @@ DEFAULT_TOOLS = {
     "get_work_profile",
     "find_repeated_workflows",
     "get_workflow_evidence",
+    "get_record_graph",
     "get_workflow_knowledge",
     "save_workflow_knowledge",
     "forget_workflow_knowledge",

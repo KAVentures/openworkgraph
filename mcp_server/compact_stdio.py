@@ -8,6 +8,7 @@ from .context_index import register_context_index
 from .history_guard import install_history_guard
 from .history_tools import register_history_tools
 from .workflow_evidence_tools import register_workflow_evidence_tools
+from .record_graph_tools import register_record_graph_tools
 
 
 install_history_guard(_secure_runtime)
@@ -17,6 +18,7 @@ register_history_tools(mcp, _secure_runtime)
 register_context_index(mcp)
 register_automation_guidance(mcp)
 register_workflow_evidence_tools(mcp, _secure_runtime)
+register_record_graph_tools(mcp, _secure_runtime)
 
 
 if __name__ == "__main__":

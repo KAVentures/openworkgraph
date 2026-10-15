@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .db import DATA_DIR, connect
+from .gh_cli import find_gh_cli
 
 WATCH_DAYS = 30
 CHECK_EVERY_SECONDS = 600
@@ -200,7 +201,7 @@ def _ci(rollup: Any) -> str:
 
 
 def _gh() -> str | None:
-    return shutil.which("gh")
+    return find_gh_cli()
 
 
 def gh_logged_in(*, runner: Callable[..., Any] = subprocess.run, refresh: bool = False) -> bool | None:
