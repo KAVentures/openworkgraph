@@ -67,7 +67,7 @@ def _canonical_surface(value: Any) -> str:
             break
     mappings = (
         (("mail.google.com", "gmail"), "Gmail"),
-        (("google sheets", "sheets", "docs.google.com/spreadsheets"), "Google Sheets"),
+        (("google sheets", "docs.google.com/spreadsheets", "sheets.google.com"), "Google Sheets"),
         (("google docs", "docs.google.com/document"), "Google Docs"),
         (("salesforce",), "Salesforce"),
         (("chatgpt", "chat.openai.com", "openai"), "ChatGPT"),
@@ -272,7 +272,7 @@ def _transfer_patterns(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in context:
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         transfer_id = str(meta.get("clipboard_transfer_id") or "").strip()
-        action = str(row.get("action") or "").lower()
+        action = _clipboard_action(row)
         if not transfer_id or action not in {"copy", "cut", "paste"}:
             continue
         slot = by_id.setdefault(transfer_id, {"sources": [], "pastes": []})
@@ -449,30 +449,81 @@ def _rhythm(focus: list[dict[str, Any]]) -> dict[str, Any]:
     return {"days": day_rows, "activity_by_local_hour": hour_rows, "gap_threshold_seconds": 300, "interpretation": "Observed timing and gaps only; gaps are not automatically classified as breaks."}
 
 
+def _clipboard_action(row: dict[str, Any]) -> str:
+    """Canonicalize observed clipboard action names, not clipboard contents."""
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    action = str(row.get("action") or meta.get("event_type") or "").strip().lower()
+    for prefix in ("clipboard_", "browser_"):
+        if action.startswith(prefix) and action[len(prefix):] in {"copy", "cut", "paste"}:
+            return action[len(prefix):]
+    return action
+
+
+def _clipboard_observation_summary(context: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report what was actually observed; absent links do not imply no transfers."""
+    counts = Counter()
+    for row in context:
+        action = _clipboard_action(row)
+        if action not in {"copy", "cut", "paste"}:
+            continue
+        counts[action] += 1
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if action == "paste":
+            counts["linked_paste" if str(meta.get("clipboard_transfer_id") or "").strip()
+                   else "unlinked_paste"] += 1
+    return {
+        "copy_events_observed": counts["copy"],
+        "cut_events_observed": counts["cut"],
+        "paste_events_observed": counts["paste"],
+        "pastes_with_transfer_id": counts["linked_paste"],
+        "pastes_without_transfer_id": counts["unlinked_paste"],
+        "scope": "recorded_context_events_only",
+        "manual_transfer_count_is_observed_lower_bound": True,
+        "zero_does_not_prove_no_real_world_copy_paste": True,
+        "clipboard_contents_captured": False,
+    }
+
+
 def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # A page may emit dozens of clicks, scrolls and timing events while being
+    # visited once. Count observed *entries* (session start or a return from a
+    # different resource), never raw event rows, as visit candidates.
     visits: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    entry_counts: Counter[tuple[str, str]] = Counter()
+    previous_by_session: dict[tuple[str, str], tuple[str, str]] = {}
     for row in context:
         locator = str(row.get("resource_locator") or "").strip()
         if not locator:
             continue
-        visits[(str(row.get("surface") or "Unknown"), locator)].append(row)
+        surface = str(row.get("surface") or "Unknown")
+        key = (surface, locator)
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        # tab_context_id is optional; session-only behavior is retained when
+        # historical context did not capture a tab. Never join across sessions.
+        scope = (str(row.get("session_id") or ""), str(meta.get("tab_context_id") or ""))
+        if previous_by_session.get(scope) != key:
+            entry_counts[key] += 1
+        previous_by_session[scope] = key
+        visits[key].append(row)
     results = []
     for (surface, locator), rows in visits.items():
-        if len(rows) < 3:
+        entries = entry_counts[(surface, locator)]
+        if entries < 2:
             continue
-        actions = [str(row.get("action") or "").lower() for row in rows]
+        actions = [_clipboard_action(row) for row in rows]
         meaningful = sum(1 for action in actions if action not in PASSIVE_ACTIONS)
         results.append({
             "surface": surface,
             "resource_locator": locator,
-            "visit_count": len(rows),
+            "visit_count": entries,
+            "observed_event_count": len(rows),
+            "visit_count_basis": "observed_resource_entry_episodes_lower_bound",
             "meaningful_action_count": meaningful,
             "candidate_reason": "repeated_resource_visits",
             "needs_review": True,
             "example_event_ids": [row.get("event_id") for row in rows[:8] if row.get("event_id")],
         })
     return sorted(results, key=lambda x: (-int(x["visit_count"]), str(x["surface"])))[:50]
-
 
 def compute_work_profile(
     *, scope: str = "current", now: datetime | None = None,
@@ -492,6 +543,7 @@ def compute_work_profile(
         "fragmentation": _fragmentation(focus),
         "manual_transfer_patterns": transfers,
         "manual_transfer_destinations": transfer_destinations,
+        "clipboard_observation_summary": _clipboard_observation_summary(context),
         "manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers),
         "cross_surface_manual_transfer_count": sum(int(x.get("count") or 0) for x in transfers if x.get("cross_surface")),
         "daily_rhythm": _rhythm(focus),
