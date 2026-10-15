@@ -215,6 +215,9 @@ def manager_insights(
             "interpretation": "navigation candidate, not verified task identity or time savings",
         })
     results.sort(key=lambda item: (
+        # Returning to the origin app is a strong structural completion cue
+        # for document-send workflows and outranks incidental Slack detours.
+        -int(item["apps"][0] == item["apps"][-1]),
         -len(set(item["apps"])),
         -len(item["apps"]),
         -int(item["contributing_people"]),
