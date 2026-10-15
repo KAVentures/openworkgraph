@@ -43,3 +43,49 @@ def test_hosted_project_never_reexposes_explicit_customer_name():
     assert "Nordholm" not in str(result)
     assert "Jorund" not in str(result)
     assert "Storvik" not in str(result)
+
+
+def test_token_safe_customer_redaction_consistent_across_all_three_paths():
+    from server.contextual_redaction import Detector
+    from shared.core.identity_cues import redact_labeled_person_fields
+
+    local = Detector(token=lambda kind, value: "PERSON_LOCALSAFE")
+    hosted = _public()
+    device = DeviceUploadRedactor(secret="synthetic-device-secret-32-characters")
+    for phrase in (
+        "Customer: Zubeyde Okonkwo — pending",
+        "customer: anna svensson",
+        "Customer: Ingrid Bergqvist Refund Approved",
+    ):
+        outputs = [local.redact(phrase), hosted.text(phrase), device.label(phrase)]
+        for output in outputs:
+            assert "Zubeyde" not in output and "Okonkwo" not in output, output
+            assert "anna svensson" not in output.casefold(), output
+            assert "PERSON_" in output, output
+        if "Refund Approved" in phrase:
+            assert "Refund Approved" in hosted.text(phrase)
+
+    for phrase in (
+        "Recipient: someone@acme.se",
+        "Contact: anders@kund.se",
+    ):
+        out = hosted.text(phrase)
+        assert "EMAIL_" in out
+        assert "PERSON_" not in out, out
+        assert hosted.text(out) == out
+        out_upload = device.label(phrase)
+        assert "EMAIL_" in out_upload
+        assert "PERSON_" not in out_upload, out_upload
+        # One pass of the local detector after the privacy presentation layer
+        # must not reinterpret pseudonyms as names.
+        assert "PERSON_" not in local.redact("Recipient: EMAIL_A1B2C3D4E5")
+
+
+def test_shared_customer_field_helper_is_idempotent_and_limits_name_span():
+    from shared.core.identity_cues import redact_labeled_person_fields
+    token = lambda name: "PERSON_ABCD1234"
+    for text in ("Recipient: EMAIL_ABCDEF1234", "Contact: PERSON_A1B2C3D4",
+                 "Customer: OWNER_A1B2C3D4"):
+        assert redact_labeled_person_fields(text, person_token=token) == text
+    assert redact_labeled_person_fields("Customer: Ingrid Bergqvist Refund Approved",
+                                        person_token=token) == "Customer: PERSON_ABCD1234 Refund Approved"
