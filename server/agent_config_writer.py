@@ -55,6 +55,20 @@ def _backup(path: Path) -> str | None:
         return None
     backup = path.with_name(f"{path.name}.owg-backup-{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(path, backup)
+    # Some AI-client configs contain bearer credentials. A backup must never
+    # inherit world-readable permissions from a legacy config.
+    try:
+        os.chmod(backup, 0o600)
+    except OSError:
+        pass
+    # Bounded retention of OWG-generated copies; do not touch user backups.
+    backups = sorted(path.parent.glob(f"{path.name}.owg-backup-*"),
+                     key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+    for stale in backups[3:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     return str(backup)
 
 
