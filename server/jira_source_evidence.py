@@ -28,7 +28,7 @@ from .local_reference_lookup import resolve_resource_reference
 _ISSUE = re.compile(r"^[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}$")
 _TENANT = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$")
 _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
-_CLOUD_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_CLOUD_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ACTOR = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 _EVENT = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 _UTC_CATEGORIES = frozenset({"new", "indeterminate", "done"})
