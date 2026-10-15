@@ -538,6 +538,21 @@ async def local_capability_guard(request: Request, call_next):
     if (method, path) in COLLECTOR_ROUTES:
         if not bearer_matches(request.headers.get("authorization")):
             return _json_error("collector authentication required", 401)
+        # Limit authenticated buggy sensors too. Checking Content-Length alone
+        # is bypassed by chunked transfer encoding; bound the stream before the
+        # Pydantic JSON parser receives it.
+        max_bytes = 5 * 1024 * 1024
+        try:
+            if int(request.headers.get("content-length") or 0) > max_bytes:
+                return _json_error("collector request exceeds 5 MiB", 413)
+        except ValueError:
+            return _json_error("invalid Content-Length", 400)
+        buffered = bytearray()
+        async for chunk in request.stream():
+            if len(buffered) + len(chunk) > max_bytes:
+                return _json_error("collector request exceeds 5 MiB", 413)
+            buffered.extend(chunk)
+        request._body = bytes(buffered)
         return await call_next(request)
 
     if path.startswith("/v1/"):
