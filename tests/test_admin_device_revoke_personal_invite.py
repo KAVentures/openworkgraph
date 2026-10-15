@@ -121,3 +121,24 @@ def test_admin_relinked_device_still_invalidates_original_invitation(tmp_path):
         assert revoked.status_code == 200, revoked.text
         assert revoked.json()["personal_invitation_revoked"] is True
         assert enroll(client, issued["token"], "spoofed-new-id").status_code == 401
+
+
+def test_repeat_admin_revoke_closes_legacy_already_revoked_device_invite(tmp_path):
+    app, db = make_app(tmp_path)
+    with TestClient(app) as client:
+        owner, _totp = bootstrap_owner(client)
+        worker = add_employee(client, owner, "worker@acme.se")
+        invitation = personal_invite(client, owner, worker["employee_id"], max_devices=2)
+        joined = enroll(client, invitation["token"], "old-revoked-device")
+        assert joined.status_code == 200, joined.text
+        # Previous releases revoked only the device and left seat 2 open.
+        with db.connect() as conn:
+            db._execute(conn,
+                "UPDATE access_tokens SET revoked_at = ? WHERE "
+                "organization_id = ? AND device_id = ? AND token_type = 'device'",
+                ("2026-10-14T18:00:00+00:00", "acme", "old-revoked-device"))
+        res = client.delete("/v1/admin/devices/acme/old-revoked-device", headers=owner)
+        assert res.status_code == 200, res.text
+        assert res.json()["revoked_credentials"] == 0
+        assert res.json()["personal_invitation_revoked"] is True
+        assert enroll(client, invitation["token"], "new-identity-for-same-laptop").status_code == 401
