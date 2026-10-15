@@ -94,6 +94,10 @@ test('Stripe dashboard native invoice/refund references are opaque and exact', (
   const parse = parser();
   const inv = parse('https://dashboard.stripe.com/invoices/in_1234567890ABCDEF');
   const refund = parse('https://dashboard.stripe.com/test/refunds/re_1234567890ABCDEF');
+  const accountInvoice = parse('https://dashboard.stripe.com/acct_1234567890ABCDEF/invoices/in_1234567890ABCDEF');
+  const accountRefund = parse('https://dashboard.stripe.com/acct_1234567890ABCDEF/test/refunds/re_1234567890ABCDEF');
+  assert.equal(accountInvoice.resolver_locator, 'invoice:in_1234567890ABCDEF');
+  assert.equal(accountRefund.resolver_locator, 'refund:re_1234567890ABCDEF');
   assert.equal(inv.provider, 'stripe');
   assert.equal(inv.resource_kind, 'invoice');
   assert.equal(inv.resolver_locator, 'invoice:in_1234567890ABCDEF');
@@ -102,4 +106,6 @@ test('Stripe dashboard native invoice/refund references are opaque and exact', (
   assert.equal(parse('https://dashboard.stripe.com/invoices/in_1234567890ABCDEF?key=PRIVATE'), null);
   assert.equal(parse('https://invoice.stripe.com/i/acct_private/live_token'), null);
   assert.equal(parse('https://dashboard.stripe.com/customers/cus_123456789012'), null);
+  assert.equal(parse('https://dashboard.stripe.com/acct_invalid/invoices/in_1234567890ABCDEF'), null);
+  assert.equal(parse('https://dashboard.stripe.com/acct_1234567890ABCDEF/invoices/in_1234567890ABCDEF?token=x'), null);
 });
