@@ -485,25 +485,42 @@ def _clipboard_observation_summary(context: list[dict[str, Any]]) -> dict[str, A
 
 
 def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # A page may emit dozens of clicks, scrolls and timing events while being
-    # visited once. Count observed *entries* (session start or a return from a
-    # different resource), never raw event rows, as visit candidates.
+    """Count active resource-entry episodes, not events and not per-tab lifetimes.
+
+    A switch from tab A to B and back to A is two visits to A even if A never
+    navigated. A desktop focus interval without a URL can interrupt the browser
+    episode. Duplicate events in the same active context are not new visits.
+    This remains a lower-bound heuristic when active focus wasn't observed.
+    """
     visits: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     entry_counts: Counter[tuple[str, str]] = Counter()
-    previous_by_session: dict[tuple[str, str], tuple[str, str]] = {}
+    last_by_session: dict[str, tuple[str, str, str]] = {}
     for row in context:
-        locator = str(row.get("resource_locator") or "").strip()
-        if not locator:
-            continue
+        session = str(row.get("session_id") or "")
         surface = str(row.get("surface") or "Unknown")
-        key = (surface, locator)
+        locator = str(row.get("resource_locator") or "").strip()
+        action = str(row.get("action") or "").casefold().strip()
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        # tab_context_id is optional; session-only behavior is retained when
-        # historical context did not capture a tab. Never join across sessions.
-        scope = (str(row.get("session_id") or ""), str(meta.get("tab_context_id") or ""))
-        if previous_by_session.get(scope) != key:
+        tab = str(meta.get("tab_context_id") or "")
+
+        if not locator:
+            # Desktop focus is still an observed surface transition. Ignore
+            # anonymous heartbeats or browser sensor noise with no page URL.
+            if action in {"focus_span", "focus", "focus_period"} and surface.casefold() not in {
+                "", "unknown", "browser", "chrome", "google chrome",
+            }:
+                last_by_session[session] = (surface, "", "")
+            continue
+        # Background navigation requests may fire for a tab that was never
+        # displayed; only meaningful/committed/activated observations count.
+        if action in {"navigation_requested", "navigation_started", "heartbeat"}:
+            continue
+
+        key = (surface, locator)
+        signature = (surface, locator, tab)
+        if last_by_session.get(session) != signature:
             entry_counts[key] += 1
-        previous_by_session[scope] = key
+        last_by_session[session] = signature
         visits[key].append(row)
     results = []
     for (surface, locator), rows in visits.items():
@@ -517,13 +534,14 @@ def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "resource_locator": locator,
             "visit_count": entries,
             "observed_event_count": len(rows),
-            "visit_count_basis": "observed_resource_entry_episodes_lower_bound",
+            "visit_count_basis": "observed_active_resource_entries_across_tabs_and_desktop_lower_bound",
             "meaningful_action_count": meaningful,
             "candidate_reason": "repeated_resource_visits",
             "needs_review": True,
             "example_event_ids": [row.get("event_id") for row in rows[:8] if row.get("event_id")],
         })
     return sorted(results, key=lambda x: (-int(x["visit_count"]), str(x["surface"])))[:50]
+
 
 def compute_work_profile(
     *, scope: str = "current", now: datetime | None = None,
