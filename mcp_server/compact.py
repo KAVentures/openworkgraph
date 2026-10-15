@@ -1550,7 +1550,7 @@ def data_model() -> str:
         "observed work, unfinished work, repeated workflows, or prior agent execution. For continuity "
         "requests such as 'continue what I was doing', start with get_current_work_context. Skip "
         "OpenWorkGraph for ordinary coding or general questions that do not depend on work evidence. "
-        "Use get_record_graph only when a relevant exact observed opaque record reference exists and a business-record timeline or authorized source status is needed; never infer customer success from GitHub merge. Use get_workflow_trace first to reconstruct work from canonical "
+        "Use get_record_graph only when a relevant exact observed opaque record reference exists and a business-record timeline or authorized source status is needed; never infer customer success from GitHub merge, Jira issue closure or Stripe processor status. Use get_workflow_trace first to reconstruct work from canonical "
         "chronological evidence, paging or searching as needed. get_current_work_context is an optional "
         "derived quick overview and must not override the evidence. find_repeated_workflows provides "
         "derived recurring-pattern candidates with readable core paths and optional-step variants; coarse family keys remain compatibility metadata. how_did_similar_runs_go provides "
