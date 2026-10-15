@@ -456,6 +456,13 @@ class Detector:
             lambda m: m.group(0) if any(a <= m.start() < b for a, b in blocked) else self._token("ID", m.group(0)),
             out,
         )
+        # Field identity cues run before generic span detection so an
+        # unrelated status word (e.g. "Refund Approved") isn't swallowed
+        # as a third component of an uncommon name.
+        out = redact_labeled_person_fields(
+            out, person_token=self.person_token,
+            blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
+        )
         spans = self.spans(out)
         # Build once rather than repeatedly copying the remaining full string.
         # Existing token, punctuation and possessive semantics are unchanged.
@@ -475,10 +482,6 @@ class Detector:
             out = "".join(fragments)
         # Use the same high-precision explicit Swedish/English personal-name
         # cues as the hosted projection, retaining local token identity.
-        out = redact_labeled_person_fields(
-            out, person_token=self.person_token,
-            blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
-        )
         return redact_explicit_person_cues(
             out, person_token=self.person_token,
             blocked_names=STOPWORDS | self._never_words | ORGANIZATIONS,
