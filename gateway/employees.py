@@ -335,19 +335,14 @@ def revoke_enrolled_device_and_its_invitation(
                WHERE organization_id = ? AND device_id = ?""",
             (org, device),
         )
-        updated = db._execute(
-            conn,
-            "UPDATE access_tokens SET revoked_at = ? "
-            "WHERE organization_id = ? AND device_id = ? "
-            "AND token_type = 'device' AND revoked_at IS NULL",
-            (now, org, device),
-        )
-        count = max(0, int(updated.rowcount or 0))
+        # Lock and invalidate the issuing invitation *first*. A concurrent
+        # enrollment attempting to spend another seat then waits for the
+        # revocation and fails its conditional invitation UPDATE. Do this even
+        # when a legacy release already revoked this computer's token, so
+        # repeating the IT action closes a still-open older invitation.
         invite_id = str(source.get("linked_by") or "")
         revoked_invitation = False
-        if count and invite_id.startswith("pinv_"):
-            # Preserve issuance provenance even if IT subsequently linked the
-            # device to a different employee; link_device retains this ID.
+        if invite_id.startswith("pinv_"):
             invite = db._execute(
                 conn,
                 """UPDATE gateway_personal_invites SET revoked_at = ?
@@ -356,6 +351,14 @@ def revoke_enrolled_device_and_its_invitation(
                 (now, org, invite_id),
             )
             revoked_invitation = bool(invite.rowcount)
+        updated = db._execute(
+            conn,
+            "UPDATE access_tokens SET revoked_at = ? "
+            "WHERE organization_id = ? AND device_id = ? "
+            "AND token_type = 'device' AND revoked_at IS NULL",
+            (now, org, device),
+        )
+        count = max(0, int(updated.rowcount or 0))
     return {
         "revoked_credentials": count,
         "personal_invitation_revoked": revoked_invitation,
