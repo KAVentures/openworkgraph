@@ -37,29 +37,33 @@ local-only source adapter, not an enterprise organization connector.
 **Every setting below is OFF/absent by default**; the app never asks connected
 agents for credentials and never uploads secrets to OWG cloud.
 
-The local service process must explicitly receive all four environment settings:
+The local service process must explicitly receive all four settings:
 
-- OWG_JIRA_SOURCE_READ_ENABLED=true: opt in separately from GitHub/AI consent.
-- OWG_JIRA_HOST=your-tenant.atlassian.net: exact allowed tenant.
-- OWG_JIRA_ACCOUNT_EMAIL: identity of an authorized Jira user.
-- OWG_JIRA_API_TOKEN: this user's Jira REST token (ideally read-only).
+- OWG_JIRA_SOURCE_READ_ENABLED=true: separate opt-in.
+- OWG_JIRA_HOST=your-tenant.atlassian.net: exact validated Jira tenant.
+- OWG_JIRA_CLOUD_ID: OAuth-accessible Jira site UUID.
+- OWG_JIRA_OAUTH_ACCESS_TOKEN: a **short-lived OAuth 2.0 bearer token**
+  obtained through an independently authorized Atlassian 3LO app.
 
-Do **not** paste tokens into prompts, commit them to a repository, or put them
-in the browser sensor. Finder-launched apps generally do not inherit shell
-environment variables, so this pilot configuration is intended for explicit
-local/service launch; it is **not yet a one-click enterprise sign-in**.
+The adapter **does not accept individual API tokens or user email/password
+credentials**. It first checks Atlassian's live OAuth accessible-resources API
+and requires the exact configured site/cloud ID and read:jira-work grant
+before issuing any issue/changelog request. Redirects are refused; token
+requests target the fixed api.atlassian.com origin, and both time and response
+size are bounded. Revocation, inaccessible sites and wrong/missing scopes fail
+closed. No token is stored by OWG.
 
-Atlassian recommends OAuth 2.0 (3LO) for distributable integrations; customer
-token collection is not an acceptable production Cloud app credential strategy.
-A real rollout needs one authorized OAuth app with per-company/revocable scopes
-and company administrators' consent. The local BYOK prototype does not replace
-that work.
+Do not paste OAuth tokens into a prompt or source repository. Finder launches
+do not inherit shell variables, so this is still an **operator-provisioned
+local prototype**. A proper commercial rollout requires OWG-owned Atlassian
+OAuth connection/refresh/revocation UX with administrator-approved per-org
+grants and secure token storage. Those steps are NOT implemented here.
 
 Authorized reads are made only for a retained, already-observed normalized
 Jira issue and only when include_source_status=true was specifically
-requested. The stored local resolver must match the tenant exactly. Calls
-use HTTPS on the configured *.atlassian.net origin, no redirects and
-bounded response sizes/timeouts. No new data is recorded or synchronized.
+requested. The stored local resolver must match the tenant exactly. Calls use HTTPS on the fixed api.atlassian.com origin after verifying the
+configured Jira tenant/cloud ID against live OAuth authorized resources;
+redirects are disabled and request size/time are bounded. No new data is recorded or synchronized.
 
 The return value distinguishes:
 - **current Jira status category** (new/in-progress/done), as reported by Jira;
