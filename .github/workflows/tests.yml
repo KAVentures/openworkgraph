@@ -214,6 +214,8 @@ jobs:
           assert trace["derived_task_inference_authoritative"] is False
           print(f"Gateway/PostgreSQL {EXPECTED_VERSION} compatibility test passed")
           PY
+      - name: Verify privacy-thresholded manager insights against PostgreSQL
+        run: python scripts/test_manager_insights_postgres.py
       - name: Test cloud-text PostgreSQL concurrency and revocation
         run: |
           docker compose -f platform/deploy/docker-compose.yml exec -T \
