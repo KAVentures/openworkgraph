@@ -63,3 +63,52 @@ def sensor_permissions() -> dict[str, bool | None]:
 
 def missing(permissions: dict[str, bool | None]) -> list[str]:
     return sorted(name for name, granted in permissions.items() if granted is False)
+
+
+def request_accessibility_permission() -> bool | None:
+    """Ask the actual macOS TCC service; no Apple Events required."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        import ApplicationServices  # type: ignore
+        return bool(ApplicationServices.AXIsProcessTrustedWithOptions({
+            "AXTrustedCheckOptionPrompt": True,
+        }))
+    except Exception:
+        return _macos_accessibility()
+
+
+def request_input_monitoring_permission() -> bool | None:
+    if platform.system() != "Darwin":
+        return None
+    try:
+        path = ctypes.util.find_library("IOKit")
+        if not path:
+            return None
+        iokit = ctypes.cdll.LoadLibrary(path)
+        request = iokit.IOHIDRequestAccess
+        request.argtypes = [ctypes.c_uint32]
+        request.restype = ctypes.c_uint32
+        request(_LISTEN_EVENT)
+    except Exception:
+        return None
+    return _macos_input_monitoring()
+
+
+def main() -> int:
+    """Small command used by the signed Mac launcher for a real OS prompt."""
+    import json
+    import sys
+    action = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if action == "request-accessibility":
+        request_accessibility_permission()
+    elif action == "request-input-monitoring":
+        request_input_monitoring_permission()
+    elif action != "status":
+        return 2
+    print(json.dumps(sensor_permissions(), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
