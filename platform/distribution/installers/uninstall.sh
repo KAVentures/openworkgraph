@@ -1,26 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-APPLICATIONS_DIR="${OWG_APPLICATIONS_DIR:-$HOME/Applications}"
-APP="$APPLICATIONS_DIR/OpenWorkGraph.app"
-INSTALL_DIR="$HOME/Library/Application Support/WorkflowObserver"
+# Remove managed client integration BEFORE deleting any interpreter/script that
+# Claude Code, Claude Desktop, Codex etc. might still execute after uninstall.
+INSTALL_DIR="${OWG_UNINSTALL_INSTALL_DIR:-$HOME/Library/Application Support/WorkflowObserver}"
+USER_APPLICATIONS="${OWG_APPLICATIONS_DIR:-$HOME/Applications}"
+SYSTEM_APPLICATIONS="${OWG_SYSTEM_APPLICATIONS_DIR:-/Applications}"
 LOG_FILE="$HOME/Library/Logs/WorkflowObserver-setup.log"
-
-if /usr/bin/lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Port 8787 is currently in use. Quit OpenWorkGraph (or the other service using that port) before uninstalling." >&2
-  exit 2
-fi
-
 YES=0
-if [ "${1:-}" = "--yes" ] || [ "${OWG_UNINSTALL_YES:-0}" = "1" ]; then
-  YES=1
-fi
+if [ "${1:-}" = "--yes" ] || [ "${OWG_UNINSTALL_YES:-0}" = "1" ]; then YES=1; fi
 
 if [ "$YES" -ne 1 ]; then
-  echo "This will remove OpenWorkGraph, its local runtime, configuration, and recorded local data from:"
-  echo "  $INSTALL_DIR"
-  echo
-  printf "Type DELETE to continue: "
+  echo "This removes OpenWorkGraph, its app, runtime, all local history/data,"
+  echo "and OpenWorkGraph-managed MCP connections and hooks from your AI apps."
+  echo "It preserves unrelated AI app settings and hooks."
+  printf 'Type DELETE to continue: '
   read -r answer
   if [ "$answer" != "DELETE" ]; then
     echo "Uninstall cancelled."
@@ -28,9 +22,57 @@ if [ "$YES" -ne 1 ]; then
   fi
 fi
 
-rm -rf "$APP"
+# Never mistake an unrelated process on 8787 for an OWG process and kill it.
+if /usr/bin/lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port 8787 is in use. Quit OpenWorkGraph before uninstalling." >&2
+  exit 2
+fi
+
+CONNECT="$INSTALL_DIR/owg_connect.py"
+if [ -f "$CONNECT" ]; then
+  PYTHON="${OWG_UNINSTALL_PYTHON:-}"
+  if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    for candidate in "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/.runtime/bin/python" /usr/bin/python3; do
+      if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+    done
+  fi
+  if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    echo "Cannot clean up AI clients: Python unavailable. Runtime preserved." >&2
+    exit 1
+  fi
+  echo "Removing only OpenWorkGraph-managed AI integrations..."
+  # Each removal handles MCP and observation/hooks; stale entries in clients
+  # must never remain pointing at a deleted runtime. Fail closed on error.
+  for client in claude_code claude_desktop codex cursor vscode windsurf gemini_cli copilot_cli kiro amazon_q; do
+    if ! "$PYTHON" "$CONNECT" remove "$client" >/dev/null; then
+      echo "Could not remove the $client integration; runtime preserved." >&2
+      exit 1
+    fi
+  done
+fi
+
+# Remove only OWG-owned app bundles, not a different app someone put at the
+# same path. Signed installers target /Applications, bootstrap targets ~/Applications.
+for dir in "$USER_APPLICATIONS" "$SYSTEM_APPLICATIONS"; do
+  app="$dir/OpenWorkGraph.app"
+  if [ ! -d "$app" ]; then continue; fi
+  plist="$app/Contents/Info.plist"
+  identifier=""
+  if [ -f "$plist" ] && [ -x /usr/libexec/PlistBuddy ]; then
+    identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true)"
+  fi
+  if [ "$identifier" != "com.kinvectum.openworkgraph" ] && [ "$identifier" != "com.kinvectum.openworkgraph.bootstrap" ]; then
+    echo "Skipping unexpected application bundle at $app (identifier: $identifier)." >&2
+    continue
+  fi
+  if ! /bin/rm -rf "$app" 2>/dev/null; then
+    echo "Unable to remove $app (possibly requires administrator permission)." >&2
+    echo "Remove the app manually, then rerun this uninstaller to finish cleanup." >&2
+    exit 1
+  fi
+done
+
 rm -rf "$INSTALL_DIR"
 rm -f "$LOG_FILE"
-
-echo "OpenWorkGraph has been removed from this macOS user account."
-echo "Browser extensions are managed by your browser; remove the OpenWorkGraph extension there if you installed it."
+echo "OpenWorkGraph integrations, runtime and local data removed."
+echo "Remove the optional OpenWorkGraph browser extension from your browser's extensions page."
