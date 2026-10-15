@@ -77,7 +77,11 @@
   function parseStripe(u) {
     if (u.hostname !== "dashboard.stripe.com" || u.search || u.hash) return null;
     const chunks = u.pathname.split("/").filter(Boolean);
-    const parts = chunks[0] === "test" ? chunks.slice(1) : chunks;
+    // Stripe's Dashboard can prefix a selected account; accept only a
+    // well-formed account ID, never arbitrary tenant or session path segments.
+    let parts = chunks;
+    if (/^acct_[A-Za-z0-9]{8,90}$/.test(parts[0] || "")) parts = parts.slice(1);
+    if (parts[0] === "test") parts = parts.slice(1);
     if (parts.length !== 2) return null;
     const [section, id] = parts;
     if (section === "invoices" && /^in_[A-Za-z0-9]{10,90}$/.test(id)) {
