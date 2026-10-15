@@ -44,3 +44,11 @@ Synthetic tests validate auth defaults, response minimization, account
 mismatch, identity mismatch and unknown/conflicting states. Actual API
 permissions and customer-authorized retention/revocation tests must still be
 completed before calling issue #226 production-ready.
+
+Operator validation before production use: verify the restricted key grants
+GET access to /v1/account and the relevant /v1/invoices and /v1/refunds
+resources in a consented Stripe TEST account. Confirm mismatched/revoked
+credentials return unknown, that the native Dashboard URL path still matches
+the strict parser, and that no unrestricted API key is accepted. Both invoice
+payment and refund results are snapshots, so evaluate their freshness before
+an agent takes any subsequent action.
