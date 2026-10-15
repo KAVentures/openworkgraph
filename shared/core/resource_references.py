@@ -253,7 +253,11 @@ def resource_reference_from_url(
     elif host == "dashboard.stripe.com" and not parsed.query and not parsed.fragment:
         # Native Stripe dashboard references only, never customer-hosted
         # invoice URLs or receipt tokens. Do not accept arbitrary path tails.
-        stripe_parts = parts[1:] if parts and parts[0] == "test" else parts
+        stripe_parts = parts
+        if stripe_parts and re.fullmatch(r"acct_[A-Za-z0-9]{8,90}", stripe_parts[0]):
+            stripe_parts = stripe_parts[1:]
+        if stripe_parts and stripe_parts[0] == "test":
+            stripe_parts = stripe_parts[1:]
         if len(stripe_parts) == 2 and stripe_parts[0] == "invoices":
             if re.fullmatch(r"in_[A-Za-z0-9]{10,90}", stripe_parts[1]):
                 provider, kind, locator = "stripe", "invoice", "invoice:" + stripe_parts[1]
