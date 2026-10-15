@@ -173,7 +173,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "OWG"
+        if let symbol = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted",
+                                accessibilityDescription: "OpenWorkGraph") {
+            symbol.isTemplate = true
+            statusItem.button?.image = symbol
+        } else {
+            statusItem.button?.title = "OWG"
+        }
         statusItem.button?.toolTip = "OpenWorkGraph"
 
         let menu = NSMenu()
