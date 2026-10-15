@@ -135,6 +135,12 @@ def status(config_path: Path) -> dict[str, Any]:
         "sync_status": state.get("status", "not_started"),
         "device_revoked": bool(settings.enabled and state.get("status") == "revoked"),
         "revoke_requires_new_enrollment": True,
+        "history_backfill_available": bool(
+            os.getenv("OWG_ENABLE_HISTORY_BACKFILL", "").lower() in {"1","true","yes"}
+            and enrolled and not paused and state.get("status") != "revoked"
+            and state.get_int("history_enrollment_boundary_event_id",0) > 0
+        ),
+        "historical_sharing_requires_new_preview_and_confirmation": True,
         "last_success_at": state.get("last_success_at", "") or None,
         "last_error": state.get("last_error", "") or None,
         "last_local_event_id": state.get_int("last_local_event_id", 0),

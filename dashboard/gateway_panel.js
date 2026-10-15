@@ -46,7 +46,7 @@
       ? `<button class="green" onclick="continueLocallyAfterRevoke()">Continue locally</button>`
       : !connected
       ? `<button class="green" onclick="openGatewaySetup()">Connect to organization</button>`
-      : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>`;
+      : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>${s.history_backfill_available?'<button class="secondary" onclick="openHistoricalGatewayPreview()">Review older history…</button>':''}`;
     const rejoinHelp = !connected && !revoked
       ? '<div class="muted" style="margin-top:7px">Have a new invitation? Choose Connect to organization here, or open Advanced → Organization → Join your organization.</div>'
       : '';
@@ -71,6 +71,55 @@
       chip.textContent='Organization sharing: off'; chip.classList.remove('on','off');
     }
   }
+
+  window.openHistoricalGatewayPreview = function() {
+    openModal('Optional older history','Preview before sharing',
+      '<p>Normally only work captured after enrollment is shared. Sharing older retained work requires a separate review of the exact date range. This action never includes saved AI conversations, typed text, clipboard contents or screenshots.</p>'+
+      '<label>Start (your local time)</label><input id="owgHistStart" type="datetime-local" style="width:100%;margin:5px 0 12px">'+
+      '<label>End (your local time)</label><input id="owgHistEnd" type="datetime-local" style="width:100%;margin:5px 0 12px">'+
+      '<div id="owgHistPreview" role="status" class="note">No data is uploaded by a preview.</div>'+
+      '<div class="modal-actions"><button id="owgHistPreviewBtn">Preview eligible history</button><button class="secondary" onclick="closeModal()">Cancel</button></div>'
+    );
+    const button=document.getElementById('owgHistPreviewBtn');
+    if (!button) return;
+    button.onclick=async()=>{
+      const report=document.getElementById('owgHistPreview');
+      try {
+        const start=document.getElementById('owgHistStart').value;
+        const end=document.getElementById('owgHistEnd').value;
+        if (!start || !end) throw new Error('Choose both date and time boundaries.');
+        const since=new Date(start).toISOString();
+        const until=new Date(end).toISOString();
+        button.disabled=true;
+        const result=await gwCall('/v1/gateway-history/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({since,until})
+        });
+        if (report) report.textContent='Eligible privacy-hardened events: '+result.eligible+
+          '. Excluded by privacy/org policy: '+result.excluded+
+          '. Range: '+new Date(result.since).toLocaleString()+' – '+
+          new Date(result.until).toLocaleString()+'.';
+        if (!result.eligible) return;
+        if (!window.confirm('Share exactly these '+result.eligible+
+            ' older privacy-hardened events with your organization Gateway? You can cancel; no earlier data has been shared.')) return;
+        button.textContent='Sending confirmed older evidence…';
+        const sent=await gwCall('/v1/gateway-history/confirm',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({since,until,
+            confirmation_token:result.confirmation_token,
+            explicit_confirmation:'I explicitly consent to share the previewed older evidence'})
+        });
+        if (report) report.textContent='Confirmed older history: '+sent.acknowledged+
+          ' events accepted, '+sent.rejected+' rejected. Ordinary sync was not rewound.';
+        button.textContent='Preview another range';
+        window.refreshGatewayPanel?.();
+      } catch(err) {
+        if (report) report.textContent='Not shared: '+String(err.message||err);
+      } finally {
+        button.disabled=false;
+      }
+    };
+  };
 
   window.refreshGatewayPanel = async function() {
     const panel=document.querySelector('#gatewayPanel');
