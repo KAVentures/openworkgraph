@@ -345,13 +345,15 @@ def revoke_enrolled_device_and_its_invitation(
         count = max(0, int(updated.rowcount or 0))
         invite_id = str(source.get("linked_by") or "")
         revoked_invitation = False
-        if count and source.get("identity_source") in ("personal_invite", "sso_verified") and invite_id:
+        if count and invite_id.startswith("pinv_"):
+            # Preserve issuance provenance even if IT subsequently linked the
+            # device to a different employee; link_device retains this ID.
             invite = db._execute(
                 conn,
                 """UPDATE gateway_personal_invites SET revoked_at = ?
-                   WHERE organization_id = ? AND employee_id = ?
-                     AND invite_id = ? AND revoked_at IS NULL""",
-                (now, org, str(source.get("employee_id") or ""), invite_id),
+                   WHERE organization_id = ? AND invite_id = ?
+                     AND revoked_at IS NULL""",
+                (now, org, invite_id),
             )
             revoked_invitation = bool(invite.rowcount)
     return {
@@ -670,11 +672,22 @@ def link_device(
                 (employee["actor_id"], org, device_id, employee["actor_id"]),
             )
             moved = int(cur.rowcount or 0)
+        origin = _one(
+            db, conn,
+            "SELECT linked_by FROM gateway_device_identity "
+            "WHERE organization_id = ? AND device_id = ?",
+            (org, device_id),
+        )
+        # Do not lose the original personal-invitation provenance when an IT
+        # admin later changes the employee association. The admin action
+        # itself is recorded separately in the Gateway audit log.
+        previous_issuer = str(origin.get("linked_by") or "")
+        issuer = previous_issuer if previous_issuer.startswith("pinv_") else str(linked_by or "")[:200]
         db._execute(conn, "DELETE FROM gateway_device_identity WHERE organization_id = ? AND device_id = ?", (org, device_id))
         db._execute(
             conn,
             "INSERT INTO gateway_device_identity(organization_id, device_id, employee_id, identity_source, linked_at, linked_by) VALUES (?, ?, ?, 'admin_linked', ?, ?)",
-            (org, device_id, employee_id, now, str(linked_by or "")[:200]),
+            (org, device_id, employee_id, now, issuer),
         )
     return {
         "organization_id": org, "device_id": device_id, "employee": employee,
