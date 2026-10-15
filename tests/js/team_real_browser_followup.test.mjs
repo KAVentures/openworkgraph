@@ -47,6 +47,9 @@ test('rejoin, copy and fresh sync wording are accurate', () => {
   assert.doesNotMatch(connect, /OWG sign-in above/);
   assert.match(connect, /ChatGPT cloud-sharing section below/);
   assert.match(gateway, /Have a new invitation/);
+  const basic = fs.readFileSync('dashboard/basic_mode.js', 'utf8');
+  assert.match(basic, /gateway\?\.mode === 'local_only'/);
+  assert.match(basic, /gateway\?\.device_revoked/);
   const service = fs.readFileSync('connector/service.py', 'utf8');
   assert.match(service, /state.delete\("last_success_at"\)/);
 });
