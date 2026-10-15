@@ -220,17 +220,20 @@ def create_enterprise_app(
         require_admin(authorization)
         org = _identifier(organization_id, "organization_id")
         device = _identifier(device_id, "device_id")
-        revoked = db.revoke_device_tokens(organization_id=org, device_id=device)
+        from .employees import revoke_enrolled_device_and_its_invitation
+        result = revoke_enrolled_device_and_its_invitation(
+            db, organization_id=org, device_id=device,
+        )
         db.audit(
             organization_id=org,
             principal_id="gateway-admin",
             action="device.admin_revoked",
-            details={"device_id": device, "revoked_credentials": revoked},
+            details={"device_id": device, **result},
         )
         return {
             "organization_id": org,
             "device_id": device,
-            "revoked_credentials": revoked,
+            **result,
             "evidence_deleted": False,
         }
 

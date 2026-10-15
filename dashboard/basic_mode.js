@@ -661,7 +661,13 @@
       today.connections = connections; today.gateway = gateway;
       const observeOn = (connections?.clients || []).some(c => c.observe?.supported && c.observe?.on);
       facts.agentsSeen = observeOn || (runs?.executions || []).length > 0;
-      facts.orgConnected = !!gateway?.enrolled || !!gateway?.managed || String(gateway?.mode || '').startsWith('connected');
+      // A computer that was revoked or explicitly disconnected should still
+      // have a visible Organization tab in Basic so an employee with a new
+      // IT-issued invitation can find the safe rejoin flow.
+      facts.orgConnected = !!gateway?.enrolled || !!gateway?.managed ||
+        String(gateway?.mode || '').startsWith('connected') ||
+        !!gateway?.device_revoked ||
+        (gateway?.mode === 'local_only' && !!gateway?.gateway_url);
       applyMode(); renderHero();
     } finally { factsLoading = false; }
   }

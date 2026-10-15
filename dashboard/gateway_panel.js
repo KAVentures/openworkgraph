@@ -47,10 +47,13 @@
       : !connected
       ? `<button class="green" onclick="openGatewaySetup()">Connect to organization</button>`
       : `<button class="${s.sharing_paused?'green':'secondary'}" onclick="setGatewaySharing(${s.sharing_paused?'true':'false'})">${s.sharing_paused?'Resume sharing':'Pause sharing'}</button><button class="secondary" onclick="disconnectGateway()">Disconnect</button>`;
+    const rejoinHelp = !connected && !revoked
+      ? '<div class="muted" style="margin-top:7px">Have a new invitation? Choose Connect to organization here, or open Advanced → Organization → Join your organization.</div>'
+      : '';
     const revokedNotice = revoked
       ? '<div class="note"><strong>Your organization removed this computer.</strong> Organization syncing has stopped. Your local recording, saved history and connected local AI apps remain available. To reconnect, request a new invitation from IT. Choose Continue locally to remove the old device credential from this computer.</div>'
       : '';
-    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
+    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${rejoinHelp}${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
   }
 
   function updateGatewayChip(s) {

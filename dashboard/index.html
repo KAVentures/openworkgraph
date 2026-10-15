@@ -235,6 +235,45 @@ function savedDayBounds(dateString){
   if(start.getFullYear()!==year||start.getMonth()!==month-1||start.getDate()!==day)return null;
   return {since:start.toISOString(), until:new Date(end.getTime()-1).toISOString()};
 }
+function savedDaySurface(event){
+  // Employee-only local history: derive the real page from the existing
+  // privacy-hardened browser hostname, never an untrusted page title.
+  const page=(event.metadata&&event.metadata.page)||{};
+  const host=String(event.page_host||event.browser_hostname||page.hostname||'')
+    .trim().toLowerCase().replace(/\.$/,'');
+  const sites=[
+    ['mail.google.com','Gmail'],['gmail.com','Gmail'],
+    ['fortnox.se','Fortnox'],['atlassian.net','Jira'],
+    ['salesforce.com','Salesforce'],['force.com','Salesforce'],
+    ['docs.google.com','Docs'],['sheets.google.com','Sheets'],
+    ['slack.com','Slack'],['github.com','GitHub'],
+  ];
+  if(/^[a-z0-9.-]{1,253}$/.test(host)){
+    for(const [domain,name] of sites)
+      if(host===domain||host.endsWith('.'+domain))return name;
+    if(['browser','google chrome','chrome','safari','firefox','edge'].includes(String(event.app||'').toLowerCase()))return host;
+  }
+  return event.app||event.work_surface||'Other app';
+}
+function savedDayAction(event){
+  const actions={
+    focus_span:'Focused on application',
+    focus:'Focused on application',
+    navigate:'Visited page',
+    copy:'Copied (contents not recorded)',
+    paste:'Pasted (contents not recorded)',
+    click:'Clicked',
+    resource_reference_observed:'Viewed work reference',
+    browser_navigation:'Visited page',
+    browser_click:'Clicked',
+    browser_paste:'Pasted (contents not recorded)',
+    browser_scroll:'Scrolled',
+    app_switch:'Switched application',
+    window_focus:'Focused on window',
+  };
+  const raw=String(event.action||event.event_type||'');
+  return actions[raw]||raw.replace(/_/g,' ')||'Activity';
+}
 async function showSavedDay(append=false){
   const picker=document.querySelector('#savedDayPicker');
   const status=document.querySelector('#savedDayStatus');
@@ -258,8 +297,8 @@ async function showSavedDay(append=false){
       const row=document.createElement('tr');
       const values=[
         event.observed_at?new Date(event.observed_at).toLocaleTimeString():'',
-        event.app||event.work_surface||'Other app',
-        event.action||event.event_type||'Observed activity',
+        savedDaySurface(event),
+        savedDayAction(event),
       ];
       for(const value of values){const cell=document.createElement('td');cell.textContent=String(value||'');row.appendChild(cell);}
       rows.appendChild(row);
