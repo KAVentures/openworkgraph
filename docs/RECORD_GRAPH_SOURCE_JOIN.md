@@ -108,3 +108,29 @@ The specific measure is a bounded source-audit observation, **not** customer
 outcome verification or an accepted cross-person handoff. An independent
 acknowledgement/acceptance receipt still requires a different authorized
 source-system event and must be validated separately.
+
+
+## Production Jira OAuth dependency before real organization tests
+
+Atlassian's documented 2026 3LO security guidance says an app should use one
+**distributable application-owned OAuth 2.0 integration**, rather than asking
+each customer to create an individual custom OAuth app or supply personal API
+tokens. OWG therefore needs a single developer-console OAuth application,
+a registered callback URL controlled by OWG, the minimum `read:jira-work`
+scope, and `offline_access` for **rotating refresh tokens**. Atlassian's
+resource-level consent is preferable where site-specific authorization is
+available.
+
+The current operator-injected `OWG_JIRA_OAUTH_ACCESS_TOKEN` proof-of-concept
+does NOT implement a callback, credential storage or refresh lifecycle.
+Do **not** publish a setup tutorial telling each user to create a Jira 3LO
+app or paste their personal API token. Implement the company-managed callback,
+org-bound consent record, securely stored refreshed credentials, immediate
+revocation and per-source site/scope checks before commercial rollout. The
+OWG-owned OAuth client ID/secret and verified callback configuration are
+deployment prerequisites; they are never included in this repository or
+passed through a connected AI tool.
+
+Official guidance:
+https://developer.atlassian.com/cloud/jira/software/oauth-2-3lo-apps/
+https://developer.atlassian.com/cloud/oauth/getting-started/refresh-tokens/
