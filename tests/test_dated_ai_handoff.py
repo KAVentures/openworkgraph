@@ -164,3 +164,28 @@ for title in ('Q4 pipeline - Atlas Logistics - Google Sheets',
 r=contextual_text_redactor({'never_redact':['anna svensson'],'always_redact':[]})
 assert r('anna svensson cardiology - Google Search')=='anna svensson cardiology - Google Search'
 ''', tmp_path)
+
+
+def test_upgrade_reprotects_history_after_the_previous_title_migration(tmp_path):
+    run(r'''
+from server import db
+db.init_db()
+insert_events([event('legacy', A, 'Invoice Acme Q4')])
+with connect() as c:
+    # Reproduce a retained title missed by the already-completed older pass.
+    c.execute("UPDATE events SET window_title=? WHERE event_id='legacy'",
+              ('natalie bergstrom cardiology - Google Search',))
+    c.execute("INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)",
+              ('titles_sensitive_details_tokenized_v0108',))
+assert not db.title_protection_complete()
+assert db.protect_existing_titles(batch_size=1) == 1
+assert db.title_protection_complete()
+with connect() as c:
+    for table, column in [('events','window_title'), ('normalized_events','window_title'),
+                          ('context_events','resource_title')]:
+        title=c.execute(f"SELECT {column} FROM {table} WHERE event_id='legacy'").fetchone()[0]
+        assert 'natalie' not in title and 'bergstrom' not in title, (table,title)
+        if table != 'normalized_events':  # normalized titles intentionally use coarse app labels
+            assert 'PERSON_' in title and 'cardiology' in title, (table,title)
+assert db.protect_existing_titles(batch_size=1) == 0
+''', tmp_path)

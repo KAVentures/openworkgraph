@@ -352,3 +352,7 @@ It is not an MCP history-access bypass. Local history availability is not proof
 that a hosted app has received it; hosted availability follows that deployment's
 existing sharing/enrollment boundary. Preparing or downloading an evidence package
 never changes either permission.
+
+On upgrade, the checkpointed title-protection migration revisits retained rows
+to apply the stronger person-search protection and rebuild the derived views.
+Already-tokenized titles and the remaining business context are preserved.
