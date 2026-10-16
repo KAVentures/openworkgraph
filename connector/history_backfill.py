@@ -81,6 +81,33 @@ def _context(config_path: Path) -> dict[str, Any]:
                 token=token, state=state, boundary=boundary)
 
 
+def _last_discovery_exclusion_window(discovery: dict[str, Any]) -> tuple[str, str | None] | None:
+    """Exclude the last captured study even if it was already deactivated.
+
+    Old installations may not have written persistent Gateway skip ranges when
+    there was no organization connected during Discovery Mode. This conservative
+    window closes that legacy gap for the most recently recorded study. New
+    sessions also get permanent ID skip ranges on deactivation.
+    """
+    if not discovery.get("session_id"):
+        return None
+    try:
+        start = normalize_timestamp(str(discovery["starts_at"]))
+        ends = [
+            normalize_timestamp(str(discovery[field]))
+            for field in ("ends_at", "deactivated_at")
+            if discovery.get(field)
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        # Malformed discovery metadata must not silently become permission to
+        # upload content captured under a restricted consent scope.
+        raise PermissionError("cannot verify historical Discovery Mode boundaries") from exc
+    end = min(ends) if ends else None
+    if end is not None and end < start:
+        raise PermissionError("invalid historical Discovery Mode boundaries")
+    return start, end
+
+
 def _eligible(config_path: Path, context: dict[str, Any], since: str, until: str,
               remote_policy: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     state = context["state"]
@@ -95,6 +122,7 @@ def _eligible(config_path: Path, context: dict[str, Any], since: str, until: str
     discovery = read_discovery_state(data_dir=context["data_dir"])
     discovery_hold = bool(discovery.get("enabled"))
     discovery_boundary = int(discovery.get("gateway_event_boundary_id") or 0)
+    last_discovery_window = _last_discovery_exclusion_window(discovery)
     key = load_or_create_upload_privacy_key(context["auth_dir"])
     owner = local_owner_names(config_path)
 
@@ -121,6 +149,13 @@ def _eligible(config_path: Path, context: dict[str, Any], since: str, until: str
             continue
         if not (since <= observed < until):
             continue
+        # A completed study is still private: being off NOW never retroactively
+        # authorizes sharing its previously restricted Discovery events.
+        if last_discovery_window is not None:
+            discovery_start, discovery_end = last_discovery_window
+            if discovery_start <= observed and (discovery_end is None or observed < discovery_end):
+                excluded += 1
+                continue
         if state.skipped(local_id) or (discovery_hold and local_id > discovery_boundary):
             excluded += 1
             continue

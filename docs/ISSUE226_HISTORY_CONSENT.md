@@ -38,7 +38,11 @@ historical data. Expiry is rechecked after the policy/evidence revalidation;
 partially failed uploads still require a fresh explicit preview and consent.
 
 A pause/revocation blocks the operation; previously defined sync skip
-ranges remain excluded. Discovery-held events remain local. Upload retries
+ranges remain excluded. Discovery-held events remain local even after a study is deactivated. The
+most recently recorded legacy study is filtered by its saved start/end window;
+new studies also persist local-ID exclusion ranges on exit, including when the
+user was not enrolled in an organization during the study. Its separately
+reviewed study-package export remains a different consent action. Upload retries
 require a new preview and explicit confirmation. Gateway event-ID
 idempotency prevents double attribution. Crucially, this operation
 **never changes the normal forward-only sync cursor**.

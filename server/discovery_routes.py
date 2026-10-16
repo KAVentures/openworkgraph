@@ -28,6 +28,7 @@ from shared.discovery_scope import (
     set_handoff_purpose,
     start_session,
 )
+from connector.state import SyncState
 from connector.control import (
     _max_local_agent_message_id,
     _max_local_event_id,
@@ -447,10 +448,35 @@ def finish_discovery() -> dict[str, Any]:
     return finish_session()
 
 
+def _seal_discovery_gateway_history(before: dict[str, Any]) -> None:
+    """Permanently exclude this study's local event IDs from future backfill.
+
+    A Discovery study may run before organization enrollment, when pausing a
+    Gateway cannot create the ordinary 'user_paused' skip range. Explicit
+    export of its reviewed study package is separate from Gateway sharing.
+    """
+    if not before.get("enabled") or not before.get("session_id"):
+        return
+    data_dir, _ = gateway_paths(CONFIG_PATH)
+    start_after = max(0, int(before.get("gateway_event_boundary_id") or 0))
+    last_id = _max_local_event_id(data_dir)
+    if last_id > start_after:
+        SyncState(data_dir / "gateway_sync_state.db").add_skip_range(
+            start_after + 1, last_id, "discovery_mode_not_gateway_history",
+        )
+
+
 @app.post("/v1/discovery/deactivate")
 def deactivate_discovery() -> dict[str, Any]:
     before = read_state()
+    # Persist the exclusion even for a device not yet enrolled in a company.
+    # If the local state DB is unavailable, fail without deactivating the
+    # restricted study, rather than silently losing the protection.
+    _seal_discovery_gateway_history(before)
     result = deactivate_session()
+    # Include events committed during deactivation; duplicate covered ranges
+    # are harmless, while a missed tail could be shared after future enroll.
+    _seal_discovery_gateway_history(before)
     restored = _restore_gateway_if_we_paused(before)
     if restored is not None:
         result["gateway_restore"] = restored

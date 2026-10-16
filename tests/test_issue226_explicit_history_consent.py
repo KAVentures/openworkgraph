@@ -290,3 +290,51 @@ def test_parallel_confirmations_cannot_reuse_same_preview(tmp_path, monkeypatch)
     assert successes[0]["acknowledged"] == 3
     assert sent == [["historic-1", "historic-2"], ["historic-3"]]
     assert ctx["state"].get_int("last_local_event_id") == 1234
+
+def test_deactivated_discovery_study_never_backfills_legacy_rows(tmp_path, monkeypatch):
+    """Older local-only studies must stay out of a later Gateway enrollment."""
+    data = tmp_path / "data"
+    auth = tmp_path / "auth"
+    data.mkdir(); auth.mkdir()
+    state = SyncState(data / "gateway_sync_state.db")
+    db = data / "workflow_observer.db"
+    midpoint = datetime.now(timezone.utc) - timedelta(days=3)
+    start = midpoint - timedelta(minutes=5)
+    finish = midpoint + timedelta(minutes=5)
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, event_id TEXT, "
+                     "observed_at TEXT, event_type TEXT, metadata_json TEXT)")
+        conn.executemany(
+            "INSERT INTO events VALUES (?,?,?,?,?)",
+            [(1, "ordinary-before", (start - timedelta(minutes=10)).isoformat(), "focus_span", "{}"),
+             (2, "restricted-study", midpoint.isoformat(), "focus_span", "{}"),
+             (3, "ordinary-after", (finish + timedelta(minutes=10)).isoformat(), "focus_span", "{}")],
+        )
+    monkeypatch.setattr(hb, "local_owner_names", lambda _: [])
+    monkeypatch.setattr(hb, "load_or_create_upload_privacy_key", lambda _: "a" * 64)
+    monkeypatch.setattr(hb, "prepare_event_for_gateway", lambda ev, policy: ev)
+    monkeypatch.setattr(hb, "project_event_for_upload", lambda ev, **kw: ev)
+    monkeypatch.setattr(hb, "read_discovery_state", lambda **kw: {
+        "enabled": False, "status": "inactive", "session_id": "disc_legacy",
+        "starts_at": start.isoformat(),
+        "ends_at": (finish + timedelta(days=1)).isoformat(),
+        "deactivated_at": finish.isoformat(),
+    })
+    settings = SimpleNamespace(local_policy={})
+    context = dict(data_dir=data, auth_dir=auth, settings=settings,
+                   state=state, boundary=3)
+    items, counts = hb._eligible(
+        tmp_path / "config.json", context,
+        (start - timedelta(hours=1)).isoformat(),
+        (finish + timedelta(hours=1)).isoformat(), {},
+    )
+    assert [item["event_id"] for item in items] == ["ordinary-before", "ordinary-after"]
+    assert counts["excluded"] == 1
+
+
+def test_malformed_legacy_discovery_cutoff_fails_closed():
+    with pytest.raises(PermissionError, match="Discovery Mode boundaries"):
+        hb._last_discovery_exclusion_window({
+            "session_id": "disc_legacy", "starts_at": "not a timestamp",
+            "ends_at": "2026-10-15T00:00:00+00:00",
+        })

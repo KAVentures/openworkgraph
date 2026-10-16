@@ -298,6 +298,10 @@ def deactivate_session() -> dict[str, Any]:
     """Exit Discovery Mode and restore ordinary OWG capture behavior."""
     with _LOCK:
         value = read_state()
+        if not value.get("enabled"):
+            # Preserve the original study cutoff. A repeated Deactivate click
+            # must not extend a past study over unrelated later work.
+            return value
         value["enabled"] = False
         value["status"] = "inactive"
         value["deactivated_at"] = _now()
