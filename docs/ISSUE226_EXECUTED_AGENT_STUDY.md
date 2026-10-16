@@ -43,6 +43,8 @@ python scripts/run_issue226_agent_study.py \
   --report-output /private/owg_eval/report.json
 ```
 
+To run with an already signed-in Codex CLI or Claude Code installation, replace the `--agent-cmd` value with `"python /absolute/path/to/openworkgraph/scripts/issue226_model_cli_adapter.py --provider codex"` or `--provider claude`. These adapters use noninteractive, regular permission settings and do **not** turn on network access, approve shell tools or bypass any sandbox. The operator must configure the selected CLI to allow safe GETs to this trial's loopback broker, without granting arbitrary writes or provider API secrets. If the CLI cannot call the tools, C will not get falsely credited for OWG retrieval, and the study will be insufficient rather than successful. Do not run both CLIs in the same matched experiment; pin the same model and configuration across A/B/C.
+
 Pass `--owg-local-url http://127.0.0.1:8787` only if an authorized local OWG server is running. When it requires a local API bearer, supply `OWG_EVAL_OWG_BEARER` in the *runner's* environment; the runner strips it from the agent's child environment and sends it only on internal loopback OWG reads. The local server's own existing read authorization/history restrictions still apply. The broker does not modify the OWG database, change source-system state or grant the agent direct production access.
 
 Every agent trial runs in a new temporary working directory. The command gets its prompt on stdin and the following variables:
