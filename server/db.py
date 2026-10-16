@@ -405,6 +405,35 @@ def title_protection_complete() -> bool:
     return done
 
 
+def mark_title_protection_complete_if_empty() -> bool:
+    """Constant-time fresh-install fast path; never scan retained work at startup.
+
+    A genuinely empty canonical store contains nothing to re-protect. Newly
+    collected events still go through the current capture-time title policy.
+    Existing histories, even a single row, are always deferred so no upgrade
+    workload can block the launcher health probe.
+    """
+    if title_protection_complete():
+        return True
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM events LIMIT 1").fetchone():
+            return False
+        conn.execute(
+            "INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)",
+            (TITLE_PROTECTION_MIGRATION,),
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS privacy_migration_progress "
+            "(migration_key TEXT PRIMARY KEY, last_id INTEGER NOT NULL)",
+        )
+        conn.execute(
+            "DELETE FROM privacy_migration_progress WHERE migration_key = ?",
+            (TITLE_PROTECTION_MIGRATION,),
+        )
+    _TITLE_PROTECTION_DONE.add(str(DB_PATH))
+    return True
+
+
 def protect_existing_titles_in_background() -> None:
     """Spawn a strictly asynchronous, throttled, checkpointed upgrade worker.
 
