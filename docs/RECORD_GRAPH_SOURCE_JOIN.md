@@ -84,3 +84,27 @@ admin-approved mappings and audit provenance, helpdesk/billing-specific outcomes
 (refunds and invoice payment), granular retention/deletion of joined receipts,
 true handoff acceptance corroboration, broader export/navigation UX, and a
 larger agent A/B/C benchmark that logs whether the OWG tool was called.
+
+
+## Bounded Jira post-assignment activity corroboration
+
+When an opted-in Jira changelog has a validated **assignee change** and later
+a separate **status transition**, and Atlassian attributes that later status
+change to the *same new assignee's stable account ID*, OWG can report
+`subsequent_status_action_by_assignee_observed: true` with the two independent
+pseudonymous source-audit references. This is an additional trace of provider-
+recorded work after reassignment, not a source assertion of a human handshake.
+
+The authorized Jira response is bounded, with HMAC pseudonyms for raw account
+IDs; names, comments, issue keys and account IDs are never returned. A
+status action by a different account, a simultaneous/earlier timestamp, a
+status item lacking validated from/to status IDs, a missing author account ID,
+or a missing/partial changelog **never** provides positive corroboration.
+
+`accepted_by_new_assignee`, `work_completed_by_new_assignee` and
+`verified_human_handoffs` intentionally remain false/zero even with this
+evidence. `absence_of_corroboration_proves_no_work` is always false.
+The specific measure is a bounded source-audit observation, **not** customer
+outcome verification or an accepted cross-person handoff. An independent
+acknowledgement/acceptance receipt still requires a different authorized
+source-system event and must be validated separately.
