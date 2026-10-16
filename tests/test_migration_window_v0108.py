@@ -31,12 +31,15 @@ from server.local_auth import ensure_api_token
 H = {"Authorization": f"Bearer {ensure_api_token()}"}
 AI = {**H, "X-OpenWorkGraph-Context": "ai"}
 now = datetime.now(timezone.utc).isoformat()
+# A real upgrade already contains the unprotected v0.107 row *before* startup.
+# An empty fresh installation legitimately has its privacy marker completed
+# immediately, so injecting a "legacy" row after first launch is not realistic.
+db.init_db()
+with db.connect() as conn:
+    conn.execute("INSERT INTO events(event_id, observed_at, device_id, session_id, app, window_title, event_type, duration_seconds, metadata_json)"
+                 " VALUES ('old', ?, 'd', 's', 'Microsoft Teams', 'Chat with Anna Svensson about Q4 renewal', 'focus_span', 30, '{}')", (now,))
 
 with TestClient(app) as c:
-    # 1. A row stored by v0.107, before titles were protected.
-    with db.connect() as conn:
-        conn.execute("INSERT INTO events(event_id, observed_at, device_id, session_id, app, window_title, event_type, duration_seconds, metadata_json)"
-                     " VALUES ('old', ?, 'd', 's', 'Microsoft Teams', 'Chat with Anna Svensson about Q4 renewal', 'focus_span', 30, '{}')", (now,))
     assert not db.title_protection_complete()
 
     # 2. The person had chosen Full AI context.
@@ -69,22 +72,29 @@ with TestClient(app) as c:
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 
 
-def test_small_histories_are_protected_before_startup_returns(tmp_path):
+def test_small_histories_migrate_in_background_without_blocking(tmp_path):
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     code = r'''
 from datetime import datetime, timezone
+import time
 import server.db as db
 db.init_db()
 with db.connect() as conn:
     conn.execute("INSERT INTO events(event_id, observed_at, device_id, session_id, app, window_title, event_type, duration_seconds, metadata_json)"
                  " VALUES ('old', ?, 'd', 's', 'Slack', 'Erik Lund (DM) - Slack', 'focus_span', 30, '{}')", (datetime.now(timezone.utc).isoformat(),))
+assert not db.title_protection_complete()
+began=time.monotonic()
 db.protect_existing_titles_in_background()
-assert db.title_protection_complete()  # synchronous: nothing left for a background thread
+assert time.monotonic()-began < 0.8, "a small legacy history also must not block the caller"
+deadline=time.monotonic()+15
+while not db.title_protection_complete() and time.monotonic() < deadline:
+    time.sleep(0.04)
+assert db.title_protection_complete(), "short history did not eventually complete"
 with db.connect() as conn:
     assert "Erik" not in conn.execute("SELECT window_title FROM events").fetchone()[0]
-db.protect_existing_titles_in_background()  # already done: returns at once
+db.protect_existing_titles_in_background()  # completed migration remains idempotent
 '''
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, text=True, capture_output=True, timeout=180)
-    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert result.returncode == 0, f"stdout={result.stdout}\\nstderr={result.stderr}"
