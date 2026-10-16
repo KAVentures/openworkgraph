@@ -222,6 +222,32 @@ class TrialBroker:
             self._server = None
 
 
+_AGENT_ENV_KEYS = frozenset({
+    "PATH", "HOME", "USER", "USERNAME", "USERPROFILE", "SYSTEMROOT", "WINDIR",
+    "TMP", "TEMP", "TMPDIR", "APPDATA", "LOCALAPPDATA", "COMSPEC", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "TERM", "PATHEXT", "PROGRAMFILES",
+    "PROGRAMFILES(X86)", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    "XDG_DATA_HOME", "XDG_STATE_HOME", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+})
+_AGENT_PROVIDER_ENV_PREFIXES = ("OPENAI_", "ANTHROPIC_", "CODEX_", "CLAUDE_")
+
+
+def _agent_environment() -> dict[str, str]:
+    """Permit CLI/runtime/provider auth, not unrelated OWG/company credentials.
+
+    The agent *does* receive its own model-provider authentication and may
+    execute code subject to the user's CLI permissions. Don't turn this into
+    a false claim of OS process sandboxing.
+    """
+    allowed = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if upper in _AGENT_ENV_KEYS or upper.startswith(_AGENT_PROVIDER_ENV_PREFIXES):
+            allowed[key] = value
+    return allowed
+
+
 def _parse_agent_output(stdout: str) -> str:
     lines = stdout.strip().splitlines()
     if not lines or len(stdout) > _MAX_AGENT_OUTPUT:
@@ -279,10 +305,10 @@ def run_study(
                     "Only infer a business outcome if supported; unknown is an acceptable answer.\n"
                     "Case goal:\n" + str(scenario["prompt"])
                 )
-                env = os.environ.copy()
-                # This capability belongs only to the coordinator. Even when
-                # reading actual local OWG evidence, never hand credentials to agents.
-                env.pop("OWG_EVAL_OWG_BEARER", None)
+                # Share only basic runtime and model-provider CLI credentials.
+                # Never inherit provider source secrets, OWG Gateway admin keys,
+                # Supabase service-role keys, or the runner's local OWG bearer.
+                env = _agent_environment()
                 env.update({
                     "OWG_EVAL_BASE_URL": base, "OWG_EVAL_TOKEN": broker.secret,
                     "OWG_EVAL_CONDITION": condition, "OWG_EVAL_CASE_ID": case_id,
