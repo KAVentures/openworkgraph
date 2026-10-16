@@ -278,3 +278,30 @@ def test_zero_cost_preflight_separates_gold_from_agent_inputs(tmp_path, capsys):
     with pytest.raises(ValueError, match="unlinked"):
         main(["--cases", str(truth), "--scenarios", str(tasks),
               "--validate-only"])
+
+
+
+def test_live_local_owg_bearer_ignores_proxy_environment(monkeypatch):
+    import io
+    import scripts.run_issue226_agent_study as study
+    intercepted = []
+    class FakeOpener:
+        def open(self, request, timeout):
+            intercepted.append((request, timeout))
+            return io.BytesIO(json.dumps({"resource_ref": REF}).encode("utf-8"))
+    def opener(handler):
+        # Even if HTTP_PROXY is configured on the runner, no proxy may
+        # intercept local OWG credentials or the returned evidence.
+        assert handler.proxies == {}
+        return FakeOpener()
+    monkeypatch.setattr(study, "build_opener", opener)
+    monkeypatch.setenv("HTTP_PROXY", "http://untrusted.example.invalid:8080")
+    result = study._live_owg(
+        REF, "http://127.0.0.1:8787/v1/record-graph", "test-local-token",
+    )
+    assert result["resource_ref"] == REF
+    assert len(intercepted) == 1
+    request, timeout = intercepted[0]
+    assert timeout == 7
+    assert "127.0.0.1:8787" in request.full_url
+    assert request.get_header("Authorization") == "Bearer test-local-token"
