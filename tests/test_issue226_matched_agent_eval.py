@@ -31,7 +31,7 @@ def _runs(*, correct_c=True, owg_ref=REF, fake_logs=False,
         for rep in (1, 2):
             for arm in ("A", "B", "C"):
                 logs = []
-                if arm in {"B", "C"}:
+                if arm in {"B", "C"} and case["resource_ref"]:
                     logs.append({
                         "origin": "orchestrator_tool_execution",
                         "tool": "source_audit_log_read",
@@ -62,7 +62,7 @@ def test_matched_a_b_c_valid_only_when_real_matching_owg_calls_are_logged():
     assert result["status"] == "evaluable"
     assert result["matched_triplets"] == 14
     assert result["scores"]["C"]["matched_owg_record_calls"] == 12
-    assert result["scores"]["B"]["matched_source_log_access_attempts"] == 14
+    assert result["scores"]["B"]["matched_source_log_access_attempts"] == 12
     assert result["scores"]["C"]["accuracy"] == 1
     assert result["superiority_claimed"] is False
     assert result["retrieval_logs_are_collector_provided_not_cryptographically_attested"]
@@ -95,7 +95,7 @@ def test_no_source_log_access_is_explicit_ablated_not_claimed_fair():
                                      if entry["tool"] != "source_audit_log_read"]
     r = evaluate(_cases(), runs)
     assert r["status"] == "insufficient_evidence"
-    assert r["b_c_source_log_ablation_confounds"] == 14
+    assert r["b_c_source_log_ablation_confounds"] == 12
 
 
 def test_missing_pairs_cannot_make_agent_seem_better_by_case_selection():
