@@ -77,7 +77,13 @@ async def lifespan(_: FastAPI):
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
     harden_existing_browser_events(_runtime_config())
-    from .db import protect_existing_titles_in_background
+    from .db import (
+        mark_title_protection_complete_if_empty,
+        protect_existing_titles_in_background,
+    )
+    # A brand-new database needs no migration and can keep the original Full
+    # AI-context behavior immediately, without delaying startup.
+    mark_title_protection_complete_if_empty()
 
     # Upgrades with 300k+ rows must not compete with the launcher's first
     # /health probe (60s deadline). Schedule the strictly background worker
