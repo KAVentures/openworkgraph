@@ -24,8 +24,8 @@ Create private `cases.json` (adjudicator-only) with entries such as:
 
 And a **separate** privacy-reviewed `scenarios.json` with the same case IDs and opaque refs, plus:
 - `prompt`: the objective an independent agent will receive, with no ground-truth labels.
-- `source_snapshot`: a bounded, independently retained **sanitized** source-system audit snapshot from the same point in time for B and C; set null for a deliberately unavailable source.
-- `owg_record_graph`: optional sanitized previously observed OWG record projection. Alternatively use `--owg-local-url` to fetch the actual local OWG read-only API for C when requested.
+- `source_snapshot`: a bounded, independently retained **sanitized** source-system audit snapshot from the same point in time for B and C. The JSON object MUST include `resource_ref` equal to that case's exact opaque record reference; set null for a deliberately unavailable source.
+- `owg_record_graph`: optional sanitized previously observed OWG record projection, also carrying the exact matching `resource_ref`. Alternatively use `--owg-local-url` to fetch the actual local OWG read-only API for C when requested.
 
 **Never include customer names, medical records, private email text, unrestricted source logs, raw browser content, secrets or ground truth in the scenario data.** Separate `cases.json` from any agent working directory or externally shared context; a malicious same-user CLI is not sandboxed by this runner. Use realistic consented sources, then have a different reviewer adjudicate outcomes without seeing the arm.
 
