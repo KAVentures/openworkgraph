@@ -4,6 +4,9 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
+import time
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
@@ -376,15 +379,15 @@ def _protected_text_changed(before: dict[str, Any], after: dict[str, Any]) -> bo
 
 
 _TITLE_PROTECTION_DONE: set[str] = set()
-SYNC_TITLE_PROTECTION_ROWS = 5000
+_TITLE_PROTECTION_WORKERS: set[str] = set()
+_TITLE_PROTECTION_WORKERS_LOCK = threading.Lock()
 
 
 def title_protection_complete() -> bool:
-    """True once every row stored before v0.108 has had its titles protected.
+    """True only after the entire checkpointed historical re-protection finishes.
 
-    Until then older rows may still hold names, so callers that would otherwise
-    return stored text unredacted (Full AI context, unredacted exports) must
-    redact on read instead. Cached once true (the marker is never removed).
+    Until then Full AI context and unredacted exports must fail closed to the
+    redacted representation, including while a background worker is sleeping.
     """
     key = str(DB_PATH)
     if key in _TITLE_PROTECTION_DONE:
@@ -392,7 +395,8 @@ def title_protection_complete() -> bool:
     try:
         with connect() as conn:
             done = bool(conn.execute(
-                "SELECT 1 FROM privacy_migrations WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)
+                "SELECT 1 FROM privacy_migrations WHERE migration_key = ?",
+                (TITLE_PROTECTION_MIGRATION,),
             ).fetchone())
     except Exception:
         return False
@@ -402,43 +406,45 @@ def title_protection_complete() -> bool:
 
 
 def protect_existing_titles_in_background() -> None:
-    """Run the one-time title migration without delaying startup.
+    """Spawn a strictly asynchronous, throttled, checkpointed upgrade worker.
 
-    Until it finishes (``title_protection_complete``), AI context is forced to
-    Redacted and exports are forced to redact on read, so older rows are never
-    returned with the personal details the migration removes.
+    Called *after* the ASGI lifespan has yielded and the app has had time to
+    start serving health checks. Even a 5k-row history is not migrated on the
+    request/event-loop thread. One worker per DB per process prevents races.
     """
-    import threading
-
-    if title_protection_complete():
-        return
-    # Small histories (fresh installs, most upgrades) finish in well under a
-    # second: do them now so Full context is never briefly unavailable. Only a
-    # long history goes to the background.
-    try:
-        with connect() as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS privacy_migration_progress (migration_key TEXT PRIMARY KEY, last_id INTEGER NOT NULL)")
-            row = conn.execute("SELECT last_id FROM privacy_migration_progress WHERE migration_key = ?", (TITLE_PROTECTION_MIGRATION,)).fetchone()
-            remaining = int(conn.execute("SELECT COUNT(*) FROM events WHERE id > ? AND source != 'agent'", (int(row[0]) if row else 0,)).fetchone()[0])
-    except Exception:
-        remaining = SYNC_TITLE_PROTECTION_ROWS + 1
-    if remaining <= SYNC_TITLE_PROTECTION_ROWS:
-        try:
-            protect_existing_titles()
+    key = str(DB_PATH)
+    with _TITLE_PROTECTION_WORKERS_LOCK:
+        if key in _TITLE_PROTECTION_WORKERS:
             return
-        except Exception:
-            pass  # fall through to the background attempt
+        _TITLE_PROTECTION_WORKERS.add(key)
 
     def run() -> None:
         try:
-            protect_existing_titles()
-        except Exception:
-            pass  # retried on the next start (progress is checkpointed)
+            if not title_protection_complete():
+                # Short transactions + a pause after each committed checkpoint
+                # leave I/O and CPU headroom for health checks and live capture.
+                protect_existing_titles(batch_size=200, pause_seconds=0.02)
+        except Exception as exc:
+            # Never print exception values or historical row contents.
+            logging.getLogger(__name__).warning(
+                "Deferred title-protection migration will resume after restart (%s)",
+                type(exc).__name__,
+            )
+        finally:
+            with _TITLE_PROTECTION_WORKERS_LOCK:
+                _TITLE_PROTECTION_WORKERS.discard(key)
 
-    threading.Thread(target=run, name="owg-title-protection-migration", daemon=True).start()
+    try:
+        threading.Thread(
+            target=run, name="owg-title-protection-migration", daemon=True,
+        ).start()
+    except BaseException:
+        with _TITLE_PROTECTION_WORKERS_LOCK:
+            _TITLE_PROTECTION_WORKERS.discard(key)
+        raise
 
 
-def protect_existing_titles(*, batch_size: int = 1000) -> int:
+def protect_existing_titles(*, batch_size: int = 1000, pause_seconds: float = 0.0) -> int:
     """Apply the v0.108 title rule once to evidence stored before it.
 
     Earlier versions stored desktop-app titles, control labels and URL paths with
@@ -488,6 +494,11 @@ def protect_existing_titles(*, batch_size: int = 1000) -> int:
                 "INSERT OR REPLACE INTO privacy_migration_progress(migration_key, last_id) VALUES (?, ?)",
                 (TITLE_PROTECTION_MIGRATION, last_id),
             )
+        # Outside the SQLite transaction: readers, writes from the capture
+        # worker, and the single-threaded API remain responsive during an
+        # upgrade of hundreds of thousands of historical rows.
+        if pause_seconds > 0:
+            time.sleep(min(float(pause_seconds), 0.2))
 
 
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
