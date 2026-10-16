@@ -66,6 +66,10 @@ def _scenarios(path: Path, cases: dict[str, dict[str, Any]]) -> dict[str, dict[s
             raise ValueError("one scenario exceeds bounded size")
         if item.get("resource_ref") != cases[cid].get("resource_ref"):
             raise ValueError("scenario resource must exactly match ground truth's opaque ref")
+        if item.get("resource_ref") is None and (
+            item.get("source_snapshot") is not None or item.get("owg_record_graph") is not None
+        ):
+            raise ValueError("unlinked work may not silently provide any source or OWG record")
         source = item.get("source_snapshot")
         if source is not None and not isinstance(source, dict):
             raise ValueError("source_snapshot must be JSON object or null for unavailable")
@@ -325,10 +329,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Private adjudicated cases; never put truth in the agent prompt")
     parser.add_argument("--scenarios", type=Path, required=True,
                         help="Privacy-reviewed prompts/source snapshots/optional OWG snapshots")
-    parser.add_argument("--agent-cmd", required=True,
+    parser.add_argument("--agent-cmd", default="",
                         help="Exact executable argv (shell disabled); e.g. 'python /abs/path/agent.py'")
-    parser.add_argument("--runs-output", type=Path, required=True)
-    parser.add_argument("--report-output", type=Path, required=True)
+    parser.add_argument("--runs-output", type=Path)
+    parser.add_argument("--report-output", type=Path)
+    parser.add_argument("--validate-only", action="store_true",
+                        help="Validate blinded manifests without any model/tool calls")
     parser.add_argument("--replicates", type=int, default=2)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--timeout-seconds", type=int, default=150)
@@ -336,7 +342,26 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional already running and authorized loopback OWG API origin")
     args = parser.parse_args(argv)
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
-    scenarios = _scenarios(args.scenarios, _validate_cases(cases))
+    validated = _validate_cases(cases)
+    scenarios = _scenarios(args.scenarios, validated)
+    if args.validate_only:
+        from scripts.evaluate_record_graph_issue226 import _REQUIRED_STRESSORS
+        stressors = set().union(*(set(row.get("stressors") or []) for row in validated.values()))
+        print(json.dumps({
+            "status": "input_validated_no_model_executed",
+            "cases": len(validated),
+            "holdout_cases": sum(row.get("fold") == "holdout" for row in validated.values()),
+            "missing_required_stressors": sorted(_REQUIRED_STRESSORS - stressors),
+            "model_calls": 0,
+        }, sort_keys=True))
+        return 0
+    if not args.agent_cmd or args.runs_output is None or args.report_output is None:
+        parser.error("--agent-cmd, --runs-output and --report-output are required for real trials")
+    if args.runs_output.resolve() == args.report_output.resolve():
+        parser.error("run and report output paths must be different")
+    # Prevent dozens of expensive model calls when a destination already exists.
+    if args.runs_output.exists() or args.report_output.exists():
+        raise FileExistsError("one of the output files already exists; use new private filenames")
     results, report = run_study(
         cases, scenarios, shlex.split(args.agent_cmd),
         replicates=args.replicates, seed=args.seed,
