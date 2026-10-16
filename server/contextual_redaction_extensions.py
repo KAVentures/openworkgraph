@@ -13,7 +13,7 @@ import re
 from typing import Any, Callable
 
 from . import presentation
-from .contextual_redaction import AMBIGUOUS_NAMES, FIRST_NAMES, SURNAMES
+from .contextual_redaction import AMBIGUOUS_NAMES, FIRST_NAMES, SURNAMES, STOPWORDS, ORGANIZATIONS, PLACE_ORG_NOUNS
 
 _WORD = r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’-]*"
 _TOKEN = r"(?:OWNER|PERSON(?:_[0-9A-F]{4,})?|[A-Z][A-Z_]*_[0-9A-F]{4,})"
@@ -25,6 +25,7 @@ _TOKEN_COMMA_RE = re.compile(rf"\b({_TOKEN}),\s+({_WORD})\b")
 _TOKEN_SLASH_AFTER_RE = re.compile(rf"\b({_TOKEN})\s*/\s*({_WORD})\b")
 _TOKEN_SLASH_BEFORE_RE = re.compile(rf"\b({_WORD})\s*/\s*({_TOKEN})\b")
 _SEGMENT_SPLIT_RE = re.compile(r"\s+[-–—|·]\s+|\s*[|·]\s*|:\s+")
+_SEARCH_TITLE_RE = re.compile(r"\s[-–—]\s(?:Google Search|Sök på Google)(?:\s[-–—].*)?$", re.I)
 _STRONG_CUE_RE = re.compile(
     r"(?:chat|meeting|meet|call|message|email|mail|reply|cc|bcc|attendee|assigned|assignee|owner|contact|"
     r"dear|hi|hello|hej|möte|samtal|ring|patient|candidate)\s+(?:with|from|to|med|från)?\s*$",
@@ -34,6 +35,11 @@ _STRONG_CUE_RE = re.compile(
 _FIRST = frozenset(name.casefold() for name in FIRST_NAMES)
 _LAST = frozenset(name.casefold() for name in SURNAMES)
 _AMBIG = frozenset(name.casefold() for name in AMBIGUOUS_NAMES)
+_SEARCH_NON_NAMES = frozenset(x.casefold() for x in STOPWORDS | ORGANIZATIONS | PLACE_ORG_NOUNS) | {
+    "price", "pricing", "weather", "invoice", "template", "calculator", "cardiology",
+    "university", "hospital", "dress", "shoes", "software", "login", "support",
+    "jobs", "careers", "recipe", "reviews", "meaning", "translation",
+}
 
 
 def _base(value: str) -> str:
@@ -92,7 +98,9 @@ def _pre_redact(text: str, never: tuple[str, ...]) -> str:
         fk, lk = _base(first), _base(last)
         if first != first.lower() or last != last.lower():
             continue
-        if fk not in _FIRST or lk not in _LAST or fk in _AMBIG or lk in _AMBIG:
+        search_lead = match.start() == 0 and bool(_SEARCH_TITLE_RE.search(out[match.end():]))
+        search_surname = search_lead and lk not in _SEARCH_NON_NAMES and len(lk) >= 3
+        if fk not in _FIRST or (lk not in _LAST and not search_surname) or fk in _AMBIG or lk in _AMBIG:
             continue
         seg_exact = any(
             out[a:b].strip(" ,;()[]") == match.group(0)
@@ -100,7 +108,10 @@ def _pre_redact(text: str, never: tuple[str, ...]) -> str:
             if a <= match.start() and match.end() <= b
         )
         cue = bool(_STRONG_CUE_RE.search(out[:match.start()]))
-        if not (seg_exact or cue) or _in_never(out, match.start(), match.end(), never):
+        # A non-ambiguous given name leading a person-shaped search can have
+        # an uncommon surname absent from the bundled list. Preserve qualifiers.
+        # Ordinary product/business query terms above remain untouched.
+        if not (seg_exact or cue or search_lead) or _in_never(out, match.start(), match.end(), never):
             continue
         start, end = match.start() + offset, match.end() + offset
         replacement = _token(match.group(0))

@@ -110,7 +110,7 @@ For more conservative analysis, also ask the model to state what evidence would 
 
 ## AI access is explicit
 
-MCP reads are **OFF on every OpenWorkGraph launch**.
+New installations default AI access **ON at Redacted**. An explicit user opt-out or reset-on-restart preference is preserved; recording remains a separate choice.
 
 The dashboard's **AI access** switch controls whether MCP tools may read workflow evidence. The server checks that switch on every tool call, so turning access off also blocks an AI client that was already configured or connected.
 
@@ -258,7 +258,7 @@ An export is a file the user can inspect before uploading.
 
 With MCP, an AI client can decide which tool to call after access has been enabled. **Evidence returned by an MCP call is sent to the AI provider so that model can process it.** Keeping the OpenWorkGraph database local does not mean the returned tool data stays local to the computer.
 
-The AI-access switch (off on a new install; remembered after a restart unless you choose otherwise) and the local activity view exist to make that boundary explicit.
+The AI-access switch (on at Redacted on a new install; remembered after a restart unless you choose otherwise) and the local activity view exist to make that boundary explicit.
 
 ---
 
@@ -306,3 +306,53 @@ GET      /v1/mcp-connection-config
 ```
 
 All data/control endpoints require the appropriate authenticated local session/capability in normal operation.
+
+## Selected-period AI handoff
+
+Basic mode now has a **Work period** selector on Overview/Today, Activity, AI apps,
+and Export. Choose Today, Last 7 days, Custom dates, This run or All retained work.
+Activity paging and ordinary exports follow this selection. Current-run charts
+remain explicitly labeled as current-run views.
+
+**Prepare for AI** previews the selected and observed dates, event/source counts,
+redacted context examples, local saved-history permission and missing-evidence
+limits. It can copy an opportunity-discovery request or download a redacted CSV
+ZIP with the existing guide, prompt and manifest. It does not invoke a model,
+upload a file, enable recording or grant AI access. No repeated-work candidate or
+upfront workflow description is required. Detailed event evidence is an optional
+choice, separate from visible work-text capture (which is not in these exports).
+
+Custom calendar days use the browser's local timezone and are converted to UTC,
+including daylight-saving changes. The end date is inclusive in the picker;
+the wire-level end timestamp is exclusive.
+
+The existing JSON/XLSX/CSV ZIP route also accepts a bounded selection:
+
+```text
+GET /v1/export/csvzip?scope=range&since=2026-10-12T00:00:00Z&until=2026-10-17T00:00:00Z&include_raw=true&redact_names=true
+```
+
+Both bounds must include a timezone, and end must be after start. Bounds require
+`scope=range`. Existing `scope=current` and `scope=all` calls retain their defaults.
+Download tickets bind the dates as well as format, scope, detail and redaction.
+The same bounds apply to Activity cursor fingerprints and all exported layers.
+Canonical observations are selected by their start timestamp in `[since, until)`;
+original span durations remain intact in canonical evidence. Derived timing uses
+only the portion before the selected end, with proportional aggregate input
+estimates. An observation starting before the window is not fetched implicitly.
+`CAPTURE_MANIFEST.json.window` documents those semantics and actual observed bounds.
+
+Event CSVs append `event_id` after their existing columns, allowing an AI to cite
+specific observations without changing existing column positions. Factual context,
+tasks and work profiles remain derived views, separate from canonical evidence.
+A small or empty repeated-work index does not establish absence of automatable work.
+
+`GET /v1/analysis-preview` is a **dashboard-session-only** preparation endpoint.
+It is not an MCP history-access bypass. Local history availability is not proof
+that a hosted app has received it; hosted availability follows that deployment's
+existing sharing/enrollment boundary. Preparing or downloading an evidence package
+never changes either permission.
+
+On upgrade, the checkpointed title-protection migration revisits retained rows
+to apply the stronger person-search protection and rebuild the derived views.
+Already-tokenized titles and the remaining business context are preserved.

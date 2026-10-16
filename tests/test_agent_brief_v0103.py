@@ -234,3 +234,32 @@ def test_hook_adapter_is_fail_open_and_emits_additional_context(tmp_path, monkey
 
     assert run_main({"source": "startup"}, boom) == ""
     assert run_main({"source": "startup"}, lambda p: "") == ""
+
+
+def test_card_like_workspace_hash_preserves_project_context(tmp_path):
+    _run(r'''
+from shared.core.sensitive_identifiers import sanitize_event_identifiers
+import shared.tool_detail as detail
+original_workspace_ref = detail.workspace_ref
+# Valid opaque hash containing a Luhn-valid card number: reproduce the rare
+# collision deterministically without relying on this machine's random key.
+ref = "w:4111111111111111"
+detail.workspace_ref = lambda path: ref if path == PROJECT_A else original_workspace_ref(path)
+run("a1", PROJECT_A, 0, "8 passed in 1s")
+run("b1", PROJECT_B, 10, "1 failed in 1s", command="npm test")
+brief = agent_brief.build_brief("claude-code", workspace_ref=ref)
+assert brief["scope"] == "this_project" and brief["runs_considered"] == 1, brief
+assert "npm" not in brief["text"]
+safe = sanitize_event_identifiers({"window_title": "4111111111111111", "metadata": {
+    "workspace_ref": ref, "other": "4111111111111111",
+    "tool_detail": {"file_refs": ["f:4111111111111111", "4111111111111111"]},
+    "file_ref": "f:4111111111111111",
+    "nested": {"workspace_ref": "4111111111111111"}}})
+assert safe["metadata"]["workspace_ref"] == ref
+assert safe["metadata"]["file_ref"] == "f:4111111111111111"
+assert safe["metadata"]["tool_detail"]["file_refs"][0] == "f:4111111111111111"
+assert "4111111111111111" not in safe["metadata"]["tool_detail"]["file_refs"][1]
+assert "4111111111111111" not in safe["window_title"]
+assert "4111111111111111" not in safe["metadata"]["other"]
+assert "4111111111111111" not in safe["metadata"]["nested"]["workspace_ref"]
+''', tmp_path)

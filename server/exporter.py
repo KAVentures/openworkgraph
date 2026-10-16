@@ -12,7 +12,8 @@ from typing import Any
 import xlsxwriter
 
 from .agent_export import AGENT_RUN_EXPORT_FIELDS, agent_run_export_rows
-from .analytics import candidate_tasks, semantic_activity, summary
+from .analytics import candidate_tasks, semantic_activity, summary, _summary_uncached
+from .export_window import selection, sql_bounds, analysis_rows
 from .db import normalized_rows, rows
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,20 @@ Use the OpenWorkGraph evidence to reconstruct how I worked. Treat raw observatio
 )
 
 
+def _analysis_request(window: dict[str, Any]) -> str:
+    dates = (f"{window['since']} to {window['until']} (end exclusive)" if window['scope'] == 'range'
+             else ('the current recording run' if window['scope'] == 'current' else 'all included retained evidence'))
+    return ("## Discover automation opportunities\n\n"
+            f"Analyze only {dates}. Find useful opportunities I have not identified upfront. "
+            "Inspect factual timelines and chronological events even when repeated-work candidates are empty. "
+            "For each opportunity give the observed work, proposed business outcome, supporting event IDs, "
+            "automatable portions, current capability checks and the next source-system investigation. "
+            "Use authorized source tools to resolve missing facts before asking targeted employee questions. "
+            "Separate observed effort from optional savings estimates and state every savings assumption. "
+            "Do not invent frequencies, business rules, completed outcomes or permission. "
+            "This file is evidence for analysis, not authorization to execute automation.")
+
+
 def _since_for_scope(scope: str) -> str | None:
     return os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT") if scope == "current" else None
 
@@ -55,37 +70,23 @@ def _loader_for(table: str):
     raise ValueError("unsupported table")
 
 
-def _query_table(table: str, *, since: str | None) -> list[dict[str, Any]]:
-    """Return the complete evidence table for the requested scope.
-
-    Exports must never silently truncate evidence. Derived summaries may use bounded
-    analytical windows for responsiveness, but the exported evidence tables are
-    complete and the manifest states that explicitly.
-    """
+def _query_table(table: str, *, since: str | None, until: str | None = None) -> list[dict[str, Any]]:
     loader = _loader_for(table)
-    if since:
-        return loader(
-            f"SELECT * FROM {table} WHERE observed_at >= ? ORDER BY observed_at ASC",
-            (since,),
-        )
-    return loader(f"SELECT * FROM {table} ORDER BY observed_at ASC")
+    where, params = sql_bounds(since, until)
+    return loader(f"SELECT * FROM {table}" + (f" WHERE {where}" if where else "")
+                  + " ORDER BY julianday(observed_at), id", params)
 
 
-def _query_agent_events(*, since: str | None) -> list[dict[str, Any]]:
-    if since:
-        return rows(
-            "SELECT * FROM events WHERE source = ? AND observed_at >= ? ORDER BY observed_at ASC",
-            ("agent", since),
-        )
-    return rows("SELECT * FROM events WHERE source = ? ORDER BY observed_at ASC", ("agent",))
+def _query_agent_events(*, since: str | None, until: str | None = None) -> list[dict[str, Any]]:
+    where, params = sql_bounds(since, until)
+    return rows("SELECT * FROM events WHERE source = ?" + (f" AND {where}" if where else "")
+                + " ORDER BY julianday(observed_at), id", ("agent", *params))
 
 
-def _count_table(table: str, *, since: str | None) -> int:
+def _count_table(table: str, *, since: str | None, until: str | None = None) -> int:
     loader = _loader_for(table)
-    if since:
-        result = loader(f"SELECT COUNT(*) AS count FROM {table} WHERE observed_at >= ?", (since,))
-    else:
-        result = loader(f"SELECT COUNT(*) AS count FROM {table}")
+    where, params = sql_bounds(since, until)
+    result = loader(f"SELECT COUNT(*) AS count FROM {table}" + (f" WHERE {where}" if where else ""), params)
     return int((result[0] if result else {}).get("count", 0) or 0)
 
 
@@ -147,17 +148,26 @@ def _capture_manifest(
     }
 
 
-def build_export_payload(*, scope: str = "current", include_raw: bool = False) -> dict[str, Any]:
-    since = _since_for_scope(scope)
-    operational_summary = summary(100000, since=since, operational=True)
-    raw_summary = summary(100000, since=since, operational=False)
-    task_data = candidate_tasks(limit=100000, since=since)
-    operational_events = _query_table("normalized_events", since=since)
-    agent_events = _query_agent_events(since=since)
-    agent_runs = agent_run_export_rows(agent_events)
-    raw_events = _query_table("events", since=since) if include_raw else []
+def build_export_payload(*, scope: str = "current", include_raw: bool = False, since: str | None = None, until: str | None = None) -> dict[str, Any]:
+    window = selection(scope, since, until)
+    since, until = window["since"], window["until"]
+    operational_events = _query_table("normalized_events", since=since, until=until)
+    canonical = _query_table("events", since=since, until=until) if scope == "range" or include_raw else []
+    if scope == "range":
+        raw_analysis = analysis_rows(canonical, until)
+        op_analysis = analysis_rows(operational_events, until)
+        operational_summary = _summary_uncached(100000, operational=True, _raw_events=op_analysis)
+        raw_summary = _summary_uncached(100000, _raw_events=raw_analysis)
+        task_data = candidate_tasks(_raw_events=raw_analysis)
+    else:
+        operational_summary = summary(100000, since=since, operational=True)
+        raw_summary = summary(100000, since=since, operational=False)
+        task_data = candidate_tasks(limit=100000, since=since)
+    agent_events = _query_agent_events(since=since, until=until)
+    agent_runs = agent_run_export_rows(analysis_rows(agent_events, until))
+    raw_events = canonical if include_raw else []
     operational_count = len(operational_events)
-    raw_count = len(raw_events) if include_raw else _count_table("events", since=since)
+    raw_count = len(canonical) if scope == "range" or include_raw else _count_table("events", since=since)
     manifest = _capture_manifest(
         scope=scope,
         include_raw=include_raw,
@@ -167,6 +177,11 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         agent_run_rows=len(agent_runs),
     )
 
+    manifest["window"] = window | {"first_observed_at": raw_summary.get("first_observed_at"),
+                                   "last_observed_at": raw_summary.get("last_observed_at"),
+                                   "canonical_rows": raw_count,
+                                   "analysis_spans_clipped_to_end": bool(until),
+                                   "canonical_span_durations_preserved": True}
     return {
         "export": {
             "product": "OpenWorkGraph / Workflow Observer",
@@ -185,7 +200,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         },
         "capture_manifest": manifest,
         "ai_guide_markdown": AI_DATA_DICTIONARY_MD,
-        "starter_prompt_markdown": AI_STARTER_PROMPT_MD,
+        "starter_prompt_markdown": AI_STARTER_PROMPT_MD + "\n\n" + _analysis_request(window),
         "overview": {
             "operational": operational_summary,
             "raw_capture_counts": {
@@ -209,7 +224,7 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False) -
         "task_inference": task_data.get("inference", {}),
         "agent_runs": agent_runs,
         "operational_events": operational_events,
-        "operational_semantic_activity": semantic_activity(limit=100000, since=since, operational=True),
+        "operational_semantic_activity": semantic_activity(limit=100000, since=since, operational=True, **({"_raw_events": op_analysis} if scope == "range" else {})),
         **({"raw_local_evidence": raw_events} if include_raw else {}),
     }
 
@@ -250,6 +265,7 @@ def _flatten_event(e: dict[str, Any]) -> dict[str, Any]:
         "target_role": target_role,
         "duration_seconds": e.get("duration_seconds", 0),
         "metadata_json": json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+        "event_id": e.get("event_id"),
     }
 
 

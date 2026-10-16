@@ -291,7 +291,11 @@ def _build_detector(settings: dict[str, Any]) -> Detector:
 
 def contextual_text_redactor(settings: dict[str, Any] | None = None):
     settings = settings or user_settings()
-    return _REDACTOR.get(_detector_state(settings), lambda: _build_detector(settings))
+    from .contextual_redaction_extensions import augment
+    return augment(_REDACTOR.get(_detector_state(settings), lambda: _build_detector(settings)), settings)
+
+
+_DOGFOOD_REDACTION_EXTENSIONS = True  # factory includes extensions without HTTP import side effects
 
 
 def _redact_slug_component(component: str, redact) -> str:

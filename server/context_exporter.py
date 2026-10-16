@@ -36,11 +36,21 @@ _FACTUAL_CONTEXT_FIELDS = [
 ]
 
 
-def build_export_payload(*, scope: str = "current", include_raw: bool = False) -> dict[str, Any]:
-    payload = base.build_export_payload(scope=scope, include_raw=include_raw)
-    since = base._since_for_scope(scope)
-    task_data = candidate_tasks(limit=100000, since=since)
-    profile = compute_work_profile(scope=scope)
+def build_export_payload(*, scope: str = "current", include_raw: bool = False, since: str | None = None, until: str | None = None) -> dict[str, Any]:
+    # Validate even when called directly rather than through the HTTP route.
+    base.selection(scope, since, until)
+    if scope == "range":
+        payload = base.build_export_payload(scope=scope, include_raw=include_raw, since=since, until=until)
+        window = payload["capture_manifest"]["window"]
+        since, until = window["since"], window["until"]
+        evidence = base._query_table("events", since=since, until=until)
+        task_data = candidate_tasks(_raw_events=base.analysis_rows(evidence, until))
+        profile = compute_work_profile(scope=scope, since=since, until=until)
+    else:
+        payload = base.build_export_payload(scope=scope, include_raw=include_raw)
+        since = base._since_for_scope(scope)
+        task_data = candidate_tasks(limit=100000, since=since)
+        profile = compute_work_profile(scope=scope)
 
     payload["inferred_tasks"] = task_data.get("tasks", [])
     payload["repeated_task_families"] = task_data.get("patterns", [])

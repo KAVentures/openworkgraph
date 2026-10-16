@@ -95,7 +95,7 @@ def test_dashboard_data_first_layout_keeps_required_observer_controls():
     for panel in ("overview", "evidence", "connect", "organization", "export"):
         assert f'data-panel="{panel}"' in html
     assert "Reset learned person aliases" in html
-    assert "Export this run" in html
+    assert "Export selected work" in html
     assert 'id="includeRawTop"' not in html
     assert "Connect AI" in html
     assert "Add to Cursor" in html

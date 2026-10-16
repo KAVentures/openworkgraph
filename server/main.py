@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -76,12 +77,27 @@ async def lifespan(_: FastAPI):
     # Idempotent local migration: remove legacy URL secrets and retroactively
     # apply browser exclusions before any API response can expose old rows.
     harden_existing_browser_events(_runtime_config())
-    from .db import protect_existing_titles_in_background
+    from .db import (
+        mark_title_protection_complete_if_empty,
+        protect_existing_titles_in_background,
+    )
+    # A brand-new database needs no migration and can keep the original Full
+    # AI-context behavior immediately, without delaying startup.
+    mark_title_protection_complete_if_empty()
 
-    # One-time v0.108 title protection of older rows; batched and checkpointed,
-    # off the startup path so a long history never delays launch.
-    protect_existing_titles_in_background()
-    yield
+    # Upgrades with 300k+ rows must not compete with the launcher's first
+    # /health probe (60s deadline). Schedule the strictly background worker
+    # only after ASGI startup can finish and the service can respond; it uses
+    # short, checkpointed transactions without blocking the event loop.
+    # During the delay and migration, Full AI context / raw export still
+    # downgrade to contextual redaction until the migration marker is set.
+    migration_timer = asyncio.get_running_loop().call_later(
+        3.0, protect_existing_titles_in_background,
+    )
+    try:
+        yield
+    finally:
+        migration_timer.cancel()
 
 
 app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION, lifespan=lifespan)
@@ -614,12 +630,16 @@ def get_session(session_id: str, limit: int = 1000):
 
 
 @app.get("/v1/export/{fmt}")
-def export_session(fmt: str, scope: str = "current", include_raw: bool = False, redact_names: bool = False):
+def export_session(fmt: str, scope: str = "current", include_raw: bool = False, redact_names: bool = False, since: str | None = None, until: str | None = None):
     fmt = fmt.lower().strip()
     if fmt not in {"json", "xlsx", "csvzip"}:
         raise HTTPException(status_code=400, detail="format must be json, xlsx, or csvzip")
-    if scope not in {"current", "all"}:
-        raise HTTPException(status_code=400, detail="scope must be current or all")
+    from .export_window import selection
+    try:
+        window = selection(scope, since, until)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    bounds = {"since": window["since"], "until": window["until"]} if scope == "range" else {}
     from .db import title_protection_complete
 
     if not title_protection_complete():
@@ -627,9 +647,9 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
     if redact_names:
         # Same redactor as Redacted AI context: names/identifiers replaced in place.
         from .ai_context import redact_contextually
-        payload = redact_contextually(build_export_payload(scope=scope, include_raw=include_raw))
+        payload = redact_contextually(build_export_payload(scope=scope, include_raw=include_raw, **bounds))
     else:
-        payload = redact_for_display(build_export_payload(scope=scope, include_raw=include_raw))
+        payload = redact_for_display(build_export_payload(scope=scope, include_raw=include_raw, **bounds))
     if fmt == "json":
         body = json_bytes(payload)
         media = "application/json"
@@ -643,7 +663,7 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
     return Response(
         content=body,
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
     )
 
 

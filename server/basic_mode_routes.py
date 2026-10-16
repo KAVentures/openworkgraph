@@ -49,7 +49,7 @@ async def _inject_basic_mode_script(request: Request, call_next):
         text = body.decode("utf-8")
     except Exception:
         return response
-    marker = '<script src="/basic-mode.js"></script>'
+    marker = '<script src="/basic-mode.js"></script>\n<script src="/analysis-handoff.js"></script>'
     if marker not in text:
         text = text.replace("</body>", marker + "\n</body>")
     headers = dict(response.headers)
@@ -62,6 +62,11 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-exclusions", put_capture_exclusions, methods=["PUT"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
+    from .analysis_handoff import analysis_preview
+    app.add_api_route("/v1/analysis-preview", analysis_preview, methods=["GET"])
+    app.add_api_route("/analysis-handoff.js", lambda: Response(
+        (ROOT / "dashboard" / "analysis_handoff.js").read_text(encoding="utf-8"),
+        media_type="application/javascript"), methods=["GET"])
     app.middleware("http")(_inject_basic_mode_script)
     app.state.owg_basic_mode_installed = True
 
