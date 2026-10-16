@@ -206,6 +206,13 @@ from unittest.mock import patch
 from server import db
 started=Event()
 finished=Event()
+# Simulate an existing installation with a pending historical re-protection.
+db.init_db()
+insert_events([event('prior_history', A, 'Invoice for Acme')])
+with connect() as c:
+    c.execute("UPDATE events SET window_title=? WHERE event_id='prior_history'",
+              ('natalie bergstrom cardiology - Google Search',))
+assert db.title_protection_complete() is False
 def expensive_history_scan(*,batch_size,pause_seconds):
     # Models a 300k-event migration without spending CI minutes writing fixtures.
     assert batch_size <= 200
@@ -257,4 +264,17 @@ with connect() as c:
         result=[row[0] for row in c.execute(f'SELECT {column} FROM {table}')]
         assert len(result)==3,(table,result)
         assert not any('natalie' in value or 'bergstrom' in value for value in result)
+''', tmp_path)
+
+
+
+def test_empty_install_title_marker_does_not_delay_full_context(tmp_path):
+    run(r'''
+from server import db
+assert db.title_protection_complete() is False
+with TestClient(app) as c:
+    assert c.get('/health').status_code == 200
+    assert db.title_protection_complete() is True
+    with connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 0
 ''', tmp_path)
