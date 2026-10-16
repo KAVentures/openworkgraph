@@ -241,3 +241,34 @@ def test_cli_adapter_keeps_model_output_separate_from_claimed_tool_logs(monkeypa
         invoke("codex", "prompt", runner=lambda *a, **k: SimpleNamespace(
             returncode=0, stdout='{"predicted_outcome":"impossible"}'
         ))
+
+
+
+def test_zero_cost_preflight_separates_gold_from_agent_inputs(tmp_path, capsys):
+    from scripts.run_issue226_agent_study import main
+    cases = [{
+        "case_id": "case_one", "gold_outcome": "unknown", "resource_ref": None,
+        "fold": "holdout", "stressors": ["no_reference"],
+    }]
+    scenario = [{"case_id": "case_one", "resource_ref": None,
+                 "prompt": "A task with no resolvable record",
+                 "source_snapshot": None, "owg_record_graph": None}]
+    truth = tmp_path / "cases.json"
+    tasks = tmp_path / "scenarios.json"
+    truth.write_text(json.dumps(cases))
+    tasks.write_text(json.dumps(scenario))
+    assert main(["--cases", str(truth), "--scenarios", str(tasks),
+                 "--validate-only"]) == 0
+    preflight = json.loads(capsys.readouterr().out)
+    assert preflight["status"] == "input_validated_no_model_executed"
+    assert preflight["model_calls"] == 0
+    assert preflight["holdout_cases"] == 1
+    assert "gold_outcome" not in preflight
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "cases.json", "scenarios.json",
+    ]
+    scenario[0]["source_snapshot"] = {"something": "must never be exposed"}
+    tasks.write_text(json.dumps(scenario))
+    with pytest.raises(ValueError, match="unlinked"):
+        main(["--cases", str(truth), "--scenarios", str(tasks),
+              "--validate-only"])
