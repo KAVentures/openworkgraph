@@ -84,6 +84,30 @@ class SyncState:
     def set_bool(self, name: str, value: bool) -> None:
         self.set(name, "1" if value else "0")
 
+    def consume_if_matches(self, name: str, expected: str, *, also_delete: tuple[str, ...] = ()) -> bool:
+        """Atomically consume one exact-value state token and its companion fields.
+
+        DELETE's affected-row count is the cross-process single-use gate. A
+        second dashboard request can never reuse the same history preview even
+        when both requests passed earlier read-only validation. The companion
+        fields are removed in the same SQLite transaction, so a replacement
+        preview cannot be half-deleted by an older confirmation.
+        """
+        if not name or name in also_delete:
+            raise ValueError("invalid one-time state key")
+        with self._connect() as conn:
+            # Serialize contenders from separate worker threads/processes.
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                "DELETE FROM sync_state WHERE name = ? AND value = ?",
+                (name, str(expected)),
+            )
+            if cursor.rowcount != 1:
+                return False
+            for other in also_delete:
+                conn.execute("DELETE FROM sync_state WHERE name = ?", (other,))
+            return True
+
     def add_skip_range(self, start_id: int, end_id: int, reason: str) -> None:
         start = int(start_id)
         end = int(end_id)

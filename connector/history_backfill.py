@@ -211,11 +211,24 @@ def confirm(config_path: Path, since: str, until: str, *,
     if not hmac.compare_digest(state.get("history_backfill_preview_digest"),
                                result["preview_digest"]):
         raise PermissionError("historical evidence or organization policy changed; preview again")
-    # Consume before first network write. Gateway's event IDs are idempotent;
-    # after partial failures the user must preview and confirm again.
-    for name in ("history_backfill_preview_token","history_backfill_preview_digest",
-                 "history_backfill_preview_expiry","history_backfill_preview_window"):
-        state.delete(name)
+    # Consume before first network write. This must be ONE atomic database
+    # operation: two simultaneous dashboard confirmations may both pass the
+    # earlier read-only checks, but only one may consume the preview token.
+    # Also recheck expiry after the potentially slow policy/source re-read.
+    if state.get_int("history_backfill_preview_expiry") < int(time.time()):
+        raise PermissionError("preview token expired while verifying current policy")
+    if not state.consume_if_matches(
+        "history_backfill_preview_token",
+        hashlib.sha256(str(confirmation_token).encode()).hexdigest(),
+        also_delete=(
+            "history_backfill_preview_digest",
+            "history_backfill_preview_expiry",
+            "history_backfill_preview_window",
+        ),
+    ):
+        raise PermissionError("preview token has expired or already been used")
+    # Gateway event IDs remain idempotent; after a partial failure the user
+    # must explicitly preview and confirm again rather than silently retry.
     if new_ctx["state"].get_bool("sharing_paused") or new_ctx["state"].get("status") == "revoked":
         raise PermissionError("history sharing revoked before upload")
     acknowledged: set[str] = set()

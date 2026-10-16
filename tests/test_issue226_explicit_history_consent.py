@@ -222,3 +222,71 @@ def test_real_device_privacy_projection_used_for_historical_rows(tmp_path, monke
     assert rows[0]["metadata"]["gateway_sync"]["preview_text_dropped"] is True
     assert rows[0]["metadata"]["page"]["hostname"]=="mail.example.com"
     assert rows[0]["metadata"]["gateway_sync"]["raw_metadata_preserved"] is False
+
+
+def test_atomic_state_token_consumption_is_single_use_across_threads(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    state = SyncState(tmp_path / "sync_state.db")
+    state.set("once", "token-hash")
+    state.set("companion", "sensitive-consent-digest")
+    both_start = Barrier(2, timeout=10)
+
+    def consume():
+        both_start.wait()
+        return state.consume_if_matches(
+            "once", "token-hash", also_delete=("companion",)
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=15) for future in
+                   (executor.submit(consume), executor.submit(consume))]
+    assert sorted(results) == [False, True]
+    assert state.get("once") == ""
+    assert state.get("companion") == ""
+
+
+def test_parallel_confirmations_cannot_reuse_same_preview(tmp_path, monkeypatch):
+    """Two requests racing through a policy refresh must cause one upload only."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+
+    ctx = _setup(tmp_path, monkeypatch)
+    since, until = _dates()
+    path = tmp_path / "config.json"
+    preview = hb.preview(path, since, until, policy_reader=_policy)
+    both_at_policy = Barrier(2, timeout=10)
+    sent = []
+    lock = Lock()
+
+    def racing_policy(client, url):
+        both_at_policy.wait()
+        return _policy(client, url)
+
+    def send(client, url, batch):
+        with lock:
+            sent.append([event["event_id"] for event in batch])
+        return {event["event_id"] for event in batch}, {}
+
+    def do_confirm():
+        return hb.confirm(
+            path, since, until,
+            confirmation_token=preview["confirmation_token"],
+            explicit_confirmation=hb._CONFIRMATION,
+            policy_reader=racing_policy,
+            batch_sender=send,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        jobs = [executor.submit(do_confirm) for _ in range(2)]
+        successes, denials = [], []
+        for job in jobs:
+            try:
+                successes.append(job.result(timeout=20))
+            except PermissionError as exc:
+                denials.append(str(exc))
+    assert len(successes) == 1 and len(denials) == 1
+    assert successes[0]["acknowledged"] == 3
+    assert sent == [["historic-1", "historic-2"], ["historic-3"]]
+    assert ctx["state"].get_int("last_local_event_id") == 1234
