@@ -276,3 +276,82 @@ def test_old_personal_api_token_does_not_enable_oauth_adapter():
                             reader=lambda *_: calls.append("read"))
     assert r["availability"] == "unknown"
     assert calls == []
+
+
+
+def test_jira_assignee_subsequent_status_action_is_corrobated_without_claiming_acceptance():
+    # Same authenticated Jira changelog, exact issue, strict later timestamp,
+    # and stable actor ID match. No customer/author identity leaves the reader.
+    def reader(url, params, token):
+        if url.endswith("/oauth/token/accessible-resources"):
+            return [{"id": CLOUD_ID, "url": f"https://{HOST}",
+                     "scopes": ["read:jira-work"]}]
+        if url.endswith("/changelog"):
+            return {"total": 4, "isLast": True, "values": [
+                {"id": "hist-1", "created": "2026-10-15T08:00:00Z",
+                 "author": {"accountId": "staff-manager", "displayName": "PRIVATE_MANAGER"},
+                 "items": [{"field": "assignee", "from": "staff-one", "to": "staff-two"}]},
+                {"id": "hist-2", "created": "2026-10-15T08:15:00Z",
+                 "author": {"accountId": "staff-other", "displayName": "PRIVATE_OTHER"},
+                 "items": [{"field": "status", "from": "10001", "to": "10002"}]},
+                {"id": "hist-3", "created": "2026-10-15T09:00:00Z",
+                 "author": {"accountId": "staff-two", "displayName": "PRIVATE_ASSIGNEE"},
+                 "items": [{"field": "status", "from": "10002", "to": "10003"}]},
+                {"id": "hist-4", "created": "2026-10-15T10:00:00Z",
+                 "author": {"accountId": "staff-manager"},
+                 "items": [{"field": "assignee", "from": "staff-two", "to": "staff-three"}]},
+            ]}
+        return {"key": "TASK-12", "fields": {
+            "status": {"statusCategory": {"key": "done"}},
+            "resolution": {"name": "Fixed"},
+            "resolutiondate": "2026-10-15T10:00:00Z",
+        }}
+    receipt = jira_issue_receipt(
+        REF_JIRA, environment=ENV, resolver=lambda *_: INFO,
+        reader=reader, key_factory=lambda: "test-key-for-actor-pseudonyms",
+    )
+    assert receipt["availability"] == "source_reported"
+    assert receipt["assignee_subsequent_status_actions_corroborated"] == 1
+    assert receipt["verified_human_handoffs"] == 0
+    assert receipt["verified_business_outcome"] is False
+    assert receipt["subsequent_status_action_is_handoff_acceptance"] is False
+    edges = receipt["source_verified_routing_edges"]
+    assert len(edges) == 2
+    assert edges[0]["subsequent_status_action_by_assignee_observed"] is True
+    assert edges[0]["corroborating_status_audit_ref"] is not None
+    assert edges[0]["accepted_by_new_assignee"] is False
+    assert edges[0]["work_completed_by_new_assignee"] is False
+    assert edges[1]["subsequent_status_action_by_assignee_observed"] is False
+    assert edges[1]["corroborating_status_audit_ref"] is None
+    assert all(not edge["absence_of_corroboration_proves_no_work"] for edge in edges)
+    safe = json.dumps(receipt)
+    for forbidden in ("staff-two", "PRIVATE_ASSIGNEE", "PRIVATE_OTHER",
+                      "staff-manager", "PRIVATE_MANAGER", "test-key-for"):
+        assert forbidden not in safe
+
+
+def test_status_author_must_match_later_assignee_and_have_real_status_ids():
+    key = b"test-only-audit-key"
+    from server.jira_source_evidence import _safe_audit
+    items = [
+        {"id": "h1", "created": "2026-10-15T08:00:00Z",
+         "items": [{"field": "assignee", "from": "u1", "to": "u2"}]},
+        # Same timestamp doesn't prove that the subsequent assignee acted.
+        {"id": "h2", "created": "2026-10-15T08:00:00Z",
+         "author": {"accountId": "u2"},
+         "items": [{"field": "status", "from": "1", "to": "2"}]},
+        {"id": "h3", "created": "2026-10-15T09:00:00Z",
+         "author": {"accountId": "u2"},
+         "items": [{"field": "status", "fromString": "SECRET", "toString": "SECRET"}]},
+        {"id": "h4", "created": "2026-10-15T10:00:00Z",
+         "author": {"accountId": "someone_else"},
+         "items": [{"field": "status", "from": "2", "to": "3"}]},
+    ]
+    audit, partial, count = _safe_audit(
+        {"values": items, "total": 4, "isLast": True}, "TASK-12", key=key,
+    )
+    assert len(audit) == 4
+    assert partial is False
+    assert count == 4
+    assert all("accountId" not in row and "SECRET" not in str(row) for row in audit)
+    assert any(row.get("acting_actor_ref") for row in audit)

@@ -84,3 +84,53 @@ admin-approved mappings and audit provenance, helpdesk/billing-specific outcomes
 (refunds and invoice payment), granular retention/deletion of joined receipts,
 true handoff acceptance corroboration, broader export/navigation UX, and a
 larger agent A/B/C benchmark that logs whether the OWG tool was called.
+
+
+## Bounded Jira post-assignment activity corroboration
+
+When an opted-in Jira changelog has a validated **assignee change** and later
+a separate **status transition**, and Atlassian attributes that later status
+change to the *same new assignee's stable account ID*, OWG can report
+`subsequent_status_action_by_assignee_observed: true` with the two independent
+pseudonymous source-audit references. This is an additional trace of provider-
+recorded work after reassignment, not a source assertion of a human handshake.
+
+The authorized Jira response is bounded, with HMAC pseudonyms for raw account
+IDs; names, comments, issue keys and account IDs are never returned. A
+status action by a different account, a simultaneous/earlier timestamp, a
+status item lacking validated from/to status IDs, a missing author account ID,
+or a missing/partial changelog **never** provides positive corroboration.
+
+`accepted_by_new_assignee`, `work_completed_by_new_assignee` and
+`verified_human_handoffs` intentionally remain false/zero even with this
+evidence. `absence_of_corroboration_proves_no_work` is always false.
+The specific measure is a bounded source-audit observation, **not** customer
+outcome verification or an accepted cross-person handoff. An independent
+acknowledgement/acceptance receipt still requires a different authorized
+source-system event and must be validated separately.
+
+
+## Production Jira OAuth dependency before real organization tests
+
+Atlassian's documented 2026 3LO security guidance says an app should use one
+**distributable application-owned OAuth 2.0 integration**, rather than asking
+each customer to create an individual custom OAuth app or supply personal API
+tokens. OWG therefore needs a single developer-console OAuth application,
+a registered callback URL controlled by OWG, the minimum `read:jira-work`
+scope, and `offline_access` for **rotating refresh tokens**. Atlassian's
+resource-level consent is preferable where site-specific authorization is
+available.
+
+The current operator-injected `OWG_JIRA_OAUTH_ACCESS_TOKEN` proof-of-concept
+does NOT implement a callback, credential storage or refresh lifecycle.
+Do **not** publish a setup tutorial telling each user to create a Jira 3LO
+app or paste their personal API token. Implement the company-managed callback,
+org-bound consent record, securely stored refreshed credentials, immediate
+revocation and per-source site/scope checks before commercial rollout. The
+OWG-owned OAuth client ID/secret and verified callback configuration are
+deployment prerequisites; they are never included in this repository or
+passed through a connected AI tool.
+
+Official guidance:
+https://developer.atlassian.com/cloud/jira/software/oauth-2-3lo-apps/
+https://developer.atlassian.com/cloud/oauth/getting-started/refresh-tokens/
