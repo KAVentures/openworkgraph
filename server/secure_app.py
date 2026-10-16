@@ -734,6 +734,8 @@ app.include_router(_agent_router)
 # production secure API as well as unit-test imports. This must run before
 # the AI-context middleware import that transforms all MCP-visible JSON.
 from . import workflow_evidence_routes as _workflow_evidence_routes  # noqa: E402,F401
+from .local_source_routes import router as _local_source_router  # noqa: E402
+app.include_router(_local_source_router)
 
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.

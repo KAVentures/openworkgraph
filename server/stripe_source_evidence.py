@@ -14,6 +14,7 @@ from typing import Any, Callable
 import httpx
 
 from .local_reference_lookup import resolve_resource_reference
+from .local_source_credentials import load_stripe_source
 
 _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _ACCT = re.compile(r"^acct_[A-Za-z0-9]{8,90}$")
@@ -63,6 +64,14 @@ def stripe_record_receipt(
     reader: Callable[[str, str], dict[str, Any]] = _get,
 ) -> dict[str, Any]:
     env = os.environ if environment is None else environment
+    # A signed Finder-launched app does not inherit interactive shell variables.
+    # Use a separately confirmed, OS-vault-backed *local* source connection
+    # only when no explicit env authorization override was supplied. Explicit
+    # OFF always wins; explicit ON with missing credentials fails closed.
+    if environment is None and "OWG_STRIPE_SOURCE_READ_ENABLED" not in env:
+        stored = load_stripe_source()
+        if stored is not None:
+            env = stored
     if str(env.get("OWG_STRIPE_SOURCE_READ_ENABLED") or "").lower() not in ("true", "1", "on", "yes"):
         return _unknown("stripe_source_read_opt_in_off")
     if not _REF.fullmatch(str(resource_ref or "")):
