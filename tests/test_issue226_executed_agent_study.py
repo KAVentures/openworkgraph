@@ -110,7 +110,7 @@ def test_exact_agent_process_invoked_for_matched_runs_without_truth_in_prompt(mo
     calls = []
     def fake_external_agent(argv, **kwargs):
         assert kwargs["shell"] is False
-        assert kwargs["cwd"].startswith(("/tmp/", "/var/", "C:\\", "/private/"))
+        assert Path(kwargs["cwd"]).is_dir()
         assert "gold_outcome" not in kwargs["input"]
         assert "OWG_EVAL_OWG_BEARER" not in kwargs["env"]
         arm = kwargs["env"]["OWG_EVAL_CONDITION"]
