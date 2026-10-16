@@ -141,6 +141,13 @@ with TestClient(app) as c:
     next=c.get('/v1/evidence',headers=H,params=dict(args,cursor=cursor)).json()
     assert next['items'][0]['event_id']=='one'
     assert c.get('/v1/evidence',headers=H,params=dict(args,cursor=cursor,until='2026-10-17T00:00:00Z')).status_code==400
+    # Preserve the existing recorder-state boundary for legacy current-run calls,
+    # even when it differs from the launcher's process environment.
+    from unittest.mock import patch
+    with patch('server.enterprise_app._current_run_start', return_value=A):
+        current=c.get('/v1/evidence',headers=H,params={'scope':'current'}).json()
+    assert current['since']==A and current['total']==3, current
+    assert {x['event_id'] for x in current['items']}=={'one','two','after'}
 ''', tmp_path)
 
 

@@ -34,6 +34,8 @@ def get_paged_evidence(
     try:
         window = selection(scope, since, until)
         since, until = window["since"], window["until"]
+        if scope == "current":
+            since = enterprise_app._current_run_start()
         return query_evidence(
             scope=scope,
             since=since,
