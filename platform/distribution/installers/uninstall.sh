@@ -34,7 +34,9 @@ CONNECT="$INSTALL_DIR/owg_connect.py"
 if [ -f "$CONNECT" ]; then
   PYTHON="${OWG_UNINSTALL_PYTHON:-}"
   if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
-    for candidate in "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/.runtime/bin/python" /usr/bin/python3; do
+    # Prefer a Python shipped with this installation. On a clean signed Mac,
+    # /usr/bin/python3 may exist but cannot import OWG's bundled dependencies.
+    for candidate in "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/.runtime/bin/python"; do
       if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
     done
   fi
@@ -55,6 +57,11 @@ if [ -f "$CONNECT" ]; then
         fi
       fi
     done
+  fi
+  # Compatibility fallback for older source installs without an embedded
+  # interpreter. Use it only after examining every bundled runtime.
+  if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+    if [ -x /usr/bin/python3 ]; then PYTHON=/usr/bin/python3; fi
   fi
   if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
     echo "Cannot clean up AI clients: Python unavailable. Runtime preserved." >&2

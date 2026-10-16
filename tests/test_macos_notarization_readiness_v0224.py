@@ -123,3 +123,48 @@ def test_uninstall_fails_closed_if_client_cleanup_fails(tmp_path):
     assert done.returncode != 0
     assert "runtime preserved" in done.stderr.lower()
     assert install.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="bash uninstaller")
+def test_uninstall_prefers_signed_bundle_python_over_system_python(tmp_path):
+    """A signed .app must clean managed hooks using its own offline interpreter.
+
+    A macOS machine can have /usr/bin/python3 installed without OWG's modules.
+    If the uninstaller picks system Python first, cleanup fails and evidence
+    remains on disk even though the app shipped a working interpreter.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    install = home / "Library" / "Application Support" / "WorkflowObserver"
+    install.mkdir(parents=True)
+    (install / "owg_connect.py").write_text("this is deliberately not Python\n")
+
+    apps = tmp_path / "Applications"
+    payload = apps / "OpenWorkGraph.app" / "Contents" / "Resources" / "openworkgraph"
+    runtime_python = payload / ".runtime" / "cpython-test" / "bin" / "python3.12"
+    runtime_python.parent.mkdir(parents=True)
+    log = tmp_path / "signed-python-calls.txt"
+    runtime_python.write_text(
+        "#!/bin/sh\n" + "echo \"$3\" >> " + repr(str(log)) + "\n"
+    )
+    runtime_python.chmod(0o700)
+    (payload / "EMBEDDED_PYTHON.txt").write_text(
+        ".runtime/cpython-test/bin/python3.12\n"
+    )
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "OWG_UNINSTALL_INSTALL_DIR": str(install),
+        "OWG_APPLICATIONS_DIR": str(tmp_path / "UserApplications"),
+        "OWG_SYSTEM_APPLICATIONS_DIR": str(apps),
+    }
+    env.pop("OWG_UNINSTALL_PYTHON", None)
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "platform/distribution/installers/uninstall.sh"), "--yes"],
+        env=env, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(log.read_text().splitlines()) == 10
+    assert "claude_code" in log.read_text()
+    assert "codex" in log.read_text()
+    assert not install.exists()
