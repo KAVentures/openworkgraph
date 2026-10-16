@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -78,10 +79,19 @@ async def lifespan(_: FastAPI):
     harden_existing_browser_events(_runtime_config())
     from .db import protect_existing_titles_in_background
 
-    # One-time v0.108 title protection of older rows; batched and checkpointed,
-    # off the startup path so a long history never delays launch.
-    protect_existing_titles_in_background()
-    yield
+    # Upgrades with 300k+ rows must not compete with the launcher's first
+    # /health probe (60s deadline). Schedule the strictly background worker
+    # only after ASGI startup can finish and the service can respond; it uses
+    # short, checkpointed transactions without blocking the event loop.
+    # During the delay and migration, Full AI context / raw export still
+    # downgrade to contextual redaction until the migration marker is set.
+    migration_timer = asyncio.get_running_loop().call_later(
+        3.0, protect_existing_titles_in_background,
+    )
+    try:
+        yield
+    finally:
+        migration_timer.cancel()
 
 
 app = FastAPI(title="OpenWorkGraph / Workflow Observer API", version=VERSION, lifespan=lifespan)
