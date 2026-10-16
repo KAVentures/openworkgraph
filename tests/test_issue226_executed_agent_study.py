@@ -98,7 +98,7 @@ def test_exact_agent_process_invoked_for_matched_runs_without_truth_in_prompt(mo
         "case_alpha": {
             "case_id": "case_alpha", "resource_ref": REF,
             "prompt": "Continue issue analysis; use verified source receipts.",
-            "source_snapshot": {"state": "done"},
+            "source_snapshot": {"resource_ref": REF, "state": "done"},
             "owg_record_graph": {"resource_ref": REF, "record_observed": True},
         },
         "case_beta": {
@@ -206,6 +206,12 @@ def test_heldout_truth_and_scenario_must_be_separate(tmp_path):
         "case_id": "case_one", "resource_ref": REF2, "prompt": "Find this item",
     }]))
     with pytest.raises(ValueError, match="exactly"):
+        _scenarios(path, _validate_cases(cases))
+    path.write_text(json.dumps([{
+        "case_id": "case_one", "resource_ref": REF, "prompt": "Find this item",
+        "source_snapshot": {"resource_ref": REF2, "status": "not this record"},
+    }]))
+    with pytest.raises(ValueError, match="source snapshot"):
         _scenarios(path, _validate_cases(cases))
 
 
