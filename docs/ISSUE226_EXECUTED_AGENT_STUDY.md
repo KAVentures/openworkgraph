@@ -31,6 +31,24 @@ And a **separate** privacy-reviewed `scenarios.json` with the same case IDs and 
 
 Required stressors across the evaluation: `interleaved`, `no_reference`, `source_outage`, `stale_state`, `divergent_clocks`, `inconsistent_ids`, `cross_device`. Include fresh source snapshots and actual holdout cases; match all cases and replicate numbers across A/B/C.
 
+## Zero-cost input preflight
+
+Before spending any model calls, validate private manifests and inspect only
+safe summary counts. This runs **no** model command, makes **no** source/OWG
+request and writes no results:
+
+```bash
+python scripts/run_issue226_agent_study.py \\
+  --cases /private/owg_eval/cases.json \\
+  --scenarios /private/owg_eval/scenarios.json \\
+  --validate-only
+```
+
+Fix missing held-out cases or missing challenge stressors before executing real
+trials. A scenario without a validated opaque record may not include any source
+or OWG payload. Output filenames are create-only; duplicate destinations are
+rejected before the first expensive agent call.
+
 ## Running
 
 ```bash
