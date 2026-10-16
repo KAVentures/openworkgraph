@@ -73,9 +73,13 @@ def _scenarios(path: Path, cases: dict[str, dict[str, Any]]) -> dict[str, dict[s
         source = item.get("source_snapshot")
         if source is not None and not isinstance(source, dict):
             raise ValueError("source_snapshot must be JSON object or null for unavailable")
+        if source is not None and source.get("resource_ref") != item.get("resource_ref"):
+            raise ValueError("source snapshot must be bound to the exact opaque record reference")
         context = item.get("owg_record_graph")
         if context is not None and not isinstance(context, dict):
             raise ValueError("owg_record_graph must be an object or null")
+        if context is not None and context.get("resource_ref") != item.get("resource_ref"):
+            raise ValueError("OWG snapshot must be bound to the exact opaque record reference")
         indexed[cid] = item
     if set(indexed) != set(cases):
         raise ValueError("scenario cases do not match adjudicated case IDs")
