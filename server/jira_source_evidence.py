@@ -114,6 +114,13 @@ def _safe_audit(
                 "usernames_and_comments_withheld": True,
             }
             if field == "status":
+                # Jira attributes changelog actions to a provider-issued
+                # account ID, if the API permits one. HMAC the raw ID with
+                # the existing local secret: no author names/IDs are emitted.
+                author = entry.get("author") if isinstance(entry.get("author"), dict) else {}
+                actor_id = author.get("accountId")
+                if isinstance(actor_id, str) and _ACTOR.fullmatch(actor_id):
+                    row["acting_actor_ref"] = _fingerprint("actor", actor_id, key=key)
                 before, after = item.get("from"), item.get("to")
                 if (isinstance(before, str) and _ACTOR.fullmatch(before)
                         and isinstance(after, str) and _ACTOR.fullmatch(after)
@@ -252,21 +259,38 @@ def jira_issue_receipt(
                 reversed_transitions += 1
             seen_transitions.add((frm, to))
 
-        routing_edges = [
-            {
+        # A later Jira status transition performed by the *assigned account*
+        # supplies a second provider-audited action on the exact same issue.
+        # This corroborates subsequent record activity, not human acceptance,
+        # delivery, or the quality/outcome of the work. A missing action never
+        # proves the assignee did nothing, especially in bounded changelogs.
+        status_actions = [row for row in audit
+                          if row["action"] == "status_transition"
+                          and row.get("acting_actor_ref")
+                          and row.get("from_status_ref")
+                          and row.get("to_status_ref")]
+        routing_edges: list[dict[str, Any]] = []
+        for row in audit:
+            if (row["action"] != "assignee_transition"
+                    or not row.get("from_actor_ref") or not row.get("to_actor_ref")
+                    or row["from_actor_ref"] == row["to_actor_ref"]):
+                continue
+            matching = next((event for event in status_actions
+                             if event["acting_actor_ref"] == row["to_actor_ref"]
+                             and event["observed_at"] > row["observed_at"]), None)
+            routing_edges.append({
                 "from_actor_ref": row["from_actor_ref"],
                 "to_actor_ref": row["to_actor_ref"],
                 "source_audit_ref": row["source_event_ref"],
                 "source_observed_at": row["observed_at"],
                 "evidence": "authoritative_jira_assignee_transition",
                 "same_source_issue": True,
+                "subsequent_status_action_by_assignee_observed": bool(matching),
+                "corroborating_status_audit_ref": matching["source_event_ref"] if matching else None,
+                "absence_of_corroboration_proves_no_work": False,
                 "accepted_by_new_assignee": False,
                 "work_completed_by_new_assignee": False,
-            }
-            for row in audit if row["action"] == "assignee_transition"
-            and row.get("from_actor_ref") and row.get("to_actor_ref")
-            and row["from_actor_ref"] != row["to_actor_ref"]
-        ]
+            })
 
         return {
             "availability": "source_reported",
@@ -295,6 +319,11 @@ def jira_issue_receipt(
                 1 for row in audit if row["action"] == "assignee_transition"
             ),
             "verified_human_handoffs": 0,
+            "assignee_subsequent_status_actions_corroborated": sum(
+                bool(edge["subsequent_status_action_by_assignee_observed"])
+                for edge in routing_edges
+            ),
+            "subsequent_status_action_is_handoff_acceptance": False,
             "source_verified_routing_edges": routing_edges,
             "source_verified_routing_edges_complete": audit_available and not audit_truncated,
             "observed_structural_status_reversals": reversed_transitions,
