@@ -196,3 +196,65 @@ with connect() as c:
             assert 'PERSON_' in title and 'cardiology' in title, (table,title)
 assert db.protect_existing_titles(batch_size=1) == 0
 ''', tmp_path)
+
+
+def test_upgrade_responds_to_health_before_heavy_title_migration(tmp_path):
+    run(r'''
+import time
+from threading import Event
+from unittest.mock import patch
+from server import db
+started=Event()
+finished=Event()
+def expensive_history_scan(*,batch_size,pause_seconds):
+    # Models a 300k-event migration without spending CI minutes writing fixtures.
+    assert batch_size <= 200
+    assert pause_seconds >= 0.01
+    started.set()
+    time.sleep(1.0)
+    finished.set()
+with patch.object(db,'protect_existing_titles',expensive_history_scan):
+    began=time.monotonic()
+    with TestClient(app) as c:
+        # ASGI lifespan finishes before migration. The launcher sees /health.
+        assert time.monotonic()-began < 2.5
+        response=c.get('/health')
+        assert response.status_code == 200,response.text
+        assert not started.is_set(), 'title migration launched before health became available'
+        assert db.title_protection_complete() is False
+        assert started.wait(5), 'deferred migration never started'
+        check=time.monotonic()
+        assert c.get('/health').status_code == 200
+        assert time.monotonic()-check < 0.8, 'slow migration blocked health'
+        assert finished.wait(5)
+        assert db.title_protection_complete() is False
+''', tmp_path)
+
+
+def test_title_migration_checkpoint_yields_and_preserves_privacy_marker(tmp_path):
+    run(r'''
+from server import db
+from unittest.mock import patch
+db.init_db()
+insert_events([
+  event('old1', A, 'Invoice for Acme'),
+  event('old2', A, 'Invoice for Acme'),
+  event('old3', A, 'Invoice for Acme'),
+])
+with connect() as c:
+    for eid in ('old1','old2','old3'):
+        c.execute('UPDATE events SET window_title=? WHERE event_id=?',
+                  ('natalie bergstrom cardiology - Google Search', eid))
+assert db.title_protection_complete() is False
+pauses=[]
+with patch.object(db.time,'sleep',lambda seconds: pauses.append(seconds)):
+    assert db.protect_existing_titles(batch_size=1,pause_seconds=0.02) == 3
+assert len(pauses)==3 and all(0 < value <= 0.2 for value in pauses), pauses
+assert db.title_protection_complete() is True
+with connect() as c:
+    assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 3
+    for table,column in [('events','window_title'),('normalized_events','window_title'),('context_events','resource_title')]:
+        result=[row[0] for row in c.execute(f'SELECT {column} FROM {table}')]
+        assert len(result)==3,(table,result)
+        assert not any('natalie' in value or 'bergstrom' in value for value in result)
+''', tmp_path)
