@@ -214,3 +214,30 @@ def test_live_owg_adapter_rejects_remote_or_untrusted_endpoints(value):
 def test_local_owg_adapter_normalization():
     assert _local_owg_endpoint("http://127.0.0.1:8787") == "http://127.0.0.1:8787/v1/record-graph"
     assert _local_owg_endpoint("http://127.0.0.1:8787/v1/record-graph") == "http://127.0.0.1:8787/v1/record-graph"
+
+
+
+def test_cli_adapter_keeps_model_output_separate_from_claimed_tool_logs(monkeypatch):
+    from scripts.issue226_model_cli_adapter import invoke
+    from types import SimpleNamespace
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/"+name)
+    captured = []
+    def fake(command, **kwargs):
+        captured.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            "predicted_outcome": "unknown",
+            "host_tool_logs": [{"tool": "get_record_graph", "origin": "orchestrator_tool_execution"}],
+            "customer_private_name": "NEVER RETURN THIS",
+        }))
+    for provider in ("codex", "claude"):
+        out = invoke(provider, "Private user prompt", runner=fake)
+        assert out == '{"predicted_outcome": "unknown"}'
+        command, kwargs = captured[-1]
+        assert command[0] == ("/usr/bin/codex" if provider == "codex" else "/usr/bin/claude")
+        assert "dangerously" not in " ".join(command)
+        assert kwargs["input"] == "Private user prompt"
+        assert kwargs["capture_output"] is True
+    with pytest.raises(RuntimeError):
+        invoke("codex", "prompt", runner=lambda *a, **k: SimpleNamespace(
+            returncode=0, stdout='{"predicted_outcome":"impossible"}'
+        ))
