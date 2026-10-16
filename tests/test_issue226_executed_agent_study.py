@@ -113,6 +113,9 @@ def test_exact_agent_process_invoked_for_matched_runs_without_truth_in_prompt(mo
         assert Path(kwargs["cwd"]).is_dir()
         assert "gold_outcome" not in kwargs["input"]
         assert "OWG_EVAL_OWG_BEARER" not in kwargs["env"]
+        assert "OWG_JIRA_OAUTH_ACCESS_TOKEN" not in kwargs["env"]
+        assert "SUPABASE_SERVICE_ROLE_KEY" not in kwargs["env"]
+        assert kwargs["env"]["OPENAI_API_KEY"] == "synthetic-model-auth-only"
         arm = kwargs["env"]["OWG_EVAL_CONDITION"]
         cid = kwargs["env"]["OWG_EVAL_CASE_ID"]
         base = kwargs["env"]["OWG_EVAL_BASE_URL"]
@@ -128,6 +131,9 @@ def test_exact_agent_process_invoked_for_matched_runs_without_truth_in_prompt(mo
             stdout=json.dumps({"predicted_outcome": "resolved" if ref else "unknown"}),
         )
     monkeypatch.setenv("OWG_EVAL_OWG_BEARER", "never-expose-parent-secret")
+    monkeypatch.setenv("OWG_JIRA_OAUTH_ACCESS_TOKEN", "private-jira-secret")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "private-db-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-model-auth-only")
     runs, report = run_study(
         cases, scenarios, ["fake-agent-binary"], runner=fake_external_agent,
         replicates=2, seed=1234,
