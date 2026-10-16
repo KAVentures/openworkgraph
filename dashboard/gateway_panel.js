@@ -53,7 +53,7 @@
     const revokedNotice = revoked
       ? '<div class="note"><strong>Your organization removed this computer.</strong> Organization syncing has stopped. Your local recording, saved history and connected local AI apps remain available. To reconnect, request a new invitation from IT. Choose Continue locally to remove the old device credential from this computer.</div>'
       : '';
-    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${rejoinHelp}${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local by default unless you separately preview and confirm a specific older date range when that feature is enabled. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div>`;
+    return revokedNotice+`<div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Organization Gateway</h2><div><strong>${e(modeLabel(s))}</strong> · ${url}</div><div class="muted" style="margin-top:5px">${e(last)}${s.worker_running?' · sync worker running':''}</div></div><div class="modal-actions">${controls}</div></div>${rejoinHelp}${err}${quarantine}<div class="note" style="margin-top:10px">Local recording always continues independently. New connections share evidence captured <strong>after enrollment</strong>; earlier local history stays local by default unless you separately preview and confirm a specific older date range when that feature is enabled. While organization sharing is paused, local capture continues but that sharing-paused interval is <strong>never backfilled</strong> on resume. No OpenWorkGraph cloud account is required.</div><div class="note" style="margin-top:10px">Optional local source integrations: <button class="secondary" onclick="openLocalStripeSource()">Manage Stripe read-only source</button>. This is separate from organization evidence sharing.</div>`;
   }
 
   function updateGatewayChip(s) {
@@ -71,6 +71,70 @@
       chip.textContent='Organization sharing: off'; chip.classList.remove('on','off');
     }
   }
+
+  window.openLocalStripeSource = async function() {
+    try {
+      const status = await gwCall('/v1/local-source/stripe');
+      if (!status.native_supported) {
+        openModal('Stripe source','Local-only connection',
+          '<p>OS-native secure credential storage is currently supported on macOS and Windows. Stripe status reads remain off here unless an operator explicitly configures the legacy read-only environment settings.</p>');
+        return;
+      }
+      const state = status.configured ? 'Connected on this computer' : 'Off (default)';
+      openModal('Stripe source','Local, separately authorized read-only access',
+        '<p><strong>'+e(state)+'</strong>. This allows agents with your existing local OWG access to request live Stripe status for <strong>previously observed</strong> invoices/refunds only. It never authorizes writes or payments, and is not an organization-wide grant.</p>'+
+        '<p>Use a <strong>Stripe restricted key</strong> with read access only to Account, Invoices, and Refunds. OWG verifies the exact account before saving the key in your operating system credential vault; neither the key nor a customer name is uploaded to OWG cloud.</p>'+
+        '<label>Stripe account ID</label><input id="owgStripeAccount" autocomplete="off" placeholder="acct_…" style="width:100%;margin:5px 0 12px">'+
+        '<label>Restricted read-only key</label><input id="owgStripeRestrictedKey" type="password" autocomplete="new-password" style="width:100%;margin:5px 0 12px">'+
+        '<div id="owgStripeNotice" role="status" class="note">No source access is enabled until you explicitly connect.</div>'+
+        '<div class="modal-actions"><button id="owgStripeConnect">Verify &amp; connect</button>'+
+        (status.configured?'<button class="secondary" id="owgStripeRevoke">Disconnect &amp; delete key</button>':'')+
+        '<button class="secondary" onclick="closeModal()">Cancel</button></div>'
+      );
+      const notice = document.getElementById('owgStripeNotice');
+      const connect = document.getElementById('owgStripeConnect');
+      if (connect) connect.onclick = async () => {
+        const account = document.getElementById('owgStripeAccount');
+        const secret = document.getElementById('owgStripeRestrictedKey');
+        if (!account || !secret) return;
+        connect.disabled=true;
+        try {
+          if (!window.confirm('Allow this computer to read Stripe status for observed records in the specified account?')) return;
+          const result=await gwCall('/v1/local-source/stripe',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({enabled:true,account:account.value.trim(),restricted_key:secret.value})
+          });
+          notice.textContent=result.configured
+            ? 'Connected. Stripe status can now be fetched for previously observed records when requested; no payment or write permission was granted.'
+            : 'Source connection was not enabled.';
+          account.value='';
+          window.refreshGatewayPanel?.();
+        } catch(err) {
+          notice.textContent='Not connected: '+String(err.message||'Source read authorization failed');
+        } finally {
+          secret.value='';
+          connect.disabled=false;
+        }
+      };
+      const revoke=document.getElementById('owgStripeRevoke');
+      if (revoke) revoke.onclick=async()=>{
+        if (!window.confirm('Stop local Stripe status reads and delete the stored restricted key?')) return;
+        revoke.disabled=true;
+        try {
+          const result=await gwCall('/v1/local-source/stripe',{method:'DELETE'});
+          notice.textContent=result.configured ? 'The source is still configured.' : 'Source disconnected; local Stripe reads are disabled.';
+          window.refreshGatewayPanel?.();
+        } catch(err) {
+          notice.textContent='Could not finish credential cleanup: '+String(err.message||'error');
+        } finally {
+          revoke.disabled=false;
+        }
+      };
+    } catch(err) {
+      openModal('Stripe source','Unavailable',
+        '<p>'+e(err.message||'Could not open local Stripe source settings')+'</p>');
+    }
+  };
 
   window.openHistoricalGatewayPreview = function() {
     openModal('Optional older history','Preview before sharing',
