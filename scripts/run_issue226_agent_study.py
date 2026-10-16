@@ -27,7 +27,7 @@ import threading
 from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from scripts.evaluate_record_graph_issue226 import (
     CONDITIONS, _OUTCOMES, _REF, _validate_cases, evaluate,
@@ -99,7 +99,10 @@ def _live_owg(ref: str, endpoint: str, auth_token: str) -> dict[str, Any]:
     if auth_token:
         headers["Authorization"] = "Bearer " + auth_token
     req = Request(url, headers=headers)
-    with urlopen(req, timeout=7) as response:
+    # A user-configured HTTP_PROXY must never intercept the loopback OWG
+    # read or receive its private bearer. Ignore proxy environment entirely.
+    opener = build_opener(ProxyHandler({}))
+    with opener.open(req, timeout=7) as response:
         content = response.read(_MAX_RESPONSE + 1)
     if len(content) > _MAX_RESPONSE:
         raise ValueError("OWG response too large")
