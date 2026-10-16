@@ -299,3 +299,59 @@ def test_interrupted_historical_upload_requires_new_consent_and_deduplicates(tmp
         assert done["acknowledged"] == 2  # includes an idempotent prior ACK
         assert gw.get("/v1/workflow-trace", headers=reader).json()["returned"] == 2
         assert SyncState(data / "gateway_sync_state.db").get_int("last_local_event_id") == 2
+
+
+def test_deactivated_discovery_study_never_reaches_seeded_gateway(tmp_path, monkeypatch):
+    """Merged #239 exclusion must survive real enroll/preview/ingest/readback.
+
+    A historical Discovery study stays private even after it was deactivated
+    *before* Gateway enrollment. The source records have real local timestamps;
+    the HTTP policy and evidence calls exercise production Gateway handlers.
+    """
+    config, data, app = _fixture(tmp_path, monkeypatch, count=2)
+    midpoint = datetime.now(timezone.utc) - timedelta(days=2)
+    study_start = midpoint - timedelta(minutes=30)
+    study_end = midpoint + timedelta(minutes=30)
+
+    # One ordinary event precedes the study; the other falls inside it.
+    with sqlite3.connect(data / "workflow_observer.db") as conn:
+        conn.execute("UPDATE events SET observed_at=? WHERE id=1",
+                     ((midpoint - timedelta(hours=2)).isoformat(),))
+        conn.execute("UPDATE events SET observed_at=? WHERE id=2",
+                     (midpoint.isoformat(),))
+
+    monkeypatch.setattr(history_backfill, "read_discovery_state", lambda **_: {
+        "session_id": "private-study-before-company-enrollment",
+        "enabled": False,
+        "status": "inactive",
+        "starts_at": study_start.isoformat(),
+        "ends_at": (study_end + timedelta(days=1)).isoformat(),
+        "deactivated_at": study_end.isoformat(),
+    })
+    with TestClient(app) as gw:
+        _InProcessGatewayClient.gateway = gw
+        monkeypatch.setattr(httpx, "Client", _InProcessGatewayClient)
+        _onboard(gw, config)
+        reader = _reader(gw, "org-a")
+        state = SyncState(data / "gateway_sync_state.db")
+        assert state.get_int("history_enrollment_boundary_event_id") == 2
+        monkeypatch.setenv("OWG_ENABLE_HISTORY_BACKFILL", "1")
+
+        since = (midpoint - timedelta(days=1)).isoformat()
+        until = (midpoint + timedelta(days=1)).isoformat()
+        preview = history_backfill.preview(config, since, until)
+        assert preview["scanned"] == 2
+        assert preview["eligible"] == 1
+        assert preview["excluded"] == 1
+        assert gw.get("/v1/workflow-trace", headers=reader).json()["returned"] == 0
+
+        confirmed = history_backfill.confirm(
+            config, since, until,
+            confirmation_token=preview["confirmation_token"],
+            explicit_confirmation=history_backfill._CONFIRMATION,
+        )
+        assert confirmed["acknowledged"] == 1
+        records = gw.get("/v1/workflow-trace", headers=reader)
+        assert records.status_code == 200
+        assert records.json()["returned"] == 1
+        assert state.get_int("last_local_event_id") == 2
