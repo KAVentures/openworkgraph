@@ -541,6 +541,19 @@ def sanitize_event_identifiers(event: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, tuple):
             return tuple(walk(v, key=key) for v in value)
         if isinstance(value, str):
+            # A validated opaque hash can coincidentally contain a Luhn-valid
+            # digit sequence. Redacting it breaks project/file linkage.
+            # Only this typed field and exact hash format receive protection.
+            if key == "workspace_ref":
+                from shared.tool_detail import valid_workspace_ref
+
+                if valid_workspace_ref(value):
+                    return value
+            if key in {"file_ref", "file_refs"}:
+                from shared.tool_detail import sanitize_detail
+
+                if sanitize_detail({"file_refs": [value]}).get("file_refs") == [value]:
+                    return value
             if structured_identifier_kind(key):
                 return tokenize_structured_identifier(key, value)
             return redact_sensitive_identifiers(value, redact_adjacent_name=False)

@@ -25,7 +25,7 @@
   }
 
   function endpoint(cursor) {
-    const params=new URLSearchParams({scope:'current',limit:String(PAGE_SIZE)});
+    const params=new URLSearchParams({...(window.owgEvidenceSelection?.()||{scope:'current'}),limit:String(PAGE_SIZE)});
     const q=currentQuery();
     if (q) params.set('q',q);
     if (selectedSurface) params.set('surface',selectedSurface);
@@ -168,6 +168,7 @@
     document.querySelectorAll('[data-evidence-view]').forEach(button=>button.addEventListener('click',()=>{
       if (button.dataset.evidenceView==='all') schedulePageLoad(0);
     }));
+    document.addEventListener('owg:period-change',()=>{resetPages();loadPage();});
     ensureControls();
     if (window.__owgLastSummary) pagedRenderEvidence(window.__owgLastSummary);
   }

@@ -905,9 +905,9 @@ def candidate_tasks(
         },
     }
 
-def semantic_activity(limit: int = 200, since: str | None = None, *, operational: bool = False) -> list[dict[str, Any]]:
+def semantic_activity(limit: int = 200, since: str | None = None, *, operational: bool = False, _raw_events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     loader = _operational_event_rows if operational else _event_rows
-    events = loader(max(limit * 6, 500), since=since)
+    events = _raw_events if _raw_events is not None else loader(max(limit * 6, 500), since=since)
     semantic: list[dict[str, Any]] = []
     for e in events:
         et = str(e.get("event_type") or "")
@@ -940,8 +940,8 @@ def semantic_activity(limit: int = 200, since: str | None = None, *, operational
     return semantic[-max(1, min(limit, 2000)):][::-1]
 
 
-def _summary_uncached(limit: int = 10000, since: str | None = None, *, operational: bool = False) -> dict[str, Any]:
-    events = _operational_event_rows(limit, since=since) if operational else _event_rows(limit, since=since)
+def _summary_uncached(limit: int = 10000, since: str | None = None, *, operational: bool = False, _raw_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    events = _raw_events if _raw_events is not None else (_operational_event_rows(limit, since=since) if operational else _event_rows(limit, since=since))
     focus_events = [e for e in events if e.get("event_type", "focus_span") == "focus_span"]
     interaction_events = [e for e in events if str(e.get("event_type", "")).startswith("screen_")]
     browser_events = [e for e in events if str(e.get("event_type", "")).startswith("browser_")]
@@ -1124,7 +1124,7 @@ def _summary_uncached(limit: int = 10000, since: str | None = None, *, operation
     task_data = candidate_tasks(
         limit=limit,
         since=since,
-        _raw_events=events if not operational else None,
+        _raw_events=events if _raw_events is not None or not operational else None,
     )
 
     return {

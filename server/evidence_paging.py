@@ -28,14 +28,16 @@ def get_paged_evidence(
     cursor: str | None = None,
     surface: str | None = None,
     q: str | None = None,
+    since: str | None = None, until: str | None = None,
 ) -> dict[str, Any]:
-    if scope not in {"current", "all"}:
-        raise HTTPException(status_code=400, detail="scope must be current or all")
-    since = enterprise_app._current_run_start() if scope == "current" else None
+    from .export_window import selection
     try:
+        window = selection(scope, since, until)
+        since, until = window["since"], window["until"]
         return query_evidence(
             scope=scope,
             since=since,
+            until=until,
             limit=limit,
             cursor=cursor,
             surface=surface,

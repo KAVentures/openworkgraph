@@ -11,6 +11,7 @@ from . import (
     list_self_tags,
     compute_work_profile as _compute_work_profile,
     _context_rows,
+    _focus_rows,
     _scope_since,
 )
 from .accuracy import compute_today_work_profile, local_day_since
@@ -51,8 +52,30 @@ def backfill_clipboard_context_links() -> int:
     return changed
 
 
-def compute_work_profile(*, scope: str = "current", now=None) -> dict[str, Any]:
+def compute_work_profile(*, scope: str = "current", now=None, since: str | None = None, until: str | None = None) -> dict[str, Any]:
     backfill_clipboard_context_links()
+    if scope == "range":
+        from server.export_window import selection, timestamp, observed_timestamp
+        window = selection(scope, since, until)
+        since, until = window["since"], window["until"]
+        context = _context_rows(since, until=until)
+        focus = _focus_rows(since, until=until)
+        end = timestamp(until).timestamp()
+        for row in focus:
+            duration = row["foreground_seconds"]
+            kept = min(duration, max(0, end - observed_timestamp(row["observed_at"]).timestamp()))
+            if duration and kept < duration:
+                for key in ("engaged_seconds", "keypress_count", "click_count", "scroll_count"):
+                    row[key] *= kept / duration
+                row["duration_seconds"] = row["foreground_seconds"] = kept
+        tags = [t for t in list_self_tags(since=since) if observed_timestamp(t["started_at"]) < timestamp(until)]
+        for tag in tags:
+            tag["started_at"] = max(observed_timestamp(tag["started_at"]), timestamp(since)).isoformat()
+            tag["ended_at"] = min(observed_timestamp(tag["ended_at"]), timestamp(until)).isoformat()
+        profile = _compute_work_profile(scope="all", _preloaded_context=context,
+                                       _preloaded_focus=focus, _preloaded_tags=tags)
+        profile.update(scope="range", since=since, until=until)
+        return enrich_work_profile(profile, since=since, rows=context)
     since = local_day_since(now=now) if scope == "today" else _scope_since(scope, now=now)
     # Read and decode canonical context once, then feed the same material to
     # both core profile metrics and optional browser-signal enrichments.

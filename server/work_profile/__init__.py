@@ -147,7 +147,7 @@ def list_self_tags(*, since: str | None = None, limit: int = 500) -> list[dict[s
     clauses: list[str] = []
     params: list[Any] = []
     if since:
-        clauses.append("ended_at >= ?")
+        clauses.append("julianday(ended_at) >= julianday(?)")
         params.append(since)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     with connect() as conn:
@@ -158,12 +158,15 @@ def list_self_tags(*, since: str | None = None, limit: int = 500) -> list[dict[s
     return [dict(row) | {"source": "voluntary_user_annotation"} for row in rows]
 
 
-def _focus_rows(since: str | None) -> list[dict[str, Any]]:
+def _focus_rows(since: str | None, *, until: str | None = None) -> list[dict[str, Any]]:
     params: tuple[Any, ...] = ()
     where = "WHERE n.event_type IN ('focus_span', 'focus_period')"
     if since:
-        where += " AND n.observed_at >= ?"
+        where += " AND julianday(n.observed_at) >= julianday(?)"
         params = (since,)
+    if until:
+        where += " AND julianday(n.observed_at) < julianday(?)"
+        params = (*params, until)
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -197,14 +200,17 @@ def _focus_rows(since: str | None) -> list[dict[str, Any]]:
     return result
 
 
-def _context_rows(since: str | None) -> list[dict[str, Any]]:
+def _context_rows(since: str | None, *, until: str | None = None) -> list[dict[str, Any]]:
     # The work profile describes the person's own work; agent runs are
     # reported separately (Agents tab, get_agent_runs).
     params: tuple[Any, ...] = ()
     where = "WHERE source != 'agent'"
     if since:
-        where += " AND observed_at >= ?"
+        where += " AND julianday(observed_at) >= julianday(?)"
         params = (since,)
+    if until:
+        where += " AND julianday(observed_at) < julianday(?)"
+        params = (*params, until)
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -566,13 +572,15 @@ def _hunting_candidates(context: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def compute_work_profile(
     *, scope: str = "current", now: datetime | None = None,
     _preloaded_context: list[dict[str, Any]] | None = None,
+    _preloaded_focus: list[dict[str, Any]] | None = None,
+    _preloaded_tags: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     since = _scope_since(scope, now=now)
-    focus = _focus_rows(since)
+    focus = _focus_rows(since) if _preloaded_focus is None else _preloaded_focus
     context = _context_rows(since) if _preloaded_context is None else _preloaded_context
     transfers = _transfer_patterns(context)
     transfer_destinations = _transfer_destinations(transfers)
-    tags = list_self_tags(since=since)
+    tags = list_self_tags(since=since) if _preloaded_tags is None else _preloaded_tags
     profile = {
         "scope": scope,
         "since": since,

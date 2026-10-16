@@ -20,13 +20,14 @@ def _norm_filter(value: str | None, limit: int) -> str:
     return " ".join(str(value or "").strip().split())[:limit]
 
 
-def _fingerprint(scope: str, surface: str, query: str, since: str | None, *, include_agents: bool = False) -> str:
+def _fingerprint(scope: str, surface: str, query: str, since: str | None, *, include_agents: bool = False, until: str | None = None) -> str:
     raw = json.dumps(
         {
             "scope": scope,
             "surface": surface.casefold(),
             "q": query.casefold(),
             "since": str(since or ""),
+            "until": str(until or ""),
             "include_agents": bool(include_agents),
         },
         sort_keys=True,
@@ -92,6 +93,7 @@ def _where(
     query: str,
     include_surface: bool = True,
     include_agents: bool = False,
+    until: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -99,8 +101,11 @@ def _where(
         # Agent runs have their own tab; this is the human evidence view.
         clauses.append("source != 'agent'")
     if since:
-        clauses.append("observed_at >= ?")
+        clauses.append("julianday(observed_at) >= julianday(?)")
         params.append(str(since))
+    if until:
+        clauses.append("julianday(observed_at) < julianday(?)")
+        params.append(until)
     if include_surface and surface:
         clauses.append("LOWER(surface) = LOWER(?)")
         params.append(surface)
@@ -178,14 +183,19 @@ def query_evidence(
     *,
     scope: str,
     since: str | None,
+    until: str | None = None,
     limit: int = 100,
     cursor: str | None = None,
     surface: str | None = None,
     q: str | None = None,
     include_agents: bool = False,
 ) -> dict[str, Any]:
-    if scope not in {"current", "all"}:
-        raise ValueError("scope must be current or all")
+    if scope not in {"current", "all", "range"}:
+        raise ValueError("scope must be current, all, or range")
+    if scope == "range":
+        from .export_window import selection
+        window = selection(scope, since, until)
+        since, until = window["since"], window["until"]
     page_limit = max(1, min(int(limit), _MAX_LIMIT))
     selected_surface = _norm_filter(surface, _MAX_SURFACE)
     query = _norm_filter(q, _MAX_QUERY)
@@ -195,6 +205,7 @@ def query_evidence(
         query,
         since,
         include_agents=include_agents,
+        until=until,
     )
     cursor_ts = ""
     cursor_id = 0
@@ -208,18 +219,19 @@ def query_evidence(
         query=query,
         include_surface=True,
         include_agents=include_agents,
+        until=until,
     )
     page_clauses = list(base_clauses)
     page_params = list(base_params)
     if cursor_ts:
-        page_clauses.append("(observed_at < ? OR (observed_at = ? AND id < ?))")
+        page_clauses.append("(julianday(observed_at) < julianday(?) OR (julianday(observed_at) = julianday(?) AND id < ?))")
         page_params.extend([cursor_ts, cursor_ts, cursor_id])
 
     select_sql = (
         "SELECT id, event_id, observed_at, source, surface, action, resource_title, "
         "resource_locator, target_label, metadata_json FROM context_events"
         + _sql_where(page_clauses)
-        + " ORDER BY observed_at DESC, id DESC LIMIT ?"
+        + " ORDER BY julianday(observed_at) DESC, id DESC LIMIT ?"
     )
 
     facet_clauses, facet_params = _where(
@@ -228,6 +240,7 @@ def query_evidence(
         query=query,
         include_surface=False,
         include_agents=include_agents,
+        until=until,
     )
 
     with db.connect() as conn:
@@ -262,6 +275,7 @@ def query_evidence(
     return {
         "scope": scope,
         "since": since,
+        "until": until,
         "surface": selected_surface or None,
         "q": query,
         "limit": page_limit,

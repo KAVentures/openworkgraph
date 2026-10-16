@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
-_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool]] = {}
+_EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool, str, str]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
 _BROWSER_PAIR_REQUESTS: dict[str, tuple[float, str, bool]] = {}
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
@@ -192,6 +192,7 @@ def issue_export_ticket(
     include_raw: bool,
     ttl_seconds: int = 30,
     redact_names: bool = False,
+    *, since: str | None = None, until: str | None = None,
 ) -> dict[str, int | str]:
     token = secrets.token_urlsafe(32)
     expires = time.time() + ttl_seconds
@@ -200,7 +201,7 @@ def issue_export_ticket(
         for key, value in list(_EXPORT_TICKETS.items()):
             if value[0] < now:
                 _EXPORT_TICKETS.pop(key, None)
-        _EXPORT_TICKETS[token] = (expires, str(export_format), str(scope), bool(include_raw), bool(redact_names))
+        _EXPORT_TICKETS[token] = (expires, str(export_format), str(scope), bool(include_raw), bool(redact_names), since or "", until or "")
     return {"ticket": token, "expires_in_seconds": ttl_seconds}
 
 
@@ -210,6 +211,7 @@ def consume_export_ticket(
     scope: str,
     include_raw: bool,
     redact_names: bool = False,
+    *, since: str | None = None, until: str | None = None,
 ) -> bool:
     if not token:
         return False
@@ -217,7 +219,7 @@ def consume_export_ticket(
         current = _EXPORT_TICKETS.pop(str(token), None)
         if not current:
             return False
-        expiry, expected_format, expected_scope, expected_raw, expected_redact = current
+        expiry, expected_format, expected_scope, expected_raw, expected_redact, expected_since, expected_until = current
         if expiry < time.time():
             return False
         return (
@@ -225,6 +227,8 @@ def consume_export_ticket(
             and hmac.compare_digest(str(scope), expected_scope)
             and bool(include_raw) is expected_raw
             and bool(redact_names) is expected_redact
+            and hmac.compare_digest((since or "").encode("utf-8"), expected_since.encode("utf-8"))
+            and hmac.compare_digest((until or "").encode("utf-8"), expected_until.encode("utf-8"))
         )
 
 

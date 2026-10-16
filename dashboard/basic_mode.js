@@ -564,6 +564,18 @@
       title.textContent = 'Recording is paused'; sub.textContent = 'Nothing is recorded until you resume.'; dot.className = 'hero-dot paused';
     } else if (state === 'stopped') {
       title.textContent = 'Recording is stopped'; sub.textContent = 'Your data is kept on this computer.'; dot.className = 'hero-dot off';
+    } else if (capture.missing_permissions?.length) {
+      title.textContent = 'Recorder needs permission';
+      sub.textContent = 'OpenWorkGraph is waiting for the required OS permissions. Saved work remains available.';
+      dot.className = 'hero-dot paused';
+    } else if (capture.away) {
+      title.textContent = 'Recorder is away';
+      sub.textContent = 'The computer is idle or locked. Saved work remains available.';
+      dot.className = 'hero-dot paused';
+    } else if (capture.collector_alive === false) {
+      title.textContent = 'Waiting for the recorder';
+      sub.textContent = 'No collector heartbeat has arrived for this run. Saved work remains available.';
+      dot.className = 'hero-dot paused';
     } else {
       title.textContent = engaged >= 60 ? `${fmtDuration(engaged)} of work recorded so far` : 'Recording your work';
       const parts = [];

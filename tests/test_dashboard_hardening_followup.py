@@ -105,7 +105,7 @@ def test_empty_base_csv_exports_keep_real_header_rows_without_fake_data():
             "transitions.csv": "from,to,count",
             "inferred_tasks.csv": "interpretation_status,started_at,ended_at,task_label,task_family,confidence,primary_surface,surfaces,elapsed_seconds,foreground_seconds,engaged_seconds,idle_seconds,active_input_seconds,keypress_count,click_count,scroll_count,boundary_reason,boundary_confidence,effort_estimated,semantic_actions",
             "repeated_task_families.csv": "interpretation_status,task_label,task_family,observed_count,surfaces,surface_variant_count,total_engaged_seconds,median_engaged_seconds,p90_engaged_seconds,median_elapsed_seconds,keypress_count,click_count,completion_boundary_count,confidence",
-            "operational_events.csv": "observed_at,schema_version,organization_id,actor_id,device_id,sensor_id,source,session_id,app_or_surface,window_title,event_type,action,page_host,page_path,target_label,target_role,duration_seconds,metadata_json",
+            "operational_events.csv": "observed_at,schema_version,organization_id,actor_id,device_id,sensor_id,source,session_id,app_or_surface,window_title,event_type,action,page_host,page_path,target_label,target_role,duration_seconds,metadata_json,event_id",
             "semantic_activity.csv": "observed_at,session_id,app,window_title,event_type,label,page,target,source",
         }
         for filename, header in expected.items():
