@@ -411,3 +411,61 @@ def test_scope_gap_generates_targeted_privacy_safe_question():
     assert "Gmail · Send" in questions[0]["question"]
     encoded = json.dumps(questions[0], ensure_ascii=False)
     assert "Teams" not in encoded
+
+
+def test_discovery_gateway_history_sealed_without_organization_enrollment(tmp_path):
+    """A locally conducted study cannot leak through later history backfill.
+
+    Discovery routes register protected routes on the shared local FastAPI app
+    when imported. Run that import in an isolated subprocess so subsequent
+    legacy API tests retain their original import-time authentication setup.
+    Do NOT disable or relax the real application auth middleware.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = """
+from pathlib import Path
+from unittest.mock import patch
+from connector.state import SyncState
+from server import discovery_routes
+import os
+
+data_dir = Path(os.environ["WORKFLOW_OBSERVER_DATA"])
+before = {
+    "enabled": True, "session_id": "disc_offline",
+    "gateway_paused_by_discovery": False,
+    "gateway_event_boundary_id": 10,
+}
+with patch.object(discovery_routes, "gateway_paths", return_value=(data_dir, data_dir)), (
+     patch.object(discovery_routes, "_max_local_event_id", return_value=14)):
+    discovery_routes._seal_discovery_gateway_history(before)
+    state = SyncState(data_dir / "gateway_sync_state.db")
+    assert not state.skipped(10)
+    assert state.skipped(11)
+    assert state.skipped(14)
+    assert not state.skipped(15)
+    discovery_routes._seal_discovery_gateway_history({**before, "enabled": False})
+    assert not state.skipped(15)
+"""
+    env = {**os.environ,
+           "WORKFLOW_OBSERVER_DATA": str(tmp_path),
+           "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth")}
+    root = Path(__file__).resolve().parents[1]
+    run = subprocess.run([sys.executable, "-c", script], cwd=root, env=env,
+                         capture_output=True, text=True, timeout=45)
+    assert run.returncode == 0, run.stderr[-2400:]
+
+
+def test_discovery_repeat_deactivation_does_not_extend_history_cutoff(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
+    from shared.discovery_scope import start_session, deactivate_session
+
+    start_session(name="Private study", purpose="Map workflow",
+                  allowed_apps=["Microsoft Excel"], duration_days=1)
+    first = deactivate_session()
+    assert first["deactivated_at"] is not None
+    second = deactivate_session()
+    assert second["deactivated_at"] == first["deactivated_at"]
