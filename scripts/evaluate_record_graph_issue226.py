@@ -157,10 +157,18 @@ def evaluate(cases_input: list[dict[str, Any]], runs: list[dict[str, Any]],
     # A/B/C must be matched, C must use the correct record when available,
     # and B/C both require source-log evidence for an incremental-value test.
     confounded = sum(
-        not trio[1]["source_log_access_attempted"]
-        or not trio[2]["source_log_access_attempted"]
-        or not trio[1]["source_snapshot"]
-        or trio[1]["source_snapshot"] != trio[2]["source_snapshot"]
+        # An absent opaque record reference makes a matched source read
+        # impossible. B/C must both abstain: penalizing their correct refusal
+        # would invalidate every benchmark that includes the required
+        # no_reference stressor.
+        (
+            trio[1]["source_log_access_attempted"] or trio[2]["source_log_access_attempted"]
+        ) if cases[trio[1]["case_id"]].get("resource_ref") is None else (
+            not trio[1]["source_log_access_attempted"]
+            or not trio[2]["source_log_access_attempted"]
+            or not trio[1]["source_snapshot"]
+            or trio[1]["source_snapshot"] != trio[2]["source_snapshot"]
+        )
         for trio in paired
     )
     valid = (not incomplete and bool(paired) and c_missing == 0
