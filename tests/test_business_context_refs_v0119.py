@@ -92,29 +92,73 @@ def test_compact_trace_row_exposes_hostname():
     assert row["page_host"] == "example.com"
 
 
-def test_safari_native_url_capture_fails_closed_for_private_or_unknown(monkeypatch):
+def test_macos_browser_detail_uses_extension_without_native_queries(monkeypatch):
+    from collector import business_context
+    import subprocess
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("browser context attempted a process or native lookup")
+    monkeypatch.setattr(business_context.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(business_context, "_mac_ax_document", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    business_context._CACHE.clear()
+    for app in ("Safari", "Google Chrome", "Firefox"):
+        for title in ("Invoice Acme Q4", "Private Browsing", "Incognito"):
+            assert business_context.capture_business_context(app, title) == {}
+
+
+def test_native_document_file_uri_is_local_and_portable(tmp_path):
+    from collector.business_context import _file_path_from_document
+
+    # pathlib.as_uri() uses /C:/... on Windows and /... on macOS/Linux.
+    # The Accessibility mock runs on the CI host OS, not just macOS.
+    document = tmp_path / "Invoice Q4 #1.xlsx"
+    document.write_bytes(b"synthetic work document")
+    assert _file_path_from_document(document.as_uri()) == str(document)
+    assert _file_path_from_document(str(document)) == str(document)
+    assert _file_path_from_document("file://remote-host/shared/document.xlsx") == ""
+    assert _file_path_from_document(document.as_uri() + "?auth=private") == ""
+    assert _file_path_from_document(document.as_uri() + "#fragment") == ""
+
+
+def test_macos_native_document_reference_needs_only_accessibility(tmp_path, monkeypatch):
+    import sys
+    import types
+    import subprocess
     from collector import business_context
 
-    monkeypatch.setattr(
-        business_context,
-        "_osascript",
-        lambda *_args, **_kwargs: "__PRIVATE__",
-    )
-    assert business_context._mac_browser_url("Safari", "Example") == ""
-
-    monkeypatch.setattr(
-        business_context,
-        "_osascript",
-        lambda *_args, **_kwargs: "__UNKNOWN__",
-    )
-    assert business_context._mac_browser_url("Safari", "Example") == ""
-
-    monkeypatch.setattr(
-        business_context,
-        "_osascript",
-        lambda *_args, **_kwargs: "__NORMAL__\nhttps://example.com/work",
-    )
-    assert business_context._mac_browser_url("Safari", "Example") == "https://example.com/work"
+    document = tmp_path / "Invoice Acme Q4.xlsx"
+    document.write_bytes(b"synthetic work document")
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path/'data'))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path/'auth'))
+    calls = []
+    def attribute(obj, key, unused):
+        calls.append(key)
+        return (0, 'focused-window') if key == 'AXFocusedWindow' else (0, document.as_uri())
+    monkeypatch.setitem(sys.modules, 'AppKit', types.SimpleNamespace(
+        NSWorkspace=types.SimpleNamespace(sharedWorkspace=lambda: types.SimpleNamespace(
+            frontmostApplication=lambda: types.SimpleNamespace(processIdentifier=lambda: 42)))))
+    ax = types.SimpleNamespace(AXIsProcessTrusted=lambda: True,
+                              AXUIElementCreateApplication=lambda pid: ('app',pid),
+                              AXUIElementCopyAttributeValue=attribute)
+    monkeypatch.setitem(sys.modules, 'ApplicationServices', ax)
+    monkeypatch.setattr(business_context.platform, 'system', lambda: 'Darwin')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('native document lookup spawned a child process')
+    monkeypatch.setattr(subprocess, 'run', forbidden)
+    business_context._CACHE.clear()
+    captured=business_context.capture_business_context('Microsoft Excel','Invoice Acme Q4')
+    assert captured['file_reference']['path'] == str(document.resolve())
+    assert captured['file_reference']['contents_stored'] is False
+    assert calls == ['AXFocusedWindow', 'AXDocument']
+    ax.AXIsProcessTrusted=lambda: False
+    calls.clear(); business_context._CACHE.clear()
+    assert business_context.capture_business_context('Microsoft Excel','Invoice Acme Q4') == {}
+    assert not calls
+    # macOS Outlook selection is deliberately unsupported without Automation;
+    # ordinary title capture remains in collector.platform.
+    business_context._CACHE.clear()
+    assert business_context.capture_business_context('Microsoft Outlook','Inbox') == {}
 
 
 def test_browser_reference_extension_explicitly_skips_incognito_tabs():

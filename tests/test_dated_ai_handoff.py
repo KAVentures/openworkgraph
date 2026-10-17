@@ -157,19 +157,25 @@ def test_lowercase_search_names_are_hidden_without_losing_context(tmp_path):
 from shared.core.browser_title_privacy import protect_text
 from server.ai_context import redact_contextually, contextual_text_redactor
 for title in ('natalie bergstrom cardiology - Google Search',
+              'zubeyde okonkwo cardiology - Google Search',
+              'zübeyde okonkwo cardiology - Google Search',
               'anna svensson acme - Sök på Google - Google Chrome'):
     for transform in (protect_text, lambda x:redact_contextually({'window_title':x})['window_title']):
         safe=transform(title)
         assert 'PERSON_' in safe,(title,safe)
         assert 'natalie' not in safe and 'bergstrom' not in safe and 'anna' not in safe and 'svensson' not in safe
+        assert 'zubeyde' not in safe and 'zübeyde' not in safe and 'okonkwo' not in safe
         assert 'cardiology' in safe or 'acme' in safe
         assert transform(safe)==safe
 for title in ('Q4 pipeline - Atlas Logistics - Google Sheets',
               'Fakturamall Sollefteå v42 Acme AB - Google Sheets',
-              'mark as read - Google Search','Stockholm weather - Google Search','De Beers','Van rental'):
+              'mark as read - Google Search','Stockholm weather - Google Search','De Beers','Van rental',
+              'john deere price - Google Search','John Deere price - Google Search'):
     assert protect_text(title)==title,(title,protect_text(title))
 r=contextual_text_redactor({'never_redact':['anna svensson'],'always_redact':[]})
 assert r('anna svensson cardiology - Google Search')=='anna svensson cardiology - Google Search'
+r=contextual_text_redactor({'never_redact':[], 'always_redact':['John Deere']})
+assert 'PERSON_' in r('John Deere price - Google Search')
 ''', tmp_path)
 
 
@@ -195,6 +201,27 @@ with connect() as c:
         if table != 'normalized_events':  # normalized titles intentionally use coarse app labels
             assert 'PERSON_' in title and 'cardiology' in title, (table,title)
 assert db.protect_existing_titles(batch_size=1) == 0
+''', tmp_path)
+
+
+def test_new_given_name_protection_applies_to_already_migrated_history(tmp_path):
+    run(r'''
+from server import db
+db.init_db()
+insert_events([event('retained', A, 'Invoice Acme Q4')])
+with connect() as c:
+    c.execute("UPDATE events SET window_title=? WHERE event_id='retained'",
+              ('zubeyde okonkwo cardiology - Google Search',))
+    c.execute("INSERT OR IGNORE INTO privacy_migrations(migration_key) VALUES (?)",
+              ('titles_sensitive_details_tokenized_v0108_search_names_v2',))
+assert not db.title_protection_complete()
+assert db.protect_existing_titles(batch_size=1) == 1
+assert db.title_protection_complete()
+with connect() as c:
+    title=c.execute("SELECT window_title FROM events WHERE event_id='retained'").fetchone()[0]
+assert 'zubeyde' not in title and 'okonkwo' not in title
+assert 'PERSON_' in title and 'cardiology' in title
+assert db.protect_existing_titles() == 0
 ''', tmp_path)
 
 
