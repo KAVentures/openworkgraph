@@ -107,6 +107,20 @@ def test_macos_browser_detail_uses_extension_without_native_queries(monkeypatch)
             assert business_context.capture_business_context(app, title) == {}
 
 
+def test_native_document_file_uri_is_local_and_portable(tmp_path):
+    from collector.business_context import _file_path_from_document
+
+    # pathlib.as_uri() uses /C:/... on Windows and /... on macOS/Linux.
+    # The Accessibility mock runs on the CI host OS, not just macOS.
+    document = tmp_path / "Invoice Q4 #1.xlsx"
+    document.write_bytes(b"synthetic work document")
+    assert _file_path_from_document(document.as_uri()) == str(document)
+    assert _file_path_from_document(str(document)) == str(document)
+    assert _file_path_from_document("file://remote-host/shared/document.xlsx") == ""
+    assert _file_path_from_document(document.as_uri() + "?auth=private") == ""
+    assert _file_path_from_document(document.as_uri() + "#fragment") == ""
+
+
 def test_macos_native_document_reference_needs_only_accessibility(tmp_path, monkeypatch):
     import sys
     import types
