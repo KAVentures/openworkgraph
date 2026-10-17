@@ -18,7 +18,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from shared.core.browser_utils import is_browser_app
 from shared.core.resource_references import resource_reference_from_url
@@ -59,8 +60,18 @@ def _file_path_from_document(value: str) -> str:
     raw = str(value or "").strip()
     if raw.startswith("file://"):
         try:
-            return unquote(urlsplit(raw).path)
-        except Exception:
+            parsed = urlsplit(raw)
+            # A document pointer must be a local file. Never turn a remote
+            # file://host/share URL into a network fetch during fingerprinting.
+            if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+                return ""
+            if parsed.query or parsed.fragment:
+                return ""
+            # URI paths use /C:/... even on Windows. url2pathname converts
+            # the URI's native-drive syntax and percent escapes correctly;
+            # unquote(parsed.path) alone produced a non-existent Windows path.
+            return url2pathname(parsed.path)
+        except (ValueError, TypeError):
             return ""
     return raw if raw and os.path.isabs(raw) else ""
 
