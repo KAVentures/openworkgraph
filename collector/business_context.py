@@ -2,16 +2,18 @@ from __future__ import annotations
 
 """Best-effort local business-object context for the foreground step.
 
-No message/file/page contents are read or persisted. The collector may retain a
-selected Outlook subject + sent time, a document path + SHA-256 fingerprint, and
-the active browser hostname / allowlisted object reference.
+No message/page bodies or file contents are persisted. File bytes are read only
+to compute local fingerprints. The collector may retain a
+selected Outlook subject + sent time on Windows, a document path + SHA-256
+fingerprint, and (on Windows) the active browser hostname / object reference.
+macOS uses native Accessibility for file pointers and relies on the optional
+browser sensor or authorized source connectors for browser/message detail.
 """
 
 import hashlib
 import os
 import platform
 import re
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -28,34 +30,29 @@ _FILE_HASH_CACHE: dict[tuple[str, int, int], str] = {}
 _PRIVATE = re.compile(r"\b(?:incognito|inprivate|private browsing|private window)\b", re.I)
 
 
-def _osascript(script: str, timeout: float = 1.0) -> str:
+def _mac_ax_document() -> str:
+    """Read the focused window's document pointer using approved Accessibility.
+
+    No Apple Events, control values, browser URLs or message selection are read.
+    Missing approval/attributes simply leave the optional file pointer absent.
+    """
     try:
-        result = subprocess.run(
-            ["/usr/bin/osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        from AppKit import NSWorkspace  # type: ignore
+        import ApplicationServices as AX  # type: ignore
+
+        if not AX.AXIsProcessTrusted():
+            return ""
+        current = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if current is None:
+            return ""
+        root = AX.AXUIElementCreateApplication(int(current.processIdentifier()))
+        status, window = AX.AXUIElementCopyAttributeValue(root, "AXFocusedWindow", None)
+        if status != 0 or window is None:
+            return ""
+        status, value = AX.AXUIElementCopyAttributeValue(window, "AXDocument", None)
+        return str(value or "") if status == 0 else ""
     except Exception:
         return ""
-
-
-def _mac_ax_document() -> str:
-    return _osascript(
-        """
-tell application "System Events"
-  try
-    set p to first application process whose frontmost is true
-    set w to front window of p
-    return value of attribute "AXDocument" of w as text
-  on error
-    return ""
-  end try
-end tell
-"""
-    )
 
 
 def _file_path_from_document(value: str) -> str:
@@ -110,38 +107,6 @@ def _file_reference(path: str) -> dict[str, Any] | None:
     }
 
 
-def _mac_outlook_selection() -> dict[str, Any] | None:
-    raw = _osascript(
-        """
-tell application "Microsoft Outlook"
-  try
-    set msgs to selection
-    if (count of msgs) is 0 then return ""
-    set m to item 1 of msgs
-    set s to subject of m as text
-    set d to time sent of m as text
-    return s & linefeed & d
-  on error
-    return ""
-  end try
-end tell
-"""
-    )
-    if not raw:
-        return None
-    subject, _, sent = raw.partition("\n")
-    subject = subject.strip()[:300]
-    sent = sent.strip()[:120]
-    if not subject:
-        return None
-    return {
-        "kind": "outlook_message",
-        "subject": subject,
-        "sent_at": sent,
-        "body_stored": False,
-    }
-
-
 def _windows_active_object(progid: str):
     try:
         import win32com.client  # type: ignore
@@ -191,78 +156,6 @@ def _windows_office_path(app: str) -> str:
             return str(getter(obj) or "")
         except Exception:
             pass
-    return ""
-
-
-def _mac_browser_url(app: str, title: str) -> str:
-    if _PRIVATE.search(title or ""):
-        return ""
-    low = app.casefold()
-    if "safari" in low:
-        # Safari's AppleScript dictionary does not expose a private-browsing
-        # property. Inspect the front Window menu instead and fail closed unless
-        # we can positively identify a normal window. On localized/future Safari
-        # versions where neither known menu item is present, native URL capture
-        # is disabled rather than risking private-window capture.
-        raw = _osascript(
-            """
-tell application "Safari"
-  try
-    if (count of windows) is 0 then return ""
-    set frontURL to URL of current tab of front window as text
-  on error
-    return ""
-  end try
-end tell
-tell application "System Events"
-  try
-    tell application process "Safari"
-      set windowMenu to menu "Window" of menu bar 1
-      if exists menu item "Move Tab to New Private Window" of windowMenu then
-        return "__PRIVATE__"
-      end if
-      if exists menu item "Move Tab to New Window" of windowMenu then
-        return "__NORMAL__" & linefeed & frontURL
-      end if
-      return "__UNKNOWN__"
-    end tell
-  on error
-    return "__UNKNOWN__"
-  end try
-end tell
-"""
-        )
-        if raw.startswith("__NORMAL__\n"):
-            return raw.partition("\n")[2].strip()
-        return ""
-    names = {
-        "chrome": "Google Chrome",
-        "edge": "Microsoft Edge",
-        "brave": "Brave Browser",
-        "vivaldi": "Vivaldi",
-        "opera": "Opera",
-        "chromium": "Chromium",
-        "arc": "Arc",
-    }
-    for token, name in names.items():
-        if token not in low:
-            continue
-        return _osascript(
-            f"""
-tell application "{name}"
-  try
-    if (count of windows) is 0 then return ""
-    if (mode of front window as text) is not "normal" then return ""
-    return URL of active tab of front window
-  on error
-    return ""
-  end try
-end tell
-"""
-        )
-    if any(token in low for token in ("firefox", "waterfox", "librewolf", "zen browser")):
-        value = _mac_ax_document()
-        return value if value.startswith(("http://", "https://")) else ""
     return ""
 
 
@@ -322,9 +215,7 @@ def _browser_context(app: str, title: str) -> dict[str, Any]:
     except Exception:
         settings = {"business_object_references": False}
     system = platform.system()
-    if system == "Darwin":
-        raw = _mac_browser_url(app, title)
-    elif system == "Windows":
+    if system == "Windows":
         raw = _windows_browser_url(title)
     else:
         raw = ""
@@ -368,17 +259,15 @@ def capture_business_context(app: str, title: str) -> dict[str, Any]:
     try:
         if is_browser_app(key[0]):
             result = _browser_context(*key)
-        elif "outlook" in low:
-            result["message_reference"] = (
-                _mac_outlook_selection()
-                if platform.system() == "Darwin"
-                else _windows_outlook_selection()
-            )
-        if not result.get("message_reference"):
+        elif "outlook" in low and platform.system() == "Windows":
+            result["message_reference"] = _windows_outlook_selection()
+        if not is_browser_app(key[0]) and not result.get("message_reference"):
             if platform.system() == "Windows":
                 path = _windows_office_path(key[0])
-            else:
+            elif platform.system() == "Darwin":
                 path = _file_path_from_document(_mac_ax_document())
+            else:
+                path = ""
             if path:
                 reference = _file_reference(path)
                 if reference:

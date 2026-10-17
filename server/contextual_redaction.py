@@ -45,7 +45,8 @@ def _load_names(name: str) -> frozenset[str]:
     return frozenset(line.strip() for line in lines if line.strip() and not line.startswith("#"))
 
 
-FIRST_NAMES = _load_names("first_names.txt")
+# Curated non-ambiguous given names below the source lists' frequency thresholds.
+FIRST_NAMES = _load_names("first_names.txt") | frozenset({"zubeyde", "zübeyde"})
 SURNAMES = _load_names("surnames.txt")
 
 # First names that are also common words, places or product names in work
@@ -110,7 +111,7 @@ _COMPANY_SUFFIXES = frozenset("ab inc ltd llc gmbh oy as asa plc corp co aktiebo
 ORGANIZATIONS = frozenset("""
 ericsson volvo scania saab skanska telia spotify ikea nordea swedbank handelsbanken seb klarna
 electrolux husqvarna sandvik securitas vattenfall northvolt tele2 ica coop atlas copco
-ford dell disney boeing siemens philips nokia bosch porsche ferrari mcdonald mcdonalds
+ford dell disney boeing siemens philips nokia bosch porsche ferrari mcdonald mcdonalds deere
 capio karolinska sahlgrenska aleris praktikertjänst medlink
 """.split())
 

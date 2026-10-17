@@ -364,7 +364,7 @@ def harden_existing_browser_events(config: dict[str, Any]) -> int:
 
 # Revisit existing installations too: the first pass could miss qualified
 # lowercase person searches. Keep the same checkpointed, idempotent migration.
-TITLE_PROTECTION_MIGRATION = "titles_sensitive_details_tokenized_v0108_search_names_v2"
+TITLE_PROTECTION_MIGRATION = "titles_sensitive_details_tokenized_v0108_search_names_v3"
 
 
 def _protected_text_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
