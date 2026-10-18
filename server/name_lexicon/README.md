@@ -20,6 +20,11 @@ python scripts/build_name_lexicon.py --sources /path/to/downloads --extract-scb 
 
 The script documents the download URLs and thresholds. OpenWorkGraph never downloads anything at runtime.
 
+The detector also includes a curated supplement for non-ambiguous given names
+missed by those thresholds (currently Zubeyde/Zübeyde). Recognition remains best
+effort; other unknown names can require person-context cues or an explicit
+redaction override. The generated source files remain unchanged.
+
 ## Ambiguous names
 
 Some names are also everyday words, places or products (May, Bill, Grace, Paris, Claude …). They are listed in `AMBIGUOUS_NAMES` in `server/contextual_redaction.py`. The list is hand-curated and part of the code, not the data. Such a name only counts with an adjacent listed surname or a strong person cue.

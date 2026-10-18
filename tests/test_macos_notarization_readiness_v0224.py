@@ -62,7 +62,10 @@ def test_macos_capture_degrades_without_leaking_window_content(monkeypatch):
 def test_signed_bundle_has_permission_and_uninstaller_paths():
     src=(ROOT/"scripts/build_macos_app_bundle.sh").read_text()
     collector=(ROOT/"collector/platform.py").read_text()
+    business_context=(ROOT/"collector/business_context.py").read_text()
     assert "osascript" not in collector
+    assert "osascript" not in business_context
+    assert '"AXDocument"' in business_context and "AXIsProcessTrusted" in business_context
     assert "AXFocusedWindow" in collector and "AXTitle" in collector
     assert "NSWorkspace" in collector
     assert "NSAccessibilityUsageDescription" in src

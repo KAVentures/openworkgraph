@@ -184,6 +184,10 @@
           <div><h3>Hide names and contact details from AI apps</h3><div class="muted" id="pvRedactText">Recommended. Titles keep their meaning: "Re: Contract for PERSON_1A2B3C - Gmail".</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvRedactSwitch" aria-checked="true" aria-label="Hide names and contact details from AI apps"></button></div>
         </div>
+        <div class="pv-row" id="pvSourceConnectionsRow">
+          <div><h3>Optional source connections</h3><div class="muted">Connect a Stripe account for read-only status checks on invoices and refunds already observed by OWG. This computer stores the restricted key in its operating system credential vault. Organization enrollment is not required.</div></div>
+          <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
+        </div>
         <div class="pv-row" id="pvWorkTextRow">
           <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
