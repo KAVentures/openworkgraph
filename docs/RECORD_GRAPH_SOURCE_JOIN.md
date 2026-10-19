@@ -134,3 +134,43 @@ passed through a connected AI tool.
 Official guidance:
 https://developer.atlassian.com/cloud/jira/software/oauth-2-3lo-apps/
 https://developer.atlassian.com/cloud/oauth/getting-started/refresh-tokens/
+
+
+## Exact-record history lookup (additive hardening)
+
+Local `get_record_graph` and `GET /v1/record-graph` now select events by the
+**exact normalized opaque resource reference** from the retained canonical event
+store before applying the bounded record-event limit. Previously the route read
+the newest 25,000 events across **all** activities first: older valid records
+could appear absent even while retained, and interleaved history could hide a
+contradictory source type.
+
+- The query uses parameterized SQL, a substring prefilter and exact validated
+  JSON-path equality. A reference appearing only in text or another JSON field
+  is not evidence of a business record. No source credentials or native record
+  values are returned.
+- Existing `since`/`until` restrictions and local AI-history permission
+  boundaries remain in force. This change cannot retrieve deleted evidence,
+  change consent, or extend retained history.
+- `source_event_limit` now bounds **matching record events**, not unrelated
+  global work events. The lookup reads one extra match to distinguish an exact
+  limit from truncation.
+- If a record's matched events exceed the limit, OWG marks identity completeness
+  false and refuses a live provider status refresh: older evidence might contain
+  a conflicting provider/record type. Call again with a narrower permitted date
+  window to review the record safely.
+- Additive fields `source_rows_scoped_to_exact_record` and
+  `record_identity_complete_within_retained_window` explain this limit.
+  `source_event_limit_reached` now indicates **actual** truncation rather
+  than equating an exactly full page with overflow.
+- No index migration is added; this remains an on-demand read and may scan
+  the retained local event table on large installations. Benchmark before
+  introducing a persisted reference index, and never block recorder startup
+  with an unbounded migration.
+
+This is a prerequisite for future optional Open Work/case discovery, **not**
+an Open Work engine. It neither claims missing business obligations nor scans
+external systems for unseen tasks. Existing Activity, Workflows, repeated-family
+discovery, Discovery Mode, exports, policy, privacy and agent interfaces
+remain intact. Additional business-case or obligation features should be
+optional, separately authorized, and independent of workflow mapping.
