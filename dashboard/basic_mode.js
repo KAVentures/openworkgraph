@@ -189,7 +189,7 @@
           <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvOpenWorkRow">
-          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div></div>
+          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
         </div>
         <div class="pv-row" id="pvWorkTextRow">
@@ -372,6 +372,43 @@
           const pastDue = rows.filter(row => row.past_due_date === true).length;
           const coverage = result.source_coverage_complete ? 'Complete source page range.' : 'More open invoices may exist beyond this preview.';
           if (status) status.textContent = rows.length + ' open invoice candidate(s); ' + pastDue + ' past the reported due date. ' + coverage + ' Review in Stripe before any follow-up.';
+          const caseArea = panel.querySelector('#pvOpenWorkCases');
+          if (caseArea) {
+            caseArea.replaceChildren();
+            for (const candidate of rows.slice(0, 20)) {
+              if (!/^owg:w:[0-9a-f]{32}$/.test(String(candidate.work_item_ref || ''))) continue;
+              const line = document.createElement('div');
+              line.className = 'pv-row pv-sub';
+              const summary = document.createElement('span');
+              summary.textContent = candidate.past_due_date ? 'Open invoice · past source due date' : 'Open invoice · review candidate';
+              const inspect = document.createElement('button');
+              inspect.type = 'button';
+              inspect.className = 'secondary';
+              inspect.textContent = 'Inspect case context';
+              inspect.onclick = async () => {
+                if (!confirm('Read current source status again and inspect matching locally retained OWG work? No external messages or changes will be made.')) return;
+                inspect.disabled = true;
+                try {
+                  const url = '/v1/open-work/stripe-preview/case?confirm_scan=true&max_pages=3&work_item_ref=' + encodeURIComponent(candidate.work_item_ref);
+                  const context = await api(url);
+                  const safe = esc(JSON.stringify(context, null, 2));
+                  window.openModal?.('Open Work case evidence', 'Source report and previously observed activity; not an instruction to act',
+                    '<div class="muted">Review and copy the context manually for an AI if you choose. OWG has not sent it to any cloud AI.</div>' +
+                    '<textarea aria-label="Read-only case context" readonly rows="15" style="width:100%;max-width:100%;box-sizing:border-box">' + safe + '</textarea>');
+                } catch (error) {
+                  toast(error.message || 'Case evidence unavailable.');
+                } finally { inspect.disabled = false; }
+              };
+              line.append(summary, inspect);
+              caseArea.append(line);
+            }
+            if (rows.length > 20) {
+              const more = document.createElement('div');
+              more.className = 'muted';
+              more.textContent = 'Showing the first 20 candidates. Review additional records in your source system.';
+              caseArea.append(more);
+            }
+          }
         }
       } catch (error) {
         if (status) status.textContent = 'Preview unavailable: ' + (error.message || 'source request failed');
