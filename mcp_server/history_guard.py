@@ -126,7 +126,7 @@ def install_history_guard(runtime_module: Any) -> None:
             query = bounded_range(query, use_current_when_off=True)
         elif route == "/v1/agent-execution-traces":
             query = bounded_range(query, use_current_when_off=True)
-        elif route in {"/v1/record-graph", "/v1/case-context"}:
+        elif route in {"/v1/record-graph", "/v1/case-context", "/v1/record-graph/operation-receipt"}:
             # Record and case context evidence share the same saved-history bound.
             query = bounded_range(query, use_current_when_off=True)
         elif route.startswith("/v1/workflow-evidence"):

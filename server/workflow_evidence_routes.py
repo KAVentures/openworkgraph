@@ -14,6 +14,7 @@ from .ai_context import redact_contextually
 from .secure_app import app
 from .record_graph import record_graph
 from .business_case_context import observed_business_case_context
+from .open_work_outcomes import source_operation_receipt
 from .workflow_evidence import (
     WorkflowEvidenceError,
     build_workflow_evidence,
@@ -51,6 +52,20 @@ def _build(
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
+
+
+@app.get("/v1/record-graph/operation-receipt")
+def get_record_operation_receipt(
+    resource_ref: str, expected_operation: str,
+    since: str | None = None, until: str | None = None,
+) -> dict[str, Any]:
+    """Return only a read-only, independently source-reported operation receipt."""
+    try:
+        return source_operation_receipt(
+            resource_ref, expected_operation, since=since, until=until,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) or "invalid operation receipt request") from None
 
 
 @app.get("/v1/case-context")
