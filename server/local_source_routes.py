@@ -15,6 +15,7 @@ from .local_source_credentials import (
     disconnect_stripe_source, stripe_source_status,
 )
 from .local_auth import dashboard_session_valid
+from .open_work_preview import stripe_open_work_preview
 
 router = APIRouter()
 
@@ -70,3 +71,23 @@ async def local_stripe_disconnect(request: Request):
     except SourceCredentialError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return _status()
+
+
+@router.get("/v1/open-work/stripe-preview")
+async def stripe_open_work_candidates(request: Request, confirm_scan: bool = False,
+                                      max_pages: int = 1):
+    """Explicit, dashboard-only read-only preview of source-reported open invoices.
+
+    No background scan, no provider write, no hosted MCP exposure and no
+    inference that all open invoices require a follow-up. Existing source
+    configuration is not consent to scan its entire invoice inventory.
+    """
+    _require_dashboard(request)
+    if confirm_scan is not True:
+        raise HTTPException(status_code=403, detail="explicit inventory scan confirmation required")
+    if not 1 <= max_pages <= 3:
+        raise HTTPException(status_code=422, detail="max_pages must be between 1 and 3")
+    return await asyncio.to_thread(
+        stripe_open_work_preview, explicit_scan_authorized=True,
+        max_pages=max_pages,
+    )
