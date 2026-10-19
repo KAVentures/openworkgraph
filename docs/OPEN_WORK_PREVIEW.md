@@ -163,3 +163,31 @@ the mapping; historical ephemeral references issued by earlier versions
 were key-derived and cannot always be recovered after an old Stripe key
 was discarded. These references are still opaque hints to a current
 authorized read, not permanent permissions or persistent case records.
+
+
+## Local OWG observation annotations (explicitly requested)
+
+The optional local dashboard preview may request
+`include_local_observation=true` along with its per-call source consent.
+It then attempts a **single batched, exact-resource lookup** for the
+source invoice IDs (server-side only) against retained canonical OWG
+events and the local private resolver dictionary.
+
+- `observed`: at least one retained OWG event with a validated exact source
+  identity matched this invoice.
+- `not_in_retained_owg`: no exact retained matching OWG event was found.
+  **Never interpret this as 'nobody touched it', 'unanswered' or neglected.**
+- `uncertain`: retained evidence cannot be safely established (conflicting
+  identity or database/read error).
+- `not_checked`: the default inventory query did not request local
+  historical observation lookup.
+
+Raw invoice IDs and resolver paths are never returned to the dashboard or
+an AI. The observation annotation itself never creates provider write rights
+or agent autonomy. Separate, user-confirmed single-case context drilldown
+continues to supply more specific permitted structural history.
+
+Optional Stripe connections and both source previews appear only in
+**Advanced mode's Privacy tab**. Basic mode remains focused on recording,
+workflow mapping, AI access and history choices. User-facing errors explain
+how to connect the source rather than exposing internal reason-code strings.
