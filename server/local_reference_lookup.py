@@ -104,6 +104,42 @@ def resolve_resource_reference(reference: str) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
+def find_observed_resource_references(
+    *, provider: str, resource_kind: str, host: str, locator: str,
+    limit: int = 8,
+) -> list[str]:
+    """Find local pointers with an *exact* trusted provider record identity.
+
+    This does not grant access to events and does not prove the observation is
+    still retained. The caller must check each match through the normal
+    record_graph evidence read and authorization/retention guard. Never return
+    native IDs, untrusted titles or local resolver details.
+    """
+    import re
+
+    requested = (str(provider), str(resource_kind), str(host), str(locator))
+    if not all(requested) or len(requested[3]) > 320:
+        return []
+    entries = _read().get("resources", {})
+    if not isinstance(entries, dict):
+        return []
+    matched: list[str] = []
+    for ref, info in entries.items():
+        if not re.fullmatch(r"owg:r:[0-9a-f]{32}", str(ref)):
+            continue
+        if not isinstance(info, dict):
+            continue
+        candidate = (
+            str(info.get("provider") or ""),
+            str(info.get("resource_kind") or ""),
+            str(info.get("host") or ""),
+            str(info.get("resolver_locator") or ""),
+        )
+        if candidate == requested:
+            matched.append(str(ref))
+    return sorted(matched)[:max(1, min(int(limit), 8))]
+
+
 def resolve_file_reference(reference: str) -> dict[str, Any] | None:
     value = _read().get("files", {}).get(str(reference))
     return dict(value) if isinstance(value, dict) else None
@@ -155,6 +191,7 @@ __all__ = [
     "remember_resource_reference",
     "remember_file_reference",
     "resolve_resource_reference",
+    "find_observed_resource_references",
     "resolve_file_reference",
     "forget_references",
     "expand_resource_references",
