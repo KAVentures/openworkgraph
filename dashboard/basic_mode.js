@@ -192,6 +192,10 @@
           <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
         </div>
+        <div class="pv-row pv-sub" id="pvGitHubOpenWorkRow">
+          <div><h3>Open Work: GitHub preview</h3><div class="muted">Optional read-only check for open pull requests in one repository you choose. Uses your existing GitHub CLI login and its separate OWG source-status permission. An open PR is not proof an action is required.</div><label for="pvGitHubOpenWorkRepo" class="muted">Repository (owner/name)</label><input id="pvGitHubOpenWorkRepo" type="text" spellcheck="false" autocomplete="off" placeholder="owner/repository" aria-label="GitHub repository owner/name" /><div class="muted" id="pvGitHubOpenWorkResult" role="status" aria-live="polite"></div></div>
+          <div class="pv-control"><button type="button" class="secondary" id="pvGitHubOpenWorkScan">Preview open PRs</button></div>
+        </div>
         <div class="pv-row" id="pvWorkTextRow">
           <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
@@ -357,6 +361,32 @@
   }
 
   function bindPrivacy(panel) {
+    const gitHubPreview = panel.querySelector('#pvGitHubOpenWorkScan');
+    if (gitHubPreview) gitHubPreview.onclick = async () => {
+      const input = panel.querySelector('#pvGitHubOpenWorkRepo');
+      const status = panel.querySelector('#pvGitHubOpenWorkResult');
+      const repository = String(input?.value || '').trim();
+      if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)) {
+        if (status) status.textContent = 'Enter one exact owner/repository name.';
+        return;
+      }
+      if (!confirm('Read up to 50 open pull requests in this repository with your existing GitHub CLI login? Nothing will be changed or shared with a cloud AI.')) return;
+      gitHubPreview.disabled = true;
+      if (status) status.textContent = 'Checking the selected repository...';
+      try {
+        const result = await api('/v1/open-work/github-preview?confirm_scan=true&limit=50&repository=' + encodeURIComponent(repository));
+        if (result.availability !== 'source_reported') {
+          if (status) status.textContent = 'Preview unavailable: ' + String(result.reason || 'source unavailable').replace(/_/g, ' ') + '.';
+        } else {
+          const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+          const awaitingReview = candidates.filter(c => c.review_status === 'review_required').length;
+          const coverage = result.source_coverage_complete ? '' : ' There may be more beyond this preview.';
+          if (status) status.textContent = candidates.length + ' open PR candidate(s); ' + awaitingReview + ' report review required.' + coverage + ' Source status is not a verified business obligation.';
+        }
+      } catch (error) {
+        if (status) status.textContent = 'Preview unavailable: ' + (error.message || 'request failed');
+      } finally { gitHubPreview.disabled = false; }
+    };
     const openWork = panel.querySelector('#pvOpenWorkScan');
     if (openWork) openWork.onclick = async () => {
       const status = panel.querySelector('#pvOpenWorkResult');
