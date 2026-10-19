@@ -99,6 +99,8 @@ def _surface(
     reason to discard already consented structural workflow evidence.
     """
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if str(row.get("app") or "").strip().casefold() == "excluded" or metadata.get("excluded"):
+        return "Other app"
     page = metadata.get("page") if isinstance(metadata.get("page"), dict) else {}
     hostname = str(
         row.get("page_host") or row.get("browser_hostname")
