@@ -77,7 +77,8 @@ async def local_stripe_disconnect(request: Request):
 
 @router.get("/v1/open-work/stripe-preview")
 async def stripe_open_work_candidates(request: Request, confirm_scan: bool = False,
-                                      max_pages: int = 1):
+                                      max_pages: int = 1,
+                                      include_local_observation: bool = False):
     """Explicit, dashboard-only read-only preview of source-reported open invoices.
 
     No background scan, no provider write, no hosted MCP exposure and no
@@ -91,7 +92,7 @@ async def stripe_open_work_candidates(request: Request, confirm_scan: bool = Fal
         raise HTTPException(status_code=422, detail="max_pages must be between 1 and 3")
     return await asyncio.to_thread(
         stripe_open_work_preview, explicit_scan_authorized=True,
-        max_pages=max_pages,
+        max_pages=max_pages, include_local_observation=include_local_observation,
     )
 
 
