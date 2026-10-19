@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .ai_context import redact_contextually
 from .secure_app import app
 from .record_graph import record_graph
+from .business_case_context import observed_business_case_context
 from .workflow_evidence import (
     WorkflowEvidenceError,
     build_workflow_evidence,
@@ -50,6 +51,23 @@ def _build(
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
+
+
+@app.get("/v1/case-context")
+def get_observed_business_case_context(
+    resource_ref: str,
+    since: str | None = None,
+    until: str | None = None,
+    include_source_status: bool = False,
+) -> dict[str, Any]:
+    """Known-record context for the existing local AI-access/history boundary."""
+    try:
+        return observed_business_case_context(
+            resource_ref, since=since, until=until,
+            include_source_status=include_source_status,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc) or "invalid case context request") from None
 
 
 @app.get("/v1/record-graph")
