@@ -28,6 +28,9 @@ _APP_NAMES = {
     "chatgpt": "ChatGPT", "claude": "Claude",
     "browser": "Browser", "chrome": "Browser", "google chrome": "Browser",
     "safari": "Browser", "finder": "Finder",
+    "zendesk": "Zendesk", "shopify": "Shopify",
+    "netsuite": "NetSuite", "oracle netsuite": "NetSuite",
+    "stripe": "Stripe", "orderadmin": "OrderAdmin",
 }
 # Patterns containing fewer than three distinct contributing people never
 # appear, including in counters or suppressed-pattern previews.
@@ -74,13 +77,30 @@ _TRUSTED_SITES = (
     ("linear.app", "Linear"),
     ("notion.so", "Notion"),
     ("figma.com", "Figma"),
+    ("zendesk.com", "Zendesk"),
+    ("shopify.com", "Shopify"),
+    ("myshopify.com", "Shopify"),
+    ("netsuite.com", "NetSuite"),
+    ("stripe.com", "Stripe"),
 )
-_IGNORED_APPS = {"Browser", "Finder", "Other app"}
+_IGNORED_APPS = {"Browser", "Finder", "Other app", "Excluded", "Unknown"}
 MAX_MOTIF_MINUTES = 90
 
 
-def _surface(row: dict[str, Any]) -> str:
+def _surface(
+    row: dict[str, Any],
+    *, aliases: dict[tuple[str, str], str] | None = None,
+) -> str:
+    """Keep distinct observed apps/sites without exposing untrusted names.
+
+    In an org report, names outside the vetted provider list get per-report
+    anonymous aliases. Never derive public labels from window/page titles or
+    return raw unknown hostnames. This is a presentation restriction, not a
+    reason to discard already consented structural workflow evidence.
+    """
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if str(row.get("app") or "").strip().casefold() == "excluded" or metadata.get("excluded"):
+        return "Other app"
     page = metadata.get("page") if isinstance(metadata.get("page"), dict) else {}
     hostname = str(
         row.get("page_host") or row.get("browser_hostname")
@@ -90,8 +110,24 @@ def _surface(row: dict[str, Any]) -> str:
         for domain, name in _TRUSTED_SITES:
             if hostname == domain or hostname.endswith("." + domain):
                 return name
-    # A generic desktop browser cannot override its own page identity.
-    return _app(row.get("app"))
+        # Unknown sites may be custom internal systems. Correlate them as
+        # distinct work surfaces, but do not reveal their hostname/subdomain.
+        if aliases is not None:
+            key = ("site", hostname)
+            if key not in aliases:
+                aliases[key] = f"Work site {len(aliases) + 1}"
+            return aliases[key]
+
+    name = _app(row.get("app"))
+    if name != "Other app" or aliases is None:
+        return name
+    raw = str(row.get("app") or "").strip().casefold()
+    if raw in {"", "unknown", "excluded", "other app"}:
+        return "Other app"
+    key = ("app", raw)
+    if key not in aliases:
+        aliases[key] = f"Work app {len(aliases) + 1}"
+    return aliases[key]
 
 
 def _timestamp(value: Any) -> float | None:
@@ -169,6 +205,9 @@ def manager_insights(
     sessions: dict[
         tuple[str, str, str, str], list[tuple[float, str, float]]
     ] = defaultdict(list)
+    # Assign stable labels within this aggregate response only. No raw
+    # unrecognized site/app names or unsalted identity hashes leave the server.
+    aliases: dict[tuple[str, str], str] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -179,7 +218,7 @@ def manager_insights(
         at = _timestamp(row.get("observed_at"))
         if not all((actor, device, session, day)) or at is None:
             continue
-        name = _surface(row)
+        name = _surface(row, aliases=aliases)
         try:
             duration = max(0.0, min(float(row.get("duration_seconds") or 0), 3600.0))
         except (TypeError, ValueError, OverflowError):
