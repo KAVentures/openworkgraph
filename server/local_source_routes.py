@@ -16,6 +16,7 @@ from .local_source_credentials import (
 )
 from .local_auth import dashboard_session_valid
 from .open_work_preview import stripe_open_work_preview
+from .open_work_case_context import stripe_open_work_case_context
 
 router = APIRouter()
 
@@ -91,3 +92,22 @@ async def stripe_open_work_candidates(request: Request, confirm_scan: bool = Fal
         stripe_open_work_preview, explicit_scan_authorized=True,
         max_pages=max_pages,
     )
+
+
+@router.get("/v1/open-work/stripe-preview/case")
+async def stripe_open_work_case(request: Request, work_item_ref: str,
+                                confirm_scan: bool = False,
+                                max_pages: int = 3):
+    """Explicit dashboard-only case context, not permission for an agent to act."""
+    _require_dashboard(request)
+    if confirm_scan is not True:
+        raise HTTPException(status_code=403, detail="explicit inventory scan confirmation required")
+    if not 1 <= max_pages <= 3:
+        raise HTTPException(status_code=422, detail="max_pages must be between 1 and 3")
+    try:
+        return await asyncio.to_thread(
+            stripe_open_work_case_context, work_item_ref,
+            explicit_scan_authorized=True, max_pages=max_pages,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
