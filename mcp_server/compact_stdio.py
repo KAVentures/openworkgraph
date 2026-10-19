@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from . import compact as _compact
 from . import secure_runtime as _secure_runtime
 from .automation_guidance import register_automation_guidance
@@ -20,7 +22,8 @@ register_context_index(mcp)
 register_automation_guidance(mcp)
 register_workflow_evidence_tools(mcp, _secure_runtime)
 register_record_graph_tools(mcp, _secure_runtime)
-register_case_context_tools(mcp, _secure_runtime)
+if os.getenv("OWG_OPEN_WORK_EXPERIMENTAL_TOOLS") == "1":
+    register_case_context_tools(mcp, _secure_runtime)
 
 
 if __name__ == "__main__":
