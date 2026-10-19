@@ -156,9 +156,9 @@ def _record_rows(
 
     conditions = [
         "metadata_json LIKE ?",
-        "CASE WHEN json_valid(metadata_json) "
+        "lower(CASE WHEN json_valid(metadata_json) "
         "THEN json_extract(metadata_json, '$.resource_reference.resource_ref') "
-        "ELSE NULL END = ?",
+        "ELSE NULL END) = ?",
     ]
     values: list[Any] = [f"%{resource_ref}%", resource_ref]
     if since:
