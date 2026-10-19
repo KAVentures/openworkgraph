@@ -23,6 +23,7 @@ from .local_source_credentials import load_stripe_source
 from .stripe_source_evidence import _get as account_read
 from .stripe_source_evidence import STRIPE_READ_API_VERSION
 from .local_auth import _read_or_create_secret
+from .open_work_observation import stripe_invoice_observation_states
 
 _ACCOUNT = re.compile(r"^acct_[A-Za-z0-9]{8,90}$")
 _INVOICE = re.compile(r"^in_[A-Za-z0-9]{10,90}$")
@@ -98,6 +99,8 @@ def stripe_open_work_preview(
     now: datetime | None = None,
     candidate_enricher: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
     reference_key: bytes | None = None,
+    include_local_observation: bool = False,
+    observation_reader: Callable[[list[str]], dict[str, str]] = stripe_invoice_observation_states,
 ) -> dict[str, Any]:
     """Read source-reported open invoice candidates, never infer payment duties.
 
@@ -129,6 +132,7 @@ def stripe_open_work_preview(
     timestamp = int(current.timestamp())
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
+    opaque_to_native: dict[str, str] = {}
     previous: str | None = None
     has_more = True
     pages_read = 0
@@ -184,12 +188,22 @@ def stripe_open_work_preview(
                     if not isinstance(candidate, dict) or candidate.get("work_item_ref") != _candidate_reference(local_key, account, iid):
                         return _unavailable("invalid_case_context_projection")
                 candidates.append(candidate)
+                if include_local_observation:
+                    opaque_to_native[candidate["work_item_ref"]] = iid
             has_more = result["has_more"]
             if not has_more:
                 break
             if not invoices:
                 return _unavailable("invalid_empty_continuation_page")
             previous = str(invoices[-1]["id"])
+        if include_local_observation and opaque_to_native:
+            states = observation_reader(list(opaque_to_native.values()))
+            for candidate in candidates:
+                invoice = opaque_to_native[candidate["work_item_ref"]]
+                state = states.get(invoice, "uncertain") if isinstance(states, dict) else "uncertain"
+                if state not in {"observed", "not_in_retained_owg", "uncertain"}:
+                    state = "uncertain"
+                candidate["historically_observed_in_owg"] = state
         return {
             "format": "openworkgraph.open-work-preview.v1",
             "provider": "stripe",
@@ -209,6 +223,8 @@ def stripe_open_work_preview(
             "read_only": True,
             "persisted": False,
             "automatic_actions": False,
+            "local_observation_checked": bool(include_local_observation),
+            "absence_of_observation_proves_no_work": False,
         }
     except (OSError, ValueError, TypeError, KeyError, httpx.HTTPError):
         return _unavailable("stripe_invoice_inventory_unavailable")
