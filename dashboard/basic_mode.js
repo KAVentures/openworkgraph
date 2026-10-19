@@ -188,6 +188,10 @@
           <div><h3>Optional source connections</h3><div class="muted">Connect a Stripe account for read-only status checks on invoices and refunds already observed by OWG. This computer stores the restricted key in its operating system credential vault. Organization enrollment is not required.</div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
         </div>
+        <div class="pv-row pv-sub" id="pvOpenWorkRow">
+          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div></div>
+          <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
+        </div>
         <div class="pv-row" id="pvWorkTextRow">
           <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
@@ -353,6 +357,26 @@
   }
 
   function bindPrivacy(panel) {
+    const openWork = panel.querySelector('#pvOpenWorkScan');
+    if (openWork) openWork.onclick = async () => {
+      const status = panel.querySelector('#pvOpenWorkResult');
+      if (!confirm('Read the first 100 open invoice records from the connected Stripe account? This is a local read-only preview; no customer details or amounts are saved or shared with AI.')) return;
+      openWork.disabled = true;
+      if (status) status.textContent = 'Checking the connected source...';
+      try {
+        const result = await api('/v1/open-work/stripe-preview?confirm_scan=true&max_pages=1');
+        if (result.availability !== 'source_reported') {
+          if (status) status.textContent = 'Preview unavailable: ' + String(result.reason || 'source access not configured').replace(/_/g, ' ') + '.';
+        } else {
+          const rows = Array.isArray(result.candidates) ? result.candidates : [];
+          const pastDue = rows.filter(row => row.past_due_date === true).length;
+          const coverage = result.source_coverage_complete ? 'Complete source page range.' : 'More open invoices may exist beyond this preview.';
+          if (status) status.textContent = rows.length + ' open invoice candidate(s); ' + pastDue + ' past the reported due date. ' + coverage + ' Review in Stripe before any follow-up.';
+        }
+      } catch (error) {
+        if (status) status.textContent = 'Preview unavailable: ' + (error.message || 'source request failed');
+      } finally { openWork.disabled = false; }
+    };
     panel.querySelector('#pvRetention').onchange = async event => {
       const value = event.target.value;
       if (value === 'custom') return;
