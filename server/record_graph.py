@@ -15,7 +15,8 @@ import subprocess
 from typing import Any, Callable
 
 from .local_reference_lookup import resolve_resource_reference
-from .workflow_evidence import _load
+from .db import rows as _db_rows
+from .workflow_evidence import WorkflowEvidenceError, _ts
 from . import outcome_tracker
 from .gh_cli import find_gh_cli
 from .jira_source_evidence import jira_issue_receipt
@@ -137,6 +138,46 @@ def _gh_pr_snapshot(
     }
 
 
+def _record_rows(
+    resource_ref: str, *, since: str | None, until: str | None, limit: int,
+) -> list[dict[str, Any]]:
+    """Read only this record's retained events, not the most recent N *other* events.
+
+    Both the substring prefilter and exact JSON-path equality are necessary:
+    the first avoids decoding unrelated large metadata blobs, while the latter
+    rules out matches in free-text fields or a different JSON key. No new index,
+    migration, capture, storage, or additional source-system permission.
+    """
+    for name, value in (("since", since), ("until", until)):
+        if value and _ts(value) is None:
+            raise WorkflowEvidenceError(f"{name} must be an ISO-8601 timestamp")
+    if since and until and _ts(since) >= _ts(until):
+        raise WorkflowEvidenceError("until must be after since")
+
+    conditions = [
+        "metadata_json LIKE ?",
+        "CASE WHEN json_valid(metadata_json) "
+        "THEN json_extract(metadata_json, '$.resource_reference.resource_ref') "
+        "ELSE NULL END = ?",
+    ]
+    values: list[Any] = [f"%{resource_ref}%", resource_ref]
+    if since:
+        conditions.append("julianday(observed_at) >= julianday(?)")
+        values.append(since)
+    if until:
+        conditions.append("julianday(observed_at) < julianday(?)")
+        values.append(until)
+    # One extra matching event distinguishes exactly-at-limit from truncation.
+    # This does not manufacture an authoritative record identity from a subset.
+    query = (
+        "SELECT event_id, observed_at, session_id, actor_id, event_type, "
+        "source, metadata_json FROM events WHERE "
+        + " AND ".join(conditions)
+        + " ORDER BY julianday(observed_at) DESC, event_id DESC LIMIT ?"
+    )
+    return _db_rows(query, tuple(values + [limit + 1]))
+
+
 def record_graph(
     resource_ref: str, *, since: str | None = None, until: str | None = None,
     include_source_status: bool = False, source_event_limit: int = _MAX_SOURCE_ROWS,
@@ -152,7 +193,10 @@ def record_graph(
     if not _RESOURCE.fullmatch(str(resource_ref or "")):
         raise ValueError("resource_ref must be a normalized opaque owg:r: reference")
     max_rows = max(1, min(int(source_event_limit), _MAX_SOURCE_ROWS))
-    raw = _load(limit=max_rows, since=since, until=until) if _raw_events is None else _raw_events[:max_rows]
+    raw = (_record_rows(resource_ref, since=since, until=until, limit=max_rows)
+           if _raw_events is None else _raw_events[:max_rows + 1])
+    truncated = len(raw) > max_rows
+    raw = raw[:max_rows]
     matched: list[dict[str, Any]] = []
     identity: tuple[str, str, str] | None = None
     conflicts = 0
@@ -195,7 +239,11 @@ def record_graph(
     } for row in matched[:_MAX_TIMELINE]]
     source = _source_unknown("source_refresh_not_requested")
     if include_source_status:
-        if not matched:
+        if truncated:
+            # A hidden older observation could contradict the apparent record
+            # identity. Refuse to authorize a provider read from partial proof.
+            source = _source_unknown("record_evidence_window_truncated")
+        elif not matched:
             source = _source_unknown("record_not_observed_in_permitted_evidence_window")
         elif identity == ("github", "pull_request", "github.com"):
             source = (source_reader or _gh_pr_snapshot)(resource_ref)
@@ -219,10 +267,12 @@ def record_graph(
         "timeline": timeline,
         "timeline_truncated": len(matched) > _MAX_TIMELINE,
         "source_evidence": source,
-        "source_event_limit_reached": len(raw) >= max_rows,
+        "source_event_limit_reached": truncated,
+        "source_rows_scoped_to_exact_record": _raw_events is None,
+        "record_identity_complete_within_retained_window": not truncated and not conflicts,
         "source_window": {"since": since, "until": until},
         "observed_same_record_not_verified_handoff": True,
-        "source_log_join_supported": bool(identity and (identity == ("github", "pull_request", "github.com") or
+        "source_log_join_supported": bool(identity and not truncated and not conflicts and (identity == ("github", "pull_request", "github.com") or
             (identity[0] == "jira" and identity[1] == "issue" and identity[2].endswith(".atlassian.net")) or
             (identity[0] == "stripe" and identity[1] in {"invoice", "refund"} and identity[2] == "dashboard.stripe.com"))),
         "verified_customer_outcome": False,
