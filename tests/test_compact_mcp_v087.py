@@ -83,9 +83,9 @@ def test_compact_stdio_adds_only_normative_governance_tools_when_enabled(tmp_pat
     assert names == DEFAULT_TOOLS | EXPERIMENTAL_GOVERNANCE_TOOLS
 
 
-def test_case_context_is_additive_explicitly_opted_in_tool(tmp_path):
+def test_open_work_tools_are_opt_in_and_default_catalog_is_unchanged(tmp_path):
     names = asyncio.run(_listed_tools(tmp_path, governance=False, open_work=True))
-    assert names == DEFAULT_TOOLS | {"get_case_context"}
+    assert names == DEFAULT_TOOLS | {"get_case_context", "verify_case_operation"}
 
 
 def test_compact_agent_tool_uses_optional_execution_id_for_detail(monkeypatch):
