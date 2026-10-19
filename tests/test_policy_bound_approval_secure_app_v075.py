@@ -27,16 +27,21 @@ def _free_port() -> int:
 
 
 def _wait(url: str, process: subprocess.Popen) -> None:
-    deadline = time.time() + 15
-    while time.time() < deadline:
+    # The full Windows CI matrix can take longer to import/start this app
+    # under load. Use a monotonic clock, tolerate slower healthy startup,
+    # and clean up a stuck child rather than leaving a listener behind.
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
         if process.poll() is not None:
             break
         try:
             if httpx.get(url, timeout=0.5).status_code < 500:
                 return
-        except Exception:
+        except httpx.HTTPError:
             time.sleep(0.1)
-    stdout, stderr = process.communicate(timeout=2) if process.poll() is not None else ("", "")
+    if process.poll() is None:
+        _stop(process)
+    stdout, stderr = process.communicate(timeout=3)
     raise AssertionError(f"secure server did not become ready; stdout={stdout!r} stderr={stderr!r}")
 
 
