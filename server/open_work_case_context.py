@@ -13,6 +13,7 @@ from typing import Any, Callable
 from .local_reference_lookup import find_observed_resource_references
 from .record_graph import record_graph
 from .open_work_preview import stripe_open_work_preview
+from .open_work_model import compose_case_graph
 
 _ITEM = re.compile(r"^owg:w:[0-9a-f]{32}$")
 
@@ -92,7 +93,14 @@ def stripe_open_work_case_context(
         return _not_available(work_item_ref, reason)
 
     item = matched[0]
+    graph = compose_case_graph(
+        candidate=item["item"],
+        source={"provider": "stripe", "source_state": "open",
+                "verified_at": inventory.get("verified_at")},
+        related_owg_evidence=item["observed_record_context"],
+    )
     return {
+        "case_graph": graph,
         "format": "openworkgraph.open-work-case-context.v1",
         "availability": "source_reported",
         "work_item_ref": work_item_ref,
