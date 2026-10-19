@@ -49,3 +49,30 @@ Even with the flag, every invocation still checks the user's regular
 per-client AI access, the current history lease and the independent source
 provider read setting. Turning the flag off restores the exact prior tool
 catalog. Existing hosted/cloud MCP tools remain unchanged.
+
+
+## Advanced-mode local tool toggle (additive)
+
+Privacy → Advanced now includes **Experimental Open Work AI tools**. The user
+may enable or disable local `get_case_context` and
+`verify_case_operation` from the dashboard; the default is OFF. The
+preference is held in the local restricted authentication directory (not
+uploaded to the Gateway). Both the standard stdio MCP server and the local
+HTTP MCP bridge load it at startup. Their tool lists refresh when the AI
+client reconnects; newly disabled tool calls are rejected immediately
+even if the client's cached catalog has not yet refreshed.
+
+The `OWG_OPEN_WORK_EXPERIMENTAL_TOOLS=1` environment setting remains an
+explicit local launcher override; if set to `0`, it disables tools even
+when the saved UI preference is on. The dashboard reports that an override
+is active, instead of claiming it can change the running environment.
+
+This switch affects *only tool catalog exposure*. Every tool still checks
+per-client AI authorization and the same current-run/saved-history lease
+as the existing record graph. It never enables provider inventories,
+connected-system writes, automated dispatch or recording. Hosted OWG
+connectors retain their existing independently controlled tool catalog.
+
+The dashboard-only management endpoint is
+`GET/POST /v1/local-open-work/mcp-tools`, requiring a valid local
+OWG dashboard session; a local MCP bearer is insufficient to change it.
