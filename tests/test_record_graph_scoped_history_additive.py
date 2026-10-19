@@ -96,6 +96,16 @@ def test_match_requires_exact_json_path_not_a_text_mention(evidence_store):
     assert calls == []
 
 
+
+def test_legacy_uppercase_reference_still_resolves(evidence_store):
+    # Previously record_graph normalized stored reference text with .lower().
+    with evidence_store.connect() as conn:
+        _insert(conn, "legacy-case", "2026-10-10T12:00:00Z", _reference(REF.upper()))
+    result = graph.record_graph(REF)
+    assert result["record_observed"] is True
+    assert result["timeline"][0]["event_id"] == "legacy-case"
+
+
 def test_truncated_record_evidence_must_not_authorize_source_read(evidence_store):
     with evidence_store.connect() as conn:
         _insert(conn, "recent", "2026-10-10T12:00:03Z", _reference())
