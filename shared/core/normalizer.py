@@ -69,8 +69,16 @@ def safe_surface(*, app: str = "", hostname: str = "", pathname: str = "", title
         if "jira" in low_title or path.startswith("/jira"):
             return "Jira"
         return "Atlassian"
-    if host.endswith("zendesk.com") or "zendesk" in low_title:
+    if host == "zendesk.com" or host.endswith(".zendesk.com") or "zendesk" in low_title:
         return "Zendesk"
+    if host == "shopify.com" or host.endswith(".shopify.com") or host == "myshopify.com" or host.endswith(".myshopify.com"):
+        return "Shopify"
+    if host == "netsuite.com" or host.endswith(".netsuite.com"):
+        return "NetSuite"
+    if host == "stripe.com" or host.endswith(".stripe.com"):
+        return "Stripe"
+    if host == "fortnox.se" or host.endswith(".fortnox.se"):
+        return "Fortnox"
     if host.endswith("salesforce.com") or host.endswith("force.com") or "salesforce" in low_title:
         return "Salesforce"
     if host.endswith("hubspot.com") or "hubspot" in low_title:
