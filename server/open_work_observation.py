@@ -9,6 +9,7 @@ resolver entries are required. One bounded SQL pass, not one scan per invoice.
 """
 from typing import Any
 import re
+import sqlite3
 
 from . import local_reference_lookup, db
 
@@ -60,12 +61,12 @@ def stripe_invoice_observation_states(invoice_ids: list[str]) -> dict[str, str]:
             "SELECT lower(CASE WHEN json_valid(metadata_json) "
             "THEN json_extract(metadata_json, '$.resource_reference.resource_ref') "
             "ELSE NULL END) AS ref, "
-            "json_extract(metadata_json, '$.resource_reference.provider') AS provider, "
-            "json_extract(metadata_json, '$.resource_reference.resource_kind') AS kind, "
-            "json_extract(metadata_json, '$.resource_reference.host') AS host, "
+            "CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.resource_reference.provider') ELSE NULL END AS provider, "
+            "CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.resource_reference.resource_kind') ELSE NULL END AS kind, "
+            "CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.resource_reference.host') ELSE NULL END AS host, "
             "count(*) AS observations FROM events WHERE "
             "json_valid(metadata_json) AND "
-            "lower(json_extract(metadata_json, '$.resource_reference.resource_ref')) "
+            "lower(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.resource_reference.resource_ref') ELSE NULL END) "
             f"IN ({placeholders}) "
             "GROUP BY ref, provider, kind, host"
         )
@@ -90,7 +91,7 @@ def stripe_invoice_observation_states(invoice_ids: list[str]) -> dict[str, str]:
             elif invoice in observed:
                 default[invoice] = "observed"
         return default
-    except (OSError, TypeError, ValueError, RuntimeError):
+    except (OSError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError):
         return {invoice: "uncertain" for invoice in wanted}
 
 
