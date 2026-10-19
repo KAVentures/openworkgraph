@@ -118,8 +118,12 @@
     mark($('#agentSessionContinuity'), true);
     mark($('#agentLearning'), true);
 
-    // Privacy: the restart preference is an advanced detail.
+    // Privacy: retain source connections and both Open Work pilots, but keep
+    // these optional specialist controls out of the simple Basic view.
     mark($('#pvRestartRow'), true);
+    mark($('#pvSourceConnectionsRow'), true);
+    mark($('#pvOpenWorkRow'), true);
+    mark($('#pvGitHubOpenWorkRow'), true);
 
     const active = $('[role="tab"][aria-selected="true"]');
     if (redirect && basic && active && active.classList.contains(HIDE) && typeof window.activateTab === 'function') window.activateTab('overview');
@@ -360,6 +364,26 @@
     refreshPrivacy();
   }
 
+  function openWorkStatus(reason, provider) {
+    const messages = provider === 'stripe'
+      ? {
+          stripe_source_read_opt_in_off: 'Connect Stripe first to run this local read-only preview.',
+          stripe_restricted_read_config_missing: 'Reconnect Stripe with a restricted read-only key.',
+          stripe_account_identity_mismatch: 'This Stripe key does not match the connected account. Reconnect the correct account.',
+          stripe_invoice_inventory_unavailable: 'Stripe did not return a usable invoice list. Check your read-only invoice-list permission and connection.',
+          invalid_stripe_invoice_page: 'Stripe returned an unexpected invoice list format. The scan was stopped.',
+          conflicting_stripe_invoice_status: 'Stripe returned conflicting invoice status information. Nothing was marked complete.',
+          invalid_local_reference_secret: 'Local Open Work reference storage is unavailable.',
+        }
+      : {
+          existing_github_outcome_tracking_opt_in_off: 'Enable optional GitHub source-status reads first.',
+          github_cli_not_installed: 'Install and sign in to the GitHub CLI to preview this repository.',
+          github_cli_read_failed: 'Could not read this repository using your GitHub CLI account.',
+          invalid_github_open_pr_inventory: 'GitHub returned an unexpected pull-request list.',
+        };
+    return messages[reason] || 'This source could not be checked. Review the local connection and try again.';
+  }
+
   function bindPrivacy(panel) {
     const gitHubPreview = panel.querySelector('#pvGitHubOpenWorkScan');
     if (gitHubPreview) gitHubPreview.onclick = async () => {
@@ -376,7 +400,7 @@
       try {
         const result = await api('/v1/open-work/github-preview?confirm_scan=true&limit=50&repository=' + encodeURIComponent(repository));
         if (result.availability !== 'source_reported') {
-          if (status) status.textContent = 'Preview unavailable: ' + String(result.reason || 'source unavailable').replace(/_/g, ' ') + '.';
+          if (status) status.textContent = openWorkStatus(result.reason, 'github');
         } else {
           const candidates = Array.isArray(result.candidates) ? result.candidates : [];
           const awaitingReview = candidates.filter(c => c.review_status === 'review_required').length;
@@ -394,23 +418,46 @@
       openWork.disabled = true;
       if (status) status.textContent = 'Checking the connected source...';
       try {
-        const result = await api('/v1/open-work/stripe-preview?confirm_scan=true&max_pages=1');
+        const result = await api('/v1/open-work/stripe-preview?confirm_scan=true&max_pages=1&include_local_observation=true');
         if (result.availability !== 'source_reported') {
-          if (status) status.textContent = 'Preview unavailable: ' + String(result.reason || 'source access not configured').replace(/_/g, ' ') + '.';
+          if (status) status.textContent = openWorkStatus(result.reason, 'stripe');
+          const sourceArea = panel.querySelector('#pvOpenWorkCases');
+          if (sourceArea) {
+            sourceArea.replaceChildren();
+            if (['stripe_source_read_opt_in_off', 'stripe_restricted_read_config_missing',
+                 'stripe_account_identity_mismatch'].includes(result.reason)) {
+              const connect = document.createElement('button');
+              connect.type = 'button';
+              connect.className = 'secondary';
+              connect.textContent = 'Connect Stripe';
+              connect.onclick = () => window.openLocalStripeSource?.();
+              sourceArea.append(connect);
+            }
+          }
         } else {
           const rows = Array.isArray(result.candidates) ? result.candidates : [];
           const pastDue = rows.filter(row => row.past_due_date === true).length;
           const coverage = result.source_coverage_complete ? 'Complete source page range.' : 'More open invoices may exist beyond this preview.';
-          if (status) status.textContent = rows.length + ' open invoice candidate(s); ' + pastDue + ' past the reported due date. ' + coverage + ' Review in Stripe before any follow-up.';
+          if (status) status.textContent = rows.length + ' open invoice candidate(s); ' + pastDue + ' past the reported due date. ' + coverage + ' No OWG observation alone proves that a person did or did not complete the work. Review in Stripe before follow-up.';
           const caseArea = panel.querySelector('#pvOpenWorkCases');
           if (caseArea) {
             caseArea.replaceChildren();
-            for (const candidate of rows.slice(0, 20)) {
+            for (const candidate of rows.slice(0, 100)) {
               if (!/^owg:w:[0-9a-f]{32}$/.test(String(candidate.work_item_ref || ''))) continue;
               const line = document.createElement('div');
               line.className = 'pv-row pv-sub';
               const summary = document.createElement('span');
               summary.textContent = candidate.past_due_date ? 'Open invoice · past source due date' : 'Open invoice · review candidate';
+              const observation = document.createElement('span');
+              observation.className = 'muted';
+              const observationLabels = {
+                observed: 'Observed in retained OWG activity',
+                not_in_retained_owg: 'No matching retained OWG evidence',
+                uncertain: 'OWG evidence uncertain',
+                not_checked: 'OWG observation not checked',
+              };
+              observation.textContent = observationLabels[candidate.historically_observed_in_owg] ||
+                'OWG evidence uncertain';
               const inspect = document.createElement('button');
               inspect.type = 'button';
               inspect.className = 'secondary';
@@ -429,13 +476,13 @@
                   toast(error.message || 'Case evidence unavailable.');
                 } finally { inspect.disabled = false; }
               };
-              line.append(summary, inspect);
+              line.append(summary, observation, inspect);
               caseArea.append(line);
             }
-            if (rows.length > 20) {
+            if (rows.length > 100) {
               const more = document.createElement('div');
               more.className = 'muted';
-              more.textContent = 'Showing the first 20 candidates. Review additional records in your source system.';
+              more.textContent = 'Showing the first 100 candidates. Review additional records in your source system.';
               caseArea.append(more);
             }
           }
