@@ -112,3 +112,36 @@ def test_default_preview_does_not_query_observed_history():
         reference_key=b"non-exportable-local-secret-1234567890",
     )
     assert r["local_observation_checked"] is False
+
+
+def test_actual_sqlite_exact_reference_and_conflict_detection(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "evidence.sqlite")
+    monkeypatch.setattr(refs, "_read", lambda: _registered())
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE TABLE events (event_id TEXT, observed_at TEXT, session_id TEXT, "
+            "actor_id TEXT, event_type TEXT, source TEXT, metadata_json TEXT)"
+        )
+        entries = [
+            ("genuine", json.dumps({"resource_reference": {
+                "resource_ref": REF, "provider": "stripe",
+                "resource_kind": "invoice", "host": "dashboard.stripe.com"}})),
+            ("unrelated", json.dumps({"resource_reference": {
+                "resource_ref": OTHER, "provider": "stripe",
+                "resource_kind": "invoice", "host": "dashboard.stripe.com"}})),
+            ("text-only", json.dumps({"description": "Mention of " + REF})),
+            ("malformed", "{invalid json containing " + REF),
+        ]
+        conn.executemany(
+            "INSERT INTO events(event_id, observed_at, session_id, actor_id, "
+            "event_type, source, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(id, "2026-10-19T10:00:00Z", "s1", "a1", "browser_click",
+              "browser_extension", metadata) for id, metadata in entries],
+        )
+    assert observation.stripe_invoice_observation_states([INV])[INV] == "observed"
+    with db.connect() as conn:
+        conn.execute("UPDATE events SET metadata_json=? WHERE event_id='genuine'",
+                     (json.dumps({"resource_reference": {
+                         "resource_ref": REF, "provider": "stripe",
+                         "resource_kind": "refund", "host": "dashboard.stripe.com"}}),))
+    assert observation.stripe_invoice_observation_states([INV])[INV] == "uncertain"
