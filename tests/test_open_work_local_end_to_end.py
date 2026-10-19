@@ -30,9 +30,9 @@ SECRET = b"only-for-test-local-owg-key-1234567890"
 db.init_db()
 with db.connect() as conn:
     conn.execute(
-        "INSERT INTO events(event_id, observed_at, session_id, actor_id, "
-        "event_type, source, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("observed-exact-invoice", "2026-10-19T08:00:00Z", "session",
+        "INSERT INTO events(event_id, observed_at, device_id, session_id, actor_id, "
+        "event_type, source, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("observed-exact-invoice", "2026-10-19T08:00:00Z", "device", "session",
          "actor", "browser_click", "browser_extension",
          json.dumps({"resource_reference": {
              "resource_ref": REF, "provider": "stripe", "resource_kind": "invoice",
