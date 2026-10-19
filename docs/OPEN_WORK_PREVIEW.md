@@ -49,7 +49,7 @@ material.
 - Missing or invalid due dates are explicitly unknown; don't infer due dates.
 - `source_coverage_complete=false` means pagination was capped, not that no
   other open invoices exist.
-- The ephemeral `owg:w:` preview pointer is **not** a persistent case ID or a
+- The local-secret-keyed `owg:w:` preview pointer is **not** a persistent case ID or a
   resource reference that an agent can resolve via `get_record_graph`.
   A future independently authorized case graph must provide stable links.
 - All data are read in memory for that explicit request, never persisted in
@@ -141,3 +141,25 @@ and it does not establish a real contractual obligation.
   not by similarity, co-occurrence, titles or unverified time-based joining.
 - Consent, access control, retention and source credential revocation must
   continue to be enforced by the existing local layers.
+
+
+## Versioned Stripe source contract and reference lifetime
+
+All three read-only Stripe calls (account verification, exact record receipt,
+open-invoice inventory) send `Stripe-Version: 2024-10-28.acacia`. This schema
+documents the `invoice.paid` boolean alongside `status`, allowing the
+preview's consistency check to fail closed for malformed provider data
+without relying on a merchant account's changing default API version.
+Tested with synthetic local HTTP streams; **a real restricted TEST key
+against Stripe is still needed before production acceptance**. Changing
+the pinned API version requires a deliberate upgrade and new acceptance test.
+
+Candidate `owg:w:` references are now derived with a separate, high-entropy
+local OWG HMAC secret stored with restricted local-auth permissions. Rotating
+the Stripe restricted key therefore **does not** change a candidate reference
+for the same Stripe account and invoice. A different OWG installation gets
+different references. Clearing the local OWG secret intentionally invalidates
+the mapping; historical ephemeral references issued by earlier versions
+were key-derived and cannot always be recovered after an old Stripe key
+was discarded. These references are still opaque hints to a current
+authorized read, not permanent permissions or persistent case records.

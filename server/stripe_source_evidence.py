@@ -20,6 +20,11 @@ _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _ACCT = re.compile(r"^acct_[A-Za-z0-9]{8,90}$")
 _INVOICE = re.compile(r"^invoice:(in_[A-Za-z0-9]{10,90})$")
 _REFUND = re.compile(r"^refund:(re_[A-Za-z0-9]{10,90})$")
+# The invoice.paid boolean and invoice status contract have been checked
+# against Stripe's dated Acacia API schema. Pin all related read calls to the
+# same release rather than inheriting each connected account's default version.
+# Real-account acceptance remains a separate release gate.
+STRIPE_READ_API_VERSION = "2024-10-28.acacia"
 _MAX_BYTES = 64_000
 
 
@@ -42,7 +47,8 @@ def _get(url: str, key: str) -> dict[str, Any]:
         raise ValueError("unexpected_stripe_read_resource")
     with httpx.Client(follow_redirects=False, trust_env=False, timeout=8.0,
                       headers={"Authorization": "Bearer " + key,
-                               "Accept": "application/json"}) as client:
+                               "Accept": "application/json",
+                               "Stripe-Version": STRIPE_READ_API_VERSION}) as client:
         with client.stream("GET", url) as response:
             if response.status_code != 200:
                 raise ValueError("source_unavailable")

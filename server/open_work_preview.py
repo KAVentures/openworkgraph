@@ -21,6 +21,8 @@ import httpx
 
 from .local_source_credentials import load_stripe_source
 from .stripe_source_evidence import _get as account_read
+from .stripe_source_evidence import STRIPE_READ_API_VERSION
+from .local_auth import _read_or_create_secret
 
 _ACCOUNT = re.compile(r"^acct_[A-Za-z0-9]{8,90}$")
 _INVOICE = re.compile(r"^in_[A-Za-z0-9]{10,90}$")
@@ -62,7 +64,8 @@ def _read_invoice_list(url: str, key: str) -> dict[str, Any]:
 
     with httpx.Client(follow_redirects=False, trust_env=False, timeout=8.0,
                       headers={"Authorization": "Bearer " + key,
-                               "Accept": "application/json"}) as client:
+                               "Accept": "application/json",
+                               "Stripe-Version": STRIPE_READ_API_VERSION}) as client:
         with client.stream("GET", url) as response:
             if response.status_code != 200:
                 raise ValueError("stripe_invoice_list_unavailable")
@@ -77,11 +80,11 @@ def _read_invoice_list(url: str, key: str) -> dict[str, Any]:
     return result
 
 
-def _candidate_reference(key: str, account: str, invoice_id: str) -> str:
-    # An HMAC avoids exposing or directly hashing raw Stripe invoice/account IDs.
-    # This preview is ephemeral: key rotation may change its opaque references.
-    digest = hmac.new(key.encode("utf-8"),
-                      (account + ":" + invoice_id).encode("utf-8"),
+def _candidate_reference(reference_key: bytes, account: str, invoice_id: str) -> str:
+    # Use a stable per-installation OWG secret, NEVER the replaceable Stripe key.
+    # Domain separation prevents cross-feature correlation of keyed hashes.
+    digest = hmac.new(reference_key,
+                      ("open-work:stripe:invoice:v1:" + account + ":" + invoice_id).encode("utf-8"),
                       hashlib.sha256).hexdigest()[:32]
     return "owg:w:" + digest
 
@@ -94,6 +97,7 @@ def stripe_open_work_preview(
     max_pages: int = 1,
     now: datetime | None = None,
     candidate_enricher: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+    reference_key: bytes | None = None,
 ) -> dict[str, Any]:
     """Read source-reported open invoice candidates, never infer payment duties.
 
@@ -132,6 +136,9 @@ def stripe_open_work_preview(
         source_account = account_reader("https://api.stripe.com/v1/account", key)
         if not isinstance(source_account, dict) or source_account.get("object") != "account" or source_account.get("id") != account:
             return _unavailable("stripe_account_identity_mismatch")
+        local_key = reference_key if reference_key is not None else _read_or_create_secret(".open_work_reference_key").encode("utf-8")
+        if not isinstance(local_key, bytes) or len(local_key) < 16:
+            return _unavailable("invalid_local_reference_secret")
         for _ in range(max_pages):
             url = "https://api.stripe.com/v1/invoices?status=open&limit=100"
             if previous is not None:
@@ -158,7 +165,7 @@ def stripe_open_work_preview(
                 due_valid = type(due) is int and 0 < due <= 4_102_444_800
                 overdue = bool(due_valid and due < timestamp)
                 candidate = {
-                    "work_item_ref": _candidate_reference(key, account, iid),
+                    "work_item_ref": _candidate_reference(local_key, account, iid),
                     "kind": "open_invoice",
                     "source_status": "open",
                     "attention_reason": "past_source_due_date" if overdue else "open_invoice_review_candidate",
@@ -174,7 +181,7 @@ def stripe_open_work_preview(
                     # Internal enrichment sees a source-validated record ID.
                     # It must not return that ID, customer values or credentials.
                     candidate = candidate_enricher(iid, candidate)
-                    if not isinstance(candidate, dict) or candidate.get("work_item_ref") != _candidate_reference(key, account, iid):
+                    if not isinstance(candidate, dict) or candidate.get("work_item_ref") != _candidate_reference(local_key, account, iid):
                         return _unavailable("invalid_case_context_projection")
                 candidates.append(candidate)
             has_more = result["has_more"]
