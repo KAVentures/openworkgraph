@@ -22,7 +22,8 @@ register_context_index(mcp)
 register_automation_guidance(mcp)
 register_workflow_evidence_tools(mcp, _secure_runtime)
 register_record_graph_tools(mcp, _secure_runtime)
-register_case_context_tools(mcp, _secure_runtime)
+if os.getenv("OWG_OPEN_WORK_EXPERIMENTAL_TOOLS") == "1":
+    register_case_context_tools(mcp, _secure_runtime)
 _inner = mcp.streamable_http_app()
 
 class MCPBearerGuard:
