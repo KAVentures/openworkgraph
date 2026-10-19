@@ -39,7 +39,7 @@ EXPERIMENTAL_GOVERNANCE_TOOLS = {
 }
 
 
-async def _listed_tools(tmp_path: Path, *, governance: bool) -> set[str]:
+async def _listed_tools(tmp_path: Path, *, governance: bool, open_work: bool = False) -> set[str]:
     env = os.environ.copy()
     env.update({
         "PYTHONPATH": str(ROOT),
@@ -51,6 +51,10 @@ async def _listed_tools(tmp_path: Path, *, governance: bool) -> set[str]:
         env["OWG_EXPERIMENTAL_GOVERNANCE"] = "1"
     else:
         env.pop("OWG_EXPERIMENTAL_GOVERNANCE", None)
+    if open_work:
+        env["OWG_OPEN_WORK_EXPERIMENTAL_TOOLS"] = "1"
+    else:
+        env.pop("OWG_OPEN_WORK_EXPERIMENTAL_TOOLS", None)
 
     params = StdioServerParameters(
         command=sys.executable,
@@ -77,6 +81,11 @@ def test_compact_stdio_exposes_exact_default_tool_surface(tmp_path):
 def test_compact_stdio_adds_only_normative_governance_tools_when_enabled(tmp_path):
     names = asyncio.run(_listed_tools(tmp_path, governance=True))
     assert names == DEFAULT_TOOLS | EXPERIMENTAL_GOVERNANCE_TOOLS
+
+
+def test_case_context_is_additive_explicitly_opted_in_tool(tmp_path):
+    names = asyncio.run(_listed_tools(tmp_path, governance=False, open_work=True))
+    assert names == DEFAULT_TOOLS | {"get_case_context"}
 
 
 def test_compact_agent_tool_uses_optional_execution_id_for_detail(monkeypatch):
