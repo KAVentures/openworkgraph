@@ -67,8 +67,10 @@ def test_missing_record_remains_unknown_not_no_work():
     assert context["confidence_and_unknowns"]["no_record_is_not_no_work"] is True
 
 
-def test_local_mcp_tool_uses_exact_reference_and_existing_auth():
+def test_local_mcp_tool_uses_exact_reference_and_existing_auth(monkeypatch):
     from mcp_server.case_context_tools import register_case_context_tools
+    from mcp_server import case_context_tools as optional_tool
+    monkeypatch.setattr(optional_tool, "experimental_tools_enabled", lambda: True)
     from types import SimpleNamespace
 
     calls = []
