@@ -43,6 +43,7 @@ def test_unknown_apps_and_sites_receive_distinct_report_scoped_aliases():
     assert not any(token in " ".join(aliases.values()) for token in
                    ("Confidential", "Alpha", "Beta", "project-merger", "internal"))
     assert manager_insights._surface({"app": "Excluded"}, aliases=aliases) == "Other app"
+    assert manager_insights._surface({"app": "Excluded", "metadata": {"page": {"hostname": "acme.zendesk.com"}}}, aliases=aliases) == "Other app"
 
 
 def test_unknown_work_apps_contribute_to_aggregate_motifs_without_name_leaks(monkeypatch):
