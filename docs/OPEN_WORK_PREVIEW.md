@@ -92,3 +92,52 @@ existing cross-platform full suite, packaging, MCP and privacy checks.
 A real Stripe TEST account with restricted read-only invoice-list scope is
 needed to validate provider behavior outside mocked CI. No real customer
 records are needed for the synthetic tests.
+
+
+## Optional case-context drilldown (stacked extension)
+
+The local dashboard's Open Work preview now provides **Inspect case context**
+for a candidate:
+
+```http
+GET /v1/open-work/stripe-preview/case?confirm_scan=true&work_item_ref=owg:w:<opaque>&max_pages=3
+Authorization: OWG-Session <local-dashboard-session>
+```
+
+This call re-reads and validates the currently authorized Stripe account and
+bounded open-invoice list; a preview reference is not a permanent source ID.
+The request returns `unknown` if the item is not currently found, distinguishing
+a full inventory miss from a bounded partial scan. It does **not** infer that
+the invoice was paid, the customer accepted it or work was completed.
+
+For an exact current source invoice that was also observed in OWG, the
+local-only reference dictionary is consulted using the native invoice ID
+*inside the server process*. Only previously registered opaque
+`owg:r:` references are returned. Every candidate link is then validated
+again against retained canonical event evidence and source identity. Deleted,
+expired, conflicting or truncated histories are not treated as confirmed.
+
+The returned case context includes current source-reported open status, a
+bounded structural timeline of matching observed work, uncertainty,
+instruction to use existing workflow family discovery, and explicit
+`agent_execution_authorized=false`, `customer_contact_authorized=false`.
+No native invoice ID, customer name, amount or provider credential is exported.
+
+Users can inspect the read-only JSON in the local dashboard and manually
+copy it to an AI. There is **no automatic cloud upload** or new MCP tool.
+Opening an unrelated workflow mapping view remains exactly as before.
+A case context is not a validated SOP: it does not make repetition normative,
+and it does not establish a real contractual obligation.
+
+### Limitations
+
+- The `owg:w:` references derive from the local restricted Stripe key and
+  may change on key rotation. They do not constitute durable graph IDs.
+- The integration is presently **local desktop only** and restricted to an
+  opted-in Stripe preview. It is not a generalized email/CRM/helpdesk solution.
+- Source invoice-list pages are re-queried to establish each case; inventories
+  beyond the bounded cap remain incomplete. API costs/rate limits matter.
+- Historical workflows are linked **only by exact provider identity** and
+  not by similarity, co-occurrence, titles or unverified time-based joining.
+- Consent, access control, retention and source credential revocation must
+  continue to be enforced by the existing local layers.
