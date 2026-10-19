@@ -26,7 +26,10 @@ _ACCOUNT = re.compile(r"^acct_[A-Za-z0-9]{8,90}$")
 _INVOICE = re.compile(r"^in_[A-Za-z0-9]{10,90}$")
 _PAGE_SIZE = 100
 _MAX_PAGES = 3
-_MAX_BODY_BYTES = 256_000
+# A 100-item Stripe invoice page may legitimately exceed 256 KB because the
+# API includes nested line and tax structures, even when OWG projects only
+# metadata. Keep a strict, per-page 2 MiB cap and reject anything larger.
+_MAX_BODY_BYTES = 2_097_152
 
 
 def _unavailable(reason: str) -> dict[str, Any]:
