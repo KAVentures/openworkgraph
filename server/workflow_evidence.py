@@ -427,6 +427,10 @@ def _candidate_runs(
         for execution in executions
         for step in (execution.get("steps") or [])
         if str(step).startswith("surface:")
+        # Only label a surface that is actually supported by permitted raw
+        # evidence. An orphan/stale structural key is not proof of an observed
+        # app and must retain the older redacted fallback.
+        and str(step) in label_candidates
         and known_labels.get(str(step), "Other surface (redacted)") == "Other surface (redacted)"
     })
     for index, step in enumerate(unknown_steps, 1):
