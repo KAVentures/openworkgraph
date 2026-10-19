@@ -90,6 +90,7 @@ def stripe_open_work_preview(
     list_reader: Callable[[str, str], dict[str, Any]] = _read_invoice_list,
     max_pages: int = 1,
     now: datetime | None = None,
+    candidate_enricher: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Read source-reported open invoice candidates, never infer payment duties.
 
@@ -153,7 +154,7 @@ def stripe_open_work_preview(
                 due = invoice.get("due_date")
                 due_valid = type(due) is int and 0 < due <= 4_102_444_800
                 overdue = bool(due_valid and due < timestamp)
-                candidates.append({
+                candidate = {
                     "work_item_ref": _candidate_reference(key, account, iid),
                     "kind": "open_invoice",
                     "source_status": "open",
@@ -165,7 +166,14 @@ def stripe_open_work_preview(
                     "business_obligation_verified": False,
                     "customer_contact_authorized": False,
                     "historically_observed_in_owg": "not_checked",
-                })
+                }
+                if candidate_enricher is not None:
+                    # Internal enrichment sees a source-validated record ID.
+                    # It must not return that ID, customer values or credentials.
+                    candidate = candidate_enricher(iid, candidate)
+                    if not isinstance(candidate, dict) or candidate.get("work_item_ref") != _candidate_reference(key, account, iid):
+                        return _unavailable("invalid_case_context_projection")
+                candidates.append(candidate)
             has_more = result["has_more"]
             if not has_more:
                 break
