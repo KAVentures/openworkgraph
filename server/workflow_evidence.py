@@ -369,12 +369,23 @@ def _candidate_runs(
         "openworkgraph": "OpenWorkGraph", "terminal": "Terminal",
         "google docs": "Google Docs", "google sheets": "Google Sheets",
         "google drive": "Google Drive", "jira": "Jira", "linear": "Linear",
+        "zendesk": "Zendesk", "shopify": "Shopify",
+        "netsuite": "NetSuite", "oracle netsuite": "NetSuite",
+        "stripe": "Stripe", "fortnox": "Fortnox", "orderadmin": "OrderAdmin",
     }
     fixed_hosts = {
         "claude.ai": "Claude", "chatgpt.com": "ChatGPT",
         "mail.google.com": "Gmail", "github.com": "GitHub",
         "drive.google.com": "Google Drive", "docs.google.com": "Google Docs",
     }
+    business_hosts = (
+        ("zendesk.com", "Zendesk"),
+        ("shopify.com", "Shopify"),
+        ("myshopify.com", "Shopify"),
+        ("netsuite.com", "NetSuite"),
+        ("stripe.com", "Stripe"),
+        ("fortnox.se", "Fortnox"),
+    )
     label_candidates: dict[str, set[str]] = defaultdict(set)
     for event in raw_events:
         etype = str(event.get("event_type") or "")
@@ -391,6 +402,13 @@ def _candidate_runs(
         # Host labels are valid only when the structural source *is* that host.
         # A browser app's visited page must never relabel surface:chrome.
         label = fixed.get(source_name) or fixed_hosts.get(source_name)
+        if not label:
+            # Domain boundaries, never a title substring: avoid treating a
+            # lookalike site (for example evilzendesk.com) as a trusted app.
+            for domain, name in business_hosts:
+                if source_name == domain or source_name.endswith("." + domain):
+                    label = name
+                    break
         label_candidates[_surface_key(source)].add(label or "Other surface (redacted)")
     known_labels = {
         key: next(iter(values)) if len(values) == 1 else "Other surface (redacted)"
@@ -399,6 +417,20 @@ def _candidate_runs(
     for browser in ("chrome", "google chrome", "browser", "safari",
                     "firefox", "microsoft edge", "edge"):
         known_labels[_surface_key(browser)] = "Browser"
+
+    # Unknown captured surfaces must remain *different* in workflow views,
+    # even where policy does not permit displaying the underlying app/hostname.
+    # Numbering is scoped to this response; don't reveal an unsalted hash or
+    # an arbitrary user/customer string in a shared Gateway projection.
+    unknown_steps = sorted({
+        str(step)
+        for execution in executions
+        for step in (execution.get("steps") or [])
+        if str(step).startswith("surface:")
+        and known_labels.get(str(step), "Other surface (redacted)") == "Other surface (redacted)"
+    })
+    for index, step in enumerate(unknown_steps, 1):
+        known_labels[step] = f"Work surface {index}"
 
     projected: list[dict[str, Any]] = []
     for execution in executions:
