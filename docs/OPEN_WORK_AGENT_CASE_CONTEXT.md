@@ -37,3 +37,15 @@ sufficient authorization for new provider-wide scans.
 
 Real-agent usefulness and enterprise workflow uplift remain to be demonstrated
 in a matched controlled evaluation (issue #247).
+
+## Explicit experimental local MCP catalog opt-in
+
+The stable default compact MCP catalog **does not change**. New Open Work
+tools are registered only when the user's local MCP launcher process has
+`OWG_OPEN_WORK_EXPERIMENTAL_TOOLS=1`. This is an experimental developer
+switch, not a UI consent grant or authorization to access source inventories.
+
+Even with the flag, every invocation still checks the user's regular
+per-client AI access, the current history lease and the independent source
+provider read setting. Turning the flag off restores the exact prior tool
+catalog. Existing hosted/cloud MCP tools remain unchanged.
