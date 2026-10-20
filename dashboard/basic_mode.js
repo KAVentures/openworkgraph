@@ -194,7 +194,7 @@
           <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvOpenWorkRow">
-          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div><div class="muted" id="pvOpenWorkReviewResult" role="status" aria-live="polite"></div><button type="button" class="secondary" id="pvOpenWorkReviewLoad">View saved reviews</button><div id="pvOpenWorkReviews" aria-label="Locally saved case reviews"></div></div>
+          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div><div class="muted" id="pvOpenWorkReviewResult" role="status" aria-live="polite"></div><button type="button" class="secondary" id="pvOpenWorkReviewLoad">View saved reviews</button><button type="button" class="secondary" id="pvOpenWorkReviewRecheck">Recheck source status</button><div id="pvOpenWorkReviews" aria-label="Locally saved case reviews"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvGitHubOpenWorkRow">
@@ -442,6 +442,8 @@
         if (status) status.textContent = 'Preview unavailable: ' + (error.message || 'request failed');
       } finally { gitHubPreview.disabled = false; }
     };
+    const recheckReviews = panel.querySelector('#pvOpenWorkReviewRecheck');
+    let currentReviewStatuses = null;
     const reviewLoad = panel.querySelector('#pvOpenWorkReviewLoad');
     const reviews = panel.querySelector('#pvOpenWorkReviews');
     const reviewStatus = panel.querySelector('#pvOpenWorkReviewResult');
@@ -463,8 +465,16 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const description = document.createElement('span');
+        const statusLabels = {
+          source_reported_open: 'still reported open by the source',
+          not_in_complete_open_inventory_outcome_unknown: 'no longer in open inventory; outcome unverified',
+          unknown_incomplete_inventory: 'unknown: inventory limit reached',
+          unknown_source_unavailable: 'unknown: provider unavailable',
+        };
+        const latest = currentReviewStatuses && currentReviewStatuses[item.work_item_ref];
         description.textContent = (labels[item.review_intent] || 'Review candidate') +
-          ' · source status not refreshed · expires ' + String(item.expires_at || '').slice(0, 10);
+          ' · ' + (statusLabels[latest] || 'source status not refreshed') +
+          ' · expires ' + String(item.expires_at || '').slice(0, 10);
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'secondary';
@@ -483,9 +493,28 @@
         reviews.append(line);
       }
     };
-    if (reviewLoad) reviewLoad.onclick = () => refreshSavedReviews().catch(() => {
-      if (reviewStatus) reviewStatus.textContent = 'Local review queue unavailable.';
-    });
+    if (reviewLoad) reviewLoad.onclick = () => {
+      currentReviewStatuses = null;
+      refreshSavedReviews().catch(() => {
+        if (reviewStatus) reviewStatus.textContent = 'Local review queue unavailable.';
+      });
+    };
+    if (recheckReviews) recheckReviews.onclick = async () => {
+      if (!confirm('Check the currently connected Stripe open-invoice inventory for your saved reviews? This is a read-only source request; absence is not proof of payment or completion.')) return;
+      recheckReviews.disabled = true;
+      if (reviewStatus) reviewStatus.textContent = 'Checking the permitted source…';
+      try {
+        const outcome = await api('/v1/open-work/reviews/recheck', send('POST', {confirm_scan: true}));
+        currentReviewStatuses = outcome.status_by_work_item || {};
+        await refreshSavedReviews();
+        if (reviewStatus) reviewStatus.textContent = outcome.availability === 'source_reported'
+          ? 'Fresh source check complete. Customer outcome and business obligations remain unverified.'
+          : 'Source check unavailable or no saved reviews. Nothing was marked complete.';
+      } catch (_) {
+        currentReviewStatuses = null;
+        if (reviewStatus) reviewStatus.textContent = 'Could not verify the current provider inventory.';
+      } finally { recheckReviews.disabled = false; }
+    };
     const openWork = panel.querySelector('#pvOpenWorkScan');
     if (openWork) openWork.onclick = async () => {
       const status = panel.querySelector('#pvOpenWorkResult');
