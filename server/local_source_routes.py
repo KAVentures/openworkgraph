@@ -8,7 +8,7 @@ Only a live dashboard-session capability may authorize new source reads.
 
 import asyncio
 import platform
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from .local_source_credentials import (
     SourceCredentialError, configure_stripe_source,
@@ -91,7 +91,7 @@ async def local_stripe_disconnect(request: Request):
 
 @router.get("/v1/process-mining/jira-case")
 async def local_jira_process_preview(
-    request: Request, resource_ref: str,
+    request: Request, resource_ref: str, response: Response,
     confirm_source_read: bool = False,
 ):
     """One explicit Jira changelog read for an already observed opaque record.
@@ -105,6 +105,7 @@ async def local_jira_process_preview(
     if not re.fullmatch(r"owg:r:[0-9a-f]{32}", str(resource_ref or "")):
         raise HTTPException(status_code=422, detail="valid local opaque resource reference required")
     receipt = await asyncio.to_thread(jira_issue_receipt, resource_ref)
+    response.headers["Cache-Control"] = "no-store"
     try:
         return jira_audit_process_preview(receipt)
     except (ProcessMiningCSVError, TypeError, ValueError):
