@@ -315,5 +315,6 @@ document.addEventListener('DOMContentLoaded',()=>{const picker=document.querySel
 document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=document.querySelector('.tabs');tabBar?.addEventListener('scroll',updateTabScrollHint,{passive:true});window.addEventListener('resize',updateTabScrollHint);new MutationObserver(updateTabScrollHint).observe(tabBar,{childList:true});updateTabScrollHint();document.querySelector('#evidenceSearch').addEventListener('input',()=>{if(window.__owgLastSummary)renderEvidence(window.__owgLastSummary);});document.querySelectorAll('[data-evidence-view]').forEach(b=>b.onclick=()=>setEvidenceView(b.dataset.evidenceView));document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});load();});document.addEventListener('visibilitychange',()=>{if(!document.hidden)load();});
 </script>
 <script src="/process-mining.js"></script>
+<script src="/process-designer.js"></script>
 </body>
 </html>
