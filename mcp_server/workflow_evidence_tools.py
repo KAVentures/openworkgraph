@@ -14,6 +14,9 @@ OpenWorkGraph supplies evidence. The connected AI and user write the skill.
 
 Use `get_workflow_evidence` when the user asks you to turn observed/repeated work
 into a reusable skill, procedure, automation specification, or agent instruction.
+The response also includes `agent_workflow_map`, a compact candidate sequence
+for use by an existing authorized agent; it is not a policy or action grant.
+
 The tool is intentionally different from the other OWG views:
 
 - `find_repeated_workflows` is discovery/navigation only;
@@ -53,6 +56,8 @@ Use OpenWorkGraph when the user's request depends on previous or observed work, 
 When the user needs status or review evidence for a business record they previously observed in OWG, use get_record_graph with an exact opaque owg:r: resource reference. GitHub PR merge, Jira issue closure and Stripe invoice/refund processor state are distinct, potentially stale source facts, not proof of customer success; do not guess references, ask for credentials, or call it on ordinary coding requests.
 
 When the user asks to draft a skill/procedure/automation from observed work, use get_workflow_evidence. It is the dedicated evidence bundle for that task. Prefer explicit execution_ids when the user selected examples; otherwise a family_key is only a derived grouping. Do not treat find_repeated_workflows, playbooks, dominant sequences, or support counts as policy, permission, or semantic ground truth. OpenWorkGraph supplies evidence; you and the user author the skill. Read get_workflow_knowledge for previously reviewed rules. After showing the complete procedure and obtaining explicit user confirmation, use save_workflow_knowledge to retain portable reviewed context; never silently promote a draft or observed chat into policy. Prefer outcome-oriented use of current authorized tools/connectors over mechanically replaying UI clicks, ask for missing business rules, and never invent clipboard values or infer authorization from repetition.
+
+When the user asks an already-authorized agent to **perform** a workflow, use `get_workflow_evidence` and its `agent_workflow_map` as compact context. Inspect canonical executions for uncertain steps, combine the proposed map with independently verified user rules, then use the agent's existing authorized tools to carry out the requested task and verify the outcome in its live system of record. A map does not itself authorize execution. Do not ask the person to manually export a map if this tool is already available. Explain missing observation coverage rather than silently treating the map as complete.
 """
 
 
