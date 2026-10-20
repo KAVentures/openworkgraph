@@ -8,7 +8,7 @@ import zipfile
 from typing import Any
 
 from fastapi import HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .main import ROOT
@@ -61,8 +61,8 @@ def _build(
 @app.get("/process-mining.js")
 def process_mining_script() -> Response:
     """Static local dashboard script; does not enable background collection."""
-    return Response(
-        (ROOT / "dashboard" / "process_mining.js").read_text(encoding="utf-8"),
+    return FileResponse(
+        ROOT / "dashboard" / "process_mining.js",
         media_type="application/javascript",
     )
 
