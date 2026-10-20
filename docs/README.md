@@ -12,6 +12,7 @@ Everything more detailed belongs here.
 - [Conversational clients](CONVERSATIONAL_CLIENTS.md) — ChatGPT/Microsoft 365 Copilot/background capture patterns.
 - [MCP architecture](MCP_ARCHITECTURE.md) — local stdio MCP, compatibility surfaces, HTTP/Gateway MCP and authentication.
 - [Agent evidence contract](AGENT_EVIDENCE.md) — structural telemetry for agent runs, tools, handoffs and approvals.
+- [Agent-ready workflow maps](AGENT_WORKFLOW_MAP.md) — map observed work, feed existing agents, execute with their tools, verify outcomes.
 - [Native agent adapters](NATIVE_AGENT_ADAPTERS.md) — Claude Code, Codex/OTLP and generic adapters.
 - [OpenAI Agents SDK adapter](OPENAI_AGENTS_ADAPTER.md) — additive Python tracing adapter.
 - [Agent context handoff](AGENT_CONTEXT_HANDOFF.md), [execution traces](AGENT_EXECUTION_TRACES.md), and [Gateway sharing](AGENT_GATEWAY_SHARING.md).
