@@ -17,6 +17,7 @@ from .local_source_credentials import (
 from .local_auth import dashboard_session_valid
 from .jira_source_evidence import jira_issue_receipt
 from .jira_process_preview import jira_audit_process_preview
+from .jira_batch_process_preview import jira_selected_cases_process
 from .process_mining_csv import ProcessMiningCSVError
 import re
 
@@ -111,6 +112,51 @@ async def local_jira_process_preview(
     except (ProcessMiningCSVError, TypeError, ValueError):
         # No source-provided content, target issue ID, or audit text in errors.
         raise HTTPException(status_code=422, detail="bounded Jira audit could not be analyzed") from None
+
+
+@router.post("/v1/process-mining/jira-selected-cases")
+async def local_selected_jira_process_preview(request: Request, response: Response):
+    """User-selected, exact observed Jira records only; no tenant scan."""
+    _require_dashboard(request)
+    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="JSON selected-record request required")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 2048:
+            raise HTTPException(status_code=413, detail="selected-record request too large")
+        body.extend(chunk)
+    try:
+        try:
+            import json
+            data = json.loads(body)
+        except (ValueError, UnicodeError):
+            raise HTTPException(status_code=422, detail="invalid selected-record JSON") from None
+    finally:
+        body.clear()
+    if (not isinstance(data, dict)
+            or set(data) != {"resource_refs", "confirm_source_reads"}
+            or data.get("confirm_source_reads") is not True):
+        raise HTTPException(status_code=403, detail="explicit source reads must be confirmed")
+    refs = data.get("resource_refs")
+    if (not isinstance(refs, list) or not 2 <= len(refs) <= 8
+            or any(not isinstance(ref, str) or not re.fullmatch(r"owg:r:[0-9a-f]{32}", ref) for ref in refs)
+            or len(set(refs)) != len(refs)):
+        raise HTTPException(status_code=422, detail="select 2-8 distinct observed Jira references")
+    receipts = []
+    for ref in refs:
+        # Each existing Jira receipt resolves and checks its own tenant,
+        # independent OAuth read permission and exact observed issue identity.
+        try:
+            receipts.append(await asyncio.to_thread(jira_issue_receipt, ref))
+        except (OSError, ValueError, RuntimeError, TypeError):
+            receipts.append(None)
+    try:
+        result = jira_selected_cases_process(receipts)
+    except (ProcessMiningCSVError, TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="source audit window could not be analyzed") from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/v1/open-work/stripe-preview")

@@ -108,15 +108,83 @@
       const jiraOption=item.provider==='jira'
         ? '<button class="secondary" type="button" data-jira-process="'+index+'">Read opted-in Jira audit</button><div role="status" data-jira-process-result="'+index+'" class="muted" style="margin-top:7px"></div>'
         : '';
+      const compareOption=item.provider==='jira'
+        ? '<label style="display:block;margin:8px 0"><input type="checkbox" data-jira-batch-select="'+index+'"> Include this observed Jira record in manual source comparison</label>'
+        : '';
       return '<details style="padding:9px 0;border-bottom:1px solid #eceee8" data-record-lane="'+index+'">'+
         '<summary style="cursor:pointer"><strong>'+esc(item.provider||'Record')+' · '+esc(item.resource_kind||'object')+'</strong>'+
         ' <span class="muted">· '+Number(item.observed_event_count||0)+' observed events, '+
         Number(item.observed_actor_count||0)+' actors, '+Number(item.observed_session_count||0)+' sessions</span></summary>'+
         '<p class="muted">Exact opaque reference: <code>'+esc(item.resource_ref||'')+
         '</code>. No cross-record join, verified handoff or successful business outcome is implied.</p>'+
-        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+
+        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+compareOption+
         '</details>';
     }).join('');
+    if(rows.filter(item=>item.provider==='jira').length>=2){
+      const bar=document.createElement('div');
+      bar.style.cssText='padding:10px 0;border-bottom:1px solid #eceee8';
+      const compare=document.createElement('button');
+      compare.type='button';
+      compare.className='secondary';
+      compare.textContent='Compare selected Jira source audits';
+      compare.disabled=true;
+      const output=document.createElement('div');
+      output.setAttribute('role','status');
+      output.className='muted';
+      output.style.marginTop='8px';
+      const selected=()=>[...host.querySelectorAll('[data-jira-batch-select]:checked')]
+        .map(input=>rows[Number(input.dataset.jiraBatchSelect||0)])
+        .filter(item=>item&&item.provider==='jira');
+      host.querySelectorAll('[data-jira-batch-select]').forEach(checkbox=>{
+        checkbox.addEventListener('change',()=>{compare.disabled=selected().length<2;});
+      });
+      compare.onclick=async()=>{
+        const refs=selected().map(item=>String(item.resource_ref||''));
+        if(refs.length<2||refs.length>8)return;
+        if(!confirm('Read '+refs.length+' exact Jira issue changelogs for a one-time local process comparison? A separate Jira read-only OAuth opt-in is required.'))return;
+        compare.disabled=true;
+        output.textContent='Reading explicitly selected Jira audit records…';
+        try{
+          await window.__owgAuthReady;
+          const response=await fetch('/v1/process-mining/jira-selected-cases',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({resource_refs:refs,confirm_source_reads:true}),
+            cache:'no-store'
+          });
+          if(!response.ok)throw new Error('Selected Jira audit read unavailable ('+response.status+').');
+          const data=await response.json();
+          output.replaceChildren();
+          const info=document.createElement('p');
+          info.textContent=String(data.audited_record_count||0)+' of '+
+            String(data.requested_record_count||0)+' selected records supplied eligible source audits; '+
+            String(data.partial_audit_record_count||0)+' have partial audit coverage. '+
+            'Missing data does not prove missing work.';
+          output.appendChild(info);
+          const process=data.process;
+          if(process){
+            const metrics=document.createElement('p');
+            metrics.textContent=String(process.variant_count||0)+' observed variants across '+
+              String(process.case_count||0)+' distinct source issues. This is not a joined cross-issue business case.';
+            output.appendChild(metrics);
+            const list=document.createElement('ol');
+            (process.variants||[]).slice(0,8).forEach(variant=>{
+              const li=document.createElement('li');
+              li.textContent=String(variant.case_count||0)+' issue(s): '+
+                (variant.observed_path||[]).slice(0,24).join(' → ')+
+                (variant.path_truncated?' (path truncated)':'');
+              list.appendChild(li);
+            });
+            output.appendChild(list);
+          }
+          const warning=document.createElement('p');
+          warning.textContent='Audit events are source-reported, not company policy, customer success, or authorization for an AI agent.';
+          output.appendChild(warning);
+        }catch(error){output.textContent=String(error?.message||'Audit comparison unavailable.');}
+        finally{compare.disabled=selected().length<2;}
+      };
+      bar.append(compare,output);
+      host.prepend(bar);
+    }
     host.querySelectorAll('[data-jira-process]').forEach(button=>{
       button.onclick=async()=>{
         const index=Number(button.dataset.jiraProcess||0);
