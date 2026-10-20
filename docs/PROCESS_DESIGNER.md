@@ -58,3 +58,5 @@ Before production use, complete real-browser keyboard/mobile acceptance and
 cross-platform CI. The next milestones are editable decision/exception paths,
 BPMN validation, signed-off process catalog entries and implementation
 templates for authorized agent runtimes.
+
+Implementation note: the reviewed draft is intentionally descriptive and must not be interpreted as an approved runbook or permission to execute business actions.
