@@ -194,7 +194,7 @@
           <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvOpenWorkRow">
-          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div></div>
+          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div><div class="muted" id="pvOpenWorkReviewResult" role="status" aria-live="polite"></div><button type="button" class="secondary" id="pvOpenWorkReviewLoad">View saved reviews</button><div id="pvOpenWorkReviews" aria-label="Locally saved case reviews"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvGitHubOpenWorkRow">
@@ -442,6 +442,50 @@
         if (status) status.textContent = 'Preview unavailable: ' + (error.message || 'request failed');
       } finally { gitHubPreview.disabled = false; }
     };
+    const reviewLoad = panel.querySelector('#pvOpenWorkReviewLoad');
+    const reviews = panel.querySelector('#pvOpenWorkReviews');
+    const reviewStatus = panel.querySelector('#pvOpenWorkReviewResult');
+    const refreshSavedReviews = async () => {
+      if (!reviews) return;
+      const result = await api('/v1/open-work/reviews');
+      reviews.replaceChildren();
+      const items = Array.isArray(result.items) ? result.items : [];
+      if (reviewStatus) reviewStatus.textContent = items.length
+        ? items.length + ' locally saved review intention(s). Source status is not refreshed.'
+        : 'No saved review intentions on this computer.';
+      const labels = {
+        assess_follow_up: 'Assess whether follow-up is appropriate',
+        verify_payment_status: 'Recheck provider payment status',
+        check_approved_policy: 'Check separately approved business policy',
+      };
+      for (const item of items) {
+        if (!/^owg:w:[0-9a-f]{32}$/.test(String(item.work_item_ref || ''))) continue;
+        const line = document.createElement('div');
+        line.className = 'pv-row pv-sub';
+        const description = document.createElement('span');
+        description.textContent = (labels[item.review_intent] || 'Review candidate') +
+          ' · source status not refreshed · expires ' + String(item.expires_at || '').slice(0, 10);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'secondary';
+        remove.textContent = 'Forget';
+        remove.onclick = async () => {
+          if (!confirm('Delete this local review intention? No source record will be changed.')) return;
+          remove.disabled = true;
+          try {
+            await api('/v1/open-work/reviews/' + encodeURIComponent(item.work_item_ref), {method: 'DELETE'});
+            await refreshSavedReviews();
+          } catch (_) {
+            if (reviewStatus) reviewStatus.textContent = 'Could not delete the local review intention.';
+          } finally { remove.disabled = false; }
+        };
+        line.append(description, remove);
+        reviews.append(line);
+      }
+    };
+    if (reviewLoad) reviewLoad.onclick = () => refreshSavedReviews().catch(() => {
+      if (reviewStatus) reviewStatus.textContent = 'Local review queue unavailable.';
+    });
     const openWork = panel.querySelector('#pvOpenWorkScan');
     if (openWork) openWork.onclick = async () => {
       const status = panel.querySelector('#pvOpenWorkResult');
@@ -507,7 +551,26 @@
                   toast(error.message || 'Case evidence unavailable.');
                 } finally { inspect.disabled = false; }
               };
-              line.append(summary, observation, inspect);
+              const save = document.createElement('button');
+              save.type = 'button';
+              save.className = 'secondary';
+              save.textContent = 'Save for human review';
+              save.onclick = async () => {
+                if (!confirm('Recheck this invoice in Stripe, then save a local 7-day intention to review whether follow-up is appropriate? No message or payment will be sent.')) return;
+                save.disabled = true;
+                try {
+                  await api('/v1/open-work/reviews', send('POST', {
+                    work_item_ref: candidate.work_item_ref,
+                    review_intent: 'assess_follow_up',
+                    confirm_scan: true,
+                    confirm_save: true,
+                  }));
+                  if (reviewStatus) reviewStatus.textContent = 'Saved locally for review; source status must be checked again before any action.';
+                } catch (_) {
+                  if (reviewStatus) reviewStatus.textContent = 'Could not confirm this candidate with the current source. No review was saved.';
+                } finally { save.disabled = false; }
+              };
+              line.append(summary, observation, inspect, save);
               caseArea.append(line);
             }
             if (rows.length > 100) {
