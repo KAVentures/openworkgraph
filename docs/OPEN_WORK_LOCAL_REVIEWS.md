@@ -21,7 +21,10 @@ successful save, the **current source state is unknown until explicitly
 rechecked**.
 
 - Maximum 50 saved review intentions on one desktop.
-- Expiration: 7 days, enforced on every read.
+- Expiration: **no more than 7 days** and never longer than the user's
+  human-history retention period. Session-only retention disables durable
+  review saving and an old queue is scrubbed when the subsystem is accessed.
+  The queue never silently overrides the existing privacy choice.
 - A user can forget an individual review from the Advanced dashboard.
 - Connecting or disconnecting the Stripe source clears all locally saved
   review intentions, preventing an old account's intentions from being
