@@ -105,15 +105,62 @@
       const lines=steps.map(step=>'<li><span class="muted">'+esc(step.observed_at||'')+'</span> · '+
         esc(step.source||'unknown')+' · '+esc(step.action||'unknown')+'</li>').join('');
       const more=item.steps_truncated?'<li class="muted">Additional events not shown. Read the exact record via existing record-graph tooling for a bounded drilldown.</li>':'';
+      const jiraOption=item.provider==='jira'
+        ? '<button class="secondary" type="button" data-jira-process="'+index+'">Read opted-in Jira audit</button><div role="status" data-jira-process-result="'+index+'" class="muted" style="margin-top:7px"></div>'
+        : '';
       return '<details style="padding:9px 0;border-bottom:1px solid #eceee8" data-record-lane="'+index+'">'+
         '<summary style="cursor:pointer"><strong>'+esc(item.provider||'Record')+' · '+esc(item.resource_kind||'object')+'</strong>'+
         ' <span class="muted">· '+Number(item.observed_event_count||0)+' observed events, '+
         Number(item.observed_actor_count||0)+' actors, '+Number(item.observed_session_count||0)+' sessions</span></summary>'+
         '<p class="muted">Exact opaque reference: <code>'+esc(item.resource_ref||'')+
         '</code>. No cross-record join, verified handoff or successful business outcome is implied.</p>'+
-        '<ol style="margin-top:6px">'+lines+more+'</ol>'+
+        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+
         '</details>';
     }).join('');
+    host.querySelectorAll('[data-jira-process]').forEach(button=>{
+      button.onclick=async()=>{
+        const index=Number(button.dataset.jiraProcess||0);
+        const item=rows[index];
+        const result=host.querySelector('[data-jira-process-result="'+index+'"]');
+        if(!result||!item||item.provider!=='jira')return;
+        if(!confirm('Read Jira source audit for this exact observed issue? This requires a separately enabled Jira OAuth read-only source connection.'))return;
+        button.disabled=true;
+        result.replaceChildren(document.createTextNode('Reading bounded Jira issue audit…'));
+        try{
+          await window.__owgAuthReady;
+          const params=new URLSearchParams({
+            resource_ref:String(item.resource_ref||''),
+            confirm_source_read:'true'
+          });
+          const response=await fetch('/v1/process-mining/jira-case?'+params,{cache:'no-store'});
+          if(!response.ok)throw new Error('Jira audit read unavailable ('+response.status+').');
+          const data=await response.json();
+          if(data.availability!=='source_audit'||!data.process){
+            result.textContent='No eligible opted-in Jira issue changelog available ('+
+              String(data.availability||'unavailable')+'). No unobserved work can be inferred.';
+            return;
+          }
+          const process=data.process;
+          result.replaceChildren();
+          result.appendChild(document.createTextNode(
+            Number(process.input_rows||0)+' Jira-audited status/assignee events. '+
+            (data.source_audit_complete?'Source audit page complete.':'Source audit is partial; earlier changes may be missing.')
+          ));
+          const list=document.createElement('ol');
+          const example=(process.variants||[])[0]?.observed_path||[];
+          example.slice(0,24).forEach(step=>{
+            const li=document.createElement('li');li.textContent=String(step||'');
+            list.appendChild(li);
+          });
+          result.appendChild(list);
+          const interpretation=document.createElement('p');
+          interpretation.textContent='These are provider-reported audit actions, not employee task acceptance, business policy, customer success or agent authorization.';
+          result.appendChild(interpretation);
+        }catch(error){
+          result.textContent=String(error?.message||'The source audit was unavailable.');
+        }finally{button.disabled=false;}
+      };
+    });
   }
 
   function selectedIds(index){
