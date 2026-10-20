@@ -8,13 +8,18 @@ Only a live dashboard-session capability may authorize new source reads.
 
 import asyncio
 import platform
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from .local_source_credentials import (
     SourceCredentialError, configure_stripe_source,
     disconnect_stripe_source, stripe_source_status,
 )
 from .local_auth import dashboard_session_valid
+from .jira_source_evidence import jira_issue_receipt
+from .jira_process_preview import jira_audit_process_preview
+from .process_mining_csv import ProcessMiningCSVError
+import re
+
 from .open_work_preview import stripe_open_work_preview
 from .open_work_github_preview import github_open_work_preview
 from .open_work_case_context import stripe_open_work_case_context
@@ -82,6 +87,30 @@ async def local_stripe_disconnect(request: Request):
     except SourceCredentialError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return _status()
+
+
+@router.get("/v1/process-mining/jira-case")
+async def local_jira_process_preview(
+    request: Request, resource_ref: str, response: Response,
+    confirm_source_read: bool = False,
+):
+    """One explicit Jira changelog read for an already observed opaque record.
+
+    Requires both a live local dashboard click and the existing independent
+    Jira OAuth source-read opt-in. A bearer/MCP alone cannot trigger this read.
+    """
+    _require_dashboard(request)
+    if confirm_source_read is not True:
+        raise HTTPException(status_code=403, detail="explicit source audit read confirmation required")
+    if not re.fullmatch(r"owg:r:[0-9a-f]{32}", str(resource_ref or "")):
+        raise HTTPException(status_code=422, detail="valid local opaque resource reference required")
+    receipt = await asyncio.to_thread(jira_issue_receipt, resource_ref)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return jira_audit_process_preview(receipt)
+    except (ProcessMiningCSVError, TypeError, ValueError):
+        # No source-provided content, target issue ID, or audit text in errors.
+        raise HTTPException(status_code=422, detail="bounded Jira audit could not be analyzed") from None
 
 
 @router.get("/v1/open-work/stripe-preview")
