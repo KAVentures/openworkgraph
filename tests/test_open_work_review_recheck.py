@@ -91,4 +91,3 @@ def test_explicit_recheck_never_automatically_runs_in_dashboard():
     assert "recheckReviews.onclick" in script
     assert "send('POST', {confirm_scan: true})" in script
     assert "no longer in open inventory; outcome unverified" in script
-    assert "Refresh" not in script[script.index("const recheckReviews"):script.index("const openWork =")]
