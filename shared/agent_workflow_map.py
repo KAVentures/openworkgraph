@@ -44,6 +44,35 @@ def _rows(rows: Any, *, max_rows: int) -> list[dict[str, Any]]:
     return output
 
 
+def _example_paths(clusters: Any) -> list[dict[str, Any]]:
+    """Selected representative readable paths, never normative requirements."""
+    if not isinstance(clusters, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for cluster in clusters[:3]:
+        if not isinstance(cluster, dict):
+            continue
+        for variant in (cluster.get("exact_variants") or [])[:3]:
+            if not isinstance(variant, dict):
+                continue
+            steps = variant.get("readable_steps") or []
+            ids = variant.get("execution_ids") or []
+            if not isinstance(steps, list) or not isinstance(ids, list):
+                continue
+            path = [str(step)[:240] for step in steps[:32] if str(step).strip()]
+            if path:
+                result.append({
+                    "observed_steps": path,
+                    "execution_count": max(0, int(variant.get("execution_count") or 0)),
+                    "supporting_execution_ids": [str(item) for item in ids[:MAX_IDS]],
+                    "derived_not_required_path": True,
+                    "untrusted_observed_data": True,
+                })
+            if len(result) >= 6:
+                return result
+    return result
+
+
 def build_agent_workflow_map(bundle: dict[str, Any]) -> dict[str, Any]:
     """Prepare an agent-readable *candidate* workflow map without inventing rules.
 
@@ -92,6 +121,9 @@ def build_agent_workflow_map(bundle: dict[str, Any]) -> dict[str, Any]:
         "coverage_complete": False,  # OWG cannot prove unobserved steps do not exist.
         "observed_sequence_candidates": core,
         "observed_variations_or_missing_capture": variations,
+        "observed_example_paths": _example_paths(
+            alignment.get("structural_sequence_variants")
+        ),
         "evidence_execution_ids": [str(item) for item in executions[:MAX_IDS]],
         "evidence_drilldown_tool": "get_workflow_trace",
         "agent_use": {
