@@ -14,6 +14,11 @@ def workflow_evidence_script() -> Response:
     return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
 
 
+def workflow_explorer_script() -> Response:
+    path = ROOT / "dashboard" / "workflow_explorer.js"
+    return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
+
+
 async def _inject_workflow_evidence_script(request: Request, call_next):
     response = await call_next(request)
     if request.method.upper() != "GET" or request.url.path != "/" or response.status_code != 200:
@@ -29,9 +34,12 @@ async def _inject_workflow_evidence_script(request: Request, call_next):
         text = body.decode("utf-8")
     except Exception:
         return response
-    marker = '<script src="/workflow-evidence.js"></script>'
-    if marker not in text:
-        text = text.replace("</body>", marker + "\n</body>")
+    for marker in (
+        '<script src="/workflow-evidence.js"></script>',
+        '<script src="/workflow-explorer.js"></script>',
+    ):
+        if marker not in text:
+            text = text.replace("</body>", marker + "\n</body>")
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return HTMLResponse(text, status_code=response.status_code, headers=headers)
@@ -39,8 +47,9 @@ async def _inject_workflow_evidence_script(request: Request, call_next):
 
 if not getattr(app.state, "owg_workflow_evidence_dashboard_installed", False):
     app.add_api_route("/workflow-evidence.js", workflow_evidence_script, methods=["GET"])
+    app.add_api_route("/workflow-explorer.js", workflow_explorer_script, methods=["GET"])
     app.middleware("http")(_inject_workflow_evidence_script)
     app.state.owg_workflow_evidence_dashboard_installed = True
 
 
-__all__ = ["workflow_evidence_script"]
+__all__ = ["workflow_evidence_script", "workflow_explorer_script"]
