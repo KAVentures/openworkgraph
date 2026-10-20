@@ -18,6 +18,7 @@ from .local_auth import dashboard_session_valid
 from .open_work_preview import stripe_open_work_preview
 from .open_work_github_preview import github_open_work_preview
 from .open_work_case_context import stripe_open_work_case_context
+from .open_work_mcp_settings import settings_status, set_experimental_tools_enabled
 
 router = APIRouter()
 
@@ -130,3 +131,25 @@ async def github_open_work_candidates(request: Request, repository: str,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.get("/v1/local-open-work/mcp-tools")
+def local_open_work_mcp_tool_status(request: Request):
+    """Read dashboard-only optional MCP catalog setting; no AI permissions."""
+    _require_dashboard(request)
+    return settings_status()
+
+
+@router.post("/v1/local-open-work/mcp-tools")
+async def update_local_open_work_mcp_tools(request: Request):
+    """Only a local dashboard-session owner may opt in, never an AI bearer."""
+    _require_dashboard(request)
+    if len(await request.body()) > 256:
+        raise HTTPException(status_code=413, detail="Open Work settings request too large")
+    try:
+        data = await request.json()
+        if not isinstance(data, dict) or type(data.get("enabled")) is not bool:
+            raise ValueError("enabled must be a boolean")
+        return await asyncio.to_thread(set_experimental_tools_enabled, data["enabled"])
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail="Open Work tool preference could not be saved") from None

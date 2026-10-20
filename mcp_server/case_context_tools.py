@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 from mcp.server.mcpserver.exceptions import ToolError
+from server.open_work_mcp_settings import experimental_tools_enabled
 
 _RESOURCE = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _REGISTERED: set[int] = set()
@@ -44,6 +45,10 @@ def register_case_context_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if not _RESOURCE.fullmatch(str(resource_ref or "")):
             raise ToolError("Use a normalized owg:r: reference from permitted OWG evidence.")
+        # Settings OFF revokes newly exposed calls immediately, even if the
+        # client has not yet refreshed its cached MCP tool catalog.
+        if not experimental_tools_enabled():
+            raise ToolError("Open Work experimental tools are switched off.")
         runtime_module.authorize_tool("get_case_context")
         params: dict[str, Any] = {
             "resource_ref": resource_ref,

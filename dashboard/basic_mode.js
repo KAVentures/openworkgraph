@@ -124,6 +124,7 @@
     mark($('#pvSourceConnectionsRow'), true);
     mark($('#pvOpenWorkRow'), true);
     mark($('#pvGitHubOpenWorkRow'), true);
+    mark($('#pvOpenWorkMcpRow'), true);
 
     const active = $('[role="tab"][aria-selected="true"]');
     if (redirect && basic && active && active.classList.contains(HIDE) && typeof window.activateTab === 'function') window.activateTab('overview');
@@ -199,6 +200,10 @@
         <div class="pv-row pv-sub" id="pvGitHubOpenWorkRow">
           <div><h3>Open Work: GitHub preview</h3><div class="muted">Optional read-only check for open pull requests in one repository you choose. Uses your existing GitHub CLI login and its separate OWG source-status permission. An open PR is not proof an action is required.</div><label for="pvGitHubOpenWorkRepo" class="muted">Repository (owner/name)</label><input id="pvGitHubOpenWorkRepo" type="text" spellcheck="false" autocomplete="off" placeholder="owner/repository" aria-label="GitHub repository owner/name" /><div class="muted" id="pvGitHubOpenWorkResult" role="status" aria-live="polite"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvGitHubOpenWorkScan">Preview open PRs</button></div>
+        </div>
+        <div class="pv-row pv-sub" id="pvOpenWorkMcpRow">
+          <div><h3>Experimental Open Work AI tools</h3><div class="muted">Allow your existing local AI connector to expose two extra read-only tools: get_case_context and verify_case_operation. This does not enable AI access, saved-history access, source scans, or business actions. Reconnect your AI app to refresh its tool list.</div><div class="muted" id="pvOpenWorkMcpStatus" role="status" aria-live="polite">Checking…</div></div>
+          <div class="pv-control"><button type="button" role="switch" class="sw" aria-label="Experimental Open Work AI tools" id="pvOpenWorkMcpSwitch" aria-checked="false"></button></div>
         </div>
         <div class="pv-row" id="pvWorkTextRow">
           <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
@@ -385,6 +390,32 @@
   }
 
   function bindPrivacy(panel) {
+    const experimentalToggle = panel.querySelector('#pvOpenWorkMcpSwitch');
+    const experimentalStatus = panel.querySelector('#pvOpenWorkMcpStatus');
+    const showExperimentalTools = state => {
+      const enabled = state?.enabled === true;
+      if (experimentalToggle) experimentalToggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+      if (experimentalStatus) experimentalStatus.textContent = state?.environment_override_active
+        ? 'Your local launcher overrides this setting. Edit its OWG_OPEN_WORK_EXPERIMENTAL_TOOLS value to change the tool list.'
+        : enabled
+          ? 'On for local MCP. Reconnect your AI app to discover the two extra tools. All existing access controls remain.'
+          : 'Off. Existing Open Work tools are denied immediately; reconnect your AI app to refresh its tool list.';
+    };
+    if (experimentalToggle) {
+      api('/v1/local-open-work/mcp-tools').then(showExperimentalTools).catch(() => {
+        if (experimentalStatus) experimentalStatus.textContent = 'Could not read local tool settings.';
+      });
+      experimentalToggle.onclick = async () => {
+        const enabled = experimentalToggle.getAttribute('aria-checked') !== 'true';
+        if (enabled && !confirm('Enable two extra read-only Open Work tools in local AI apps? Your existing AI and history access controls still apply. Reconnect your AI app afterwards.')) return;
+        experimentalToggle.disabled = true;
+        try {
+          showExperimentalTools(await api('/v1/local-open-work/mcp-tools', send('POST', {enabled})));
+        } catch (error) {
+          if (experimentalStatus) experimentalStatus.textContent = 'Could not update local Open Work tool settings.';
+        } finally { experimentalToggle.disabled = false; }
+      };
+    }
     const gitHubPreview = panel.querySelector('#pvGitHubOpenWorkScan');
     if (gitHubPreview) gitHubPreview.onclick = async () => {
       const input = panel.querySelector('#pvGitHubOpenWorkRepo');

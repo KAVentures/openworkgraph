@@ -14,6 +14,7 @@ from .workflow_evidence_tools import register_workflow_evidence_tools
 from .record_graph_tools import register_record_graph_tools
 from .case_context_tools import register_case_context_tools
 from .outcome_receipt_tools import register_outcome_receipt_tools
+from server.open_work_mcp_settings import experimental_tools_enabled
 
 install_history_guard(_secure_runtime)
 apply_compact_hardening(_compact)
@@ -23,7 +24,7 @@ register_context_index(mcp)
 register_automation_guidance(mcp)
 register_workflow_evidence_tools(mcp, _secure_runtime)
 register_record_graph_tools(mcp, _secure_runtime)
-if os.getenv("OWG_OPEN_WORK_EXPERIMENTAL_TOOLS") == "1":
+if experimental_tools_enabled():
     register_case_context_tools(mcp, _secure_runtime)
     register_outcome_receipt_tools(mcp, _secure_runtime)
 _inner = mcp.streamable_http_app()

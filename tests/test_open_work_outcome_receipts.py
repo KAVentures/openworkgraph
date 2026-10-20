@@ -120,8 +120,10 @@ def test_invalid_request_does_not_refresh_source():
             record_reader=lambda *_a, **_kw: pytest.fail("provider read"))
 
 
-def test_new_receipt_mcp_uses_authorize_tool_and_secure_get():
+def test_new_receipt_mcp_uses_authorize_tool_and_secure_get(monkeypatch):
     from mcp_server.outcome_receipt_tools import register_outcome_receipt_tools
+    from mcp_server import outcome_receipt_tools as optional_tool
+    monkeypatch.setattr(optional_tool, "experimental_tools_enabled", lambda: True)
     calls = []
     class Stub:
         def tool(self, **kw):
