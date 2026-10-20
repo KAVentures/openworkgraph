@@ -73,6 +73,8 @@ def record_case_lanes(
     identities: dict[str, tuple[str, str, str, str]] = {}
     conflicts: set[str] = set()
     seen_events: set[tuple[str, str]] = set()
+    actors: dict[str, set[str]] = defaultdict(set)
+    sessions: dict[str, set[str]] = defaultdict(set)
     duplicates = 0
     dropped_timestamps = 0
     # Preserve no raw row outside this temporary in-memory call.
@@ -100,6 +102,10 @@ def record_case_lanes(
                 duplicates += 1
                 continue
             seen_events.add(event_key)
+        if event.get("actor_id"):
+            actors[ref].add(str(event["actor_id"]))
+        if event.get("session_id"):
+            sessions[ref].add(str(event["session_id"]))
         # Only the event type can become a readable action. Never export
         # window titles, UI strings, browser URLs, clipboard or source locators.
         action = _token(event.get("event_type"))
@@ -116,24 +122,14 @@ def record_case_lanes(
             continue
         rows.sort(key=lambda x: (x[0], x[1]))
         identity = identities[ref]
-        # Track actor/session diversity only. Do not reveal raw actor/device IDs.
-        actor_ids, session_ids = set(), set()
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            match = _identity(event)
-            if match and match[0] == ref and match[1:] == identity:
-                if event.get("actor_id"):
-                    actor_ids.add(str(event["actor_id"]))
-                if event.get("session_id"):
-                    session_ids.add(str(event["session_id"]))
+        # Diversity counts exclude malformed timestamps and duplicates.
         ordered.append({
             "resource_ref": ref,
             "provider": identity[0],
             "resource_kind": identity[1],
             "observed_event_count": len(rows),
-            "observed_actor_count": len(actor_ids),
-            "observed_session_count": len(session_ids),
+            "observed_actor_count": len(actors[ref]),
+            "observed_session_count": len(sessions[ref]),
             "first_observed_at": rows[0][0],
             "last_observed_at": rows[-1][0],
             "observed_steps": [item[2] for item in rows[:steps_limit]],
