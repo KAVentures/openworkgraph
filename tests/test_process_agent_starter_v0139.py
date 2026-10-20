@@ -177,7 +177,7 @@ def test_local_client_requires_explicit_review_and_click():
     designer = (ROOT / "dashboard/process_designer.js").read_text(encoding="utf-8")
     assert "Download agent starter ZIP" in designer
     assert "window.owgAgentStarter.prepare(output)" in designer
-    assert "packet(state.report,state.variant,state.target,state.goal,state.reviewed)" in designer
+    assert "packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules)" in designer
     assert "'/v1/process-design/starter'" in script
     assert "method:'POST'" in script
     assert "window.__owgAuthReady" in script
