@@ -186,3 +186,39 @@ assert client.get(url, headers=owner).json()["items"] == []
         text=True, cwd=Path(__file__).resolve().parents[1], env=env,
         timeout=80 if os.name == "nt" else 50)
     assert r.returncode == 0, r.stderr[-3000:]
+
+
+def test_history_policy_session_only_change_clears_queue_immediately(tmp_path):
+    script = r"""
+from datetime import datetime, timezone
+import server.history_routes as history
+from server import open_work_reviews as reviews
+from server.history_routes import RetentionChoice
+
+reviews.read_policy = lambda: {"human_retention": {"mode": "forever"}}
+ref = "owg:w:" + "a"*32
+reviews.save_review_intention(ref, "assess_follow_up",
+    provider_candidate_currently_open=True)
+path = reviews._path()
+assert path.exists()
+history.update_retention = lambda **kw: {
+    "human_retention": {"mode": "ephemeral"},
+    "agent_retention": {"mode": "ephemeral"},
+    "onboarding_complete": True}
+history.cleanup_expired_history = lambda **kw: {}
+result = history.set_history_policy(RetentionChoice(
+    human_mode="ephemeral", agent_mode="ephemeral",
+    onboarding_complete=True))
+assert result["status"] == "saved"
+assert not path.exists()
+"""
+    env = os.environ.copy()
+    env["WORKFLOW_OBSERVER_AUTH_DIR"] = str(tmp_path / "auth")
+    env["WORKFLOW_OBSERVER_DATA"] = str(tmp_path / "data")
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        timeout=80 if os.name == "nt" else 50,
+    )
+    assert completed.returncode == 0, completed.stderr[-3000:]
