@@ -38,7 +38,17 @@
     const wrap=make('div',null,'owg-process-controls');
     const file=make('input');file.type='file';file.accept='.csv,text/csv';file.id='owgProcessFile';file.setAttribute('aria-label','Choose business event log CSV');
     const run=button('Analyze selected CSV',analyze);run.id='owgProcessAnalyze';run.disabled=true;
-    file.addEventListener('change',()=>{report=null;run.disabled=!file.files?.length;clearReport();});
+    file.addEventListener('change',()=>{
+      if(window.owgProcessDesigner?.hasDraft?.() && !window.confirm(
+        'Discard your unsaved proposed process before selecting a different CSV?')) {
+        file.value='';
+        run.disabled=true;
+        return;
+      }
+      report=null;
+      run.disabled=!file.files?.length;
+      clearReport();
+    });
     wrap.append(file,run);card.appendChild(wrap);
     const status=make('p','No CSV selected. This feature is opt-in and does not change desktop recording.','muted');
     status.id='owgProcessStatus';status.setAttribute('role','status');card.appendChild(status);
@@ -61,6 +71,7 @@
   }
   function clearReport(){
     const host=document.getElementById('owgProcessResults');if(host)host.replaceChildren();
+    window.owgProcessDesigner?.reset?.();
   }
   function setStatus(message){
     const s=document.getElementById('owgProcessStatus');if(s)s.textContent=String(message||'');
@@ -140,6 +151,19 @@
       b.setAttribute('aria-pressed',String(activeVariant===index));controls.appendChild(b);
     });
     host.appendChild(controls);
+    if(variants.length){
+      const selected=variants[Math.min(activeVariant,variants.length-1)];
+      const edit=button('Design improved TO-BE workflow',()=>{
+        if(!window.owgProcessDesigner?.open) {
+          setStatus('Process designer unavailable. Reopen the local dashboard.');
+          return;
+        }
+        window.owgProcessDesigner.open(report,selected);
+      });
+      edit.disabled=!!selected.path_truncated;
+      if(selected.path_truncated)edit.title='This observed path is truncated; design requires a complete observed variant.';
+      host.appendChild(edit);
+    }
     if(variants.length){
       const variant=variants[Math.min(activeVariant,variants.length-1)];
       host.appendChild(graph(variant.observed_path));

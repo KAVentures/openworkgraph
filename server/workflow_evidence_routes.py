@@ -67,6 +67,15 @@ def process_mining_script() -> Response:
     )
 
 
+@app.get("/process-designer.js")
+def process_designer_script() -> Response:
+    """Static optional UI for reviewable proposed processes."""
+    return FileResponse(
+        ROOT / "dashboard" / "process_designer.js",
+        media_type="application/javascript",
+    )
+
+
 @app.post("/v1/process-mining/preview")
 async def process_mining_csv_preview(request: Request) -> Response:
     """Explicit, authenticated local CSV preview. No file or projection retained.
