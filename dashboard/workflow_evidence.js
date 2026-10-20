@@ -221,6 +221,10 @@
       renderFamilies();
       renderRecordLanes();
     }catch(_){
+      families=[];
+      recordLanes=[];
+      recordLaneCoverageLimited=false;
+      renderRecordLanes();
       const host=ensureCard()?.querySelector('#workflowEvidenceCandidates');
       if(host) host.innerHTML='<div class="muted">Workflow evidence examples are unavailable right now. Stored/Redacted evidence export and canonical MCP trace access are unchanged.</div>';
     }finally{
