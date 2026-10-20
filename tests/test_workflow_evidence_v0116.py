@@ -100,6 +100,11 @@ def test_explicit_run_selection_keeps_support_descriptive(monkeypatch: pytest.Mo
     assert bundle["interpretation_contract"]["descriptive_not_prescriptive"] is True
     assert bundle["interpretation_contract"]["observed_behavior_is_not_policy"] is True
     assert bundle["interpretation_contract"]["observed_behavior_is_not_permission"] is True
+    agent_map = bundle["agent_workflow_map"]
+    assert agent_map["selected_execution_count"] == 3
+    assert agent_map["observed_sequence_candidates"][0]["observed_step"] == "surface:gmail"
+    assert agent_map["business_outcome_verified"] is False
+    assert agent_map["execution_permissions_granted"] is False
 
     high = {row["step"]: row for row in bundle["structural_alignment"]["high_support_steps"]}
     uncommon = {row["step"]: row for row in bundle["structural_alignment"]["less_common_observed_steps"]}
