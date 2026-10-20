@@ -112,6 +112,7 @@ with TestClient(app) as client:
     assert called==[]
     response=client.get(url,params={"resource_ref":ref,"confirm_source_read":"true"},headers=owner)
     assert response.status_code==200,response.text
+    assert response.headers.get("cache-control")=="no-store"
     assert response.json()["process"]["input_rows"]==2
     assert called==[ref]
 '''
