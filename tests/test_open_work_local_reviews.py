@@ -18,6 +18,8 @@ NOW = datetime(2026, 10, 20, 9, tzinfo=timezone.utc)
 @pytest.fixture
 def local_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path))
+    monkeypatch.setattr(review, "read_policy",
+                        lambda: {"human_retention": {"mode": "forever"}})
     return tmp_path
 
 
@@ -61,6 +63,29 @@ def test_invalid_reviews_never_saved(local_auth, invalid):
         review.save_review_intention(invalid[0], invalid[1],
             provider_candidate_currently_open=True, now=NOW)
     assert review.list_review_intentions(now=NOW)["items"] == []
+
+
+def test_history_retention_is_upper_bound_not_ignored(local_auth, monkeypatch):
+    saved = review.save_review_intention(
+        REF, "assess_follow_up", provider_candidate_currently_open=True, now=NOW)
+    assert saved["expires_at"].startswith("2026-10-27")
+    monkeypatch.setattr(review, "read_policy",
+                        lambda: {"human_retention": {"mode": "days", "days": 1}})
+    assert review.list_review_intentions(now=NOW + timedelta(days=2))["items"] == []
+
+
+def test_ephemeral_history_forbids_durable_reviews_and_scrubs_previous(local_auth, monkeypatch):
+    review.save_review_intention(REF, "assess_follow_up",
+        provider_candidate_currently_open=True, now=NOW)
+    file = local_auth / ".open_work_review_intentions.json"
+    assert file.exists()
+    monkeypatch.setattr(review, "read_policy",
+                        lambda: {"human_retention": {"mode": "ephemeral"}})
+    assert review.list_review_intentions(now=NOW)["items"] == []
+    assert not file.exists()
+    with pytest.raises(ValueError, match="session-only"):
+        review.save_review_intention(REF, "assess_follow_up",
+            provider_candidate_currently_open=True, now=NOW)
 
 
 def test_delete_or_disconnect_removes_only_review_intentions(local_auth):
