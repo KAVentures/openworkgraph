@@ -11,7 +11,7 @@
   function repeatedCard(){
     return [...document.querySelectorAll('#panel-overview .card')].find(card =>
       /repeated workflows/i.test(card.querySelector('h2')?.textContent || '')
-    ) || null;
+    ) || document.querySelector('#panel-overview #patternCard') || null;
   }
 
   function removeOldPlaceholderActions(){
