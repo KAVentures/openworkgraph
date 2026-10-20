@@ -16,6 +16,7 @@ import statistics
 from typing import Any, Iterable
 
 from . import analytics
+from shared.agent_workflow_map import build_agent_workflow_map
 from .procedural_memory import derive_executions, load_recent_evidence
 from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
@@ -879,6 +880,9 @@ def build_workflow_evidence(
             per_run_events,
             max_events_per_run=max_events_per_run,
         )
+    # Additive agent map: same authorization/window as this evidence bundle.
+    # No extra reads, permissions or agent execution.
+    bundle["agent_workflow_map"] = build_agent_workflow_map(bundle)
     return bundle
 
 
