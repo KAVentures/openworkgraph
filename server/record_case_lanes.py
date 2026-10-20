@@ -81,8 +81,15 @@ def record_case_lanes(
     for event in events:
         if not isinstance(event, dict):
             continue
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        reference = metadata.get("resource_reference") if isinstance(metadata.get("resource_reference"), dict) else {}
+        candidate_ref = str(reference.get("resource_ref") or "").lower()
         match = _identity(event)
         if not match:
+            # Do not silently discard a corrupt row claiming the same normalized
+            # reference and then publish the other rows as an unconflicted path.
+            if _RESOURCE.fullmatch(candidate_ref):
+                conflicts.add(candidate_ref)
             continue
         ref, provider, kind, host, org = match
         identity = (provider, kind, host, org)
