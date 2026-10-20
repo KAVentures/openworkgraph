@@ -18,6 +18,7 @@ import threading
 from typing import Any
 
 from .local_auth import auth_dir
+from shared.history_policy import read_policy
 
 _REF = re.compile(r"^owg:w:[0-9a-f]{32}$")
 _INTENTS = frozenset({"assess_follow_up", "verify_payment_status", "check_approved_policy"})
@@ -42,7 +43,29 @@ def _time(value: Any) -> datetime | None:
         return None
 
 
+def _allowed_days() -> int | None:
+    """Keep review records no longer than the owner's chosen history window."""
+    try:
+        retention = read_policy().get("human_retention", {})
+        if not isinstance(retention, dict):
+            return None
+        mode = retention.get("mode")
+        if mode == "ephemeral":
+            return None
+        if mode == "forever":
+            return _TTL_DAYS
+        if mode == "days":
+            days = retention.get("days")
+            return min(_TTL_DAYS, days) if type(days) is int and days > 0 else None
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _read(now: datetime) -> dict[str, dict[str, Any]]:
+    max_days = _allowed_days()
+    if max_days is None:
+        return {}
     path = _path()
     try:
         info = path.lstat()
@@ -64,7 +87,8 @@ def _read(now: datetime) -> dict[str, dict[str, Any]]:
         if (not isinstance(ref, str) or not _REF.fullmatch(ref) or
             intent not in _INTENTS or not created or not expires or
             created > now + timedelta(minutes=5) or expires <= now or
-            expires - created > timedelta(days=_TTL_DAYS, minutes=1)):
+            expires - created > timedelta(days=_TTL_DAYS, minutes=1) or
+            created + timedelta(days=max_days) <= now):
             continue
         result[ref] = {
             "work_item_ref": ref,
@@ -105,6 +129,9 @@ def _write(items: dict[str, dict[str, Any]]) -> None:
 
 def list_review_intentions(*, now: datetime | None = None) -> dict[str, Any]:
     current = now or datetime.now(timezone.utc)
+    max_days = _allowed_days()
+    if max_days is None:
+        raise ValueError("saved reviews are unavailable with session-only history retention")
     with _LOCK:
         items = _read(current)
     return {
@@ -140,7 +167,7 @@ def save_review_intention(
             "work_item_ref": work_item_ref,
             "review_intent": review_intent,
             "created_at": created.isoformat(),
-            "expires_at": (created + timedelta(days=_TTL_DAYS)).isoformat(),
+            "expires_at": (created + timedelta(days=max_days)).isoformat(),
             "review_status": "human_review_requested",
             "current_source_state": "unknown_until_explicit_recheck",
             "business_obligation_verified": False,
