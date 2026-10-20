@@ -112,7 +112,6 @@ def record_case_lanes(
         source = _token(event.get("source"))
         grouped[ref].append((stamp, event_id, {
             "observed_at": stamp,
-            "event_id": event_id,
             "action": action,
             "source": source,
         }))
