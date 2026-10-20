@@ -135,9 +135,6 @@ def _write(items: dict[str, dict[str, Any]]) -> None:
 
 def list_review_intentions(*, now: datetime | None = None) -> dict[str, Any]:
     current = now or datetime.now(timezone.utc)
-    max_days = _allowed_days()
-    if max_days is None:
-        raise ValueError("saved reviews are unavailable with session-only history retention")
     with _LOCK:
         items = _read(current)
     return {
@@ -164,6 +161,9 @@ def save_review_intention(
     if provider_candidate_currently_open is not True:
         raise ValueError("current provider source did not verify candidate")
     current = now or datetime.now(timezone.utc)
+    max_days = _allowed_days()
+    if max_days is None:
+        raise ValueError("saved reviews are unavailable with session-only history retention")
     with _LOCK:
         items = _read(current)
         if work_item_ref not in items and len(items) >= _MAX_ITEMS:
