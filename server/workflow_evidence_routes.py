@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .main import ROOT
 from .process_mining_csv import MAX_BYTES as MAX_PROCESS_CSV_BYTES, ProcessMiningCSVError, mine_csv_events
+from .process_agent_starter import MAX_REQUEST_BYTES as MAX_STARTER_BYTES, AgentStarterError, build_agent_starter
 from .ai_context import redact_contextually
 from .secure_app import app
 from .record_graph import record_graph
@@ -110,6 +111,49 @@ async def process_mining_csv_preview(request: Request) -> Response:
     finally:
         payload.clear()
     return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/agent-starter.js")
+def agent_starter_script() -> Response:
+    """Static client only; no background agent installation."""
+    return FileResponse(ROOT / "dashboard" / "agent_starter.js", media_type="application/javascript")
+
+
+@app.post("/v1/process-design/starter")
+async def process_design_starter(request: Request) -> Response:
+    """Explicit, bounded, authenticated download; never deploys or persists."""
+    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="starter requires application/json")
+    try:
+        declared_size = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Content-Length") from None
+    if declared_size > MAX_STARTER_BYTES:
+        raise HTTPException(status_code=413, detail="starter request too large")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_STARTER_BYTES:
+            raise HTTPException(status_code=413, detail="starter request too large")
+        data.extend(chunk)
+    try:
+        try:
+            packet = json.loads(data)
+        except (ValueError, UnicodeError):
+            raise HTTPException(status_code=422, detail="invalid reviewed process JSON") from None
+        result = build_agent_starter(packet)
+    except AgentStarterError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    finally:
+        data.clear()
+    return Response(
+        content=result,
+        media_type="application/zip",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="openworkgraph-agent-starter.zip"',
+        },
+    )
 
 
 @app.get("/v1/record-graph/operation-receipt")

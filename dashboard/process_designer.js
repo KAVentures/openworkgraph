@@ -170,6 +170,19 @@
     host.appendChild(checkLabel);
     const buttons=elem('div',null,'owg-design-buttons');
     buttons.appendChild(btn('Export reviewed draft as JSON',exportDraft));
+    buttons.appendChild(btn('Download agent starter ZIP',async()=>{
+      if(!state)return;
+      selected();
+      try{
+        const output=packet(state.report,state.variant,state.target,state.goal,state.reviewed);
+        if(!window.owgAgentStarter?.prepare)throw new Error('Agent starter unavailable. Reopen the local dashboard.');
+        setMessage('Building the non-executable starter locally…');
+        await window.owgAgentStarter.prepare(output);
+        setMessage('Agent starter downloaded. No business action, tool installation or deployment occurred.');
+      }catch(error){
+        setMessage(String(error?.message||'Review the proposed workflow before downloading.'));
+      }
+    }));
     buttons.appendChild(btn('Discard this draft',()=>{
       if(typeof window.confirm==='function'&& !window.confirm('Discard the unsaved proposed workflow?'))return;
       reset();
