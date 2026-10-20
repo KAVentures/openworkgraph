@@ -61,6 +61,7 @@ jobs:
           node --check dashboard/gateway_panel.js
           node --check dashboard/process_mining.js
           node --check dashboard/process_designer.js
+          node --check dashboard/opportunity_review.js
           node --check integrations/plugins/openworkgraph/scripts/find-and-launch.mjs
           node --check integrations/plugins/openworkgraph/scripts/check-openworkgraph.mjs
       - name: Authenticated dashboard JavaScript syntax
