@@ -64,6 +64,12 @@ def test_conflicting_provider_host_kind_or_organization_suppresses_entire_lane()
         output = record_case_lanes([_event(1), _event(2, **changed), _event(3)])
         assert output["lanes"] == []
         assert output["conflicting_reference_groups_suppressed"] == 1
+    # A corrupt identity with the same valid opaque ref must suppress the
+    # entire path, rather than being silently omitted from its provenance.
+    corrupt = _event(2, provider="corrupted product label !")
+    output = record_case_lanes([_event(1), corrupt, _event(3)])
+    assert output["lanes"] == []
+    assert output["conflicting_reference_groups_suppressed"] == 1
     # Similar title and close timestamps cannot join two different references.
     output = record_case_lanes([_event(1, A), _event(2, B)])
     assert output["lanes"] == []
