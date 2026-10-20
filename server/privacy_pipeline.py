@@ -151,10 +151,13 @@ def reset_persistent_identities() -> bool:
 
 def redact_for_display_now(value: Any) -> Any:
     """Apply the presentation pipeline unconditionally."""
-    return _redactor(value)
+    from shared.core.private_browsing import suppress_private_browsing
+    return _redactor(suppress_private_browsing(value))
 
 
 def redact_for_display(value: Any) -> Any:
+    from shared.core.private_browsing import suppress_private_browsing
+    value = suppress_private_browsing(value)
     # AI-context requests (MCP) are redacted once, for the whole response, by
     # server.ai_context according to the effective detail level. Redacting here
     # too would make "Full" impossible and double-process every string.

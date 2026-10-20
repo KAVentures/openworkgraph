@@ -157,7 +157,8 @@ def _row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     d.pop("id", None)
     if "metadata_json" in d:
         d["metadata"] = _decoded_metadata(d.pop("metadata_json"))
-    return d
+    from shared.core.private_browsing import suppress_private_browsing
+    return suppress_private_browsing(d)
 
 
 def _identity_value(e: dict[str, Any], key: str, default: str = "") -> str:
@@ -633,7 +634,8 @@ def rows(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
             d = dict(row)
             if "metadata_json" in d:
                 d["metadata"] = _decoded_metadata(d.pop("metadata_json"))
-            result.append(d)
+            from shared.core.private_browsing import suppress_private_browsing
+            result.append(suppress_private_browsing(d))
         return result
 
 
