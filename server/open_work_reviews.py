@@ -65,6 +65,12 @@ def _allowed_days() -> int | None:
 def _read(now: datetime) -> dict[str, dict[str, Any]]:
     max_days = _allowed_days()
     if max_days is None:
+        # A session-only history choice must not retain a previous durable
+        # manual-review file after this subsystem is next accessed.
+        try:
+            _path().unlink(missing_ok=True)
+        except OSError:
+            pass
         return {}
     path = _path()
     try:
