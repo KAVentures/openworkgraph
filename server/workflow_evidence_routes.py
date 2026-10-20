@@ -7,9 +7,12 @@ import json
 import zipfile
 from typing import Any
 
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from .main import ROOT
+from .process_mining_csv import MAX_BYTES as MAX_PROCESS_CSV_BYTES, ProcessMiningCSVError, mine_csv_events
 from .ai_context import redact_contextually
 from .secure_app import app
 from .record_graph import record_graph
@@ -52,6 +55,46 @@ def _build(
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
+
+
+
+@app.get("/process-mining.js")
+def process_mining_script() -> Response:
+    """Static local dashboard script; does not enable background collection."""
+    return FileResponse(
+        ROOT / "dashboard" / "process_mining.js",
+        media_type="application/javascript",
+    )
+
+
+@app.post("/v1/process-mining/preview")
+async def process_mining_csv_preview(request: Request) -> Response:
+    """Explicit, authenticated local CSV preview. No file or projection retained.
+
+    The existing secure_app middleware checks dashboard/bearer auth before
+    entering this endpoint. Bound the actual chunked stream, not just headers.
+    """
+    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if content_type != "text/csv":
+        raise HTTPException(status_code=415, detail="CSV requests must use text/csv")
+    try:
+        length = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Content-Length") from None
+    if length > MAX_PROCESS_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
+    payload = bytearray()
+    async for chunk in request.stream():
+        if len(payload) + len(chunk) > MAX_PROCESS_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
+        payload.extend(chunk)
+    try:
+        report = mine_csv_events(bytes(payload))
+    except ProcessMiningCSVError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    finally:
+        payload.clear()
+    return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/v1/record-graph/operation-receipt")
