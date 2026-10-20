@@ -49,7 +49,7 @@
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     const patternList=parent.querySelector('#patternList');
-    if(patternList) parent.insertBefore(host,patternList); else parent.appendChild(host);
+    if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
   }
 
