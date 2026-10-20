@@ -56,3 +56,5 @@ before merging the integration PR.
 Integration: from a reviewed AS-IS/TO-BE proposal, select **Download agent starter ZIP**. This sends only the minimized reviewed draft to the already authenticated local OWG process.
 
 The BPMN file is only a descriptive linear model, not an executable RPA workflow. Its source labels are user-reviewed structural data; decisions, gateways, connector mappings and production authorization must be designed separately.
+
+Integration note: the downloadable starter is based on the current merged OWG process-mining and opportunity-review stack. The generated runner still has no live actions.
