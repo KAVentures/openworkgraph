@@ -115,3 +115,18 @@ def test_existing_workflow_discovery_returns_lanes_additively(monkeypatch):
     assert result["record_case_lanes"]["total_lanes"] == 2
     assert result["record_linked_activity"]["total_groups"] == 2
     assert result["returned_clusters_are_verified_tasks"] is False
+
+
+def test_record_lane_ui_is_visible_even_without_legacy_repeated_card():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "dashboard/workflow_evidence.js").read_text(encoding="utf-8")
+    dashboard = (root / "dashboard/index.html").read_text(encoding="utf-8")
+    assert 'id="patternCard"' in dashboard
+    assert "document.querySelector('#panel-overview #patternCard')" in script
+    assert "workflowRecordCaseLanes" in script
+    assert "payload.record_case_lanes" in script
+    assert "renderRecordLanes()" in script
+    assert "recordLaneCoverageLimited" in script
+    assert "payload.families" in script  # retained existing workflow candidate path
