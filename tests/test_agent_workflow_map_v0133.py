@@ -24,6 +24,13 @@ def _bundle():
                 {"step": "surface:gmail", "support_runs": 3, "runs_total": 3,
                  "median_zero_based_position": 0, "supporting_execution_ids": ["execution:aaaaaaaaaaaaaaaa", "execution:bbbbbbbbbbbbbbbb"]},
             ],
+            "structural_sequence_variants": [{
+                "exact_variants": [{
+                    "readable_steps": ["Gmail · Open message", "Salesforce · Update record"],
+                    "execution_count": 2,
+                    "execution_ids": ["execution:aaaaaaaaaaaaaaaa"],
+                }],
+            }],
             "less_common_observed_steps": [
                 {"step": "surface:slack", "support_runs": 1, "runs_total": 3,
                  "median_zero_based_position": 1},
@@ -47,6 +54,10 @@ def test_workflow_map_orders_observations_and_preserves_variation_evidence():
     assert result["observed_sequence_candidates"][0]["untrusted_observed_data"]
     assert result["evidence_execution_ids"] == frozen["provenance"]["selected_execution_ids"]
     assert result["coverage_complete"] is False
+    assert result["observed_example_paths"][0]["observed_steps"] == [
+        "Gmail · Open message", "Salesforce · Update record",
+    ]
+    assert result["observed_example_paths"][0]["derived_not_required_path"] is True
 
 
 def test_workflow_map_never_promotes_clicks_or_labels_to_rules_or_permissions():
