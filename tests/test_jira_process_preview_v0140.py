@@ -78,7 +78,6 @@ def test_ui_requires_user_click_and_does_not_enable_jira_background_reads():
     assert "button.onclick=async()" in ui
     assert "confirm_source_read:'true'" in ui
     assert "window.__owgAuthReady" in ui
-    assert "user consent" not in ui.lower() or True
 
 
 def test_real_api_auth_source_opt_in_and_audit_projection(tmp_path):
