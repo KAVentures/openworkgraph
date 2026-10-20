@@ -72,6 +72,7 @@
   function clearReport(){
     const host=document.getElementById('owgProcessResults');if(host)host.replaceChildren();
     window.owgProcessDesigner?.reset?.();
+    window.owgOpportunityReview?.reset?.();
   }
   function setStatus(message){
     const s=document.getElementById('owgProcessStatus');if(s)s.textContent=String(message||'');
@@ -184,6 +185,7 @@
     });
     table.append(head,body);wrapper.appendChild(table);host.appendChild(wrapper);
     host.appendChild(make('p','Case IDs and source values are never returned; the CSV preview is not saved. Process mining from live business-system connectors is a separate, future capability.','muted'));
+    window.owgOpportunityReview?.render?.(report);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();

@@ -118,6 +118,7 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
     activity_cases: dict[str, set[str]] = defaultdict(set)
     transition_events: Counter[tuple[str, str]] = Counter()
     transition_cases: dict[tuple[str, str], set[str]] = defaultdict(set)
+    transition_gaps: dict[tuple[str, str], list[float]] = defaultdict(list)
     repeated_steps = 0
     cases: list[dict[str, Any]] = []
 
@@ -143,7 +144,9 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
                 edge = (path[i - 1], activity)
                 transition_events[edge] += 1
                 transition_cases[edge].add(native_id)
-                gaps.append(_seconds(rows[i - 1][1], rows[i][1]))
+                gap_seconds = _seconds(rows[i - 1][1], rows[i][1])
+                gaps.append(gap_seconds)
+                transition_gaps[edge].append(gap_seconds)
         cases.append({
             "case": f"Case {case_index}",
             "event_count": len(rows),
@@ -166,9 +169,37 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
     edge_rows = [{
         "from": source, "to": target, "transition_count": n,
         "case_count": len(transition_cases[(source, target)]),
+        "median_elapsed_gap_seconds": round(median(transition_gaps[(source, target)]), 3),
+        "max_elapsed_gap_seconds": round(max(transition_gaps[(source, target)]), 3),
+        "gap_is_verified_waiting": False,
         "edge_is_causal_dependency": False,
     } for (source, target), n in transition_events.items()]
     edge_rows.sort(key=lambda row: (-row["transition_count"], row["from"], row["to"]))
+
+    # Time-gap and repetition signals identify where a person should inspect
+    # the source process. They are NOT automation, ROI or waiting-time claims.
+    gap_signals = sorted(
+        (row for row in edge_rows if row["median_elapsed_gap_seconds"] > 0),
+        key=lambda row: (-row["median_elapsed_gap_seconds"], -row["case_count"],
+                         row["from"], row["to"]),
+    )[:10]
+    repetition_signals = sorted(
+        (row for row in node_rows if row["event_count"] > row["case_count"]),
+        key=lambda row: (-(row["event_count"] - row["case_count"]), row["activity"]),
+    )[:10]
+    review_signals = [
+        {"type": "long_observed_transition_gap", "from": row["from"], "to": row["to"],
+         "observed_case_count": row["case_count"],
+         "median_elapsed_gap_seconds": row["median_elapsed_gap_seconds"],
+         "not_verified_wait_or_bottleneck": True}
+        for row in gap_signals
+    ] + [
+        {"type": "repeated_activity", "activity": row["activity"],
+         "observed_case_count": row["case_count"],
+         "additional_observed_events": row["event_count"] - row["case_count"],
+         "not_verified_rework_or_automation_opportunity": True}
+        for row in repetition_signals
+    ]
 
     variant_rows = [{
         "observed_path": list(path[:MAX_PATH_STEPS]),
@@ -196,6 +227,9 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         },
         "activities": node_rows,
         "transitions": edge_rows,
+        "review_signals": review_signals,
+        "review_signals_are_confirmed_bottlenecks": False,
+        "estimated_labor_savings_from_timestamps": None,
         "variants": variant_rows,
         "cases": cases[:MAX_CASE_RESULTS],
         "cases_truncated": len(cases) > MAX_CASE_RESULTS,

@@ -67,6 +67,12 @@ def process_mining_script() -> Response:
     )
 
 
+@app.get("/opportunity-review.js")
+def opportunity_review_script() -> Response:
+    """Static, local-only explicit-assumption process improvement UI."""
+    return FileResponse(ROOT / "dashboard" / "opportunity_review.js", media_type="application/javascript")
+
+
 @app.get("/process-designer.js")
 def process_designer_script() -> Response:
     """Static optional UI for reviewable proposed processes."""
