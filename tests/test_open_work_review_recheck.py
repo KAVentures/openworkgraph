@@ -16,6 +16,7 @@ from server.local_auth import create_dashboard_session, ensure_api_token
 from server import local_source_routes as routes
 from server import open_work_reviews as reviews
 
+routes.stripe_source_status = lambda: {"configured": True}
 ref = "owg:w:" + "a"*32
 reviews.save_review_intention(
     ref, "assess_follow_up", provider_candidate_currently_open=True)
