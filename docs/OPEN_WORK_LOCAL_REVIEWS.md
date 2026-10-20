@@ -48,3 +48,27 @@ satisfy issue #247's durable, tenant/actor-scoped, cross-provider case graph,
 declarative SOPs, verified customer outcomes, or agent A/B/C uplift study.
 That broader work requires a different explicit organizational scope and
 deletion/retention acceptance review before being called production-ready.
+
+
+## Owner-triggered fresh source recheck (stacked addition)
+
+The Advanced dashboard's **Recheck source status** button asks permission
+on every click and re-reads the connected read-only Stripe open-invoice
+inventory. It maps only locally stored opaque review references, returning:
+
+- `source_reported_open`: Stripe still lists the invoice as open;
+- `not_in_complete_open_inventory_outcome_unknown`: a bounded but complete
+  list no longer includes it. This does **not** establish whether the invoice
+  was paid, voided, deleted, disputed or written off;
+- `unknown_incomplete_inventory`: three-page cap prevents exhaustive proof;
+- `unknown_source_unavailable`: independent provider read failed.
+
+No request happens automatically in the background, on queue load, or when
+a source status is missing. The response is transient, never stored in
+the review-intention file. It never claims a verified business objective,
+agent causation, customer outcome or permission to issue a payment request.
+
+The associated endpoint is
+`POST /v1/open-work/reviews/recheck` with
+`{"confirm_scan":true}`, behind the existing privileged local dashboard
+session only.
