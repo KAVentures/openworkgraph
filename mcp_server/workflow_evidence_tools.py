@@ -14,7 +14,10 @@ OpenWorkGraph supplies evidence. The connected AI and user write the skill.
 
 Use `get_workflow_evidence` when the user asks you to turn observed/repeated work
 into a reusable skill, procedure, automation specification, or agent instruction.
-The response also includes `agent_workflow_map`, a compact candidate sequence\nfor use by an existing authorized agent; it is not a policy or action grant.\n\nThe tool is intentionally different from the other OWG views:
+The response also includes `agent_workflow_map`, a compact candidate sequence
+for use by an existing authorized agent; it is not a policy or action grant.
+
+The tool is intentionally different from the other OWG views:
 
 - `find_repeated_workflows` is discovery/navigation only;
 - `get_playbooks` returns descriptive shared playbooks, not executable authority;
