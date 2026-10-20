@@ -229,3 +229,73 @@ async def delete_local_review_intention(request: Request, work_item_ref: str):
     except ValueError:
         raise HTTPException(status_code=422, detail="invalid review reference") from None
     return {"removed": removed, "source_read_performed": False}
+
+
+@router.post("/v1/open-work/reviews/recheck")
+async def recheck_local_review_sources(request: Request):
+    """Explicit read-only fresh source status for locally saved review intents.
+
+    A missing item from a complete *open invoice inventory* proves only
+    it is not currently reported open; it does not prove paid, resolved,
+    customer acceptance or any agent's involvement.
+    """
+    _require_dashboard(request)
+    if len(await request.body()) > 256:
+        raise HTTPException(status_code=413, detail="review recheck request too large")
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="invalid recheck request") from None
+    if not isinstance(payload, dict) or payload.get("confirm_scan") is not True:
+        raise HTTPException(status_code=403, detail="explicit provider recheck required")
+    saved = await asyncio.to_thread(list_review_intentions)
+    reviews = saved.get("items") or []
+    if not reviews:
+        return {
+            "availability": "no_local_reviews",
+            "provider_read_performed": False,
+            "source_outcome_verified": False,
+            "business_objective_verified": False,
+            "status_by_work_item": {},
+        }
+    scan = await asyncio.to_thread(
+        stripe_open_work_preview, explicit_scan_authorized=True, max_pages=3,
+    )
+    if scan.get("availability") != "source_reported":
+        return {
+            "availability": "unknown",
+            "reason": "source_read_unavailable",
+            "provider_read_performed": True,
+            "source_outcome_verified": False,
+            "business_objective_verified": False,
+            "status_by_work_item": {
+                item["work_item_ref"]: "unknown_source_unavailable"
+                for item in reviews
+            },
+        }
+    open_refs = {
+        item.get("work_item_ref") for item in scan.get("candidates", [])
+        if isinstance(item, dict) and item.get("source_status") == "open"
+    }
+    complete = scan.get("source_coverage_complete") is True
+    states = {
+        item["work_item_ref"]: (
+            "source_reported_open" if item["work_item_ref"] in open_refs
+            else "not_in_complete_open_inventory_outcome_unknown" if complete
+            else "unknown_incomplete_inventory"
+        )
+        for item in reviews
+    }
+    return {
+        "format": "openworkgraph.review-source-recheck.v1",
+        "availability": "source_reported",
+        "verified_at": scan.get("verified_at"),
+        "provider_read_performed": True,
+        "source_coverage_complete": complete,
+        "source_outcome_verified": False,
+        "business_objective_verified": False,
+        "agent_caused_outcome_verified": False,
+        "automatic_actions": False,
+        "review_intentions_unchanged": True,
+        "status_by_work_item": states,
+    }
