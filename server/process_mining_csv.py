@@ -132,11 +132,13 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         duration = _seconds(rows[0][1], rows[-1][1])
         durations.append(duration)
         variants[path] += 1
+        visited_activities: set[str] = set()
         for i, activity in enumerate(path):
             activity_events[activity] += 1
             activity_cases[activity].add(native_id)
-            if activity in path[:i]:
+            if activity in visited_activities:
                 repeated_steps += 1
+            visited_activities.add(activity)
             if i:
                 edge = (path[i - 1], activity)
                 transition_events[edge] += 1
