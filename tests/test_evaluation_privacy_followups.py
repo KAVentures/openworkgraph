@@ -48,3 +48,16 @@ def test_regular_work_context_and_references_are_preserved(app, title):
     assert not private_browser_window(app, title)
     assert suppress_private_browsing(event) == event
     assert not should_exclude(app, title, [], [])
+
+
+@pytest.mark.parametrize('title_field', ['resource_title', 'context_title', 'page_title'])
+def test_legacy_derived_context_keeps_schema_without_private_content(title_field):
+    event = {'event_id': 'context-1', 'surface': 'Gmail',
+             title_field: 'SECRET_TITLE - Google Chrome (Inkognito)',
+             'target_label': 'SECRET_TARGET', 'context_text': 'SECRET_BODY',
+             'resource_locator': 'https://secret.invalid/record'}
+    safe = suppress_private_browsing(event)
+    assert safe['surface'] == 'Excluded'
+    assert safe[title_field] == ''
+    assert safe['event_id'] == 'context-1'
+    assert 'SECRET_' not in str(safe) and 'secret.invalid' not in str(safe)

@@ -16,7 +16,8 @@ _MARKER = re.compile(
 
 
 def private_browser_window(app: str = "", title: str = "") -> bool:
-    return bool(_BROWSER.search(str(app)) and _MARKER.search(str(title)))
+    return bool((_BROWSER.search(str(app)) or _BROWSER.search(str(title)))
+                and _MARKER.search(str(title)))
 
 
 def suppress_private_browsing(value: Any) -> Any:
@@ -24,8 +25,10 @@ def suppress_private_browsing(value: Any) -> Any:
         return [suppress_private_browsing(item) for item in value]
     if not isinstance(value, dict):
         return value
-    title = value.get("window_title") or value.get("page_title") or value.get("context_title") or ""
-    app = value.get("app") or value.get("container_app") or value.get("app_or_surface") or ""
+    title = (value.get("window_title") or value.get("page_title") or value.get("context_title")
+             or value.get("resource_title") or value.get("display_hint") or "")
+    app = (value.get("app") or value.get("container_app") or value.get("app_or_surface")
+           or value.get("surface") or value.get("work_surface") or "")
     if private_browser_window(str(app), str(title)):
         # An allowlist prevents new target/file/clipboard/screenshot fields from
         # accidentally bypassing the boundary. Keep structural event linkage.
@@ -37,5 +40,11 @@ def suppress_private_browsing(value: Any) -> Any:
         safe.update(app="Excluded", window_title="", metadata={
             "excluded": True, "excluded_by": "private_browser_window",
         })
+        for field in ("surface", "work_surface", "container_app", "app_or_surface"):
+            if field in value:
+                safe[field] = "Excluded"
+        for field in ("resource_title", "page_title", "context_title", "display_hint"):
+            if field in value:
+                safe[field] = ""
         return safe
     return {key: suppress_private_browsing(child) for key, child in value.items()}

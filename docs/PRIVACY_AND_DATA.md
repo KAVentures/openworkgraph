@@ -10,7 +10,8 @@ This document describes the current v0.114 behavior. It is a technical descripti
 
 Browser chrome markers such as Chrome's `(Incognito)` / Swedish and German
 `(Inkognito)` and Edge's `InPrivate` are excluded independently of older saved
-keyword lists. Detection requires a browser application and an explicit marker;
+keyword lists. Detection requires an explicit marker and a browser application
+or browser name in the title (for legacy normalized context rows);
 ordinary titles about private equity or a brand named Inkognito retain context.
 This is a marker-based safeguard, not a claim that every private window on every
 platform exposes a detectable title marker.
