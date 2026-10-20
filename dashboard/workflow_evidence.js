@@ -4,6 +4,8 @@
     : String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmt = seconds => typeof window.fmtTime === 'function' ? window.fmtTime(seconds) : `${Math.round(Number(seconds||0)/60)}m`;
   let families=[];
+  let recordLanes=[];
+  let recordLaneCoverageLimited=false;
   let loading=false;
 
   function repeatedCard(){
@@ -39,7 +41,12 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="ghost" type="button" id="refreshWorkflowEvidence">Refresh examples</button><span class="badge">Evidence → external AI</span></div>
       </div>
-      <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>`;
+      <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>
+      <div style="border-top:1px solid #eceee8;padding-top:13px;margin-top:13px">
+        <h3>Record-linked observations</h3>
+        <div class="muted">Separate records stay separate even when work is interleaved. Only exact, opted-in OWG record references are matched; this is not a verified business process, handoff or outcome.</div>
+        <div id="workflowRecordCaseLanes" style="margin-top:10px"></div>
+      </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     const patternList=parent.querySelector('#patternList');
     if(patternList) parent.insertBefore(host,patternList); else parent.appendChild(host);
@@ -81,6 +88,32 @@
     host.querySelectorAll('[data-review-workflow]').forEach(button=>{
       button.onclick=()=>openReview(Number(button.dataset.reviewWorkflow||0));
     });
+  }
+
+  function renderRecordLanes(){
+    const host=ensureCard()?.querySelector('#workflowRecordCaseLanes');
+    if(!host) return;
+    const rows=recordLanes.slice(0,8);
+    if(!rows.length){
+      host.innerHTML='<p class="muted">No repeated exact-record observations in this evidence window. This does not mean no business cases exist; exact source references require opt-in capture.</p>';
+      return;
+    }
+    const coverage=recordLaneCoverageLimited
+      ? '<p class="muted">Source event cap reached. Earlier observations may be missing; narrow the period before assessing coverage.</p>' : '';
+    host.innerHTML=coverage+rows.map((item,index)=>{
+      const steps=(item.observed_steps||[]).slice(0,24);
+      const lines=steps.map(step=>'<li><span class="muted">'+esc(step.observed_at||'')+'</span> · '+
+        esc(step.source||'unknown')+' · '+esc(step.action||'unknown')+'</li>').join('');
+      const more=item.steps_truncated?'<li class="muted">Additional events not shown. Read the exact record via existing record-graph tooling for a bounded drilldown.</li>':'';
+      return '<details style="padding:9px 0;border-bottom:1px solid #eceee8" data-record-lane="'+index+'">'+
+        '<summary style="cursor:pointer"><strong>'+esc(item.provider||'Record')+' · '+esc(item.resource_kind||'object')+'</strong>'+
+        ' <span class="muted">· '+Number(item.observed_event_count||0)+' observed events, '+
+        Number(item.observed_actor_count||0)+' actors, '+Number(item.observed_session_count||0)+' sessions</span></summary>'+
+        '<p class="muted">Exact opaque reference: <code>'+esc(item.resource_ref||'')+
+        '</code>. No cross-record join, verified handoff or successful business outcome is implied.</p>'+
+        '<ol style="margin-top:6px">'+lines+more+'</ol>'+
+        '</details>';
+    }).join('');
   }
 
   function selectedIds(index){
@@ -183,7 +216,10 @@
       if(!response.ok) throw new Error('workflow evidence unavailable');
       const payload=await response.json();
       families=Array.isArray(payload.families)?payload.families:[];
+      recordLanes=Array.isArray(payload.record_case_lanes?.lanes)?payload.record_case_lanes.lanes:[];
+      recordLaneCoverageLimited=!!payload.source_limit_reached;
       renderFamilies();
+      renderRecordLanes();
     }catch(_){
       const host=ensureCard()?.querySelector('#workflowEvidenceCandidates');
       if(host) host.innerHTML='<div class="muted">Workflow evidence examples are unavailable right now. Stored/Redacted evidence export and canonical MCP trace access are unchanged.</div>';
