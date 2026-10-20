@@ -61,3 +61,16 @@ def test_legacy_derived_context_keeps_schema_without_private_content(title_field
     assert safe[title_field] == ''
     assert safe['event_id'] == 'context-1'
     assert 'SECRET_' not in str(safe) and 'secret.invalid' not in str(safe)
+
+
+def test_dashboard_activity_hides_legacy_private_context_before_title_formatting():
+    from server.evidence_query import _row_item
+    row = {'event_id': 'legacy-context', 'observed_at': '2026-10-20T10:00:00Z',
+           'surface': 'Gmail', 'resource_title': 'SECRET_TITLE - Google Chrome (Inkognito)',
+           'target_label': 'SECRET_TARGET', 'action': 'click', 'metadata_json': '{}'}
+    safe = _row_item(row)
+    assert safe['surface'] == 'Excluded'
+    assert safe['page'] == 'Excluded'
+    assert safe['resource_title'] == ''
+    assert safe['event_id'] == 'legacy-context'
+    assert 'SECRET_' not in str(safe)

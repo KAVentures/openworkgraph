@@ -154,7 +154,8 @@ def _row_item(row: Any, cache: dict[str, str] | None = None) -> dict[str, Any]:
     redacted AI context. URL paths and raw target labels are not sent: the
     action is a canonical semantic verb (or the structural event type).
     """
-    value = dict(row)
+    from shared.core.private_browsing import suppress_private_browsing
+    value = suppress_private_browsing(dict(row))
     try:
         metadata = json.loads(value.get("metadata_json") or "{}")
     except Exception:
