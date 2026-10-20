@@ -19,6 +19,10 @@ from .open_work_preview import stripe_open_work_preview
 from .open_work_github_preview import github_open_work_preview
 from .open_work_case_context import stripe_open_work_case_context
 from .open_work_mcp_settings import settings_status, set_experimental_tools_enabled
+from .open_work_reviews import (
+    list_review_intentions, save_review_intention,
+    remove_review_intention, clear_review_intentions,
+)
 
 router = APIRouter()
 
@@ -61,6 +65,9 @@ async def local_stripe_connect(request: Request):
         # Provider GET and OS credential dialogs must not stall the local API's
         # event loop. No secret enters access logs, query strings or response.
         await asyncio.to_thread(configure_stripe_source, account, secret)
+        # A new/replaced provider connection must not inherit another
+        # connection's locally saved review intentions.
+        await asyncio.to_thread(clear_review_intentions)
         return _status()
     except (ValueError, SourceCredentialError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -71,6 +78,7 @@ async def local_stripe_disconnect(request: Request):
     _require_dashboard(request)
     try:
         await asyncio.to_thread(disconnect_stripe_source)
+        await asyncio.to_thread(clear_review_intentions)
     except SourceCredentialError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     return _status()
@@ -153,3 +161,71 @@ async def update_local_open_work_mcp_tools(request: Request):
         return await asyncio.to_thread(set_experimental_tools_enabled, data["enabled"])
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail="Open Work tool preference could not be saved") from None
+
+
+@router.get("/v1/open-work/reviews")
+async def local_review_intentions(request: Request):
+    """List only human-selected local review intents; does not read Stripe."""
+    _require_dashboard(request)
+    if not stripe_source_status().get("configured"):
+        return {
+            **list_review_intentions(),
+            "items": [],
+            "reason": "provider_connection_not_configured",
+        }
+    return await asyncio.to_thread(list_review_intentions)
+
+
+@router.post("/v1/open-work/reviews")
+async def create_local_review_intention(request: Request):
+    """A deliberate owner click, live source verification, then local write.
+
+    A provider's 'open' flag proves only its current source status, never
+    an obligation, customer debt, or permission to contact the customer.
+    """
+    _require_dashboard(request)
+    if len(await request.body()) > 512:
+        raise HTTPException(status_code=413, detail="review request too large")
+    try:
+        payload = await request.json()
+        if (not isinstance(payload, dict) or
+            payload.get("confirm_scan") is not True or
+            payload.get("confirm_save") is not True):
+            raise HTTPException(status_code=403, detail="explicit scan and local save confirmation required")
+        ref = payload.get("work_item_ref")
+        intent = payload.get("review_intent")
+        if not isinstance(ref, str) or not isinstance(intent, str):
+            raise ValueError("invalid review candidate")
+        import re
+        if not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
+            raise ValueError("invalid review candidate reference")
+        if intent not in {"assess_follow_up", "verify_payment_status", "check_approved_policy"}:
+            raise ValueError("invalid review intention")
+        scan = await asyncio.to_thread(
+            stripe_open_work_preview, explicit_scan_authorized=True,
+            max_pages=3,
+        )
+        if scan.get("availability") != "source_reported":
+            raise HTTPException(status_code=409, detail="current source status unavailable")
+        if ref not in {
+            item.get("work_item_ref") for item in scan.get("candidates", [])
+            if isinstance(item, dict) and item.get("source_status") == "open"
+        }:
+            raise HTTPException(status_code=409, detail="candidate not verified open within bounded source inventory")
+        return await asyncio.to_thread(
+            save_review_intention, ref, intent,
+            provider_candidate_currently_open=True,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid local review request") from None
+
+
+@router.delete("/v1/open-work/reviews/{work_item_ref}")
+async def delete_local_review_intention(request: Request, work_item_ref: str):
+    """Forget an explicit locally stored review intention without source calls."""
+    _require_dashboard(request)
+    try:
+        removed = await asyncio.to_thread(remove_review_intention, work_item_ref)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid review reference") from None
+    return {"removed": removed, "source_read_performed": False}
