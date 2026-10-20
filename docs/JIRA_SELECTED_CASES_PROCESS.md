@@ -46,3 +46,5 @@ logs from additional providers, verified cross-system shared case identities,
 source coverage checks, user-reviewed process ownership and approved decision
 rules. The separate agent starter is an implementation scaffold, not proof
 of a functioning live automation.
+
+Integration note: this comparison is based on the merged, independently opted-in single-Jira-issue source audit reader.
