@@ -126,3 +126,54 @@ def test_dashboard_route_and_no_default_upload_or_persistence():
     assert "sendBeacon" not in script
     assert "fetch('/v1/process-mining/preview'" in script
     assert "file.size>MAX_UPLOAD" in script
+
+
+def test_real_authenticated_local_preview_stream_and_no_store(tmp_path):
+    """Isolate middleware imports so existing in-process FastAPI tests remain unaltered."""
+    import os
+    import subprocess
+    import sys
+
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from server.process_mining_csv import MAX_BYTES
+
+csv = b"case_id,activity,timestamp\ncase1,Received,2026-10-20T10:00:00Z\ncase1,Closed,2026-10-20T10:05:00Z\n"
+with TestClient(app) as client:
+    assert client.post("/v1/process-mining/preview", content=csv, headers={
+        "Content-Type": "text/csv"
+    }).status_code == 401
+    auth = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session(),
+            "Content-Type": "text/csv"}
+    ok = client.post("/v1/process-mining/preview", content=csv, headers=auth)
+    assert ok.status_code == 200, ok.text
+    assert ok.headers.get("cache-control") == "no-store"
+    assert ok.json()["case_count"] == 1
+    assert ok.json()["variants"][0]["observed_path"] == ["Received", "Closed"]
+    assert ok.json()["import_retained"] is False
+    assert client.get("/process-mining.js").status_code == 200
+    assert client.post("/v1/process-mining/preview", content=csv,
+        headers={**auth, "Content-Type": "application/json"}).status_code == 415
+    oversize = b"x" * (MAX_BYTES + 1)
+    assert client.post("/v1/process-mining/preview", content=oversize,
+        headers=auth).status_code == 413
+    invalid = client.post("/v1/process-mining/preview",
+        content=b"case_id,activity,timestamp\nc1,Open,2026-10-20T10:00:00\n",
+        headers=auth)
+    assert invalid.status_code == 422, invalid.text
+'''
+    env = os.environ.copy()
+    env.update({
+        "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+        "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+        "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json"),
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, (
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
