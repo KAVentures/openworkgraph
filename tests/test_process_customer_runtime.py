@@ -147,6 +147,22 @@ for name,data in [('plan.json',plan),('case.json',case),('bindings.json',binding
     with open(name,'w') as f:json.dump(data,f)
 ''')
             assert setup.returncode==0,setup.stderr
+            inspection=run('configure.py','--inspect-tools','--tool-server-url',base+'/mcp','--output','tool-catalog.json')
+            assert inspection.returncode==0,inspection.stderr
+            catalog=json.loads((project/'tool-catalog.json').read_text())
+            assert {tool['name'] for tool in catalog['tools']}=={'read_case','resolve_case'}
+            assert stats()['tool_calls']==[] and stats()['source_reads']==0 and stats()['catalog_reads']==0
+            configuration_tests=run('-m','unittest','-v','test_configuration')
+            assert configuration_tests.returncode==0,configuration_tests.stdout+configuration_tests.stderr
+            pinned=run('-c',r'''
+import json
+catalog=json.load(open('tool-catalog.json'))
+bindings=json.load(open('bindings.json'))
+schemas={tool['name']:tool['input_schema_sha256'] for tool in catalog['tools']}
+for row in bindings['bindings']:row['tool_schema_sha256']=schemas[row['tool_name']]
+json.dump(bindings,open('bindings.json','w'))
+''')
+            assert pinned.returncode==0,pinned.stderr
             args=['execute.py','--plan','plan.json','--case','case.json','--bindings','bindings.json']
             offline=run(*args,'--write-review-template','intent.json')
             assert offline.returncode==0,offline.stderr

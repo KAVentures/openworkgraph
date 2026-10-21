@@ -131,6 +131,24 @@ This is a planning backlog, not validated financial ROI or worker scoring.
 to the saved process revision. `GET /v1/process-catalog/agent-project` accepts
 exact `workflow_id` and `revision` query parameters and returns the ZIP.
 
+The export also includes `configure.py`: explicit MCP metadata inspection and
+model-assisted proposals for current tool names and argument mappings. Inspection
+calls only protocol initialization and list-tools; proposal invokes an explicitly
+chosen model with the process, minimized tool metadata and case field paths/types,
+never the selected case's values. Tool descriptions and field names can themselves
+be confidential, so the customer reviews the catalog before requesting a model
+proposal. No tools are attached to that model; SDK tracing stays disabled.
+
+Suggestions validate known eligible activity IDs, current tool names, real case
+pointers and primitive argument types. Human-designated activities stay human.
+The proposed bindings remain disabled, unauthorized and unmapped for actual
+read/write execution; model recommendations are separate annotations. The customer
+must review full current schemas, service semantics, result predicates, permission,
+fresh preconditions, conditional writes, idempotency and outcome association.
+Input-schema fingerprints from inspection are checked against current metadata
+before execution; changed schemas stop calls pending review. These fingerprints
+are content identifiers, not signed approval or proof of provider semantics.
+
 The project contains an OpenAI Agents SDK 0.24 planner, structured response
 schema, offline graph validator, bounded synthetic route examples, missing tool
 binding declarations and executable unit tests. Process data stays in the

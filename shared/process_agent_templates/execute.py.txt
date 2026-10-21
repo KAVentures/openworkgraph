@@ -109,6 +109,20 @@ def tool_name(value):
     return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:/-]{1,120}', value) is not None
 
 
+def tool_input_schema(tool):
+    schema = (tool.get('inputSchema',tool.get('input_schema')) if isinstance(tool,dict) else
+              getattr(tool,'inputSchema',getattr(tool,'input_schema',None)))
+    if not isinstance(schema,dict) or len(json.dumps(schema,allow_nan=False).encode())>65536:
+        raise ImplementationError('A bounded current tool input schema is required')
+    return schema
+
+
+def schema_reference(value):
+    if value is not None and (not isinstance(value,str) or not re.fullmatch(r'[a-f0-9]{64}',value)):
+        raise ImplementationError('Tool schema references must be exact SHA256 values')
+    return value
+
+
 def predicate_value(row, case):
     if 'result_equals_from_case' in row:
         if 'result_equals' in row:
@@ -199,6 +213,7 @@ def prepare(spec, plan_document, case, bindings):
                 requirements.append('missing_fresh_precondition_contract:' + activity_id)
             else:
                 precondition = {'tool_name': condition['tool_name'], 'arguments': arguments_for(condition, case),
+                                'tool_schema_sha256': schema_reference(condition.get('tool_schema_sha256')),
                                 'result_pointer': condition['result_pointer'], 'result_equals': predicate_value(condition, case)}
             concurrency = row.get('concurrency_control')
             if not isinstance(concurrency, dict) or concurrency.get('mode') != 'expected_version' or concurrency.get('provider_semantics_reviewed') is not True:
@@ -208,6 +223,7 @@ def prepare(spec, plan_document, case, bindings):
                     or (isinstance(arguments[concurrency['argument']], str) and not 1 <= len(arguments[concurrency['argument']]) <= 240)):
                 requirements.append('missing_expected_source_version:' + activity_id)
         actions.append({'activity_id': activity_id, 'tool_name': tool, 'operation_kind': kind,
+                        'tool_schema_sha256': schema_reference(row.get('tool_schema_sha256')),
                         'arguments': arguments, 'result_pointer': row.get('result_pointer'),
                         'result_equals': predicate_value(row, case), 'precondition': precondition})
     terminal = plan['activity_ids'][-1]
@@ -473,10 +489,16 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     ensure_current(intent, now)
                     tools = await client.list_tools()
                     names = {tool.get('name') if isinstance(tool, dict) else tool.name for tool in tools}
+                    current_tools = {tool.get('name') if isinstance(tool,dict) else tool.name:tool for tool in tools}
                     required_names = {action['tool_name'] for action in prepared['actions']}
                     required_names.update(action['precondition']['tool_name'] for action in prepared['actions'] if action['precondition'])
                     if not required_names <= names:
                         raise ImplementationError('A configured tool is unavailable; no actions were called')
+                    for action in prepared['actions']:
+                        for contract in [action]+([action['precondition']] if action['precondition'] else []):
+                            expected=contract.get('tool_schema_sha256')
+                            if expected is not None and digest(tool_input_schema(current_tools[contract['tool_name']]))!=expected:
+                                raise ImplementationError('A mapped tool input schema changed; inspect and review current bindings')
                     for index, action in enumerate(prepared['actions']):
                         await check_catalog()
                         ensure_current(intent, now)
