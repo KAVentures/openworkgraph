@@ -77,7 +77,12 @@ def test_real_today_profile_keeps_three_crm_transfers_after_restart(monkeypatch,
     # analytics tests in the same pytest process.
     monkeypatch.setattr(server_db, "DB_PATH", tmp_path / "owg.db")
     server_db.init_db()
-    base = datetime.now(timezone.utc) - timedelta(minutes=45)
+    # Pin this fixture to midday in the runner's local timezone. A rolling
+    # 45-minute window straddles midnight and erroneously puts events outside
+    # the explicitly requested local-today scope on overnight CI runs.
+    local_noon = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+    base = local_noon.astimezone(timezone.utc)
+    profile_now = base + timedelta(minutes=45)
     # Simulate a launcher restart after the observed work: current scope begins
     # after the events, while local-today history must still remain useful.
     monkeypatch.setenv("WORKFLOW_OBSERVER_RUN_STARTED_AT", (base + timedelta(minutes=40)).isoformat())
@@ -100,8 +105,8 @@ def test_real_today_profile_keeps_three_crm_transfers_after_restart(monkeypatch,
         ])
 
     assert server_db.insert_events(events) == len(events)
-    current = compute_work_profile(scope="current")
-    today = compute_work_profile(scope="today")
+    current = compute_work_profile(scope="current", now=profile_now)
+    today = compute_work_profile(scope="today", now=profile_now)
 
     assert float((current.get("fragmentation") or {}).get("foreground_seconds") or 0) == 0
     assert float((today.get("fragmentation") or {}).get("foreground_seconds") or 0) > 0

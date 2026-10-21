@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from .main import ROOT
 from .process_mining_csv import MAX_BYTES as MAX_PROCESS_CSV_BYTES, ProcessMiningCSVError, mine_csv_events
 from .process_agent_starter import MAX_REQUEST_BYTES as MAX_STARTER_BYTES, AgentStarterError, build_agent_starter
+from .agent_plan_preflight import MAX_BYTES as MAX_PREFLIGHT_BYTES, AgentPreflightError, preflight_agent_plan
+from .local_auth import dashboard_session_valid
 from .ai_context import redact_contextually
 from .secure_app import app
 from .record_graph import record_graph
@@ -160,6 +162,44 @@ async def process_design_starter(request: Request) -> Response:
             "Content-Disposition": 'attachment; filename="openworkgraph-agent-starter.zip"',
         },
     )
+
+
+@app.get("/agent-preflight.js")
+def agent_preflight_script() -> Response:
+    """Local, optional UI for deterministic non-executing plan review."""
+    return FileResponse(ROOT / "dashboard" / "agent_preflight.js", media_type="application/javascript")
+
+
+@app.post("/v1/process-design/preflight")
+async def local_agent_plan_preflight(request: Request) -> Response:
+    """Only an explicit local dashboard session may run bounded synthetic checks.
+
+    This imports an offline candidate plan and mock cases, never provider or
+    agent execution. API/MCP bearers are not a substitute for owner intent.
+    """
+    auth = str(request.headers.get("authorization") or "")
+    if (not auth.lower().startswith("owg-session ")
+            or not dashboard_session_valid(auth[len("owg-session "):].strip())):
+        raise HTTPException(status_code=403, detail="local dashboard session required")
+    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="JSON agent preflight required")
+    payload = bytearray()
+    async for chunk in request.stream():
+        if len(payload) + len(chunk) > MAX_PREFLIGHT_BYTES:
+            raise HTTPException(status_code=413, detail="agent preflight exceeds 64 KiB")
+        payload.extend(chunk)
+    try:
+        try:
+            document = json.loads(payload)
+        except (ValueError, UnicodeError):
+            raise HTTPException(status_code=422, detail="invalid agent preflight JSON") from None
+        report = preflight_agent_plan(document)
+    except AgentPreflightError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    finally:
+        payload.clear()
+    return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/v1/record-graph/operation-receipt")

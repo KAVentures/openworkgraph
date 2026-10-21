@@ -258,10 +258,36 @@ def build_agent_starter(packet: Any) -> bytes:
         "    assert all(not s['independent_success_receipt_configured']\n"
         "               for s in SPEC['to_be']['steps'])\n"
     )
+    # A user-editable, intentionally incomplete synthetic preflight fixture.
+    # "mock_unknown" never certifies a successful outcome. A real implementation
+    # agent must fill in a candidate plan and synthetic test traces explicitly.
+    preflight_template = {
+        "format": "openworkgraph.agent-plan-preflight.v1",
+        "workflow": workflow,
+        "candidate": {
+            "format": "openworkgraph.agent-candidate-plan.v1",
+            "intent": "shadow_only",
+            "exception_handling": "human_escalation",
+            "proposed_actions": [{
+                "step_id": step["id"],
+                "action_kind": "manual_review",
+                "source_state_checked": False,
+                "outcome_evidence_mode": "none",
+            } for step in workflow["to_be"]["steps"]],
+        },
+        "simulated_cases": [{
+            "scenario": "SyntheticUnknown",
+            "mock_steps": [{
+                "step_id": step["id"], "mock_result": "mock_unknown"
+            } for step in workflow["to_be"]["steps"]],
+            "claimed_outcome": "unknown",
+        }],
+    }
     files = {
         "README.md": readme,
         "AGENTS.md": agent_instructions,
         "workflow.spec.json": manifest,
+        "preflight.request.template.json": json.dumps(preflight_template, indent=2, ensure_ascii=False) + "\n",
         "process.bpmn": _review_bpmn(proposed, review_conditions),
         "dry_run.py": dry_run,
         "tests/test_contract.py": test_contract,
