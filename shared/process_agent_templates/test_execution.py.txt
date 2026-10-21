@@ -146,6 +146,27 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):await self.run_case(data)
         self.assertFalse(self.tools.calls);self.assertFalse(self.source_requests)
 
+    async def test_changed_pinned_tool_schema_blocks_actions_before_the_precondition(self):
+        data=deepcopy(self.data)
+        data[3]['bindings'][0]['tool_schema_sha256']=digest({'type':'object','properties':{'issue':{'type':'string'}}})
+        data[4]['bindings_sha256']=digest(data[3])
+        async def tools():return [{'name':'read_case','inputSchema':{}},{'name':'resolve_case','inputSchema':{'type':'object','properties':{'issue':{'type':'integer'}}}}]
+        self.tools.list_tools=tools
+        result=await self.run_case(data)
+        self.assertFalse(self.tools.calls)
+        self.assertTrue(result['implementation_contract_or_intent_not_established'])
+        self.assertFalse(result['all_tool_results_matched'])
+
+    async def test_changed_pinned_precondition_schema_blocks_even_the_read(self):
+        data=deepcopy(self.data)
+        data[3]['bindings'][0]['precondition']['tool_schema_sha256']=digest({'type':'object','properties':{'issue':{'type':'string'}}})
+        data[4]['bindings_sha256']=digest(data[3])
+        async def tools():return [{'name':'read_case','inputSchema':{}},{'name':'resolve_case','inputSchema':{}}]
+        self.tools.list_tools=tools
+        result=await self.run_case(data)
+        self.assertFalse(self.tools.calls)
+        self.assertTrue(result['implementation_contract_or_intent_not_established'])
+
     async def test_mapped_precondition_action_and_independent_source_state(self):
         result=await self.run_case()
         self.assertEqual([c[0] for c in self.tools.calls],['read_case','resolve_case','read_case'])

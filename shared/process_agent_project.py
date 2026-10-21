@@ -83,7 +83,7 @@ def build_runtime_project(packet: dict) -> bytes:
             raise ValueError('A bounded organization catalog reference is required')
         spec['organization_catalog_reference'] = dict(origin)
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py')}
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'
     files['synthetic-cases.json'] = json.dumps(synthetic_routes(model), indent=2) + '\n'
@@ -93,7 +93,7 @@ def build_runtime_project(packet: dict) -> bytes:
         'enabled':False, 'tool_server_url':None, 'source_api_url':'http://127.0.0.1:8787',
         'process_catalog_url':None, 'bindings': [
         {'activity_id': a.id, 'suggested_implementation': a.implementation,
-         'tool_name':None, 'operation_kind':'unmapped', 'authorized':False,
+         'tool_name':None, 'operation_kind':'unmapped', 'authorized':False, 'tool_schema_sha256':None,
          'argument_map':{}, 'constant_arguments':{}, 'result_pointer':None, 'result_equals':None,
          'precondition':None, 'concurrency_control':None, 'idempotency':None}
          for a in model.activities if a.kind == 'activity'],
@@ -141,6 +141,29 @@ def build_runtime_project(packet: dict) -> bytes:
         'Unevaluated manual review conditions are retained by stable activity ID.\n'
         'A route containing one requires human clarification even if the model\n'
         'returns a proposal. Neither the model nor the validator evaluates its trigger.\n\n'
+        '## Inspect current tools and propose disabled mappings\n\n'
+        'Install requirements.txt first. Configure the customer MCP metadata credential\n'
+        'in OWG_EXECUTION_MCP_TOKEN, then explicitly inspect its current catalog:\n\n'
+        '```sh\npython configure.py --inspect-tools --tool-server-url https://customer.example/mcp --output tool-catalog.json\n```\n\n'
+        'Inspection calls initialize/list-tools only, never call-tool or a model.\n'
+        'The local catalog omits raw schemas, defaults and examples, retaining\n'
+        'bounded tool names/descriptions, argument names/types and schema hashes.\n'
+        'Tool metadata is untrusted and can contain confidential descriptions;\n'
+        'review that file before explicitly sending it to a chosen model:\n\n'
+        '```sh\npython configure.py --propose-bindings --catalog tool-catalog.json --case authorized-case.json --model YOUR_MODEL --output tool-bindings.proposed.json\n```\n\n'
+        'This sends the process model, minimized catalog and case FIELD PATHS/TYPES,\n'
+        'not case values or server credentials. Field names may themselves be sensitive.\n'
+        'SDK tracing is disabled and the model has no business tools. Suggestions\n'
+        'must use listed tools, eligible activities and existing typed case pointers;\n'
+        'declared human responsibilities remain human. Both top-level enablement\n'
+        'and per-binding authorization remain false. Read/write kinds stay unmapped\n'
+        'until customer review; model recommendations are separate annotations.\n'
+        'No preconditions, concurrency\n'
+        'contracts, idempotency or outcome associations are approved automatically.\n'
+        'Resolve questions and review full current schemas and service semantics.\n'
+        'Only after customer review should mappings enter a separate bindings file.\n'
+        'Pinned input-schema changes block later tool attempts; hashes identify\n'
+        'structure, not signed authorization or proof of provider semantics.\n\n'
         '## Separately authorized customer MCP implementation\n\n'
         'execute.py defaults to offline review with no network or action calls.\n'
         'tool-bindings.example.json is disabled and has no tool mappings. Map\n'

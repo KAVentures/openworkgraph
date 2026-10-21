@@ -1,0 +1,113 @@
+"""Current-tool inspection and actual SDK mapping proposals against owned fakes."""
+import asyncio
+from copy import deepcopy
+from datetime import datetime,timezone
+import json
+import unittest
+from unittest.mock import patch
+
+try:
+    from agents.models.interface import Model,ModelTracing
+    from agents.items import ModelResponse
+    from agents.usage import Usage
+    from openai.types.responses import ResponseOutputMessage,ResponseOutputText
+    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog
+    from execute import ImplementationError,digest
+    from test_execution import fixture
+    SDK_AVAILABLE=True
+except ImportError:
+    SDK_AVAILABLE=False
+
+
+class MetadataTools:
+    def __init__(self):self.business_calls=[]
+    async def __aenter__(self):return self
+    async def __aexit__(self,*args):return False
+    async def list_tools(self):
+        return [{'name':'resolve_case','description':'SYNTHETIC_UNTRUSTED_TOOL_DATA '+ 'SYNTHETIC_MCP_SECRET',
+            'inputSchema':{'type':'object','properties':{'issue':{'type':'string','default':'PRIVATE_DEFAULT'},
+                'expected_version':{'type':'integer'},'request_id':{'type':'string'}},
+                'required':['issue','expected_version','request_id']}},
+            {'name':'read_case','description':'Read a selected current case',
+             'inputSchema':{'type':'object','properties':{'issue':{'type':'string'}},'required':['issue']}},
+            {'name':'bad tool name','inputSchema':{}}]
+    async def call_tool(self,*args):self.business_calls.append(args);raise AssertionError('Configuration cannot call business tools')
+
+
+if SDK_AVAILABLE:
+    class OfflineBindingModel(Model):
+        def __init__(self,proposal):self.proposal=proposal
+        async def get_response(self,system_instructions,input,model_settings,tools,output_schema,handoffs,tracing,**kwargs):
+            assert tools==[] and tracing is ModelTracing.DISABLED
+            assert 'SYNTHETIC_UNTRUSTED_TOOL_DATA' not in system_instructions
+            assert 'SYNTHETIC_UNTRUSTED_TOOL_DATA' in str(input)
+            for value in ('SYNTHETIC_PRIVATE_RECORD','PRIVATE_DEFAULT','SYNTHETIC_MCP_SECRET'):
+                assert value not in str(input) and value not in system_instructions
+            message=ResponseOutputMessage(id='message_synthetic',type='message',role='assistant',
+                content=[ResponseOutputText(type='output_text',text=json.dumps(self.proposal),annotations=[])],status='completed')
+            return ModelResponse(output=[message],usage=Usage(),response_id='response_synthetic')
+        def stream_response(self,*args,**kwargs):raise NotImplementedError
+
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for current-tool and actual SDK proposal tests')
+class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.spec,_,self.case,_,_=fixture();self.tools=MetadataTools()
+        self.environment=patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_MCP_SECRET'})
+        self.environment.start();self.addCleanup(self.environment.stop)
+        self.catalog=await inspect_tools(self.spec,'http://127.0.0.1:18790/mcp',client_factory=lambda *args:self.tools)
+        self.proposal={'workflow_id':self.spec['workflow_id'],'revision':self.spec['revision'],
+            'content_sha256':self.spec['content_sha256'],'status':'proposal','missing_business_inputs':[],
+            'bindings':[{'activity_id':'resolve','tool_name':'resolve_case','operation_kind':'write',
+                'arguments':[{'name':'issue','case_pointer':'/issue'},{'name':'expected_version','case_pointer':'/version'},
+                             {'name':'request_id','case_pointer':'/request_id'}],'rationale':'Use the declared conditional API'},
+                {'activity_id':'readback','tool_name':'read_case','operation_kind':'read',
+                 'arguments':[{'name':'issue','case_pointer':'/issue'}],'rationale':'Inspect current state'}]}
+    async def test_inspection_minimizes_metadata_and_never_calls_business_tools(self):
+        self.assertEqual(len(self.catalog['tools']),2);self.assertEqual(self.catalog['omitted_tool_count'],1)
+        self.assertFalse(self.tools.business_calls)
+        text=json.dumps(self.catalog)
+        for value in ('SYNTHETIC_MCP_SECRET','PRIVATE_DEFAULT'):
+            self.assertNotIn(value,text)
+        self.assertNotIn('inputSchema',text)
+        self.assertEqual(self.catalog['tools'][0]['input_schema_sha256'],digest((await self.tools.list_tools())[0]['inputSchema']))
+    async def test_actual_sdk_proposes_only_disabled_bindings_from_known_metadata(self):
+        result=await propose_bindings(self.spec,self.catalog,self.case,model=OfflineBindingModel(self.proposal))
+        self.assertIs(result['enabled'],False)
+        self.assertEqual(result['bindings'][0]['argument_map']['issue'],'/issue')
+        self.assertEqual(result['bindings'][0]['tool_schema_sha256'],self.catalog['tools'][0]['input_schema_sha256'])
+        self.assertTrue(all(row['authorized'] is False for row in result['bindings']))
+        self.assertTrue(all(row['operation_kind']=='unmapped' for row in result['bindings']))
+        self.assertEqual(result['bindings'][0]['proposed_operation_kind'],'write')
+        self.assertTrue(all(row['precondition'] is None and row['idempotency'] is None for row in result['bindings']))
+        self.assertFalse(result['proposal_metadata']['case_values_sent_to_model'])
+        self.assertFalse(result['proposal_metadata']['business_tools_called'])
+        self.assertFalse(self.tools.business_calls)
+    async def test_unknown_tool_activity_pointer_and_argument_are_rejected(self):
+        for field,value in [('tool_name','unlisted_write'),('activity_id','not_in_model')]:
+            proposal=deepcopy(self.proposal);proposal['bindings'][0][field]=value
+            with self.assertRaises(ImplementationError):await propose_bindings(self.spec,self.catalog,self.case,model=OfflineBindingModel(proposal))
+        for name,path in [('unknown_argument','/issue'),('issue','/missing'),('expected_version','/issue')]:
+            proposal=deepcopy(self.proposal);proposal['bindings'][0]['arguments']=[{'name':name,'case_pointer':path}]
+            with self.assertRaises(ImplementationError):await propose_bindings(self.spec,self.catalog,self.case,model=OfflineBindingModel(proposal))
+    async def test_human_responsibilities_are_not_automatically_mapped(self):
+        spec=deepcopy(self.spec);spec['process_model']['activities'][0]['implementation']='human';spec['process_model_sha256']=digest(spec['process_model'])
+        catalog=deepcopy(self.catalog);catalog['spec_sha256']=digest(spec)
+        with self.assertRaises(ImplementationError):await propose_bindings(spec,catalog,self.case,model=OfflineBindingModel(self.proposal))
+    async def test_stale_wrong_revision_or_unminimized_catalogs_are_rejected_before_the_model(self):
+        for changed in ({'spec_sha256':'c'*64},{'inspected_at':'2000-01-01T00:00:00Z'}):
+            with self.assertRaises(ImplementationError):await propose_bindings(self.spec,self.catalog|changed,self.case,model=OfflineBindingModel(self.proposal))
+        catalog=deepcopy(self.catalog);catalog['tools'][0]['raw_defaults']='PRIVATE_DEFAULT'
+        with self.assertRaises(ImplementationError):validate_catalog(self.spec,catalog)
+    async def test_malformed_cached_metadata_is_rejected_before_any_model_call(self):
+        for key,value in [('name',{}),('input_fields',[{'name':'issue','type':[],'required':True}])]:
+            catalog=deepcopy(self.catalog);catalog['tools'][0][key]=value
+            with self.assertRaises(ImplementationError):
+                await propose_bindings(self.spec,catalog,self.case,model=OfflineBindingModel(self.proposal))
+    async def test_field_projection_has_types_and_escaped_paths_without_values(self):
+        result=case_fields({'a/b':{'~secret':'PRIVATE_VALUE'},'items':[{'value':3}]})
+        self.assertIn({'pointer':'/a~1b/~0secret','type':'string'},result)
+        self.assertNotIn('PRIVATE_VALUE',json.dumps(result))
+
+
+if __name__=='__main__':unittest.main()
