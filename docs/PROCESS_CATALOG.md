@@ -1,5 +1,8 @@
 # Versioned process catalog and structural comparison
 
+BPMN exports include [portable diagram geometry](PROCESS_DIAGRAM_INTERCHANGE.md)
+so external modelers can render activities, branches and loops immediately.
+
 The local Evidence page now connects the CSV designer to the existing
 `workflow_knowledge` store. No second model database or collector is introduced.
 Saving is explicit; selecting or analyzing a CSV still retains no import.

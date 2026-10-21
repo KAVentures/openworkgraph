@@ -72,10 +72,12 @@ jobs:
         run: python -m pytest -q tests/test_process_collaboration.py
       - name: Install isolated Chromium test runtime
         run: |
-          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 bpmn-js@18.31.0
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
+      - name: Verify BPMN external-modeler round trips
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
 
   browser-js:
     runs-on: ubuntu-latest

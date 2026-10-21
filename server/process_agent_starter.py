@@ -13,6 +13,7 @@ import re
 from typing import Any
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from shared.process_diagram import add_process_diagram
 
 FORMAT = "openworkgraph.agent-starter.v1"
 SOURCE_FORMAT = "openworkgraph.proposed-process-design.v1"
@@ -101,6 +102,7 @@ def _review_bpmn(steps: list[str], conditions: list[dict[str, Any]]) -> str:
             ET.SubElement(process, f"{{{ns}}}endEvent", attrib={"id": end})
             flow(gateway, manual)
             flow(manual, end)
+    add_process_diagram(root, process, entry_id='StartEvent_1')
     return ET.tostring(root, encoding="unicode", xml_declaration=False) + "\n"
 
 
