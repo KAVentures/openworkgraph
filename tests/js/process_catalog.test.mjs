@@ -15,7 +15,7 @@ class Element {
   scrollIntoView(){}
   walk(){return [this,...this.children.flatMap(n=>n.walk())];}
 }
-function fixture(){
+function fixture({shadowResponse}={}){
   const document={readyState:'complete'};
   const root=new Element('main',document);root.id='panel-evidence';
   document.querySelector=()=>null;
@@ -28,6 +28,7 @@ function fixture(){
   const fetch=async(path,options)=>{
     requests.push({path,options});
     const body=JSON.parse(options.body);
+    if(path==='/v1/process-catalog/shadow-review')return {ok:true,json:async()=>shadowResponse(body)};
     if(body.expected_revision!==(saved?.revision||0))return {ok:false,json:async()=>({detail:'Revision changed'})};
     saved={...body,workflow_id:'process_test',revision:(saved?.revision||0)+1};
     return {ok:true,json:async()=>saved};
@@ -45,6 +46,33 @@ test('designer bridge preserves duplicate AS-IS activities and exact TO-BE posit
   assert.equal(m.activities[0].label,m.activities[2].label);
   assert.equal(m.execution_authorized,false);assert.equal(m.outcomes_verified,false);
   assert.equal(m.transitions[1].target,'step_3');
+});
+
+test('shadow report inspection is explicit, temporary and ignores responses after editing',async()=>{
+  let release;const gate=new Promise(resolve=>release=resolve);
+  const {window,root,document,requests,button}=fixture({shadowResponse:async body=>{
+    await gate;
+    return {process_reference:{workflow_id:body.workflow_id,revision:body.revision},
+      references_latest_revision_at_inspection:true,report:{matching_case_count:0,case_count:1,review_required:true,
+      cases:[{case_id:'case_1',category:'normal',reason:'unexpected_clarification'}]}};
+  }});
+  await window.owgProcessCatalog.saveDesigner();
+  const file=root.walk().find(node=>node.attrs['aria-label']==='Choose shadow evaluation report');
+  file.files=[{size:20,text:async()=>JSON.stringify({format:'selected_minimized_report'})}];file.handlers.change();
+  assert.equal(requests.length,1);
+  const pending=button('Inspect report against saved revision').handlers.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests.length,2);assert.equal(JSON.parse(requests[1].options.body).revision,1);
+  const goal=root.walk().find(node=>node.attrs['aria-label']==='Business goal');goal.value='Changed draft';goal.handlers.input();
+  release();await pending;
+  assert.equal(document.getElementById('owgCatalogShadowResult').children.length,0);
+  await button('Inspect report against saved revision').handlers.click();
+  assert(document.getElementById('owgCatalogShadowResult').walk().some(node=>node.textContent==='0 of 1 cases match customer expectations'));
+  file.handlers.change();assert.equal(document.getElementById('owgCatalogShadowResult').children.length,0);
+  file.files=[{size:30,text:async()=>'{PRIVATE_CASE_VALUE'}];
+  await button('Inspect report against saved revision').handlers.click();
+  assert.equal(requests.length,3);
+  assert(!document.getElementById('owgCatalogStatus').textContent.includes('PRIVATE_CASE_VALUE'));
 });
 
 test('no catalog requests until explicit action; edits invalidate review and saved revisions use optimistic checks',async()=>{

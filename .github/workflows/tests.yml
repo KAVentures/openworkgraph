@@ -82,6 +82,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_logs.cjs
       - name: Verify reviewed grouping corrections preserve canonical histories
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/workflow_groupings.cjs
+      - name: Verify generated shadow reports reconnect to saved process revisions
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_shadow_review.cjs
       - name: Verify BPMN external-modeler round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
       - name: Install isolated generated-project SDK runtime

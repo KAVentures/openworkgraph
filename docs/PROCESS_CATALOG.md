@@ -156,6 +156,10 @@ Minimized reports identify exact suite/specification hashes, mismatches and
 review needs without case values or model questions. Customer expectations are
 declarations; agreement does not establish business truth or source outcomes.
 The evaluator grants no execution permission and never updates the process.
+Open its minimized report in the local saved-design editor to inspect mismatch
+reasons against the exact exported specification. Inspection validates report
+consistency and artifact association, keeps customer assertions unverified and
+retains nothing. Draft/file changes or reload clear the temporary review.
 
 The project contains an OpenAI Agents SDK 0.24 planner, structured response
 schema, offline graph validator, bounded synthetic route examples, missing tool

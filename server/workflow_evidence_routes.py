@@ -787,6 +787,24 @@ def get_process_opportunities(currency: str = Query(default='USD', pattern='^(US
     return JSONResponse(_catalog.opportunities(currency), headers={'Cache-Control': 'no-store'})
 
 
+@app.post('/v1/process-catalog/shadow-review')
+async def review_process_shadow_report(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_shadow_review import ShadowReviewRequest, inspect_shadow_report
+    _require_dashboard(request)
+    try:
+        body = ShadowReviewRequest.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid minimized shadow evaluation report') from None
+    packet = _catalog_export(body.workflow_id, body.revision)
+    latest = _catalog_record(body.workflow_id)
+    try:
+        result = inspect_shadow_report(packet, body.report, latest_revision=latest['revision'])
+    except ValueError:
+        raise HTTPException(status_code=422, detail='report does not match this exact saved process specification') from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 class ProcessOutcomeCheck(BaseModel):
     model_config = {'extra': 'forbid'}
     workflow_id: str = Field(pattern=_PROCESS_ID)

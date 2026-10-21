@@ -71,3 +71,30 @@ representative population coverage, rule truth, execution permission, source
 outcomes, agent causality or financial savings. Inspect mismatches against
 authorized evidence and current business rules before reviewing a new catalog
 revision. An evaluation never approves, deploys or updates a process or agent.
+
+## Inspect a report in the local catalog
+
+Open the exact saved design and use **Choose shadow evaluation report**, then
+**Inspect report against saved revision**. Selecting a file sends nothing. The
+explicit inspection sends the minimized JSON only to the authenticated local
+OWG server, which validates its schema, case/reason totals and exact exported
+specification hash. Extra raw fields, contradictory counts, authority claims
+and other specifications are rejected with fixed diagnostics.
+
+The result shows matching case counts and per-case mismatch reasons beside the
+saved process. It warns when that immutable revision has a newer saved version.
+Unsaved editor changes are excluded. Editing the draft, changing the selected
+file, clearing the review, switching revisions or reloading clears the display;
+late responses cannot restore a review invalidated by an edit.
+
+This verifies artifact association and internal report consistency only. A
+customer could fabricate a self-consistent report; authenticity, expectation
+truth, population coverage and source outcomes remain unverified. The report's
+timestamp is a customer claim. Inspection creates no knowledge revision, retains
+no report, copies no case values and invokes no model, source adapter or business
+tool. Downloaded reports remain independent files under customer control.
+
+`POST /v1/process-catalog/shadow-review` accepts `workflow_id`, strict integer
+`revision` and the minimized `report`, within the existing 128 KiB bounded JSON
+limit. It requires a local dashboard session; ordinary API/MCP bearers cannot
+upload these reports. Responses use `Cache-Control: no-store`.

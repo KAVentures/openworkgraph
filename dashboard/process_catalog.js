@@ -2,11 +2,13 @@
 (() => {
   'use strict';
   let record=null, model=null, reviewed=false, busy=false, after='';
+  let shadowGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
-  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;}
+  function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
+  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -159,6 +161,7 @@
     wrap.appendChild(drawing);return wrap;
   }
   function renderEditor(){
+    clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
     host.appendChild(el('p','Edits create a new revision. These are proposed designs and declared rules; they do not authorize an agent or establish company policy.'));
@@ -305,7 +308,41 @@
     })));
     }
     host.appendChild(actions);
+    if(record.revision)renderShadowReview(host);
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
+  }
+  function renderShadowReview(host){
+    const section=el('section');section.appendChild(el('h4','Review a shadow evaluation'));
+    section.appendChild(el('p','Inspect a minimized report from this saved revision’s downloaded agent project. It stays local and temporary. Customer expectations and reported counts remain unverified declarations; this inspection grants no execution permission. Unsaved graph edits are excluded.'));
+    const label=el('label','Choose shadow evaluation report '),file=el('input');
+    file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Choose shadow evaluation report');
+    file.addEventListener('change',clearShadowReview);label.appendChild(file);section.appendChild(label);
+    const output=el('div');output.id='owgCatalogShadowResult';output.setAttribute('role','status');
+    section.appendChild(button('Inspect report against saved revision',()=>locked(async()=>{
+      clearShadowReview();const generation=shadowGeneration,selected=record,source=file.files?.[0];
+      if(!source||source.size>128*1024)throw new Error('Choose a minimized shadow report JSON file of at most 128 KiB.');
+      let report;
+      try{report=JSON.parse(await source.text());}catch{throw new Error('The selected file is not a valid shadow report JSON document.');}
+      if(generation!==shadowGeneration||record!==selected)return;
+      const result=await request('/v1/process-catalog/shadow-review',{workflow_id:selected.workflow_id,revision:selected.revision,report});
+      if(generation!==shadowGeneration||record!==selected)return;
+      output.appendChild(el('h4',result.report.matching_case_count+' of '+result.report.case_count+' cases match customer expectations'));
+      output.appendChild(el('p','Exact saved specification matched · revision '+result.process_reference.revision+'. '+
+        (result.references_latest_revision_at_inspection?'This was the latest saved revision at inspection.':
+          'A newer revision '+result.latest_revision_at_inspection+' exists. Re-export and evaluate that design before using its results.')));
+      output.appendChild(el('p',result.report.review_required?'Mismatches require human review against source evidence and business rules.':'Selected expectations agree. Coverage, business truth and live outcomes remain unverified.'));
+      const reasons={matches_reviewed_expectation:'Matches reviewed expectation',invalid_or_stale_plan:'Invalid or stale plan',
+        invalid_route:'Route outside saved graph',unresolved_review_bypassed:'Unresolved review bypassed',
+        proposal_has_unresolved_inputs:'Proposal contains unresolved inputs',expected_clarification:'Clarification was expected',
+        unexpected_route:'Different route than expected',clarification_without_question:'Clarification has no question',
+        unknown_activity_in_clarification:'Clarification references an unknown activity',unexpected_clarification:'Unexpected clarification'};
+      const list=el('ul');for(const row of result.report.cases)list.appendChild(el('li',row.case_id+' · '+row.category+' · '+reasons[row.reason]));
+      output.appendChild(list);
+      output.appendChild(el('p','This is a customer-supplied report. Its authenticity and expected business results were not independently verified. No case values are imported, no process revision is changed and no report is retained.'));
+      status('Shadow report inspected against saved revision '+result.process_reference.revision+'. Review is temporary and clears when the editor or file changes.');
+    })));
+    section.appendChild(button('Clear shadow report review',()=>{file.value='';clearShadowReview();}));
+    section.appendChild(output);host.appendChild(section);
   }
   async function backlog(currency){
     const result=await request('/v1/process-catalog/opportunities?'+new URLSearchParams({currency}));
