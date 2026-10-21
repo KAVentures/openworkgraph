@@ -166,7 +166,7 @@
       currentWindow = sinceWindow(chosenPeriod);
       const params = new URLSearchParams({
         min_runs: '2', limit: String(LIMIT), rank_by_quality: 'true',
-        source_event_limit: '25000', ...currentWindow
+        source_event_limit: '25000', include_transition_maps:'true', ...currentWindow
       });
       const response = await fetch('/v1/workflow-evidence/families?' + params, {cache: 'no-store'});
       if (!response.ok) throw new Error('The workflow evidence read failed (' + response.status + ').');
@@ -297,6 +297,11 @@
       'Each lane is a distinct observed sequence. Identical steps in different lanes are not assumed to be the same decision or case.' +
       (limited > 0 ? ' ' + limited + ' additional variants are not drawn.' : '') +
       ' The map shows no unobserved actions, values, or inferred authorization.', 'muted'));
+    if(candidate.observed_transition_map){
+      const combined=element('div');combined.id='owgExplorerCombinedMap';
+      host.appendChild(button('Explore combined candidate transitions',()=>renderCombinedMap(candidate,lanes,combined),true));
+      host.appendChild(combined);
+    }
     const actions = element('div', null, 'owg-explorer-actions');
     actions.appendChild(button('Review selected examples', () => inspect(candidate, selectedExample), true));
     const regroup=button('Name or regroup selected examples',()=>{
@@ -323,6 +328,54 @@
     const examples = element('div');
     examples.id = 'owgExplorerEvidence';
     host.appendChild(examples);
+  }
+  function renderCombinedMap(candidate,lanes,host){
+    host.replaceChildren();
+    const map=candidate.observed_transition_map;
+    if(!window.owgProcessGraph?.draw||map?.format!=='openworkgraph.candidate-transition-map.v1'){
+      host.appendChild(element('p','Combined map unavailable. Use the separate observed variant lanes.','muted'));return;
+    }
+    const activities=safeArray(map.activities).map(node=>({...node,
+      label:readable(node.structural_step,candidate.surface_labels),kind:'activity',
+      observed_summary:count(node.projected_occurrence_count)+' projected steps · '+count(node.supporting_execution_count)+' executions'}));
+    const byId=new Map(activities.map(node=>[node.id,node]));
+    const transitions=safeArray(map.transitions).map(edge=>({...edge,
+      observed_summary:(byId.get(edge.source)?.label||'')+' → '+(byId.get(edge.target)?.label||'')+' · '+
+        count(edge.projected_transition_count)+' projected transitions in '+count(edge.supporting_execution_count)+' executions; step timing unavailable'}));
+    host.appendChild(element('h4','Combined candidate transition map'));
+    host.appendChild(element('p',count(map.execution_count)+' candidate executions across all cluster projections, including variants omitted from the lanes. '+
+      'Counts describe normalized structural steps: adjacent repeats collapse and each sequence is limited to '+count(map.maximum_projected_steps_per_execution)+' steps. '+
+      'They are not canonical event counts or verified business cases. Combined paths can be absent from every execution; no step timing, policy or authorization is inferred.','muted'));
+    if(count(map.omitted_activity_count)||count(map.omitted_transition_type_count))host.appendChild(element('p',
+      count(map.omitted_activity_count)+' activity types and '+count(map.omitted_transition_type_count)+' transition types omitted by map limits. Separate variants remain available.','muted'));
+    const info=element('div','Select a node to inspect projection counts and displayed supporting variants.','muted');
+    info.id='owgExplorerCombinedDetails';info.setAttribute('role','status');info.tabIndex=-1;
+    try{
+      const drawing=window.owgProcessGraph.draw({activities,transitions,entry_activity_id:activities[0]?.id},selected=>{
+        const node=byId.get(selected.id);if(!node)return;
+        // A combined selection does not silently choose a complete execution.
+        selectedExample=null;
+        const stepInfo=document.getElementById('owgExplorerStepInfo');
+        if(stepInfo)stepInfo.textContent='Combined activity selected. Choose a supporting variant before drafting an exact route.';
+        info.replaceChildren(element('p',node.label+' · '+count(node.projected_occurrence_count)+' projected occurrences in '+
+          count(node.supporting_execution_count)+' candidate executions. Supporting examples below are limited to displayed variants.'));
+        let found=0;
+        for(const lane of lanes){
+          if(!safeArray(candidate.exact_variants?.[lane.index]?.structural_steps).includes(node.structural_step))continue;
+          found++;
+          info.appendChild(button('Select supporting variant '+(lane.index+1),()=>{
+            selectedExample=lane;
+            const detail=document.getElementById('owgExplorerStepInfo');
+            if(detail)detail.textContent='Selected variant '+(lane.index+1)+' supporting '+node.label+'. '+lane.count+' candidate executions; inspect evidence before inferring intent.';
+          },true));
+        }
+        if(!found)info.appendChild(element('p','No supporting variant is included in the displayed lane sample. Narrow the period or inspect the source evidence.'));
+        info.focus();
+      },{observed:true});
+      host.appendChild(drawing);host.appendChild(info);
+    }catch{
+      host.appendChild(element('p','This combined projection exceeds the renderer limits. Use the separate observed variant lanes.','muted'));
+    }
   }
   function explainStep(lane, position) {
     selectedExample = lane;

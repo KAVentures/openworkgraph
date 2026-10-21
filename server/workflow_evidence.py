@@ -902,6 +902,7 @@ def list_workflow_evidence_candidates(
     rank_by_quality: bool = False,
     rank_by_navigation: bool = False,
     navigation_summary_only: bool = False,
+    include_transition_maps: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
@@ -950,6 +951,7 @@ def list_workflow_evidence_candidates(
         # high-volume single-app noise can hide valid multi-app workflows.
         min_cluster_quality=min_cluster_quality,
         rank_by_navigation=rank_by_navigation,
+        include_transition_maps=include_transition_maps,
     )
     def _eligible_cluster(row: dict[str, Any]) -> bool:
         if float(row.get("cluster_quality") or 0) < min_cluster_quality:

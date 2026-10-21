@@ -108,3 +108,54 @@ def test_five_workflow_shapes_cluster_core_paths_without_merging_unrelated_send_
         if "human:email.compose_send" in row["coarse_family_keys"]
     ]
     assert sorted(row["execution_count"] for row in send_clusters) == [3, 5]
+
+
+def test_combined_map_counts_projected_repeats_and_execution_support_separately():
+    runs = [_run(f'execution:loop{i}', ['a', 'a', 'b', 'a', 'c'], [], 'loop') for i in range(3)]
+    runs += [_run(f'execution:short{i}', ['a', 'c'], [], 'loop') for i in range(2)]
+    assert all('observed_transition_map' not in row for row in cluster_runs(runs, similarity_threshold=0.6))
+    cluster, = cluster_runs(runs, similarity_threshold=0.6, include_transition_maps=True)
+    graph = cluster['observed_transition_map']
+    nodes = {row['structural_step']: row for row in graph['activities']}
+    assert graph['execution_count'] == 5
+    assert nodes['a']['projected_occurrence_count'] == 8
+    assert nodes['a']['supporting_execution_count'] == 5
+    edges = {(row['source'], row['target']): row for row in graph['transitions']}
+    assert edges[nodes['b']['id'], nodes['a']['id']]['projected_transition_count'] == 3
+    assert edges[nodes['a']['id'], nodes['c']['id']]['supporting_execution_count'] == 5
+    assert (nodes['a']['id'], nodes['a']['id']) not in edges  # adjacent repeats collapse upstream
+    assert graph['projected_occurrence_count'] == 16
+    assert graph['projected_transition_count'] == 11
+    assert graph['adjacent_repeats_collapsed'] is True
+    for flag in ('canonical_event_counts', 'case_membership_verified', 'step_elapsed_times_available',
+                 'combined_paths_are_observed_executions', 'execution_authorized'):
+        assert graph[flag] is False
+
+
+def test_combined_map_uses_all_cluster_variants_not_the_display_sample():
+    prefix = [f'common{i}' for i in range(10)]
+    runs = [_run(f'execution:variant{i}_{j}', prefix + [f'optional{i}'], [], 'variants')
+            for i in range(13) for j in range(2)]
+    cluster, = cluster_runs(runs, include_transition_maps=True)
+    assert len(cluster['exact_variants']) == 12
+    assert cluster['exact_variant_count'] == 13
+    graph = cluster['observed_transition_map']
+    assert graph['execution_count'] == 26
+    assert graph['projected_occurrence_count'] == 26 * 11
+    assert len(graph['activities']) == 23
+    assert all(row['supporting_execution_count'] == 26 for row in graph['activities']
+               if row['structural_step'].startswith('common'))
+
+
+def test_dense_combined_map_marks_omissions_without_changing_global_counts():
+    prefix = [f'common{i}' for i in range(10)]
+    runs = [_run(f'execution:dense{i}', prefix + [f'optional{i}'], [], 'variants') for i in range(80)]
+    cluster, = cluster_runs(runs, include_transition_maps=True)
+    graph = cluster['observed_transition_map']
+    assert len(graph['activities']) == 64
+    assert graph['omitted_activity_count'] == 26
+    assert graph['omitted_transition_type_count'] == 26
+    assert graph['execution_count'] == 80
+    assert graph['projected_occurrence_count'] == 880
+    assert graph['projected_transition_count'] == 800
+    assert len(graph['transitions']) <= 4096
