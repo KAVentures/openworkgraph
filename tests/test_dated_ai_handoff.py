@@ -77,6 +77,44 @@ with TestClient(app) as c:
 ''', tmp_path)
 
 
+def test_handoff_chunks_and_legacy_private_export_protection(tmp_path):
+    run(r'''
+with TestClient(app) as c:
+    insert_events([event('ordinary', A, 'Invoice template'),
+                   event('legacy-private', '2026-10-16T09:30:00Z', 'Placeholder'),
+                   event('health', '2026-10-16T09:45:00Z', 'Capture gap')])
+    with connect() as conn:
+        for table in ('events','normalized_events'):
+            conn.execute('UPDATE '+table+' SET app=?, window_title=?, metadata_json=? WHERE event_id=?',
+                         ('Google Chrome','SECRET_LEGACY - Google Chrome (Inkognito)',
+                          json.dumps({'target':{'label':'SECRET_TARGET'},'page':{'hostname':'secret.invalid'}}),
+                          'legacy-private'))
+        conn.execute("UPDATE events SET event_type='capture_gap' WHERE event_id='health'")
+    args={'scope':'range','since':A,'until':B}
+    preview=c.get('/v1/analysis-preview',headers=D,params=args)
+    assert preview.status_code==200,preview.text
+    data=preview.json()
+    assert data['work_evidence']['health_event_rows']==1
+    assert data['analysis_plan']['page_size']==200
+    chunks=data['analysis_plan']['date_chunks']
+    assert len(chunks)==1 and chunks[0]['event_rows']==3
+    from datetime import datetime
+    assert datetime.fromisoformat(chunks[0]['since'])==datetime.fromisoformat(A)
+    assert datetime.fromisoformat(chunks[0]['until'])==datetime.fromisoformat(B)
+    assert not data['analysis_plan']['complete_history_claimed']
+    assert 'SECRET_' not in preview.text
+    r=c.get('/v1/export/json',headers=H,params={**args,'include_raw':True,'redact_names':False})
+    assert r.status_code==200,r.text
+    assert 'SECRET_LEGACY' not in r.text and 'SECRET_TARGET' not in r.text and 'secret.invalid' not in r.text
+    rows=r.json()['raw_local_evidence']
+    hidden=next(row for row in rows if row['event_id']=='legacy-private')
+    assert hidden['app']=='Excluded'
+    assert next(row for row in rows if row['event_id']=='ordinary')['window_title']=='Invoice template'
+    with connect() as conn:
+        assert 'SECRET_LEGACY' in conn.execute("SELECT window_title FROM events WHERE event_id='legacy-private'").fetchone()[0]
+''', tmp_path)
+
+
 def test_download_ticket_cannot_widen_dates_and_remains_one_use(tmp_path):
     run(r'''
 with TestClient(app) as c:

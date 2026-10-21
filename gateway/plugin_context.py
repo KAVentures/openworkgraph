@@ -16,6 +16,7 @@ def make_orientation(
     recent: list[dict[str, Any]], *,
     returned_limit: int,
     scan_limit: int,
+    useful_work: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Bounded recent evidence + conservative pointers + explicit raw fallback.
 
@@ -24,7 +25,11 @@ def make_orientation(
     evidence is intentionally not synthesized or declared absent.
     """
     visible = recent[-max(1, int(returned_limit)):]
-    graph = build_continuity_context(recent, max_resources=12)
+    work = [row for row in (recent if useful_work is None else useful_work)
+            if row.get("event_type") not in {"capture_gap", "capture_health"}
+            and row.get("app") != "Excluded"]
+    combined = {str(row.get("event_id")): row for row in [*work, *recent]}
+    graph = build_continuity_context(sorted(combined.values(), key=lambda r: str(r.get("observed_at") or "")), max_resources=12)
     graph["coverage"].update({
         "scope": "bounded_recent_gateway_tail",
         "recent_rows_scanned": len(recent),
@@ -33,6 +38,8 @@ def make_orientation(
         "all_relevant_work_found": False,
         "candidate_recall_guaranteed": False,
         "source_evidence_remains_available_when_no_candidates": True,
+        "useful_work_rows_considered": len(work),
+        "useful_work_lookback_is_complete_history": False,
     })
     observed_agent_events = any(
         row.get("source") == "agent" or str(row.get("event_type") or "").startswith("agent_")
@@ -49,6 +56,20 @@ def make_orientation(
     return {
         "rows": visible,
         "returned": len(visible),
+        "latest_work": {
+            "rows": work[-max(1, int(returned_limit)):],
+            "returned": min(len(work), max(1, int(returned_limit))),
+            "latest_observed_at": work[-1].get("observed_at") if work else None,
+            "scope": "bounded_recent_non_health_evidence",
+            "complete_history": False,
+            "recorder_liveness_verified": False,
+        },
+        "capture_health": {
+            "latest_observed_at": max((str(row.get("observed_at") or "") for row in recent
+                                       if row.get("event_type") in {"capture_gap", "capture_health"}), default=None),
+            "recent_health_rows": sum(row.get("event_type") in {"capture_gap", "capture_health"} for row in recent),
+            "gaps_are_work_time": False,
+        },
         "orientation": {
             "recent_canonical_evidence_available": bool(recent),
             "repeated_work_candidates_available": "not_checked",
