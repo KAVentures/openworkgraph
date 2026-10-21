@@ -159,6 +159,51 @@ async def local_selected_jira_process_preview(request: Request, response: Respon
     return result
 
 
+@router.post('/v1/process-mining/github-selected-cases')
+async def local_selected_github_process_preview(request: Request, response: Response):
+    """Explicit exact-PR reads through the existing opted-in GitHub adapter."""
+    import json
+    from .record_graph import record_graph
+    from .github_process_preview import github_selected_cases_process
+    _require_dashboard(request)
+    if request.headers.get('content-type','').split(';',1)[0].strip().lower()!='application/json':
+        raise HTTPException(415,'JSON selected-record request required')
+    raw=bytearray()
+    def pairs(values):
+        result={}
+        for key,value in values:
+            if key in result:raise ValueError('duplicate field')
+            result[key]=value
+        return result
+    def invalid_constant(_value):raise ValueError('nonstandard JSON')
+    try:
+        async for chunk in request.stream():
+            if len(raw)+len(chunk)>2048:raise HTTPException(413,'selected-record request too large')
+            raw.extend(chunk)
+        try:data=json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid_constant)
+        except (ValueError,UnicodeError,RecursionError):raise HTTPException(422,'invalid selected-record JSON') from None
+    finally:raw.clear()
+    if not isinstance(data,dict) or set(data)!={'resource_refs','confirm_source_reads'} or data.get('confirm_source_reads') is not True:
+        raise HTTPException(403,'explicit source reads must be confirmed')
+    refs=data.get('resource_refs')
+    if (not isinstance(refs,list) or not 1<=len(refs)<=8
+            or any(not isinstance(ref,str) or not re.fullmatch(r'owg:r:[0-9a-f]{32}',ref) for ref in refs)
+            or len(set(refs))!=len(refs)):
+        raise HTTPException(422,'select 1-8 distinct observed GitHub references')
+    receipts=[]
+    for ref in refs:
+        try:
+            graph=await asyncio.to_thread(record_graph,ref,include_source_status=True,
+                required_source_type=('github','pull_request','github.com'))
+            receipts.append(graph['source_evidence'])
+        except (OSError,ValueError,RuntimeError,TypeError):receipts.append(None)
+    try:result=github_selected_cases_process(receipts)
+    except (ProcessMiningCSVError,TypeError,ValueError):
+        raise HTTPException(422,'bounded GitHub source history could not be analyzed') from None
+    response.headers['Cache-Control']='no-store'
+    return result
+
+
 @router.get("/v1/open-work/stripe-preview")
 async def stripe_open_work_candidates(request: Request, confirm_scan: bool = False,
                                       max_pages: int = 1,
