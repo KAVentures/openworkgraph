@@ -4,6 +4,7 @@
   const SVG_NS='http://www.w3.org/2000/svg';
   const MAX_UPLOAD=1024*1024;
   let report=null;
+  let reference=null;
   let activeVariant=0;
   let activeActivity=null;
   const make=(tag,text,className)=>{
@@ -51,6 +52,8 @@
       clearReport();
     });
     wrap.append(file,run);card.appendChild(wrap);
+    const referenceLabel=make('p','No saved reference selected.','muted');referenceLabel.id='owgProcessReference';card.appendChild(referenceLabel);
+    card.appendChild(button('Clear reference model',()=>setReference(null)));
     const status=make('p','No CSV selected. This feature is opt-in and does not change desktop recording.','muted');
     status.id='owgProcessStatus';status.setAttribute('role','status');card.appendChild(status);
     const output=make('div');output.id='owgProcessResults';card.appendChild(output);
@@ -86,7 +89,7 @@
     report=null;clearReport();control.disabled=true;setStatus('Analyzing selected CSV on this local OWG service…');
     try{
       await window.__owgAuthReady;
-      const response=await fetch('/v1/process-mining/preview',{
+      const response=await fetch('/v1/process-mining/preview'+(reference?'?'+new URLSearchParams(reference):''),{
         method:'POST',headers:{'Content-Type':'text/csv'},body:file,cache:'no-store'
       });
       if(!response.ok){
@@ -156,6 +159,19 @@
         '—':seconds(report.metrics.median_inter_event_gap_seconds)));
     host.appendChild(stats);
     host.appendChild(make('p','Elapsed time spans first to last logged event; gaps are not proven waiting, and repeated activities are not necessarily rework. No case outcome or automation authority is established.','muted'));
+    if(report.data_quality){
+      const quality=report.data_quality;
+      host.appendChild(make('p','Data quality: '+quality.cases_with_tied_timestamps+' cases have timestamp ties; '+
+        quality.same_case_activity_timestamp_repeats+' repeated case/activity/timestamp entries. Ties follow supplied row order; repeats are retained. Source completeness and authoritative case identity are not verified.','muted'));
+    }
+    if(report.conformance){
+      const comparison=report.conformance,ref=comparison.reference;
+      host.appendChild(make('h3','Structural comparison · saved revision '+ref.revision));
+      host.appendChild(make('p',comparison.exact_structural_match_cases+' exact path matches · '+
+        comparison.structurally_deviating_cases+' differing cases · '+comparison.possible_incomplete_prefix_cases+
+        ' possible incomplete prefixes. All cases and full variants are compared.'));
+      host.appendChild(make('p','Routing decisions are traversed structurally; rule conditions, business compliance, source completeness and successful outcomes are not evaluated.','muted'));
+    }
     host.appendChild(make('h3','Observed process variants'));
     const variants=safe(report.variants);
     const controls=make('div',null,'owg-variants');
@@ -190,6 +206,19 @@
     if(report.variants_truncated)host.appendChild(make('p','Additional variants are omitted from this bounded preview.','muted'));
     const variant=variants[Math.min(activeVariant,variants.length-1)];
     if(variant){
+      if(variant.conformance){
+        const c=variant.conformance;
+        host.appendChild(make('h4',c.exact_structural_match?'Selected variant matches the reference path':'Selected variant differs from the reference path'));
+        host.appendChild(make('p','Minimum activity edits: '+c.minimum_activity_edit_count+
+          (c.could_be_incomplete_log_prefix?' · this could be an incomplete source-log prefix.':'.')));
+        const alignment=make('details');alignment.appendChild(make('summary','Inspect one minimum-edit structural alignment'));
+        const list=make('ol');safe(c.alignment).forEach(item=>list.appendChild(make('li',item.type+' · '+item.activity+
+          (item.log_position?' · log event '+item.log_position:'')+(item.model_activity_id?' · model '+item.model_activity_id:''))));
+        alignment.appendChild(list);if(c.alignment_truncated)alignment.appendChild(make('p','Alignment is truncated to 80 entries.'));
+        host.appendChild(alignment);
+      }
+      if(variant.ambiguous_order_case_count)host.appendChild(make('p',variant.ambiguous_order_case_count+
+        ' cases in this variant have timestamp ties. This path and its structural comparison depend on the supplied row order.','muted'));
       host.appendChild(make('h3','Selected variant · activity inspection'));
       host.appendChild(make('p',variant.case_count+' cases · median case elapsed '+
         seconds(variant.median_case_elapsed_seconds)+'. Counts below cover every case in this exact variant.','muted'));
@@ -248,5 +277,11 @@
     host.appendChild(make('p','Transition gaps use all matching events in this variant. Case IDs and source values are never returned; the CSV preview is not saved.','muted'));
     window.owgOpportunityReview?.render?.(report);
   }
+  function setReference(value){
+    reference=value?{workflow_id:value.workflow_id,revision:String(value.revision)}:null;
+    const label=document.getElementById('owgProcessReference');
+    if(label)label.textContent=reference?'Next analysis compares with saved process '+reference.workflow_id+' revision '+reference.revision+'. Existing results are unchanged until Analyze.':'No saved reference selected.';
+  }
+  window.owgProcessMining={setReference};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();

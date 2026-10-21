@@ -12,32 +12,34 @@ or full competitor parity.
 
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
-| Visual exploration | Observed workflow lanes (#263); CSV variant/activity/case inspection | Shared interactive analysis across evidence sources; reviewed grouping corrections |
+| Visual exploration | Observed workflow lanes (#263), CSV activity/case inspection, desktop/Jira-to-catalog drafting | Shared interactive analysis across evidence sources; reviewed grouping corrections |
 | Task/case reconstruction | Exact-record interleaving lanes (#265) | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272) | Additional source adapters, coverage diagnostics and approved-model conformance |
-| Opportunity ranking | Measured review signals and explicit ROI assumptions (#268) | Comparable process backlog, validated effort and tool suitability |
-| Process design | Reviewed AS-IS / TO-BE draft and JSON export (#267) | Persistent revisions, ownership, rules, exceptions and collaboration |
-| Implementation | Non-executing starter ZIP and structural BPMN (#269) | Working runtime/tool bindings, branch tests and sandbox execution |
-| Testing and feedback | Existing agent traces and independent source receipts | Integrated workflow test suites, shadow evaluation and drift review |
+| Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped improvement backlog | Validated employee effort, business outcomes and tool suitability |
+| Process design | Reviewed draft (#267), versioned local graph catalog, declared ownership/rules, BPMN/PDD/spec exports | Organization approval attestations and collaboration |
+| Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner and synthetic tests pinned to a saved revision | Authorized live tool bindings, deployment and end-to-end business tests |
+| Testing and feedback | Agent traces/receipts, full-log structural comparison, workflow shadow tests, pinned terminal source-state checks | Live case evaluation, verified business outcomes and drift review |
 | Company rollout | Existing Gateway, organization and deployment infrastructure | Cohesive process inventory, review roles and operational reporting |
 
 The CSV drill-down connects diagram selections to exact variant statistics
-and bounded supporting examples. It remains an ephemeral import; it does not
-establish a persistent process catalog or authoritative business case graph.
+and bounded supporting examples. CSV analysis itself remains ephemeral; only explicitly reviewed designs are
+saved to the catalog. Neither establishes authoritative cross-system case identity.
 
-## Next shared foundation
+## Shared foundation and next acceptance scenario
 
-Build a versioned process model that references existing evidence and reviewed
-workflow knowledge. Before adding a second model store, inspect the existing
-procedural-memory and workflow-knowledge revision/export contracts. Preserve
-the distinction between an observed path, a human proposal, confirmed rules,
-and authorization to perform a particular business action.
+The [versioned process catalog](PROCESS_CATALOG.md) now extends existing
+owner-scoped workflow knowledge. Designs retain an observed baseline, explicit
+activities/transitions, declared rules and proposed implementation types.
+Saving creates immutable revisions with optimistic conflict checks. Exports,
+structural comparisons and agent projects identify the exact reviewed version.
+No second evidence collector or model database was introduced.
 
-A useful next acceptance scenario is: reopen a reviewed design, inspect its
-baseline and evidence coverage, change one rule or activity, and save a new
-revision without overwriting another reviewer's changes. Exports and agent
-starters should identify the exact reviewed revision. Then attach conformance,
-opportunity ranking and runtime generation to that same model.
+The next acceptance scenario requires an authorized real workflow: map tools
+and case identity for one reviewed process, run its generated planner in a
+customer-controlled sandbox, validate normal/exception cases against confirmed
+business rules, and verify resulting operations with independent source
+receipts. Extend that same model with production feedback and reviewer-approved
+updates. Structural tests and synthetic data cannot certify that lifecycle.
 
 Retain exact declared case identifiers for source joins; temporal adjacency
 alone cannot establish workflow identity. Keep observation consent, evidence

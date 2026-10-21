@@ -1,0 +1,315 @@
+/* Explicit local process catalog. Same reviewed knowledge store, immutable revisions. */
+(() => {
+  'use strict';
+  let record=null, model=null, reviewed=false, busy=false, after='';
+  const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
+  const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
+  const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
+  const copy=value=>JSON.parse(JSON.stringify(value));
+  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;}
+  function field(parent,title,value,apply,options){
+    const label=el('label',title+' '),input=el(options?'select':'input');
+    if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
+    input.value=value;input.setAttribute('aria-label',title);
+    input.addEventListener(options?'change':'input',()=>{apply(input.value);changed();});
+    label.appendChild(input);parent.appendChild(label);return input;
+  }
+  async function request(path,body){
+    await window.__owgAuthReady;
+    const response=await fetch(path,{cache:'no-store',...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
+    if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(String(data.detail||'Local process request failed'));}
+    return response.json();
+  }
+  async function locked(fn){
+    if(busy)throw new Error('A process request is already in progress.');
+    busy=true;
+    try{return await fn();}finally{busy=false;}
+  }
+  function linearModel(draft){
+    const activities=draft.to_be.proposed_path.map((label,i)=>({id:'step_'+(i+1),label,kind:'activity',implementation:'unmapped'}));
+    return {format:'openworkgraph.process-model.v1',goal:draft.business_goal_declared_by_user,owner_label:'',
+      baseline_path:copy(draft.as_is.path),baseline_source:'selected_csv_variant',supporting_case_count:draft.as_is.supporting_case_count,
+      activities,transitions:activities.slice(1).map((activity,i)=>({source:activities[i].id,target:activity.id,rule_id:null})),
+      business_rules:[],entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
+      observed_path_is_policy:false,execution_authorized:false,outcomes_verified:false};
+  }
+  async function saveDesigner(){
+    return locked(async()=>{
+      if(!replaceDraft())throw new Error('Existing catalog draft kept.');
+      const draft=window.owgProcessDesigner.reviewedDraft();
+      const saved=await request('/v1/process-catalog',{title:draft.business_goal_declared_by_user.slice(0,240),
+        expected_revision:0,user_confirmed:true,process_model:linearModel(draft)});
+      record=saved;model=copy(saved.process_model);reviewed=false;renderEditor();
+      status('Saved locally as revision '+saved.revision+'. Source CSV and native case IDs were not retained.');
+      document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
+      return saved;
+    });
+  }
+  function draftObserved(source){
+    if(busy)throw new Error('Wait for the current process request.');
+    if(!replaceDraft())return;
+    if(!Array.isArray(source.path)||source.path.length<1||source.path.length>40||
+      source.path.some(step=>typeof step!=='string'||!step.trim()||step.length>240))
+      throw new Error('A bounded observed sequence of 1–40 labels is required.');
+    const basis=['selected_observed_variant','selected_source_audit'].includes(source.basis)?source.basis:'user_declared';
+    const activities=source.path.map((label,i)=>({id:'step_'+(i+1),
+      label:/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(label)?label:'Activity '+(i+1),kind:'activity',implementation:'unmapped'}));
+    model={format:'openworkgraph.process-model.v1',goal:'',owner_label:'',baseline_path:copy(source.path),
+      baseline_source:basis,baseline_coverage:source.partial?'partial_source_audit':'bounded_candidate_sequence',
+      baseline_support_unit:basis==='selected_observed_variant'?'candidate_executions':'declared_cases',
+      supporting_case_count:Number.isInteger(source.count)?Math.min(1000000,Math.max(0,source.count)):0,
+      activities,transitions:activities.slice(1).map((activity,i)=>({source:activities[i].id,target:activity.id,rule_id:null})),
+      business_rules:[],entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
+      outcome_expectations:[],opportunity_scenario:null,observed_path_is_policy:false,execution_authorized:false,outcomes_verified:false};
+    record={workflow_id:null,revision:0,title:'Observed workflow proposal',process_model:copy(model),
+      evidence_refs:(source.evidenceRefs||[]).filter(ref=>typeof ref==='string'&&/^execution:[A-Za-z0-9_-]+$/.test(ref)).slice(0,100)};
+    reviewed=false;renderEditor();
+    status('Unsaved proposal from a bounded observation. Add a business goal and review every proposed label. Unsupported labels use Activity placeholders; the AS-IS baseline keeps the supplied sequence.');
+    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+    document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
+  }
+  async function inventory(next=false){
+    if(!next)after='';
+    const page=await request('/v1/process-catalog?'+new URLSearchParams({after,limit:'20'}));
+    const host=document.getElementById('owgCatalogList');host.replaceChildren();
+    page.processes.forEach(item=>{
+      const row=el('p');row.appendChild(button(item.title+' · r'+item.revision,()=>load(item.workflow_id)));
+      row.appendChild(el('span',' · '+item.activity_count+' activities · '+item.unconfirmed_rule_count+' unconfirmed rules'));
+      host.appendChild(row);
+    });
+    if(!page.processes.length)host.appendChild(el('p',page.has_more?'No process designs on this knowledge page. Continue to the next page.':'No saved process designs on this page.'));
+    if(page.has_more)host.appendChild(button('Next designs',()=>{after=page.next_after;return inventory(true);}));
+    status('Saved process inventory loaded from local reviewed knowledge.');
+  }
+  function replaceDraft(){return !model||window.confirm('Discard unsaved catalog edits and load this revision?');}
+  async function load(id,revision){
+    return locked(async()=>{
+      if(!replaceDraft())return;
+      const params=new URLSearchParams({workflow_id:id});if(revision)params.set('revision',String(revision));
+      const result=await request('/v1/process-catalog/revision?'+params);
+      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      status('Opened immutable revision '+record.revision+'. Saving requires review and the same latest revision.');
+    });
+  }
+  async function save(fork=false){
+    if(!model||!reviewed)throw new Error('Review this exact edited graph before saving.');
+    return locked(async()=>{
+      const submitted=copy(model),title=record.title;
+      const result=await request('/v1/process-catalog',{...(fork?{}:{workflow_id:record.workflow_id}),
+        title,expected_revision:fork?0:record.revision,user_confirmed:true,process_model:submitted,evidence_refs:record.evidence_refs||[]});
+      // Never replace edits made while the server was saving an older snapshot.
+      if(JSON.stringify(model)!==JSON.stringify(submitted)||record.title!==title){
+        record={...result,title:record.title};changed();renderEditor();status('Snapshot saved; newer local edits remain unsaved.');return;
+      }
+      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      status('Saved revision '+record.revision+'. Earlier revisions remain available.');
+    });
+  }
+  async function history(before){
+    if(!record)return;
+    return locked(async()=>{
+      const workflowId=record.workflow_id;
+      const params=new URLSearchParams({workflow_id:workflowId,limit:'10'});if(before)params.set('before_revision',String(before));
+      const result=await request('/v1/process-catalog/history?'+params),host=document.getElementById('owgCatalogHistory');
+      host.replaceChildren(el('h4','Revision history'));
+      result.workflows.forEach(item=>host.appendChild(button('Open revision '+item.revision+' · '+item.saved_at,()=>load(workflowId,item.revision))));
+      if(result.has_more)host.appendChild(button('Older revisions',()=>history(result.next_before_revision)));
+    });
+  }
+  async function download(format){
+    if(!record)return;
+    const exportedRecord={workflow_id:record.workflow_id,revision:record.revision};
+    await window.__owgAuthReady;
+    const response=await fetch((format==='agent-project'?'/v1/process-catalog/agent-project?':'/v1/process-catalog/export?')+new URLSearchParams({workflow_id:exportedRecord.workflow_id,revision:String(exportedRecord.revision),format}),{cache:'no-store'});
+    if(!response.ok)throw new Error('Could not export saved revision.');
+    const url=URL.createObjectURL(await response.blob());
+    const anchor=el('a');anchor.href=url;anchor.download='owg-process-r'+exportedRecord.revision+'.'+({pdd:'txt',json:'json',bpmn:'bpmn','agent-project':'zip'}[format]);
+    document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+    status('Exported saved revision '+exportedRecord.revision+'. Unsaved editor changes are excluded.');
+  }
+  function graph(){
+    const ns='http://www.w3.org/2000/svg';
+    const svg=(tag,attrs)=>{const node=document.createElementNS(ns,tag);Object.entries(attrs||{}).forEach(([k,v])=>node.setAttribute(k,String(v)));return node;};
+    const wrap=el('div');wrap.style.overflow='auto';
+    const drawing=svg('svg',{width:780,height:Math.max(120,Math.ceil(model.activities.length/4)*110),role:'group','aria-label':'Proposed process graph. Arrows represent designed transitions.'});
+    const positions=new Map(model.activities.map((a,i)=>[a.id,{x:10+(i%4)*195,y:20+Math.floor(i/4)*110}]));
+    model.transitions.forEach(edge=>{
+      const from=positions.get(edge.source),to=positions.get(edge.target);if(!from||!to)return;
+      const line=svg('path',{d:'M '+(from.x+85)+' '+(from.y+50)+' L '+(to.x+85)+' '+to.y,stroke:'#557e70',fill:'none'});
+      const title=svg('title');title.textContent=edge.source+' → '+edge.target+(edge.rule_id?' · '+edge.rule_id:'');line.appendChild(title);drawing.appendChild(line);
+      const tip=svg('path',{d:'M '+(to.x+80)+' '+(to.y-6)+' L '+(to.x+85)+' '+to.y+' L '+(to.x+90)+' '+(to.y-6),stroke:'#557e70',fill:'none'});drawing.appendChild(tip);
+    });
+    model.activities.forEach((activity,i)=>{
+      const p=positions.get(activity.id),group=svg('g',{role:'button',tabindex:0,'aria-label':'Edit activity '+activity.id});
+      const rect=svg('rect',{x:p.x,y:p.y,width:175,height:50,rx:activity.kind==='decision'?22:5,fill:'#f1f7f4',stroke:'#557e70'});
+      const text=svg('text',{x:p.x+8,y:p.y+20,'font-size':12});text.textContent=activity.label.slice(0,22);
+      const sub=svg('text',{x:p.x+8,y:p.y+38,'font-size':10});sub.textContent=activity.id+' · '+activity.kind;
+      const focus=()=>document.getElementById('owgCatalogActivity'+i)?.focus();
+      group.addEventListener('click',focus);group.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();focus();}});
+      group.append(rect,text,sub);drawing.appendChild(group);
+    });
+    wrap.appendChild(drawing);return wrap;
+  }
+  function renderEditor(){
+    const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
+    host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
+    host.appendChild(el('p','Edits create a new revision. These are proposed designs and declared rules; they do not authorize an agent or establish company policy.'));
+    field(host,'Process title',record.title,value=>record.title=value);
+    field(host,'Business goal',model.goal,value=>model.goal=value);
+    field(host,'Process owner',model.owner_label,value=>model.owner_label=value);
+    host.appendChild(el('h4','AS-IS observed baseline'));
+    host.appendChild(el('p',model.baseline_path.join(' → ')));
+    host.appendChild(el('p','Baseline basis: '+model.baseline_source+' · '+(model.baseline_coverage||'complete_supplied_path')+' · '+model.supporting_case_count+' '+(model.baseline_support_unit||'declared_cases')+'. This does not verify task boundaries or business case identity.'));
+    host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
+    host.appendChild(button('Refresh graph preview',()=>renderEditor()));
+    const mutate=fn=>{fn();changed();renderEditor();};
+    model.activities.forEach((activity,index)=>{
+      const row=el('fieldset');row.appendChild(el('legend',activity.id));
+      const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
+      field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','start','end']);
+      field(row,'Implementation '+activity.id,activity.implementation,value=>activity.implementation=value,['unmapped','api','deterministic','ai_agent','computer_use','human']);
+      row.appendChild(button('Remove '+activity.id,()=>mutate(()=>{
+        model.activities.splice(index,1);model.transitions=model.transitions.filter(e=>e.source!==activity.id&&e.target!==activity.id);
+        model.terminal_activity_ids=model.terminal_activity_ids.filter(id=>id!==activity.id);
+      })));host.appendChild(row);
+    });
+    host.appendChild(button('Add activity',()=>mutate(()=>{
+      if(model.activities.length>=40)throw new Error('Maximum 40 activities.');
+      let i=1;while(model.activities.some(a=>a.id==='step_'+i))i++;
+      model.activities.push({id:'step_'+i,label:'New activity',kind:'activity',implementation:'unmapped'});
+    })));
+    field(host,'Entry activity ID',model.entry_activity_id,value=>model.entry_activity_id=value);
+    field(host,'Terminal activity IDs (comma separated)',model.terminal_activity_ids.join(','),value=>model.terminal_activity_ids=value.split(',').map(s=>s.trim()).filter(Boolean));
+    host.appendChild(el('h4','Transitions and decision branches'));
+    model.transitions.forEach((edge,index)=>{
+      const row=el('fieldset');row.appendChild(el('legend','Transition '+(index+1)));
+      field(row,'From '+(index+1),edge.source,value=>edge.source=value,model.activities.map(a=>a.id));
+      field(row,'To '+(index+1),edge.target,value=>edge.target=value,model.activities.map(a=>a.id));
+      field(row,'Rule '+(index+1),edge.rule_id||'',value=>edge.rule_id=value||null,['',...model.business_rules.map(r=>r.id)]);
+      row.appendChild(button('Remove transition '+(index+1),()=>mutate(()=>model.transitions.splice(index,1))));host.appendChild(row);
+    });
+    host.appendChild(button('Add transition',()=>mutate(()=>{
+      if(model.transitions.length>=100)throw new Error('Maximum 100 transitions.');
+      model.transitions.push({source:model.activities[0]?.id||'missing',target:model.activities.at(-1)?.id||'missing',rule_id:null});
+    })));
+    host.appendChild(el('h4','Business rules and exceptions'));
+    model.business_rules.forEach((rule,index)=>{
+      const row=el('fieldset');row.appendChild(el('legend',rule.id));
+      field(row,'Rule text '+rule.id,rule.text,value=>{rule.text=value;rule.user_confirmed=false;check.checked=false;});
+      const label=el('label',' User-confirmed rule '),check=el('input');check.type='checkbox';check.checked=rule.user_confirmed;
+      check.addEventListener('change',()=>{rule.user_confirmed=check.checked;changed();});label.appendChild(check);row.appendChild(label);
+      row.appendChild(button('Remove rule '+rule.id,()=>mutate(()=>{
+        model.business_rules.splice(index,1);model.transitions.forEach(e=>{if(e.rule_id===rule.id)e.rule_id=null;});
+      })));host.appendChild(row);
+    });
+    host.appendChild(button('Add rule',()=>mutate(()=>{
+      if(model.business_rules.length>=40)throw new Error('Maximum 40 rules.');
+      let i=1;while(model.business_rules.some(r=>r.id==='rule_'+i))i++;
+      model.business_rules.push({id:'rule_'+i,text:'Describe the condition or exception',user_confirmed:false});
+    })));
+    host.appendChild(el('h4','Independent source-state expectations'));
+    host.appendChild(el('p','Declare which provider operation should be checked for a terminal activity. Confirmation describes the expected state; it does not grant execution rights or prove an agent caused it.'));
+    model.outcome_expectations=model.outcome_expectations||[];
+    const operations=['github_pr_merged','stripe_invoice_paid','stripe_refund_processor_succeeded','jira_issue_resolved'];
+    model.outcome_expectations.forEach((expectation,index)=>{
+      const row=el('fieldset');row.appendChild(el('legend','Outcome expectation '+(index+1)));
+      const clear=()=>{expectation.user_confirmed=false;confirmation.checked=false;};
+      field(row,'Outcome terminal '+(index+1),expectation.terminal_activity_id,value=>{expectation.terminal_activity_id=value;clear();},model.terminal_activity_ids);
+      field(row,'Expected source operation '+(index+1),expectation.operation,value=>{expectation.operation=value;clear();},operations);
+      const label=el('label',' I confirm this declared source-state expectation '),confirmation=el('input');confirmation.type='checkbox';confirmation.checked=expectation.user_confirmed;
+      confirmation.addEventListener('change',()=>{expectation.user_confirmed=confirmation.checked;changed();});label.appendChild(confirmation);row.appendChild(label);
+      row.appendChild(button('Remove outcome expectation '+(index+1),()=>mutate(()=>model.outcome_expectations.splice(index,1))));host.appendChild(row);
+    });
+    host.appendChild(button('Add source-state expectation',()=>mutate(()=>{
+      if(model.outcome_expectations.length>=40)throw new Error('Maximum 40 source-state expectations.');
+      model.outcome_expectations.push({terminal_activity_id:model.terminal_activity_ids[0]||'missing',operation:'jira_issue_resolved',user_confirmed:false});
+    })));
+    const savedExpectations=(record.process_model.outcome_expectations||[]).filter(e=>e.user_confirmed);
+    if(savedExpectations.length){
+      let resource='';field(host,'Exact observed OWG record reference','',value=>resource=value.trim());
+      savedExpectations.forEach(expectation=>host.appendChild(button('Check saved '+expectation.operation+' for '+expectation.terminal_activity_id,()=>locked(async()=>{
+        if(!/^owg:r:[0-9a-f]{32}$/.test(resource))throw new Error('Enter an existing exact opaque owg:r: record reference.');
+        if(!window.confirm('Read source status for the exact selected record '+resource+' using your separately enabled source connection?'))return;
+        const output=await request('/v1/process-catalog/check-outcome',{workflow_id:record.workflow_id,revision:record.revision,
+          terminal_activity_id:expectation.terminal_activity_id,expected_operation:expectation.operation,
+          resource_ref:resource,source_reads_confirmed:true});
+        status('Saved revision '+output.reference.revision+': '+(output.receipt.operation_verified?
+          'source reports the expected provider operation.':'source operation not verified ('+output.receipt.reason+').')+
+          (output.receipt.verified_at?' Checked at '+output.receipt.verified_at+'.':'')+
+          ' Business objective and agent causality remain unverified. No result was persisted.');
+      }))));
+    }
+    host.appendChild(el('h4','Automation opportunity · explicit assumptions'));
+    host.appendChild(el('p','Enter a business scenario for comparison with other saved processes. Event gaps do not establish employee effort or savings. Sensitivity is a chosen range, not statistical confidence.'));
+    if(model.opportunity_scenario){
+      const scenario=model.opportunity_scenario;
+      field(host,'Scenario currency',scenario.currency,value=>scenario.currency=value,['USD','EUR','GBP','SEK']);
+      const names={monthly_cases:'Assumed monthly cases',minutes_saved_per_case:'Assumed minutes saved per case',
+        eligible_fraction_percent:'Assumed eligible cases percent',loaded_hourly_cost:'Assumed loaded hourly cost',
+        recurring_monthly_cost:'Assumed recurring monthly cost',one_time_implementation_cost:'Assumed implementation cost',
+        sensitivity_percent:'Chosen sensitivity percent'};
+      Object.entries(names).forEach(([key,title])=>field(host,title,scenario[key]??'',value=>scenario[key]=value.trim()===''?null:Number(value)));
+      host.appendChild(button('Remove opportunity scenario',()=>mutate(()=>model.opportunity_scenario=null)));
+    }else host.appendChild(button('Add explicit opportunity scenario',()=>mutate(()=>{
+      model.opportunity_scenario={currency:'USD',monthly_cases:null,minutes_saved_per_case:null,
+        eligible_fraction_percent:null,loaded_hourly_cost:null,recurring_monthly_cost:null,
+        one_time_implementation_cost:null,sensitivity_percent:25};
+    })));
+    const reviewLabel=el('label',' I reviewed this exact process graph and declared rules. Save locally as reviewed knowledge. ');
+    const check=el('input');check.id='owgCatalogReviewed';check.type='checkbox';check.checked=reviewed;
+    check.addEventListener('change',()=>reviewed=check.checked);reviewLabel.appendChild(check);host.appendChild(reviewLabel);
+    const actions=el('div');actions.className='owg-catalog-actions';
+    actions.append(button('Save new revision',()=>save()),button('Save as a new process',()=>save(true)));
+    if(record.revision){
+    actions.appendChild(button('Load revision history',()=>history()));
+    actions.appendChild(button('Download OpenAI Agents project',()=>download('agent-project')));
+    ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
+    actions.appendChild(button('Compare next CSV with this saved revision',()=>{
+      window.owgProcessMining?.setReference({workflow_id:record.workflow_id,revision:record.revision});
+      document.getElementById('owgProcessCSV')?.scrollIntoView({block:'start'});
+      status('Next CSV analysis will compare against saved revision '+record.revision+'. Unsaved edits are excluded.');
+    }));
+    actions.appendChild(button('Delete all revisions',()=>locked(async()=>{
+      if(!window.confirm('Delete this saved process and ALL revisions from local reviewed knowledge?'))return;
+      await request('/v1/process-catalog/forget',{workflow_id:record.workflow_id,user_confirmed:true});
+      record=null;model=null;reviewed=false;host.replaceChildren();status('Process revisions deleted locally. Downloaded exports are separate copies.');
+    })));
+    }
+    host.appendChild(actions);
+    const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
+  }
+  async function backlog(currency){
+    const result=await request('/v1/process-catalog/opportunities?'+new URLSearchParams({currency}));
+    const host=document.getElementById('owgCatalogBacklog');host.replaceChildren(el('h3','Improvement backlog · '+currency));
+    host.appendChild(el('p','Ranked by declared net monthly value. These are scenarios, not verified savings or implementation recommendations. Costs and quality risks need separate review.'));
+    result.opportunities.forEach(item=>{
+      const row=el('section'),p=item.projection;
+      row.appendChild(button(item.title+' · r'+item.revision,()=>load(item.workflow_id)));
+      row.appendChild(el('p','Assumed net monthly value '+p.net_monthly_value_before_other_costs+' '+currency+
+        ' · sensitivity '+p.sensitivity_net_monthly_low+' to '+p.sensitivity_net_monthly_high+
+        ' · simple payback '+(p.simple_payback_months==null?'not positive':p.simple_payback_months+' months')));
+      row.appendChild(el('p',item.unconfirmed_rule_count+' unconfirmed rules · '+item.unmapped_activity_count+
+        ' unmapped activities · owner: '+(item.declared_owner||'undeclared')));host.appendChild(row);
+    });
+    if(!result.opportunities.length)host.appendChild(el('p','No saved scenarios in this currency. Add assumptions to a process and save a reviewed revision.'));
+    host.appendChild(el('p',result.processes_without_scenarios_in_scanned_records+' processes have no scenario. '+
+      (result.catalog_scan_truncated||result.ranked_results_truncated?'This ranked view is bounded; additional records are omitted.':'All local reviewed-knowledge pages were considered.')));
+  }
+  function install(){
+    const panel=document.getElementById('panel-evidence');if(!panel||document.getElementById('owgProcessCatalog'))return;
+    const host=el('section');host.id='owgProcessCatalog';host.className='card';
+    host.append(el('h2','Process catalog · reviewed designs'),el('p','Save a reviewed process from the designer, or reopen a saved revision. Source event logs remain separate.'));
+    host.appendChild(button('Load saved designs',()=>inventory()));
+    const list=el('div');list.id='owgCatalogList';host.appendChild(list);
+    let currency='USD';field(host,'Backlog currency',currency,value=>currency=value,['USD','EUR','GBP','SEK']);
+    host.appendChild(button('Review improvement backlog',()=>backlog(currency)));
+    const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
+    const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);
+    const editor=el('div');editor.id='owgCatalogEditor';host.appendChild(editor);
+    const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);
+    panel.appendChild(host);
+  }
+  window.owgProcessCatalog={saveDesigner,draftObserved};
+  window.__owgProcessCatalogModel={linearModel};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
+})();

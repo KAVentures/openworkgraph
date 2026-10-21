@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import re
 import zipfile
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool
 
 from .main import ROOT
 from .process_mining_csv import MAX_BYTES as MAX_PROCESS_CSV_BYTES, ProcessMiningCSVError, mine_csv_events
@@ -84,12 +85,20 @@ def process_designer_script() -> Response:
 
 
 @app.post("/v1/process-mining/preview")
-async def process_mining_csv_preview(request: Request) -> Response:
+async def process_mining_csv_preview(
+    request: Request, workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
+    revision: int | None = Query(default=None, ge=1),
+) -> Response:
     """Explicit, authenticated local CSV preview. No file or projection retained.
 
     The existing secure_app middleware checks dashboard/bearer auth before
     entering this endpoint. Bound the actual chunked stream, not just headers.
     """
+    reference = None
+    if (workflow_id is None) != (revision is None):
+        raise HTTPException(status_code=422, detail='conformance requires both process ID and exact revision')
+    if workflow_id is not None:
+        reference = _catalog_record(workflow_id, revision)
     content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
     if content_type != "text/csv":
         raise HTTPException(status_code=415, detail="CSV requests must use text/csv")
@@ -105,7 +114,13 @@ async def process_mining_csv_preview(request: Request) -> Response:
             raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
         payload.extend(chunk)
     try:
-        report = mine_csv_events(bytes(payload))
+        report = mine_csv_events(bytes(payload), reference_model=(
+            ProcessModel.model_validate(reference['process_model']) if reference else None
+        ))
+        if reference:
+            report['conformance']['reference'] = {
+                key: reference[key] for key in ('workflow_id', 'revision', 'content_sha256')
+            }
     except ProcessMiningCSVError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     finally:
@@ -429,3 +444,178 @@ class KnowledgeForget(BaseModel):
 @app.post("/v1/workflow-knowledge/forget")
 def forget_workflow_knowledge(request: KnowledgeForget) -> dict[str, Any]:
     return _knowledge.forget("local", request.workflow_id)
+
+# Versioned process designs reuse workflow_knowledge and its owner boundary.
+from pydantic import ValidationError
+from shared.process_model import ProcessModel
+from .process_catalog import CatalogWrite, ProcessCatalog, process_bpmn, process_document
+
+_catalog = ProcessCatalog(_knowledge, 'local')
+_PROCESS_ID = r'^[a-zA-Z0-9_-]{1,80}$'
+
+
+def _process_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('duplicate process JSON key')
+        value[key] = item
+    return value
+
+
+def _invalid_process_constant(_value):
+    raise ValueError('nonstandard JSON constant')
+
+
+async def _process_json(request: Request) -> dict[str, Any]:
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise HTTPException(status_code=415, detail='application/json required')
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 128 * 1024:
+            raise HTTPException(status_code=413, detail='process request exceeds 128 KiB')
+        data.extend(chunk)
+    try:
+        value = json.loads(data, object_pairs_hook=_process_object, parse_constant=_invalid_process_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(status_code=422, detail='invalid process JSON') from None
+    finally:
+        data.clear()
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail='process JSON object required')
+    return value
+
+
+def _catalog_record(workflow_id: str, revision: int | None = None):
+    try:
+        return _catalog.get(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(status_code=404, detail='process revision not found') from None
+
+
+def _catalog_export(workflow_id: str, revision: int):
+    try:
+        return _catalog.export(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(status_code=404, detail='process revision not found') from None
+
+
+@app.get('/process-catalog.js')
+def process_catalog_script() -> Response:
+    return FileResponse(ROOT / 'dashboard' / 'process_catalog.js', media_type='application/javascript')
+
+
+@app.get('/v1/process-catalog')
+def list_process_catalog(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    page = _knowledge.page('local', after=after, limit=limit)
+    summaries = []
+    for record in page['workflows']:
+        if not record.get('process_model'):
+            continue
+        model = record['process_model']
+        summaries.append({key: record[key] for key in ('workflow_id', 'title', 'revision', 'content_sha256', 'saved_at')} | {
+            'activity_count': len(model['activities']), 'owner_label': model['owner_label'],
+            'unconfirmed_rule_count': sum(not rule['user_confirmed'] for rule in model['business_rules']),
+        })
+    return JSONResponse({'processes': summaries, 'has_more': page['has_more'], 'next_after': page['next_after']}, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog')
+async def save_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    try:
+        record = CatalogWrite.model_validate(value)
+        result = _catalog.save(record)
+    except ValidationError as exc:
+        messages = '; '.join(str(error['msg'])[:200] for error in exc.errors(include_input=False)[:5])
+        raise HTTPException(status_code=422, detail='Invalid process graph: ' + messages) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/revision')
+def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
+    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/history')
+def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    _catalog_record(workflow_id)
+    return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/export')
+def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1), format: str = Query(default='json', pattern='^(json|bpmn|pdd)$')) -> Response:
+    packet = _catalog_export(workflow_id, revision)
+    headers = {'Cache-Control': 'no-store', 'Content-Disposition':
+               f'attachment; filename="openworkgraph-process-r{revision}.{ {"json": "json", "bpmn": "bpmn", "pdd": "txt"}[format]}"'}
+    if format == 'json':
+        return JSONResponse(packet, headers=headers)
+    return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet),
+                    media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
+
+
+@app.post('/v1/process-catalog/forget')
+async def forget_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    if set(value) != {'workflow_id', 'user_confirmed'} or value.get('user_confirmed') is not True:
+        raise HTTPException(status_code=422, detail='explicit deletion review required')
+    workflow_id = value.get('workflow_id')
+    if not isinstance(workflow_id, str) or not re.fullmatch(_PROCESS_ID, workflow_id):
+        raise HTTPException(status_code=422, detail='invalid process ID')
+    _catalog_record(workflow_id)
+    return JSONResponse(_knowledge.forget('local', workflow_id), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/agent-project')
+def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1)) -> Response:
+    from .process_agent_project import build_runtime_project
+    archive = build_runtime_project(_catalog_export(workflow_id, revision))
+    return Response(archive, media_type='application/zip', headers={
+        'Cache-Control': 'no-store',
+        'Content-Disposition': 'attachment; filename="openworkgraph-openai-agents-project.zip"',
+    })
+
+
+@app.get('/v1/process-catalog/opportunities')
+def get_process_opportunities(currency: str = Query(default='USD', pattern='^(USD|EUR|GBP|SEK)$')) -> Response:
+    return JSONResponse(_catalog.opportunities(currency), headers={'Cache-Control': 'no-store'})
+
+
+class ProcessOutcomeCheck(BaseModel):
+    model_config = {'extra': 'forbid'}
+    workflow_id: str = Field(pattern=_PROCESS_ID)
+    revision: int = Field(ge=1, strict=True)
+    terminal_activity_id: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')
+    expected_operation: Literal['github_pr_merged', 'stripe_invoice_paid', 'stripe_refund_processor_succeeded', 'jira_issue_resolved']
+    resource_ref: str = Field(pattern=r'^owg:r:[0-9a-f]{32}$')
+    source_reads_confirmed: StrictBool = False
+
+
+@app.post('/v1/process-catalog/check-outcome')
+async def check_process_outcome(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    import asyncio
+    _require_dashboard(request)
+    try:
+        body = ProcessOutcomeCheck.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid exact-record outcome check') from None
+    if not body.source_reads_confirmed:
+        raise HTTPException(status_code=403, detail='confirm this exact source read')
+    record = _catalog_record(body.workflow_id, body.revision)
+    model = ProcessModel.model_validate(record['process_model'])
+    if not any(e.terminal_activity_id == body.terminal_activity_id and e.operation == body.expected_operation
+               and e.user_confirmed for e in model.outcome_expectations):
+        raise HTTPException(status_code=422, detail='source-state expectation must be confirmed in this saved revision')
+    receipt = await asyncio.to_thread(source_operation_receipt, body.resource_ref, body.expected_operation)
+    return JSONResponse({
+        'format': 'openworkgraph.process-outcome-check.v1',
+        'reference': {key: record[key] for key in ('workflow_id', 'revision', 'content_sha256')},
+        'terminal_activity_id': body.terminal_activity_id,
+        'association_basis': 'user_selected_process_expectation_and_exact_observed_record',
+        'receipt': receipt, 'agent_caused_operation_verified': False,
+        'business_objective_verified': False, 'execution_authorization': False,
+        'result_persisted': False,
+    }, headers={'Cache-Control': 'no-store'})

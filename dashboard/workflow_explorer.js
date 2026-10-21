@@ -60,6 +60,7 @@
         omittedSteps: Math.max(0, safeArray(steps).length - MAX_STEPS),
         count: count(variant.execution_count),
         ids,
+        exact: variants.length > 0,
         inferred: true
       };
     }).filter(row => row.steps.length);
@@ -244,7 +245,7 @@
     const width = 160 + Math.max(...lanes.map(lane => lane.steps.length)) * 184;
     const height = lanes.length * 106 + 35;
     const svg = svgElement('svg', {width, height, viewBox: '0 0 ' + width + ' ' + height,
-      role: 'img', 'aria-label': 'Observed sequences in separate lanes; not a single confirmed business process'});
+      role: 'group', 'aria-label': 'Observed sequences in separate lanes; not a single confirmed business process'});
     lanes.forEach((lane, row) => {
       const y = 24 + row * 106;
       const caption = svgElement('text', {x: 10, y: y + 31, 'font-size': 12, fill: '#61726b'});
@@ -296,6 +297,14 @@
       ' The map shows no unobserved actions, values, or inferred authorization.', 'muted'));
     const actions = element('div', null, 'owg-explorer-actions');
     actions.appendChild(button('Review selected examples', () => inspect(candidate, selectedExample), true));
+    actions.appendChild(button('Draft selected variant in process catalog',()=>{
+      const lane=selectedExample;
+      if(!lane||!lane.exact||lane.omittedSteps){status('Select a node in a complete displayed exact variant before drafting. Core summaries and clipped lanes cannot be used.');return;}
+      try{
+        if(!window.owgProcessCatalog?.draftObserved)throw new Error('Open the current local process catalog first.');
+        window.owgProcessCatalog.draftObserved({path:lane.steps,count:lane.count,basis:'selected_observed_variant',evidenceRefs:lane.ids});
+      }catch(error){status(String(error.message||'Could not draft this selected variant.'));}
+    },true));
     actions.appendChild(button('Copy AI handoff request', () => copyHandoff(candidate, selectedExample), true));
     host.appendChild(actions);
     const stepInfo = element('div', 'Select a map node to inspect its supporting variant.', 'muted');

@@ -108,3 +108,14 @@ throughput analytics, and source-verified end states.
 
 A real desktop browser acceptance test with a consented/synthetic CSV,
 security testing, and the full cross-platform CI are release requirements.
+
+Data-quality diagnostics also count cases with tied timestamps, repeated
+case/activity/timestamp entries and cases sorted from nonchronological input.
+Ties retain supplied row order; repeats are never silently deduplicated. Counts
+and structural matches must be interpreted with those ordering limits. Source
+log completeness and case-identifier authoritativeness remain unverified.
+
+A saved [process catalog](PROCESS_CATALOG.md) revision can be selected as the
+reference for a new analysis. The returned structural comparison covers all
+cases and full variants, with bounded displayed alignments. It does not
+establish business-policy compliance or independently verified outcomes.

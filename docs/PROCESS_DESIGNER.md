@@ -60,3 +60,5 @@ BPMN validation, signed-off process catalog entries and implementation
 templates for authorized agent runtimes.
 
 Implementation note: the reviewed draft is intentionally descriptive and must not be interpreted as an approved runbook or permission to execute business actions.
+
+Reviewed drafts can now be saved explicitly into the [versioned process catalog](PROCESS_CATALOG.md), which adds graph/rule editing, revision history, conflict detection, pinned exports, structural comparison and runtime projects. The original in-memory draft/export flow remains available.

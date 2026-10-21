@@ -62,6 +62,7 @@ jobs:
           node --check dashboard/workflow_evidence.js
           node --check dashboard/process_mining.js
           node --check dashboard/process_designer.js
+          node --check dashboard/process_catalog.js
           node --check dashboard/agent_starter.js
           node --check dashboard/opportunity_review.js
           node --check integrations/plugins/openworkgraph/scripts/find-and-launch.mjs
