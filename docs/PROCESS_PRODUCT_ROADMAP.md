@@ -19,7 +19,7 @@ or full competitor parity.
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Real-time collaboration, richer rule clarification and business-policy approval lifecycle |
 | Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner, separately authorized customer MCP implementation, conditional writes, current shared-design checks, replay journal and independent source readback pinned to exact artifacts | Customer-specific tool mappings, production deployment and end-to-end business acceptance |
 | Testing and feedback | Agent traces/receipts, full-log structural comparison, workflow shadow tests, pinned terminal source-state checks | Live case evaluation, verified business outcomes and drift review |
-| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history and audit | Integrated employee SSO for process portal, deployment controls and operational reporting |
+| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history/audit and opt-in company sign-in with process-only browser sessions | Deployment controls and operational reporting |
 
 The CSV drill-down connects diagram selections to exact variant statistics
 and bounded supporting examples. CSV preview remains ephemeral; reviewed designs are saved to the catalog.

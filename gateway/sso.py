@@ -38,7 +38,7 @@ from .auth import token_hash
 from .db import GatewayDB
 
 STATE_MINUTES = 10
-PURPOSES = ("admin", "me", "join")
+PURPOSES = ("admin", "me", "join", "processes")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS gateway_sso_states (
@@ -202,7 +202,10 @@ class SSOClient:
             data = self.db._row(row, columns)
             if not data or data.get("used_at") or data["expires_at"] < _ts(now):
                 raise SSOError("this sign-in attempt expired or was already used; start again", status_code=400)
-            self.db._execute(conn, "UPDATE gateway_sso_states SET used_at = ? WHERE state_hash = ?", (_ts(now), data["state_hash"]))
+            consumed = self.db._execute(conn, "UPDATE gateway_sso_states SET used_at = ? WHERE state_hash = ? AND used_at IS NULL AND expires_at >= ?",
+                                        (_ts(now), data["state_hash"], _ts(now)))
+            if consumed.rowcount != 1:
+                raise SSOError("this sign-in attempt expired or was already used; start again", status_code=400)
         meta = self.discovery()
         form = {
             "grant_type": "authorization_code",
@@ -249,4 +252,8 @@ class SSOClient:
             "email": email,
             "name": str(claims.get("name") or "")[:120],
         }
+        # Only the dedicated process callback receives verified identity claims.
+        # Existing admin/employee/invitation consumers retain their exact shape.
+        if data['purpose'] == 'processes':
+            identity['verified_claims'] = claims
         return data["purpose"], json.loads(data.get("context_json") or "{}"), identity

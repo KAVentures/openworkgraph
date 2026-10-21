@@ -141,7 +141,13 @@
       approve business policy or authorize an agent.
     </p>
     <section aria-label="Organization sign-in">
-      <h2>Connect your delegated identity</h2>
+      <h2>Sign in to shared processes</h2>
+      <button id="companySignIn" hidden>Sign in with company account</button>
+      <p class="muted">
+        Your administrator assigns access to your organization's process
+        catalog.
+      </p>
+      <h3>Advanced: connect a delegated identity</h3>
       <p class="muted">
         Use an access token from your existing company OIDC integration. It
         stays in this page's memory. Your administrator must explicitly assign
@@ -250,6 +256,7 @@
       (() => {
         "use strict";
         let candidateEditing = false;
+        let credentialScheme = "Bearer";
         let credential = "",
           selected = null,
           candidate = null,
@@ -292,7 +299,7 @@
           const response = await fetch(path, {
             cache: "no-store",
             headers: {
-              Authorization: "Bearer " + credential,
+              Authorization: credentialScheme + " " + credential,
               ...(body ? { "Content-Type": "application/json" } : {}),
             },
             ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
@@ -313,6 +320,7 @@
           $("sharing").disabled = false;
           previewGeneration++;
           credential = "";
+          credentialScheme = "Bearer";
           $("publish").disabled = true;
           selected = null;
           candidate = null;
@@ -345,39 +353,92 @@
             "Page memory cleared. No browser credential or process cache is stored.",
           );
         }
-        $("disconnect").onclick = () => {
-          if (busy) {
-            note("Wait for the current request before disconnecting.");
-            return;
-          }
-          clear();
-        };
-        $("connect").onclick = () =>
+        $("disconnect").onclick = () =>
           run(async () => {
-            const presented = $("token").value.trim();
+            const previous = credential,
+              previousScheme = credentialScheme;
             clear();
-            credential = presented;
-            try {
-              const who = await call("/v1/human/me");
-              $("publish").disabled = !(
-                who.scopes.includes("org:process:read") &&
-                who.scopes.includes("org:process:write")
+            if (previous && previousScheme === "OWG-Process-Session") {
+              const response = await fetch(
+                "/v1/human/processes/session/logout",
+                {
+                  method: "POST",
+                  cache: "no-store",
+                  headers: { Authorization: previousScheme + " " + previous },
+                },
               );
-              $("identity").textContent =
-                "Organization " +
-                who.organization_id +
-                " · actor " +
-                who.actor_id +
-                " · " +
-                who.scopes
-                  .filter((s) => s.startsWith("org:process:"))
-                  .join(", ");
-              await inventory();
-            } catch (error) {
-              clear();
-              throw error;
+              if (!response.ok)
+                throw new Error(
+                  "Page cleared. Server sign-out could not be confirmed; the process session expires within 15 minutes.",
+                );
             }
           });
+        async function connectIdentity(presented, scheme = "Bearer") {
+          clear();
+          credential = presented;
+          credentialScheme = scheme;
+          try {
+            const who = await call(
+              scheme === "OWG-Process-Session"
+                ? "/v1/human/processes/session/me"
+                : "/v1/human/me",
+            );
+            $("publish").disabled = !(
+              who.scopes.includes("org:process:read") &&
+              who.scopes.includes("org:process:write")
+            );
+            $("identity").textContent =
+              "Organization " +
+              who.organization_id +
+              " · actor " +
+              who.actor_id +
+              " · " +
+              who.scopes.filter((s) => s.startsWith("org:process:")).join(", ");
+            await inventory();
+          } catch (error) {
+            clear();
+            throw error;
+          }
+        }
+        $("connect").onclick = () =>
+          run(() => connectIdentity($("token").value.trim()));
+        $("companySignIn").onclick = () =>
+          run(async () => {
+            clear();
+            const response = await fetch("/v1/human/processes/sign-in", {
+              method: "POST",
+              cache: "no-store",
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok)
+              throw new Error(
+                typeof data.detail === "string"
+                  ? data.detail
+                  : "Company sign-in is unavailable.",
+              );
+            location.assign(data.redirect_url);
+          });
+        {
+          const fragment = new URLSearchParams(location.hash.slice(1));
+          const incomingSession = fragment.get("process_session"),
+            signInError = fragment.get("error");
+          fragment.delete("process_session");
+          if (incomingSession || signInError)
+            window.history.replaceState(
+              null,
+              "",
+              location.pathname + location.search,
+            );
+          if (incomingSession && incomingSession.length <= 100)
+            run(() => connectIdentity(incomingSession, "OWG-Process-Session"));
+          else if (signInError) note(signInError.slice(0, 200));
+        }
+        fetch("/v1/human/processes/sign-in/config", { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            $("companySignIn").hidden = data?.company_sign_in_enabled !== true;
+          })
+          .catch(() => {});
         async function inventory(after = "") {
           const result = await call(
             "/v1/human/processes?" +
@@ -1327,7 +1388,7 @@
               }),
             {
               cache: "no-store",
-              headers: { Authorization: "Bearer " + credential },
+              headers: { Authorization: credentialScheme + " " + credential },
             },
           );
           if (!response.ok)

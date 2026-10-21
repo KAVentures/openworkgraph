@@ -6,11 +6,43 @@ organization inventory, ownership, collaborator roles and independent revision
 review. It uses the existing append-only workflow knowledge store; it does not
 copy employees' evidence into a second process database.
 
+## Company sign-in
+
+Administrators can enable the portal's **Sign in with company account** button
+with `OWG_GATEWAY_PROCESS_SSO_ENABLED=true`. It requires the existing company
+SSO client/public URL configuration, enabled human OIDC configuration, the same
+issuer for both, and explicit group mappings containing `org:process:read`.
+The provider must include the configured organization, actor and group claims in
+its verified ID token. An email address or an employee roster entry alone grants
+no process permission. The provider's registered redirect URI remains
+`<OWG_GATEWAY_PUBLIC_URL>/sso/callback`.
+
+The dedicated flow uses authorization code + PKCE, signature/issuer/audience/
+expiry/nonce verification, single-use state and an HttpOnly same-browser login
+binding. It creates a separate process session lasting at most 15 minutes and
+never beyond the verified ID token's expiry. The login cookie is removed after a verified process callback; incomplete
+login bindings expire after ten minutes. The session is transferred in a URL fragment, immediately removed from
+browser history, and retained only in page memory. No persistent browser storage
+or ambient session cookie authenticates process API requests.
+
+Server storage contains only a session hash and bounded subject, organization,
+actor, group and issuer fields, with expiry. It stores no ID/access token or
+email. Session creation and logout commit with minimized audits. Configured group
+mappings are re-evaluated on each request; provider-side group changes require
+fresh sign-in or session expiry. Existing per-process collaborator changes are
+checked live. **Disconnect and clear page** revokes the server session.
+
+Process sessions authenticate only process-catalog routes using a distinct
+header scheme. They cannot access evidence, administrator or employee APIs and
+are not interchangeable with delegated API access tokens or agent credentials.
+The default remains disabled. Existing advanced delegated-token access and the
+admin/employee/invitation sign-in flows retain their own permission boundaries.
+
 ## Publish and review
 
 1. Review and save a design in the local process catalog; export its JSON.
-2. Connect a delegated company identity on the Gateway's **Shared processes**
-   page. Select the export and preview its baseline, activities and rules.
+2. Sign in with a company account on the Gateway's **Shared processes**
+   page, or use its advanced delegated-token option. Select the export and preview its baseline, activities and rules.
    Selecting a file sends nothing. Explicitly confirm both design review and
    organization sharing before publishing.
 3. Publish a new shared process or save a selected editable process's next
