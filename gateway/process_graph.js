@@ -1,12 +1,12 @@
-/* Shared process-design visualization. Data only; no network, storage or execution. */
+/* Shared process-design and observed-transition visualization. Data only; no network, storage or execution. */
 (() => {
   "use strict";
-  function layout(model) {
+  function layout(model, observed = false) {
     if (
       !Array.isArray(model.activities) ||
-      model.activities.length > 40 ||
+      model.activities.length > (observed ? 64 : 40) ||
       !Array.isArray(model.transitions) ||
-      model.transitions.length > 100
+      model.transitions.length > (observed ? 4096 : 100)
     ) {
       throw new Error("A bounded process graph is required.");
     }
@@ -34,7 +34,8 @@
     const rows = new Map(),
       positions = new Map(),
       edges = [];
-    const top = 70 + model.transitions.length * 8;
+    const top =
+      70 + Math.min(model.transitions.length, observed ? 24 : 100) * 8;
     for (const id of nodes.keys()) {
       const level = levels.has(id) ? levels.get(id) : fallback;
       const row = rows.get(level) || 0;
@@ -60,7 +61,7 @@
         const middle = (start[0] + end[0]) / 2;
         points = [start, [middle, start[1]], [middle, end[1]], end];
       } else {
-        const lane = 25 + index * 8;
+        const lane = 25 + (observed ? index % 24 : index) * 8;
         points = [
           start,
           [start[0] + 24, start[1]],
@@ -79,8 +80,8 @@
       height: Math.max(150, ...[...positions.values()].map((p) => p.y + 110)),
     };
   }
-  function draw(model, onSelect) {
-    const geometry = layout(model),
+  function draw(model, onSelect, options = {}) {
+    const geometry = layout(model, options.observed === true),
       ns = "http://www.w3.org/2000/svg";
     const svg = (tag, attrs = {}) => {
       const element = document.createElementNS(ns, tag);
@@ -95,8 +96,9 @@
       width: geometry.width,
       height: geometry.height,
       role: "group",
-      "aria-label":
-        "Proposed process graph. Arrows represent designed transitions.",
+      "aria-label": options.observed
+        ? "Observed activity transitions across supplied cases. Arrows show recorded order, not causal dependencies or approved routes."
+        : "Proposed process graph. Arrows represent designed transitions.",
     });
     geometry.edges.forEach((edge) => {
       const path = svg("path", {
@@ -107,10 +109,11 @@
       });
       const title = svg("title");
       title.textContent =
+        (options.observed && edge.observed_summary) ||
         edge.source +
-        " → " +
-        edge.target +
-        (edge.rule_id ? " · " + edge.rule_id : "");
+          " → " +
+          edge.target +
+          (edge.rule_id ? " · " + edge.rule_id : "");
       path.appendChild(title);
       drawing.appendChild(path);
       const end = edge.points.at(-1),
@@ -138,7 +141,9 @@
         group = svg("g", {
           role: "button",
           tabindex: 0,
-          "aria-label": "Select activity " + activity.id,
+          "aria-label": options.observed
+            ? "Inspect observed activity " + activity.label
+            : "Select activity " + activity.id,
         });
       const rect = svg("rect", {
         x: p.x,
@@ -152,6 +157,8 @@
       });
       const title = svg("title");
       title.textContent =
+        (options.observed &&
+          activity.label + " · " + activity.observed_summary) ||
         activity.label + " · " + activity.id + " · " + activity.kind;
       const label = svg("text", {
         x: p.x + 10,
@@ -167,9 +174,10 @@
         fill: "#526358",
       });
       detail.textContent =
+        (options.observed && activity.observed_summary) ||
         activity.id +
-        " · " +
-        String(activity.kind || "activity").replaceAll("_", " ");
+          " · " +
+          String(activity.kind || "activity").replaceAll("_", " ");
       const select = () => onSelect?.(activity);
       group.addEventListener("click", select);
       group.addEventListener("keydown", (event) => {
@@ -184,5 +192,58 @@
     wrap.appendChild(drawing);
     return wrap;
   }
-  window.owgProcessGraph = Object.freeze({ layout, draw });
+  function drawObserved(report, onSelect) {
+    if (
+      !Array.isArray(report.activities) ||
+      report.activities.length > 64 ||
+      !Array.isArray(report.transitions) ||
+      report.transitions.length > 4096
+    ) {
+      throw new Error("A bounded observed transition map is required.");
+    }
+    const labels = new Map();
+    const activities = report.activities.map((row, index) => {
+      if (typeof row.activity !== "string" || labels.has(row.activity))
+        throw new Error("Observed activity labels must be unique.");
+      const id = "observed_" + index;
+      labels.set(row.activity, id);
+      return {
+        id,
+        label: row.activity,
+        kind: "activity",
+        observed_summary:
+          row.event_count + " events · " + row.case_count + " cases",
+      };
+    });
+    const transitions = report.transitions.map((row) => {
+      if (!labels.has(row.from) || !labels.has(row.to))
+        throw new Error("Observed transition endpoints must exist.");
+      return {
+        source: labels.get(row.from),
+        target: labels.get(row.to),
+        observed_summary:
+          row.from +
+          " → " +
+          row.to +
+          " · " +
+          row.transition_count +
+          " recorded transitions across " +
+          row.case_count +
+          " cases · median elapsed gap " +
+          row.median_elapsed_gap_seconds +
+          " s; not verified waiting",
+      };
+    });
+    const first = report.cases?.[0]?.path?.[0];
+    return draw(
+      {
+        activities,
+        transitions,
+        entry_activity_id: labels.get(first) || activities[0]?.id,
+      },
+      onSelect,
+      { observed: true },
+    );
+  }
+  window.owgProcessGraph = Object.freeze({ layout, draw, drawObserved });
 })();

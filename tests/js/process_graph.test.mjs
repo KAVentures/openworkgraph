@@ -52,3 +52,43 @@ test('incomplete edits remain visible and graph labels stay data; keyboard selec
  assert.deepEqual(selected,['decide','decide']);assert.equal(prevented,true);
  assert.equal(input.activities[1].label,'</text><script>sideEffects()</script>');
 });
+
+
+test('observed transition map preserves forks, joins, loops, counts and source labels without changing design semantics',()=>{
+ const graph=fixture();
+ const report={activities:[{activity:'Open',event_count:3,case_count:3},
+   {activity:'Review',event_count:3,case_count:2},{activity:'Close',event_count:3,case_count:3}],
+   cases:[{path:['Open','Close']}],transitions:[
+   {from:'Open',to:'Review',transition_count:2,case_count:2,median_elapsed_gap_seconds:60},
+   {from:'Open',to:'Close',transition_count:1,case_count:1,median_elapsed_gap_seconds:120},
+   {from:'Review',to:'Review',transition_count:1,case_count:1,median_elapsed_gap_seconds:30},
+   {from:'Review',to:'Close',transition_count:2,case_count:2,median_elapsed_gap_seconds:60}]};
+ const selected=[],drawing=graph.drawObserved(report,activity=>selected.push(activity.label));
+ const svg=drawing.walk().find(node=>node.tag==='svg');
+ assert.match(svg.attrs['aria-label'],/not causal dependencies/);
+ assert.equal(drawing.walk().filter(node=>node.tag==='path').length,8);
+ assert.equal(drawing.walk().filter(node=>node.tag==='g').length,3);
+ assert(drawing.walk().some(node=>node.tag==='title'&&node.textContent.includes('median elapsed gap 60')));
+ const review=drawing.walk().find(node=>node.attrs['aria-label']==='Inspect observed activity Review');
+ review.handlers.keydown({key:'Enter',preventDefault(){}});
+ assert.deepEqual(selected,['Review']);
+ assert(drawing.walk().some(node=>node.tag==='text'&&node.textContent==='3 events · 2 cases'));
+ assert.equal(report.activities[1].activity,'Review');
+ const design=graph.draw(model(),()=>{});
+ assert.match(design.walk().find(node=>node.tag==='svg').attrs['aria-label'],/Proposed process graph/);
+ assert.throws(()=>graph.drawObserved({...report,activities:[...report.activities,report.activities[0]]}),/unique/);
+ assert.throws(()=>graph.drawObserved({...report,transitions:[{from:'unknown',to:'Close'}]}),/endpoints/);
+});
+
+test('dense observed maps stay bounded and finite while keeping their own larger read-only limits',()=>{
+ const graph=fixture();const activities=Array.from({length:64},(_,i)=>({activity:'Activity '+i,event_count:64,case_count:64}));
+ const transitions=activities.flatMap(a=>activities.map(b=>({from:a.activity,to:b.activity,transition_count:1,case_count:1,median_elapsed_gap_seconds:0})));
+ const drawing=graph.drawObserved({activities,transitions},()=>{});
+ assert.equal(drawing.walk().filter(node=>node.tag==='g').length,64);
+ assert.equal(drawing.walk().filter(node=>node.tag==='path').length,8192);
+ const svg=drawing.walk().find(node=>node.tag==='svg');
+ assert(Number.isFinite(Number(svg.attrs.width))&&Number.isFinite(Number(svg.attrs.height)));
+ assert(Number(svg.attrs.height)<10000);
+ assert.throws(()=>graph.drawObserved({activities:[...activities,{activity:'Too many'}],transitions:[]}),/bounded/);
+ assert.throws(()=>graph.drawObserved({activities,transitions:[...transitions,transitions[0]]}),/bounded/);
+});
