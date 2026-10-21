@@ -23,6 +23,30 @@ copy employees' evidence into a second process database.
    process design document. Saving another revision resets current review
    status; old decisions remain attached to the old revision.
 
+Owners and assigned editors can also choose **Edit selected design** directly
+in the shared catalog. The browser draft supports activity labels/types and
+implementation suggestions, adding/removing activities and transitions,
+decision-rule editing and confirmation, entry/terminal IDs, and unevaluated
+manual review conditions. Local export/upload is only needed for initial
+publication or importing a separately designed model.
+
+The shared catalog and local editor use the same accessible graph renderer.
+It shows the actual proposed transitions, branches and loops; selecting a node
+in an editor focuses that activity's field. These are design maps, not new
+observations or proof that a step happened. Draft graph changes appear when
+the user chooses **Review edited design**. Overall review/sharing confirmation
+is disabled during editing and cleared by every edit. Saving runs the existing
+graph validation, preserves immutable history, records the current actor as
+author and requires a fresh independent review. Invalid graphs stay unsaved and
+return a fixed diagnostic without echoing model input. Concurrent or revoked
+editors cannot bypass current server-side scope, role and version checks.
+
+AS-IS baselines remain unchanged in this editor. Removing an activity removes
+its attached edges, manual conditions and source expectations; the complete
+updated design must be reviewed again. Other source-state expectations and
+opportunity assumptions are retained and visible in the preview. The portal
+performs no source checks or business writes.
+
 Publishing includes all declared model fields, including baseline labels, goal,
 rules, opportunity assumptions and source-state expectations. The publisher
 must review these for sharing. Raw event rows and local evidence references are
@@ -125,3 +149,9 @@ review, a new revision invalidating cached review, immediate reviewer revocation
 read-only historical export, identity switching, mobile layout and memory-only
 credentials. No real IdP, customer evidence or live business integration is
 certified by these tests.
+
+The browser acceptance also creates a decision with two terminal branches in
+the shared editor, checks keyboard/node-to-field navigation and rule-confirmation
+invalidation, verifies there are no automatic design writes, rejects and repairs
+an incomplete decision, then saves a new revision and checks stale-review and
+read-only access boundaries.

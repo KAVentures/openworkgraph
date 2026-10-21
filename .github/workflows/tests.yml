@@ -100,6 +100,7 @@ jobs:
           node --check dashboard/process_mining.js
           node --check dashboard/process_designer.js
           node --check dashboard/process_catalog.js
+          node --check gateway/process_graph.js
           node --check dashboard/process_decisions.js
           node --check dashboard/agent_starter.js
           node --check dashboard/agent_preflight.js

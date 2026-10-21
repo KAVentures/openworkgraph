@@ -42,7 +42,16 @@ async def _body(request: Request, model: type[_MODEL]) -> _MODEL:
         data.extend(chunk)
     try:
         return model.model_validate(json.loads(data, object_pairs_hook=_object, parse_constant=_invalid_constant))
-    except (ValueError, UnicodeError, RecursionError, ValidationError):
+    except ValidationError as exc:
+        # Root graph validators emit fixed product messages. Surface those to
+        # help editors repair connectivity without echoing input or field paths.
+        graph_errors = [error['msg'].removeprefix('Value error, ') for error in exc.errors(
+            include_input=False, include_context=False, include_url=False)
+            if error['type'] == 'value_error' and error['loc'] == ('process_model',)]
+        if graph_errors:
+            raise HTTPException(422, 'Invalid process graph: ' + graph_errors[0]) from None
+        raise HTTPException(422, 'Invalid shared process JSON or review fields') from None
+    except (ValueError, UnicodeError, RecursionError):
         raise HTTPException(422, 'Invalid shared process JSON or review fields') from None
     finally:
         data.clear()
@@ -64,6 +73,13 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
     def portal():
         from .html_pages import render_page
         return render_page('processes.html', config={})
+
+    @router.get('/process-graph.js', include_in_schema=False)
+    def graph_script():
+        from pathlib import Path
+        return Response(Path(__file__).with_name('process_graph.js').read_text(encoding='utf-8'),
+                        media_type='application/javascript', headers={
+                            'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
 
     @router.get('/v1/human/processes')
     def inventory(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100),

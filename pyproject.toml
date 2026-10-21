@@ -48,4 +48,4 @@ where = ["."]
 server = ["name_lexicon/*.txt", "name_lexicon/README.md", "process_agent_templates/*.txt"]
 # The enterprise Gateway serves these identity/admin shells. Every data/action
 # request is still authenticated independently by the Gateway.
-gateway = ["processes.html", "admin_console.html", "me_page.html", "join_verify.html", "landing.html", "work_text_account.html", "qrcode.min.js", "qrcode.LICENSE"]
+gateway = ["processes.html", "process_graph.js", "admin_console.html", "me_page.html", "join_verify.html", "landing.html", "work_text_account.html", "qrcode.min.js", "qrcode.LICENSE"]

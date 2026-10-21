@@ -270,6 +270,11 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
         assert "'unsafe-inline'" not in portal.headers['content-security-policy']
         assert '__NONCE__' not in portal.text
         assert 'localStorage' not in portal.text and 'sessionStorage' not in portal.text
+        graph_script=client.get('/process-graph.js')
+        assert graph_script.status_code==200
+        assert graph_script.headers['content-type'].startswith('application/javascript')
+        assert graph_script.headers['x-content-type-options']=='nosniff'
+        assert 'owgProcessGraph' in graph_script.text
         headers=lambda who:{'Authorization':'Bearer '+who}
         assert client.get('/v1/human/processes').status_code==401
         assert client.get('/v1/human/processes',headers=headers('admin')).status_code==401
@@ -279,6 +284,14 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
         assert saved.status_code==200,saved.text
         assert saved.headers['cache-control']=='no-store'
         first=saved.json();wid=first['process']['workflow_id'];url='/v1/human/processes/'+wid
+        invalid=write('PRIVATE TITLE',expected=1).model_dump()
+        invalid['process_model']['goal']='PRIVATE GOAL'
+        invalid['process_model']['transitions']=[]
+        rejected=client.post(url,headers=headers('alice'),json=invalid)
+        assert rejected.status_code==422
+        assert 'Nonterminal activities must have an outgoing transition' in rejected.json()['detail']
+        assert 'PRIVATE' not in rejected.text
+        assert client.get(url,headers=headers('alice')).json()['process']['revision']==1
         assert client.get(url,headers=headers('foreign')).status_code==404
         assert client.post(url,headers=headers('bob'),json=write(expected=1).model_dump()).status_code==403
         access=ProcessAccessWrite(expected_access_revision=1,members=[ProcessMember(actor_id='bob',role='reviewer')],user_confirmed=True)

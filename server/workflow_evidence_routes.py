@@ -136,6 +136,11 @@ async def process_mining_csv_preview(
     return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/process-graph.js")
+def process_graph_script() -> Response:
+    return FileResponse(ROOT / "gateway" / "process_graph.js", media_type="application/javascript")
+
+
 @app.get("/agent-starter.js")
 def agent_starter_script() -> Response:
     """Static client only; no background agent installation."""
