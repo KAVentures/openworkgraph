@@ -86,6 +86,66 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
     async def run_case(self,data=None):
         return await execute_approved(*(data or self.data),journal_directory=Path(self.folder.name)/'journal',
             client_factory=lambda *args:self.tools,receipt_reader=self.source)
+    def shared_fixture(self):
+        data=deepcopy(self.data)
+        data[0]['organization_catalog_reference']={'organization_id':'synthetic-org'}
+        data[3]['process_catalog_url']='https://catalog.invalid'
+        data[4].update(review_template(data[0],prepare(*data[:4]),data[2],data[3]))
+        data[4].update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+            expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+        return data
+    def catalog_state(self,spec):
+        return {'format':'openworkgraph.process-implementation-state.v1','organization_id':'synthetic-org',
+            'process_reference':{key:spec[key] for key in ('workflow_id','revision','content_sha256')},
+            'process_model_sha256':spec['process_model_sha256'],'latest_revision':spec['revision'],
+            'archived':False,'review_status':'reviewed_design','current_independent_design_review':True,
+            'execution_authorization':False}
+    async def test_shared_design_rechecks_before_actions_and_after_precondition(self):
+        data=self.shared_fixture();checks=[]
+        async def catalog(base,token,spec):
+            checks.append(len(self.tools.calls));return self.catalog_state(spec)
+        with patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            result=await execute_approved(*data,journal_directory=Path(self.folder.name)/'journal',
+                client_factory=lambda *args:self.tools,receipt_reader=self.source,catalog_reader=catalog)
+        self.assertEqual(checks,[0,0,1,2,2])
+        self.assertTrue(result['all_tool_results_matched'])
+        self.assertTrue(result['catalog_current_at_last_check'])
+    async def test_shared_design_revoked_during_precondition_stops_write(self):
+        data=self.shared_fixture()
+        async def catalog(base,token,spec):
+            state=self.catalog_state(spec)
+            if self.tools.calls:state['current_independent_design_review']=False
+            return state
+        with patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            result=await execute_approved(*data,journal_directory=Path(self.folder.name)/'journal',
+                client_factory=lambda *args:self.tools,receipt_reader=self.source,catalog_reader=catalog)
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case'])
+        self.assertFalse(result['catalog_current_at_last_check'])
+        self.assertFalse(result['all_tool_results_matched'])
+    async def test_mismatched_or_unavailable_catalog_stops_before_tools_or_source(self):
+        for changes in ({'organization_id':'foreign'}, {'process_model_sha256':'c'*64},
+                {'latest_revision':2}, {'latest_revision':True}, {'archived':True},
+                {'review_status':'changes_requested'}, {'execution_authorization':True},
+                {'process_reference':None}, None):
+            data=self.shared_fixture()
+            async def catalog(base,token,spec):
+                if changes is None:raise TimeoutError('SYNTHETIC_PRIVATE_ERROR')
+                return self.catalog_state(spec)|changes
+            with TemporaryDirectory() as folder, patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+                result=await execute_approved(*data,journal_directory=folder,
+                    client_factory=lambda *args:self.tools,receipt_reader=self.source,catalog_reader=catalog)
+            self.assertTrue(result['stopped_before_tools'])
+            self.assertFalse(result['catalog_current_at_last_check'])
+        self.assertFalse(self.tools.calls);self.assertFalse(self.source_requests)
+    async def test_shared_design_needs_separate_catalog_read_credential_and_endpoint(self):
+        data=self.shared_fixture()
+        with patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':''}):
+            with self.assertRaises(ImplementationError):await self.run_case(data)
+        data[3]['process_catalog_url']='http://public.invalid'
+        data[4].update(review_template(data[0],prepare(*data[:4]),data[2],data[3]))
+        with self.assertRaises(ImplementationError):await self.run_case(data)
+        self.assertFalse(self.tools.calls);self.assertFalse(self.source_requests)
+
     async def test_mapped_precondition_action_and_independent_source_state(self):
         result=await self.run_case()
         self.assertEqual([c[0] for c in self.tools.calls],['read_case','resolve_case','read_case'])

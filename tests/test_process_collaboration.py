@@ -167,6 +167,38 @@ def test_review_pins_current_revision_requires_independent_actor_and_retains_his
     assert rows==2
 
 
+def test_implementation_state_is_minimized_tenant_scoped_and_tracks_changes(store):
+    from shared.process_agent_project import process_model_digest
+    first=store.save(person(),write());wid=first['process']['workflow_id']
+    state=store.implementation_state(person('reader'),wid,revision=1)
+    assert not state['current_independent_design_review']
+    grant(store,wid,members=[ProcessMember(actor_id='bob',role='reviewer')])
+    store.review(person('bob'),wid,review(first['process']))
+    state=store.implementation_state(person('reader'),wid,revision=1)
+    assert state['current_independent_design_review'] is True
+    assert state['process_model_sha256']==process_model_digest(first['process']['process_model'])
+    assert state['execution_authorization'] is False
+    assert set(state)=={'format','organization_id','process_reference','process_model_sha256',
+        'latest_revision','archived','review_status','current_independent_design_review','execution_authorization'}
+    assert 'Evidence missing' not in json.dumps(state) and 'alice' not in json.dumps(state)
+    for principal,status in [(person(org='foreign'),404),(person(scopes=frozenset()),403)]:
+        with pytest.raises(ProcessCollaborationError) as exc:
+            store.implementation_state(principal,wid,revision=1)
+        assert exc.value.status==status
+    store.review(person('bob'),wid,review(first['process'],'changes_requested',1))
+    assert not store.implementation_state(person(),wid,revision=1)['current_independent_design_review']
+    store.review(person('bob'),wid,review(first['process'],'reviewed_design',2))
+    store.save(person(),write(expected=1),wid)
+    state=store.implementation_state(person(),wid,revision=1)
+    assert state['latest_revision']==2 and not state['current_independent_design_review']
+    assert not store.implementation_state(person(),wid,revision=2)['current_independent_design_review']
+    store.archive(person(),wid,ProcessArchiveWrite(expected_access_revision=2,archived=True,user_confirmed=True))
+    state=store.implementation_state(person(),wid,revision=1)
+    assert state['archived'] and not state['current_independent_design_review']
+    audits=[r for r in store.db.audit_rows('acme') if r['action']=='process.implementation_state.read']
+    assert audits and all(set(row['details'])=={'workflow_id','revision'} for row in audits)
+
+
 def test_reviewer_revocation_and_owner_transfer_need_current_permissions(store):
     first=store.save(person(),write());wid=first['process']['workflow_id']
     grant(store,wid,members=[ProcessMember(actor_id='bob',role='reviewer')])
@@ -306,13 +338,23 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
             exported=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':fmt})
             assert exported.status_code==200,exported.text
             assert exported.headers['cache-control']=='no-store'
+        status_url=url+'/implementation-status'
+        assert client.get(status_url,params={'revision':1}).status_code==401
+        assert client.get(status_url,headers=headers('no-process'),params={'revision':1}).status_code==403
+        assert client.get(status_url,headers=headers('foreign'),params={'revision':1}).status_code==404
+        current=client.get(status_url,headers=headers('reader'),params={'revision':1})
+        assert current.status_code==200 and current.headers['cache-control']=='no-store'
+        assert current.json()['current_independent_design_review'] is True
+        assert 'process_model' not in current.json()
         implementation=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':'agent-project'})
         assert implementation.status_code==200
         with ZipFile(BytesIO(implementation.content)) as archive:
             assert 'execute.py' in archive.namelist()
             assert json.loads(archive.read('tool-bindings.example.json'))['enabled'] is False
             assert json.loads(archive.read('customer-intent.example.json'))['customer_authorization_confirmed'] is False
-            assert json.loads(archive.read('workflow.spec.json'))['revision']==1
+            spec=json.loads(archive.read('workflow.spec.json'))
+            assert spec['revision']==1
+            assert spec['organization_catalog_reference']=={'organization_id':'acme'}
         history=client.get(url+'/history',headers=headers('reader')).json()
         assert history['workflows'][0]['revision']==1
         for body in [b'{"user_confirmed":true,"user_confirmed":false}',b'{"n":NaN}',b'['*2000+b']'*2000]:

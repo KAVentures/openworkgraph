@@ -214,6 +214,27 @@ class OrganizationProcessStore:
             self._audit(conn, p, 'process.read', workflow_id=workflow_id, revision=result['process']['revision'])
             return result
 
+    def implementation_state(self, p, workflow_id, *, revision):
+        """Minimized read-only freshness check; design review grants no execution."""
+        from shared.process_agent_project import process_model_digest
+        self.require_scope(p, 'org:process:read')
+        with self.db.connect() as conn:
+            detail = self._detail(conn, p, workflow_id, revision=revision)
+            record = detail['process']
+            result = {
+                'format': 'openworkgraph.process-implementation-state.v1',
+                'organization_id': p.organization_id,
+                'process_reference': {key: record[key] for key in ('workflow_id', 'revision', 'content_sha256')},
+                'process_model_sha256': process_model_digest(record['process_model']),
+                'latest_revision': detail['latest_revision'], 'archived': detail['archived'],
+                'review_status': detail['review']['status'],
+                'current_independent_design_review': (not detail['archived']
+                    and not detail['viewing_historical_revision'] and detail['review']['status'] == 'reviewed_design'),
+                'execution_authorization': False,
+            }
+            self._audit(conn, p, 'process.implementation_state.read', workflow_id=workflow_id, revision=revision)
+            return result
+
     def inventory(self, p, *, after='', limit=20, include_archived=False):
         self.require_scope(p, 'org:process:read')
         with self.db.connect() as conn:
