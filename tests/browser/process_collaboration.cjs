@@ -92,6 +92,16 @@ const pathModule = require("node:path");
       await p.locator("#sharing").check();
     }
     const alice = await login("alice");
+    let designWrites = 0;
+    alice.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        /\/v1\/human\/processes(?:\/process_[A-Za-z0-9_-]+)?$/.test(
+          new URL(request.url()).pathname,
+        )
+      )
+        designWrites++;
+    });
     await upload(alice, pathModule.join(scratch, "process.json"));
     assert.equal(await alice.locator("#inventory button").count(), 0);
     await alice
@@ -167,7 +177,150 @@ const pathModule = require("node:path");
       .locator("#reviewState")
       .filter({ hasText: "Design review: reviewed design." })
       .waitFor();
-    await upload(alice, pathModule.join(scratch, "process-v2.json"));
+    await alice
+      .getByRole("button", { name: "Edit selected design", exact: true })
+      .click();
+    await alice
+      .locator("#preview")
+      .getByRole("button", { name: "Select activity open", exact: true })
+      .click();
+    assert.equal(
+      await alice.evaluate(() =>
+        document.activeElement.getAttribute("aria-label"),
+      ),
+      "Draft activity open",
+    );
+    await alice
+      .getByLabel("Draft business goal", { exact: true })
+      .fill("Resolve the reviewed case after checking its evidence");
+    await alice
+      .getByLabel("Draft activity open", { exact: true })
+      .fill("Inspect case");
+    await alice
+      .getByRole("button", { name: "Add draft activity", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft activity step_1", { exact: true })
+      .fill("Decide case");
+    await alice
+      .getByLabel("Draft kind step_1", { exact: true })
+      .selectOption("decision");
+    await alice
+      .getByRole("button", { name: "Add draft activity", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft activity step_2", { exact: true })
+      .fill("Reject case");
+    await alice
+      .getByLabel("Draft terminal activity IDs (comma separated)", {
+        exact: true,
+      })
+      .fill("close,step_2");
+    await alice
+      .getByRole("button", { name: "Add draft rule", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft rule rule_1", { exact: true })
+      .fill("Evidence sufficient");
+    await alice
+      .getByLabel("I confirm declared rule rule_1", { exact: true })
+      .check();
+    await alice
+      .getByLabel("Draft rule rule_1", { exact: true })
+      .fill("Reviewed evidence is sufficient");
+    assert.equal(
+      await alice
+        .getByLabel("I confirm declared rule rule_1", { exact: true })
+        .isChecked(),
+      false,
+    );
+    await alice
+      .getByLabel("I confirm declared rule rule_1", { exact: true })
+      .check();
+    await alice
+      .getByRole("button", { name: "Add draft rule", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft rule rule_2", { exact: true })
+      .fill("Evidence is insufficient");
+    await alice
+      .getByLabel("I confirm declared rule rule_2", { exact: true })
+      .check();
+    await alice
+      .getByLabel("Draft to 1", { exact: true })
+      .selectOption("step_1");
+    await alice
+      .getByRole("button", { name: "Add draft transition", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft from 2", { exact: true })
+      .selectOption("step_1");
+    await alice.getByLabel("Draft to 2", { exact: true }).selectOption("close");
+    await alice
+      .getByLabel("Draft branch rule 2", { exact: true })
+      .selectOption("rule_1");
+    await alice
+      .getByRole("button", { name: "Add draft transition", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft from 3", { exact: true })
+      .selectOption("step_1");
+    await alice
+      .getByLabel("Draft to 3", { exact: true })
+      .selectOption("step_2");
+    await alice
+      .getByLabel("Draft branch rule 3", { exact: true })
+      .selectOption("rule_2");
+    await alice
+      .getByRole("button", { name: "Remove draft transition 3", exact: true })
+      .click();
+    assert.equal(await alice.locator("#reviewed").isDisabled(), true);
+    assert.equal(await alice.locator("#sharing").isDisabled(), true);
+    assert.match(
+      await alice.locator("#selectedTitle").textContent(),
+      /revision 1/,
+    );
+    assert.equal(designWrites, 1);
+    await alice
+      .getByRole("button", { name: "Review edited design", exact: true })
+      .click();
+    assert.match(await alice.locator("#preview").textContent(), /Inspect case/);
+    await alice.locator("#reviewed").check();
+    await alice.locator("#sharing").check();
+    await alice
+      .getByRole("button", {
+        name: "Save as the selected process's next revision",
+        exact: true,
+      })
+      .click();
+    await waitStatus(
+      alice,
+      "Invalid process graph: Decision branches require at least two explicitly referenced rules",
+    );
+    assert.match(
+      await alice.locator("#selectedTitle").textContent(),
+      /revision 1/,
+    );
+    await alice
+      .getByRole("button", { name: "Continue editing candidate", exact: true })
+      .click();
+    await alice
+      .getByRole("button", { name: "Add draft transition", exact: true })
+      .click();
+    await alice
+      .getByLabel("Draft from 3", { exact: true })
+      .selectOption("step_1");
+    await alice
+      .getByLabel("Draft to 3", { exact: true })
+      .selectOption("step_2");
+    await alice
+      .getByLabel("Draft branch rule 3", { exact: true })
+      .selectOption("rule_2");
+    await alice
+      .getByRole("button", { name: "Review edited design", exact: true })
+      .click();
+    await alice.locator("#reviewed").check();
+    await alice.locator("#sharing").check();
     await alice
       .getByRole("button", {
         name: "Save as the selected process's next revision",
@@ -181,6 +334,19 @@ const pathModule = require("node:path");
     assert.match(
       await alice.locator("#reviewState").textContent(),
       /needs review/,
+    );
+    assert.equal(designWrites, 3);
+    assert.match(await alice.locator("#design").textContent(), /Decide case/);
+    assert.equal(
+      await alice
+        .locator("#design")
+        .getByRole("button", { name: "Select activity step_1", exact: true })
+        .count(),
+      1,
+    );
+    assert.match(
+      await alice.locator("#design").textContent(),
+      /Reviewed evidence is sufficient/,
     );
     await bob.locator("#reviewConfirm").check();
     await bob
@@ -226,6 +392,12 @@ const pathModule = require("node:path");
     await reader
       .getByRole("button", { name: "Shared support process · r2", exact: true })
       .click();
+    assert.equal(
+      await reader
+        .getByRole("button", { name: "Edit selected design", exact: true })
+        .isDisabled(),
+      true,
+    );
     await reader
       .getByRole("button", { name: "Load revision history", exact: true })
       .click();
@@ -282,10 +454,34 @@ const pathModule = require("node:path");
     );
     assert.equal(await alice.locator("#comment").inputValue(), "");
     await reader.setViewportSize({ width: 390, height: 844 });
+    assert.equal(
+      await reader.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      true,
+    );
     await reader.screenshot({
       path: pathModule.join(scratch, "mobile.png"),
       fullPage: true,
     });
+    if (process.env.OWG_BROWSER_ARTIFACT_DIR) {
+      await fs.mkdir(process.env.OWG_BROWSER_ARTIFACT_DIR, { recursive: true });
+      await fs.copyFile(
+        pathModule.join(scratch, "mobile.png"),
+        pathModule.join(
+          process.env.OWG_BROWSER_ARTIFACT_DIR,
+          "shared-process-mobile.png",
+        ),
+      );
+      await reader.setViewportSize({ width: 1280, height: 900 });
+      await reader.screenshot({
+        path: pathModule.join(
+          process.env.OWG_BROWSER_ARTIFACT_DIR,
+          "shared-process-desktop.png",
+        ),
+        fullPage: true,
+      });
+    }
     assert.deepEqual(
       await reader.evaluate(() => [localStorage.length, sessionStorage.length]),
       [0, 0],

@@ -132,6 +132,10 @@
     status('Exported saved revision '+exportedRecord.revision+'. Unsaved editor changes are excluded.');
   }
   function graph(){
+    if(window.owgProcessGraph) return window.owgProcessGraph.draw(model, activity=>{
+      const index=model.activities.findIndex(a=>a.id===activity.id);
+      document.getElementById('owgCatalogActivity'+index)?.focus();
+    });
     const ns='http://www.w3.org/2000/svg';
     const svg=(tag,attrs)=>{const node=document.createElementNS(ns,tag);Object.entries(attrs||{}).forEach(([k,v])=>node.setAttribute(k,String(v)));return node;};
     const wrap=el('div');wrap.style.overflow='auto';

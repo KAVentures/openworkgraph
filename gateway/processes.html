@@ -75,6 +75,15 @@
       .scroll {
         overflow: auto;
       }
+      .owg-process-graph {
+        overflow: auto;
+        max-width: 100%;
+      }
+      p,
+      li,
+      legend {
+        overflow-wrap: anywhere;
+      }
       table {
         border-collapse: collapse;
         width: 100%;
@@ -189,6 +198,7 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
+      <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
       <div class="actions" id="exports"></div>
       <div class="grid">
@@ -235,9 +245,11 @@
       </div>
       <div id="historyList"></div>
     </section>
+    <script nonce="__NONCE__" src="/process-graph.js"></script>
     <script nonce="__NONCE__">
       (() => {
         "use strict";
+        let candidateEditing = false;
         let credential = "",
           selected = null,
           candidate = null,
@@ -296,6 +308,9 @@
           return response.json();
         }
         function clear() {
+          candidateEditing = false;
+          $("reviewed").disabled = false;
+          $("sharing").disabled = false;
           previewGeneration++;
           credential = "";
           $("publish").disabled = true;
@@ -429,8 +444,25 @@
                 words(model.baseline_coverage || "supplied path") +
                 ". Source identity and task boundaries are not verified.",
             ),
-            el("h4", "TO-BE activities"),
+            el("h4", "TO-BE proposed map and activities"),
           );
+          const selectedActivity = el(
+            "p",
+            "Select a graph activity to inspect its proposed implementation.",
+          );
+          if (window.owgProcessGraph)
+            host.appendChild(
+              window.owgProcessGraph.draw(model, (activity) => {
+                selectedActivity.textContent =
+                  activity.id +
+                  ": " +
+                  activity.label +
+                  " · " +
+                  words(activity.implementation || "unmapped") +
+                  "; this is a proposed design activity.";
+              }),
+            );
+          host.appendChild(selectedActivity);
           const table = el("table"),
             head = el("tr");
           ["Activity", "Label", "Type", "Suggested implementation"].forEach(
@@ -547,7 +579,376 @@
             host.appendChild(assumptions);
           } else host.appendChild(el("p", "No opportunity scenario declared."));
         }
+        function draftChanged() {
+          $("reviewed").checked = false;
+          $("sharing").checked = false;
+        }
+        function draftField(
+          host,
+          title,
+          value,
+          apply,
+          options,
+          maxLength = 240,
+        ) {
+          const label = el("label", title + " ");
+          const input = el(options ? "select" : "input");
+          input.setAttribute("aria-label", title);
+          input.maxLength = maxLength;
+          if (options)
+            options.forEach((value) => {
+              const option = el("option", words(value));
+              option.value = value;
+              input.appendChild(option);
+            });
+          input.value = value;
+          input.addEventListener(options ? "change" : "input", () => {
+            apply(input.value);
+            draftChanged();
+          });
+          label.appendChild(input);
+          host.appendChild(label);
+          return input;
+        }
+        function editCandidate() {
+          if (!candidate)
+            throw new Error(
+              "Select an export or an editable saved process first.",
+            );
+          previewGeneration++;
+          candidateEditing = true;
+          draftChanged();
+          $("reviewed").disabled = true;
+          $("sharing").disabled = true;
+          const model = candidate.process_model,
+            host = $("preview");
+          host.replaceChildren(
+            el("h3", "Edit unsaved process design"),
+            el(
+              "p",
+              "Changes remain in this page until you preview, review and save them. Keep all activities reachable and connect each path to a terminal. Observed baselines remain unchanged.",
+            ),
+          );
+          const mutate = (fn) => {
+            fn();
+            draftChanged();
+            editCandidate();
+          };
+          draftField(
+            host,
+            "Draft business goal",
+            model.goal,
+            (value) => (model.goal = value),
+            null,
+            500,
+          );
+          draftField(
+            host,
+            "Draft owner label",
+            model.owner_label || "",
+            (value) => (model.owner_label = value),
+            null,
+            120,
+          );
+          const ids = model.activities.map((a) => a.id);
+          const activityFields = new Map();
+          if (window.owgProcessGraph)
+            host.appendChild(
+              window.owgProcessGraph.draw(model, (activity) =>
+                activityFields.get(activity.id)?.focus(),
+              ),
+            );
+          host.appendChild(el("h4", "Activities"));
+          model.activities.forEach((activity, index) => {
+            const row = el("fieldset");
+            row.appendChild(el("legend", activity.id));
+            const activityField = draftField(
+              row,
+              "Draft activity " + activity.id,
+              activity.label,
+              (value) => (activity.label = value),
+              null,
+              64,
+            );
+            activityFields.set(activity.id, activityField);
+            draftField(
+              row,
+              "Draft kind " + activity.id,
+              activity.kind,
+              (value) => (activity.kind = value),
+              ["activity", "decision", "start", "end"],
+            );
+            draftField(
+              row,
+              "Draft implementation " + activity.id,
+              activity.implementation,
+              (value) => (activity.implementation = value),
+              [
+                "unmapped",
+                "api",
+                "deterministic",
+                "ai_agent",
+                "computer_use",
+                "human",
+              ],
+            );
+            row.appendChild(
+              button("Remove draft activity " + activity.id, () =>
+                mutate(() => {
+                  model.activities.splice(index, 1);
+                  model.transitions = model.transitions.filter(
+                    (e) => e.source !== activity.id && e.target !== activity.id,
+                  );
+                  model.terminal_activity_ids =
+                    model.terminal_activity_ids.filter(
+                      (id) => id !== activity.id,
+                    );
+                  model.outcome_expectations = (
+                    model.outcome_expectations || []
+                  ).filter((e) => e.terminal_activity_id !== activity.id);
+                  model.manual_review_conditions = (
+                    model.manual_review_conditions || []
+                  ).filter((c) => c.activity_id !== activity.id);
+                }),
+              ),
+            );
+            host.appendChild(row);
+          });
+          host.appendChild(
+            button("Add draft activity", () =>
+              mutate(() => {
+                if (model.activities.length >= 40)
+                  throw new Error("Maximum 40 activities.");
+                let id = 1;
+                while (ids.includes("step_" + id)) id++;
+                model.activities.push({
+                  id: "step_" + id,
+                  label: "New activity",
+                  kind: "activity",
+                  implementation: "unmapped",
+                });
+              }),
+            ),
+          );
+          draftField(
+            host,
+            "Draft entry activity",
+            model.entry_activity_id,
+            (value) => (model.entry_activity_id = value),
+            ids,
+          );
+          draftField(
+            host,
+            "Draft terminal activity IDs (comma separated)",
+            model.terminal_activity_ids.join(","),
+            (value) =>
+              (model.terminal_activity_ids = value
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean)),
+            null,
+            2600,
+          );
+          host.appendChild(el("h4", "Transitions and decision branches"));
+          model.transitions.forEach((edge, index) => {
+            const row = el("fieldset");
+            row.appendChild(el("legend", "Transition " + (index + 1)));
+            draftField(
+              row,
+              "Draft from " + (index + 1),
+              edge.source,
+              (value) => (edge.source = value),
+              ids,
+            );
+            draftField(
+              row,
+              "Draft to " + (index + 1),
+              edge.target,
+              (value) => (edge.target = value),
+              ids,
+            );
+            draftField(
+              row,
+              "Draft branch rule " + (index + 1),
+              edge.rule_id || "",
+              (value) => (edge.rule_id = value || null),
+              ["", ...model.business_rules.map((r) => r.id)],
+            );
+            row.appendChild(
+              button("Remove draft transition " + (index + 1), () =>
+                mutate(() => model.transitions.splice(index, 1)),
+              ),
+            );
+            host.appendChild(row);
+          });
+          host.appendChild(
+            button("Add draft transition", () =>
+              mutate(() => {
+                if (model.transitions.length >= 100)
+                  throw new Error("Maximum 100 transitions.");
+                model.transitions.push({
+                  source: ids[0] || "missing",
+                  target: ids.at(-1) || "missing",
+                  rule_id: null,
+                });
+              }),
+            ),
+          );
+          host.appendChild(el("h4", "Declared business rules"));
+          model.business_rules.forEach((rule, index) => {
+            const row = el("fieldset");
+            row.appendChild(el("legend", rule.id));
+            const check = el("input");
+            check.type = "checkbox";
+            check.checked = rule.user_confirmed;
+            draftField(
+              row,
+              "Draft rule " + rule.id,
+              rule.text,
+              (value) => {
+                rule.text = value;
+                rule.user_confirmed = false;
+                check.checked = false;
+              },
+              null,
+              2000,
+            );
+            const label = el(
+              "label",
+              " I confirm declared rule " + rule.id + " ",
+            );
+            check.addEventListener("change", () => {
+              rule.user_confirmed = check.checked;
+              draftChanged();
+            });
+            label.appendChild(check);
+            row.appendChild(label);
+            row.appendChild(
+              button("Remove draft rule " + rule.id, () =>
+                mutate(() => {
+                  model.business_rules.splice(index, 1);
+                  model.transitions.forEach((e) => {
+                    if (e.rule_id === rule.id) e.rule_id = null;
+                  });
+                }),
+              ),
+            );
+            host.appendChild(row);
+          });
+          host.appendChild(
+            button("Add draft rule", () =>
+              mutate(() => {
+                if (model.business_rules.length >= 40)
+                  throw new Error("Maximum 40 rules.");
+                let id = 1;
+                while (model.business_rules.some((r) => r.id === "rule_" + id))
+                  id++;
+                model.business_rules.push({
+                  id: "rule_" + id,
+                  text: "Describe the condition",
+                  user_confirmed: false,
+                });
+              }),
+            ),
+          );
+          host.appendChild(el("h4", "Unverified manual review conditions"));
+          model.manual_review_conditions = model.manual_review_conditions || [];
+          model.manual_review_conditions.forEach((condition, index) => {
+            const row = el("fieldset");
+            row.appendChild(el("legend", "Manual condition " + (index + 1)));
+            draftField(
+              row,
+              "Draft review activity " + (index + 1),
+              condition.activity_id,
+              (value) => (condition.activity_id = value),
+              ids,
+            );
+            draftField(
+              row,
+              "Draft condition " + (index + 1),
+              condition.condition_label,
+              (value) => (condition.condition_label = value),
+              null,
+              64,
+            );
+            draftField(
+              row,
+              "Draft response " + (index + 1),
+              condition.response,
+              (value) => (condition.response = value),
+              [
+                "pause_for_review",
+                "request_source_recheck",
+                "escalate_to_owner",
+              ],
+            );
+            row.appendChild(
+              button("Remove draft condition " + (index + 1), () =>
+                mutate(() => model.manual_review_conditions.splice(index, 1)),
+              ),
+            );
+            host.appendChild(row);
+          });
+          host.appendChild(
+            button("Add draft manual condition", () =>
+              mutate(() => {
+                if (model.manual_review_conditions.length >= 12)
+                  throw new Error("Maximum 12 manual review conditions.");
+                model.manual_review_conditions.push({
+                  activity_id: ids[0] || "missing",
+                  kind: "exception_condition",
+                  condition_label: "Describe condition",
+                  response: "pause_for_review",
+                  source: "user_declared_unverified",
+                  evaluated_by_owg: false,
+                  automatic_branch_authorized: false,
+                  executable: false,
+                });
+              }),
+            ),
+          );
+          host.appendChild(
+            el(
+              "p",
+              "Existing source-state expectations and opportunity assumptions are retained and shown in the updated preview. This editor performs no source reads or business actions.",
+            ),
+          );
+          host.appendChild(
+            button("Review edited design", () => {
+              preview(model, host);
+              candidateEditing = false;
+              draftChanged();
+              $("reviewed").disabled = false;
+              $("sharing").disabled = false;
+              host.appendChild(
+                button("Continue editing candidate", editCandidate),
+              );
+              note(
+                "Unsaved changes previewed. Review this exact design and organization sharing before saving a new revision.",
+              );
+            }),
+          );
+          note(
+            "Editing an unsaved candidate. No model changes have been published.",
+          );
+        }
+        $("revise").onclick = () =>
+          run(() => {
+            if (!selected?.permissions.edit)
+              throw new Error("Open a current process you can edit.");
+            candidate = {
+              title: selected.process.title,
+              process_model: structuredClone(selected.process.process_model),
+            };
+            $("file").value = "";
+            $("title").value = candidate.title;
+            editCandidate();
+            $("preview").scrollIntoView({ block: "start" });
+          });
         $("file").addEventListener("change", async () => {
+          candidateEditing = false;
+          $("reviewed").disabled = false;
+          $("sharing").disabled = false;
           const generation = ++previewGeneration;
           candidate = null;
           $("preview").replaceChildren();
@@ -586,6 +987,10 @@
           $("sharing").checked = false;
         });
         function reviewedCandidate() {
+          if (candidateEditing)
+            throw new Error(
+              "Finish editing and preview the updated design before publishing.",
+            );
           if (!candidate || !$("reviewed").checked || !$("sharing").checked)
             throw new Error(
               "Preview and review the exact model and explicitly confirm organization sharing.",
@@ -659,6 +1064,7 @@
               : "");
           preview(data.process.process_model, $("design"));
           $("update").disabled = !data.permissions.edit;
+          $("revise").disabled = !data.permissions.edit;
           $("reviewConfirm").checked = false;
           $("comment").value = "";
           $("accessConfirm").checked = false;

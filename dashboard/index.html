@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>OpenWorkGraph</title>
   <style>
+.owg-process-graph{overflow:auto;max-width:100%}
     :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1b1d1b;background:#f3f4ef;--ink:#1b1d1b;--muted:#555c55;--line:#d9dcd4;--panel:#fff;--soft:#f7f8f4;--green:#285e42;--green-soft:#edf7f0;--amber:#8b6417;--amber-soft:#fff7df;--red:#a43d3d;--dark:#1b1e1b;--blue:#3159a5;--blue-soft:#eef3ff;--shadow:0 7px 28px rgba(28,31,28,.055)}
     *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#f3f4ef;color:var(--ink)}
     button,a,input{font:inherit}button,.btn{min-height:44px;border:1px solid #292d29;border-radius:10px;padding:9px 13px;background:#1d201d;color:#fff;cursor:pointer;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}.secondary{background:#fff!important;color:#222521!important;border-color:#cfd3cb!important}.ghost{background:transparent!important;color:#383c38!important;border-color:#cfd3cb!important}.green{background:var(--green)!important;border-color:var(--green)!important}button:focus-visible,a:focus-visible,input:focus-visible,[role="tab"]:focus-visible{outline:3px solid #6b8fe0;outline-offset:2px}
@@ -316,6 +317,7 @@ document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=docume
 </script>
 <script src="/process-mining.js"></script>
 <script src="/process-designer.js"></script>
+<script src="/process-graph.js"></script>
 <script src="/process-catalog.js"></script>
 <script src="/process-decisions.js"></script>
 <script src="/agent-starter.js"></script>
