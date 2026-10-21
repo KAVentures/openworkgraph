@@ -71,6 +71,11 @@ def process_mining_script() -> Response:
     )
 
 
+@app.get('/workflow-groupings.js')
+def workflow_groupings_script():
+    return FileResponse(ROOT/'dashboard'/'workflow_groupings.js',media_type='application/javascript')
+
+
 @app.get("/opportunity-review.js")
 def opportunity_review_script() -> Response:
     """Static, local-only explicit-assumption process improvement UI."""
@@ -571,14 +576,19 @@ class KnowledgeForget(BaseModel):
 
 @app.post("/v1/workflow-knowledge/forget")
 def forget_workflow_knowledge(request: KnowledgeForget) -> dict[str, Any]:
-    return _knowledge.forget("local", request.workflow_id)
+    try:
+        return _knowledge.forget("local", request.workflow_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from None
 
 # Versioned process designs reuse workflow_knowledge and its owner boundary.
 from pydantic import ValidationError
 from shared.process_model import ProcessModel
 from .process_catalog import CatalogWrite, ProcessCatalog, process_bpmn, process_document
+from .workflow_groupings import WorkflowGroupings, GroupSave, GroupMove, GroupingError, GROUP_ID
 
 _catalog = ProcessCatalog(_knowledge, 'local')
+_groupings = WorkflowGroupings(_knowledge)
 _PROCESS_ID = r'^[a-zA-Z0-9_-]{1,80}$'
 
 
@@ -619,6 +629,70 @@ def _catalog_record(workflow_id: str, revision: int | None = None):
         return _catalog.get(workflow_id, revision)
     except LookupError:
         raise HTTPException(status_code=404, detail='process revision not found') from None
+
+
+def _group_response(request,operation,*args,**kwargs):
+    _require_process_log_dashboard(request)
+    try:
+        return JSONResponse(operation(*args,**kwargs),headers={'Cache-Control':'no-store'})
+    except LookupError:
+        raise HTTPException(404,'Reviewed workflow group not found') from None
+    except ValidationError:
+        raise HTTPException(422,'Invalid reviewed grouping fields') from None
+    except (GroupingError,ValueError) as exc:
+        raise HTTPException(409,str(exc)) from None
+
+
+@app.get('/v1/workflow-groupings')
+def reviewed_groupings(request:Request):
+    return _group_response(request,_groupings.inventory)
+
+
+@app.get('/v1/workflow-groupings/revision')
+def reviewed_grouping(request:Request,workflow_id:str=Query(pattern=GROUP_ID)):
+    return _group_response(request,_groupings.get,workflow_id)
+
+
+@app.get('/v1/workflow-groupings/history')
+def reviewed_grouping_history(request:Request,workflow_id:str=Query(pattern=GROUP_ID),
+                              before_revision:int|None=Query(default=None,ge=1),limit:int=Query(default=20,ge=1,le=100)):
+    return _group_response(request,_groupings.history,workflow_id,before_revision=before_revision,limit=limit)
+
+
+async def _group_request(request,model):
+    _require_process_log_dashboard(request)
+    try:body=model.model_validate(await _process_json(request))
+    except ValidationError:raise HTTPException(422,'Invalid reviewed grouping request') from None
+    if not body.user_confirmed:raise HTTPException(403,'Review this exact classification before saving')
+    return body
+
+
+@app.post('/v1/workflow-groupings')
+async def save_reviewed_grouping(request:Request):
+    from starlette.concurrency import run_in_threadpool
+    body=await _group_request(request,GroupSave)
+    return await run_in_threadpool(_group_response,request,_groupings.save,body)
+
+
+@app.post('/v1/workflow-groupings/move')
+async def move_reviewed_grouping(request:Request):
+    from starlette.concurrency import run_in_threadpool
+    body=await _group_request(request,GroupMove)
+    return await run_in_threadpool(_group_response,request,_groupings.move,body)
+
+
+class GroupForget(BaseModel):
+    model_config={'extra':'forbid'}
+    workflow_id:str=Field(pattern=GROUP_ID)
+    expected_revision:int=Field(strict=True,ge=1)
+    user_confirmed:StrictBool=False
+
+
+@app.post('/v1/workflow-groupings/forget')
+async def forget_reviewed_grouping(request:Request):
+    body=await _group_request(request,GroupForget)
+    return _group_response(request,_groupings.forget,body.workflow_id,
+                           expected_revision=body.expected_revision,confirmed=body.user_confirmed)
 
 
 def _catalog_export(workflow_id: str, revision: int):
