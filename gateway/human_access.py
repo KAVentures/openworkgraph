@@ -22,6 +22,10 @@ _TEAM_SCOPE_RE = re.compile(r"^team:([A-Za-z0-9._-]{1,128}):evidence:read$")
 _ALLOWED_STATIC_SCOPES = {
     "self:evidence:read",
     "self:knowledge:write",
+    "org:process:read",
+    "org:process:write",
+    "org:process:review",
+    "org:process:admin",
     "org:evidence:read",
     "aggregate:read",
     "pseudonymous:evidence:read",
@@ -463,6 +467,8 @@ def install_human_access(
             return principal_from_claims(settings, claims)
         except Exception as exc:
             raise HTTPException(status_code=401, detail="valid OIDC bearer token required") from exc
+
+    app.state.human_principal_dependency = human
 
     @app.get("/v1/human/me")
     def human_me(p: HumanPrincipal = Depends(human)) -> dict[str, Any]:

@@ -1,0 +1,52 @@
+"""Synthetic graph checks. No provider, credentials, live cases or business writes."""
+import json
+from pathlib import Path
+import unittest
+
+from runtime import check_plan, load_spec
+
+
+class ShadowCases(unittest.TestCase):
+    def setUp(self):
+        self.spec = load_spec()
+        self.cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))
+
+    def plan(self, path):
+        return {'revision': self.spec['revision'], 'content_sha256': self.spec['content_sha256'], 'activity_ids': path}
+
+    def test_representative_graph_routes(self):
+        for case in self.cases['cases']:
+            with self.subTest(case=case['id']):
+                result = check_plan(self.plan(case['activity_ids']), self.spec)
+                self.assertTrue(result['valid_structure'])
+                self.assertFalse(result['execution_permitted'])
+                self.assertFalse(result['source_outcome_verified'])
+                self.assertFalse(result['manual_review_conditions_evaluated'])
+                expected = [condition for condition in self.spec['process_model'].get('manual_review_conditions', [])
+                            if condition['activity_id'] in case['activity_ids']]
+                self.assertEqual(result['manual_review_conditions'], expected)
+
+    def test_unknown_activity_is_rejected(self):
+        path = self.cases['cases'][0]['activity_ids'] + ['unknown_external_action']
+        with self.assertRaises(ValueError):
+            check_plan(self.plan(path), self.spec)
+
+    def test_revision_mismatch_is_rejected(self):
+        plan = self.plan(self.cases['cases'][0]['activity_ids'])
+        plan['revision'] += 1
+        with self.assertRaises(ValueError):
+            check_plan(plan, self.spec)
+
+    def test_hash_mismatch_is_rejected(self):
+        plan = self.plan(self.cases['cases'][0]['activity_ids'])
+        plan['content_sha256'] = ('0' if self.spec['content_sha256'] != '0' * 64 else 'f') * 64
+        with self.assertRaises(ValueError):
+            check_plan(plan, self.spec)
+
+    def test_disconnected_plan_is_rejected(self):
+        with self.assertRaises(ValueError):
+            check_plan(self.plan(['__unknown_model_activity__']), self.spec)
+
+
+if __name__ == '__main__':
+    unittest.main()

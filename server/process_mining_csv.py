@@ -14,6 +14,9 @@ import re
 from statistics import median
 from typing import Any
 
+from shared.process_model import ProcessModel
+from shared.process_conformance import compare_path
+
 FORMAT = "openworkgraph.process-mining-csv-preview.v1"
 MAX_BYTES = 1024 * 1024
 MAX_ROWS = 5_000
@@ -22,6 +25,7 @@ MAX_ACTIVITIES = 64
 MAX_CASE_RESULTS = 30
 MAX_VARIANTS = 20
 MAX_PATH_STEPS = 24
+MAX_VARIANT_EXAMPLES = 5
 _REQUIRED = {"case_id", "activity", "timestamp"}
 _ALLOWED = _REQUIRED | {"source"}
 _ACTIVITY = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,63}$")
@@ -47,7 +51,7 @@ def _seconds(a: datetime, b: datetime) -> float:
     return max(0.0, (b - a).total_seconds())
 
 
-def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
+def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None) -> dict[str, Any]:
     """Parse a small explicitly selected, schema-limited CSV entirely in memory.
 
     Strictly no storage or provider connections. No raw case IDs, user titles,
@@ -121,6 +125,13 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
     transition_gaps: dict[tuple[str, str], list[float]] = defaultdict(list)
     repeated_steps = 0
     cases: list[dict[str, Any]] = []
+    timestamp_ties = 0
+    repeated_case_activity_timestamps = 0
+    out_of_order_cases = 0
+    variant_cases: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    variant_gaps: dict[tuple[str, ...], dict[tuple[str, str], list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
 
     # Output opaque ordinal labels only, not customer keys or hashed keys that
     # can be guessed via enumeration. The labels are ephemeral to this analysis.
@@ -128,7 +139,14 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         min(row[1] for row in item[1]), item[0]
     ))
     for case_index, (native_id, rows) in enumerate(ordered_cases, start=1):
+        if any(a[1] > b[1] for a, b in zip(rows, rows[1:])):
+            out_of_order_cases += 1
         rows.sort(key=lambda item: (item[1], item[2]))
+        case_ties = sum(a[1] == b[1] for a, b in zip(rows, rows[1:]))
+        timestamp_ties += case_ties
+        repeated_case_activity_timestamps += sum(n - 1 for n in Counter(
+            (activity, stamp) for activity, stamp, _ in rows
+        ).values())
         path = tuple(item[0] for item in rows)
         duration = _seconds(rows[0][1], rows[-1][1])
         durations.append(duration)
@@ -147,9 +165,13 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
                 gap_seconds = _seconds(rows[i - 1][1], rows[i][1])
                 gaps.append(gap_seconds)
                 transition_gaps[edge].append(gap_seconds)
+                variant_gaps[path][edge].append(gap_seconds)
         cases.append({
             "case": f"Case {case_index}",
             "event_count": len(rows),
+            "tied_timestamp_adjacent_pairs": case_ties,
+            "ordering_basis": "timestamp_then_supplied_row_order",
+            "tied_timestamp_order_verified": False,
             "duration_seconds": round(duration, 3),
             "repeated_activity_count": sum(
                 count - 1 for count in Counter(path).values() if count > 1
@@ -159,7 +181,16 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
             "path": list(path[:MAX_PATH_STEPS]),
             "path_truncated": len(path) > MAX_PATH_STEPS,
             "case_end_is_business_completion": False,
+            "events": [{
+                "position": i + 1,
+                "activity": activity,
+                "observed_at": stamp.isoformat(),
+                "elapsed_since_previous_seconds": (
+                    round(_seconds(rows[i - 1][1], stamp), 3) if i else None
+                ),
+            } for i, (activity, stamp, _) in enumerate(rows[:MAX_PATH_STEPS])],
         })
+        variant_cases[path].append(cases[-1])
 
     node_rows = [{
         "activity": activity, "event_count": n,
@@ -201,15 +232,42 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         for row in repetition_signals
     ]
 
+    variant_ids = {path: f"variant_{index}" for index, (path, _) in enumerate(
+        variants.most_common(), start=1
+    )}
+    for path, examples in variant_cases.items():
+        for example in examples:
+            example["variant_id"] = variant_ids[path]
     variant_rows = [{
+        "variant_id": variant_ids[path],
         "observed_path": list(path[:MAX_PATH_STEPS]),
         "path_truncated": len(path) > MAX_PATH_STEPS,
         "path_event_count": len(path),
         "case_count": count,
         "fraction_of_cases": round(count / len(cases), 4),
+        # Counts and gap summaries use ALL cases in the exact full path, never
+        # the returned sample or truncated display prefix.
+        "activities": [{
+            "activity": activity, "event_count": occurrences * count,
+            "case_count": count,
+        } for activity, occurrences in Counter(path).items()],
+        "transitions": [{
+            "from": edge[0], "to": edge[1],
+            "transition_count": len(values), "case_count": count,
+            "median_elapsed_gap_seconds": round(median(values), 3),
+            "max_elapsed_gap_seconds": round(max(values), 3),
+            "gap_is_verified_waiting": False,
+            "edge_is_causal_dependency": False,
+        } for edge, values in variant_gaps[path].items()],
+        "median_case_elapsed_seconds": round(median(
+            case["duration_seconds"] for case in variant_cases[path]
+        ), 3),
+        "ambiguous_order_case_count": sum(case['tied_timestamp_adjacent_pairs'] > 0 for case in variant_cases[path]),
+        "case_examples": variant_cases[path][:MAX_VARIANT_EXAMPLES],
+        "case_examples_truncated": count > MAX_VARIANT_EXAMPLES,
     } for path, count in variants.most_common(MAX_VARIANTS)]
 
-    return {
+    result = {
         "format": FORMAT,
         "source": "explicit_user_selected_csv_event_log",
         "input_rows": len(event_rows),
@@ -224,6 +282,16 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
             "inter_event_gaps_are_not_verified_waiting_time": True,
             "repeated_activities_are_not_verified_rework": True,
             "elapsed_time_is_not_active_work_time": True,
+        },
+        "data_quality": {
+            "cases_with_tied_timestamps": sum(case['tied_timestamp_adjacent_pairs'] > 0 for case in cases),
+            "tied_timestamp_adjacent_pairs": timestamp_ties,
+            "same_case_activity_timestamp_repeats": repeated_case_activity_timestamps,
+            "cases_sorted_from_nonchronological_input": out_of_order_cases,
+            "timestamp_ties_resolved_by_supplied_row_order": True,
+            "repeated_rows_are_verified_duplicate_events": False,
+            "source_log_completeness_verified": False,
+            "source_identity_authoritativeness_verified": False,
         },
         "activities": node_rows,
         "transitions": edge_rows,
@@ -242,6 +310,27 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         "agent_permissions_granted": False,
         "authoritative": False,
     }
+
+    if reference_model is not None:
+        comparisons = {path: compare_path(path, reference_model) for path in variants}
+        for item, (path, _) in zip(variant_rows, variants.most_common(MAX_VARIANTS)):
+            item['conformance'] = comparisons[path]
+        matched = sum(n for path, n in variants.items() if comparisons[path]['exact_structural_match'])
+        possible_prefixes = sum(n for path, n in variants.items() if comparisons[path]['could_be_incomplete_log_prefix'])
+        result['conformance'] = {
+            'case_count': len(cases), 'exact_structural_match_cases': matched,
+            'structurally_deviating_cases': len(cases) - matched,
+            'possible_incomplete_prefix_cases': possible_prefixes,
+            'comparison_covers_all_cases_and_variants': True,
+            'matching_cases_with_ambiguous_timestamp_order': sum(
+                case['tied_timestamp_adjacent_pairs'] > 0
+                for path in variants if comparisons[path]['exact_structural_match']
+                for case in variant_cases[path]
+            ),
+            'business_rules_evaluated': False, 'policy_compliance_verified': False,
+            'source_log_completeness_verified': False,
+        }
+    return result
 
 
 __all__ = ["mine_csv_events", "ProcessMiningCSVError", "MAX_BYTES"]

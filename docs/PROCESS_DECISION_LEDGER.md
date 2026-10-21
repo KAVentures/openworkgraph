@@ -34,6 +34,15 @@ each entry, including its step index, matching activity label, allowed
 condition class, safe review action and prohibited execution flags.
 Legacy reviewed proposals with no ledger remain accepted.
 
+**Save reviewed design to process catalog** also preserves this ledger, binding
+conditions to stable graph activity IDs instead of positional indices. Conditions
+remain separate from business branch rules and can be reviewed in the catalog
+editor, explicitly published to the organization, and exported with an exact
+revision. Catalog BPMN documents the unevaluated conditions on their activities;
+the proposal starter's illustrative unresolved gateways remain available.
+The generated SDK planner independently requires clarification when a proposed
+route contains an unevaluated manual condition. See [process catalog](PROCESS_CATALOG.md).
+
 The portable agent starter maps conditions to stable `step_NNN` IDs
 under `to_be.manual_review_conditions`. No generated code evaluates the
 condition, invokes a tool, sends a message or writes to source systems.

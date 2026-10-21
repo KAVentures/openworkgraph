@@ -1,0 +1,55 @@
+"""Offline structural checks. Never executes process activities or connector calls."""
+import json
+import hashlib
+from pathlib import Path
+
+
+def load_spec():
+    spec = json.loads((Path(__file__).parent / 'workflow.spec.json').read_text(encoding='utf-8'))
+    validate_spec(spec)
+    return spec
+
+
+def validate_spec(spec):
+    digest = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
+    if (digest != spec['process_model_sha256'] or spec.get('execution_authorization') is not False
+            or spec.get('live_business_tools') != []):
+        raise ValueError('Process model changed; export a reviewed revision before planning')
+
+
+def check_plan(plan, spec=None):
+    spec = spec or load_spec()
+    validate_spec(spec)
+    model = spec['process_model']
+    ids = plan.get('activity_ids')
+    if (type(plan.get('revision')) is not int or plan['revision'] != spec['revision']
+            or plan.get('content_sha256') != spec['content_sha256']):
+        raise ValueError('Plan does not identify this exact reviewed process revision')
+    if (not isinstance(ids, list) or not 1 <= len(ids) <= 80
+            or any(not isinstance(node, str) for node in ids)):
+        raise ValueError('Plan requires a bounded sequence of activity IDs')
+    nodes = {node['id']: node for node in model['activities']}
+    edges = {(edge['source'], edge['target']): edge for edge in model['transitions']}
+    if (any(node not in nodes for node in ids) or ids[0] != model['entry_activity_id']
+            or ids[-1] not in model['terminal_activity_ids']
+            or any(pair not in edges for pair in zip(ids, ids[1:]))):
+        raise ValueError('Proposed path does not fit the reviewed process graph')
+    used_rules = {edges[pair]['rule_id'] for pair in zip(ids, ids[1:]) if edges[pair].get('rule_id')}
+    unconfirmed = sorted(rule['id'] for rule in model['business_rules']
+                         if rule['id'] in used_rules and not rule['user_confirmed'])
+    return {
+        'mode': 'offline_structural_shadow_check',
+        'workflow_id': spec['workflow_id'], 'revision': spec['revision'],
+        'content_sha256': spec['content_sha256'],
+        'valid_structure': True,
+        'unconfirmed_rule_ids': unconfirmed,
+        'requires_tool_mapping_ids': sorted({node for node in ids if nodes[node]['kind'] == 'activity'
+                                            and nodes[node]['implementation'] != 'human'}),
+        'human_activity_ids': sorted({node for node in ids if nodes[node]['implementation'] == 'human'}),
+        'manual_review_conditions': [condition for condition in model.get('manual_review_conditions', [])
+                                     if condition['activity_id'] in ids],
+        'manual_review_conditions_evaluated': False,
+        'business_rules_evaluated': False,
+        'execution_permitted': False,
+        'source_outcome_verified': False,
+    }

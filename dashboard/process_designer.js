@@ -1,5 +1,5 @@
 /* Human-reviewed AS-IS / TO-BE workflow drafting over explicit local CSV observations.
- * No execution, policy inference, persistence, cloud sync, or extra permissions.
+ * Drafts stay in memory; catalog persistence requires an explicit reviewed save.
  */
 (() => {
   'use strict';
@@ -210,6 +210,13 @@
     host.appendChild(checkLabel);
     const buttons=elem('div',null,'owg-design-buttons');
     buttons.appendChild(btn('Export reviewed draft as JSON',exportDraft));
+    buttons.appendChild(btn('Save reviewed draft to process catalog',async()=>{
+      try{
+        if(!window.owgProcessCatalog?.saveDesigner)throw new Error('Process catalog unavailable. Reopen the dashboard.');
+        await window.owgProcessCatalog.saveDesigner();
+        setMessage('Reviewed design saved locally. Open the process catalog to manage revisions and rules.');
+      }catch(error){setMessage(String(error?.message||'Could not save reviewed design.'));}
+    }));
     buttons.appendChild(btn('Download agent starter ZIP',async()=>{
       if(!state)return;
       selected();
@@ -248,7 +255,7 @@
     selected();
     let output;
     try{
-      output=packet(state.report,state.variant,state.target,state.goal,state.reviewed);
+      output=packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules);
     }catch(error){setMessage(error.message||'Review the draft before exporting.');return;}
     output.exported_at=new Date().toISOString();
     const blob=new Blob([JSON.stringify(output,null,2)+'\n'],{type:'application/json'});
@@ -275,6 +282,12 @@
     }
   }
   // The pure model is deliberately exported for regression tests, not agents.
-  window.owgProcessDesigner={open,reset,hasDraft:()=>!!state};
+  window.owgProcessDesigner={open,reset,hasDraft:()=>!!state,
+    reviewedDraft:()=>{
+      if(!state)throw new Error('Open a complete observed variant in the process designer first.');
+      selected();
+      return packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules);
+    }
+  };
   window.__owgProcessDesignModel={validStep,diff,packet,validateRules};
 })();

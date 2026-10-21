@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+
+// Minimal DOM exercises the installed production handlers, including rerenders.
+class Element {
+  constructor(tag, document) { this.tag=tag;this.document=document;this.children=[];this.attrs={};this.handlers={};this.textContent=''; }
+  append(...children) {this.children.push(...children);}
+  appendChild(child) {this.append(child);return child;}
+  prepend(child) {this.children.unshift(child);}
+  replaceChildren(...children) {this.children=children;}
+  setAttribute(key,value) {this.attrs[key]=value;}
+  addEventListener(name,handler) {this.handlers[name]=handler;}
+  querySelector() {return null;}
+  focus() {this.document.activeElement=this;}
+  get text() {return this.textContent+this.children.map(child=>child.text).join(' ');}
+  walk() {return [this,...this.children.flatMap(child=>child.walk())];}
+}
+function setup(report) {
+  const document={readyState:'complete',activeElement:null};
+  const root=new Element('main',document);root.id='panel-evidence';
+  document.getElementById=id=>root.walk().find(element=>element.id===id);
+  document.createElement=tag=>new Element(tag,document);
+  document.createElementNS=(_,tag)=>new Element(tag,document);
+  const calls=[];
+  const window={__owgAuthReady:Promise.resolve()};
+  vm.runInNewContext(fs.readFileSync(new URL('../../dashboard/process_mining.js',import.meta.url),'utf8'),{
+    document,window,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>report};},
+  });
+  const find=(tag,text)=>root.walk().find(element=>element.tag===tag&&element.textContent===text);
+  return {document,root,calls,find};
+}
+const edge=(from,to,count,gap)=>({from,to,transition_count:count,case_count:1,median_elapsed_gap_seconds:gap,max_elapsed_gap_seconds:gap});
+const example=(label,steps)=>({case:label,event_count:steps.length,duration_seconds:60,
+  events:steps.map((activity,i)=>({position:i+1,activity,observed_at:'2026-10-20T10:00:00Z',elapsed_since_previous_seconds:i?10:null}))});
+
+test('variant selection scopes transitions and case examples; repeated SVG nodes support keyboard inspection',async()=>{
+  const report={format:'openworkgraph.process-mining-csv-preview.v1',case_count:2,input_rows:6,metrics:{},
+    // Deliberate global-only edge must never be rendered in a selected variant.
+    transitions:[edge('GLOBAL','OTHER',9,999)],variants:[
+      {case_count:1,observed_path:['Open','Review','Review','Close'],median_case_elapsed_seconds:60,
+        activities:[{activity:'Open',event_count:1,case_count:1},{activity:'Review',event_count:2,case_count:1}],
+        transitions:[edge('Open','Review',1,10),edge('Review','Review',1,20),edge('Review','Close',1,30)],
+        case_examples:[example('Case 1',['Open','Review','Review','Close'])]},
+      {case_count:1,observed_path:['Open','Close'],median_case_elapsed_seconds:300,
+        activities:[{activity:'Open',event_count:1,case_count:1}],transitions:[edge('Open','Close',1,300)],
+        case_examples:[example('Case 2',['Open','Close'])]},
+    ]};
+  const {document,root,calls,find}=setup(report);
+  const file={size:100};document.getElementById('owgProcessFile').files=[file];
+  document.getElementById('owgProcessFile').handlers.change();
+  await find('button','Analyze selected CSV').handlers.click();
+  assert.equal(calls.length,1);assert.equal(calls[0][1].body,file);
+  assert(!root.text.includes('GLOBAL'));
+  assert(root.text.includes('Case 1'));assert(!root.text.includes('Case 2'));
+  assert.equal(root.walk().filter(e=>e.tag==='g'&&e.attrs.role==='button').length,4);
+  const node=root.walk().find(e=>e.attrs['aria-label']==='Inspect event 2: Review');
+  let prevented=false;
+  node.handlers.keydown({key:' ',preventDefault(){prevented=true;}});
+  assert(prevented);
+  assert.equal(document.activeElement.id,'owgProcessActivityDetails');
+  assert(document.activeElement.text.includes('2 recorded events'));
+  assert.equal(root.walk().filter(e=>e.tag==='strong'&&e.text.includes('selected activity')).length,2);
+  find('button','Open · 1 events').handlers.click();
+  assert.equal(root.walk().filter(e=>e.tag==='tbody')[0].children.length,1);
+  find('button','All activities').handlers.click();
+  assert.equal(root.walk().filter(e=>e.tag==='tbody')[0].children.length,3);
+  find('button','Variant 2 · 1 cases').handlers.click();
+  assert(!document.getElementById('owgProcessActivityDetails'));
+  assert(!root.text.includes('Case 1'));assert(root.text.includes('Case 2'));
+  assert(root.text.includes('5.0 min'));
+  assert.equal(root.walk().filter(e=>e.tag==='tbody')[0].children.length,1);
+  assert.equal(calls.length,1);
+});

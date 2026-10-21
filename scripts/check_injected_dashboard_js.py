@@ -30,6 +30,34 @@ def main() -> None:
     if missing:
         raise RuntimeError(f"missing injected dashboard script functions: {sorted(missing)}")
 
+    # Nonce-bearing organization process shell is packaged independently of the
+    # local dashboard. Check its actual shipped script, too.
+    from html.parser import HTMLParser
+
+    class InlineScripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.inside = False
+            self.parts: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'script':
+                self.inside = True
+
+        def handle_endtag(self, tag):
+            if tag == 'script':
+                self.inside = False
+
+        def handle_data(self, data):
+            if self.inside:
+                self.parts.append(data)
+
+    portal = InlineScripts()
+    portal.feed((ROOT / 'gateway' / 'processes.html').read_text(encoding='utf-8'))
+    if not portal.parts:
+        raise RuntimeError('Organization process portal script is missing')
+    scripts['organization_process_portal'] = '\n'.join(portal.parts)
+
     with tempfile.TemporaryDirectory() as tmp:
         for name, javascript in scripts.items():
             path = Path(tmp) / f"{name}.js"

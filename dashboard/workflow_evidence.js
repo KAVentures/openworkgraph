@@ -172,6 +172,17 @@
               li.textContent=String(variant.case_count||0)+' issue(s): '+
                 (variant.observed_path||[]).slice(0,24).join(' → ')+
                 (variant.path_truncated?' (path truncated)':'');
+              if(!variant.path_truncated){
+                const draft=document.createElement('button');draft.type='button';draft.className='secondary';
+                draft.textContent='Draft this source variant';
+                draft.addEventListener('click',()=>{
+                  try{
+                    if(!window.owgProcessCatalog?.draftObserved)throw new Error('Process catalog unavailable.');
+                    window.owgProcessCatalog.draftObserved({path:variant.observed_path,count:variant.case_count,
+                      basis:'selected_source_audit',partial:!data.all_selected_source_audits_complete,evidenceRefs:[]});
+                  }catch(error){output.appendChild(document.createTextNode(String(error.message||'Could not draft source variant.')));}
+                });li.appendChild(draft);
+              }
               list.appendChild(li);
             });
             output.appendChild(list);

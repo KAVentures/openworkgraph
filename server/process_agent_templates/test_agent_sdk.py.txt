@@ -1,0 +1,77 @@
+"""Actual SDK Runner check with an in-memory model; no provider or tracing export."""
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+import unittest
+
+try:
+    from agents.models.interface import Model, ModelTracing
+    from agents.items import ModelResponse
+    from agents.usage import Usage
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from agent import propose
+    from runtime import load_spec, check_plan
+    SDK_AVAILABLE = True
+except ImportError:
+    SDK_AVAILABLE = False
+
+if SDK_AVAILABLE:
+    class OfflineModel(Model):
+        def __init__(self, plan):
+            self.plan = plan
+
+        async def get_response(self, system_instructions, input, model_settings, tools,
+                               output_schema, handoffs, tracing, **kwargs):
+            assert tools == [] and tracing is ModelTracing.DISABLED
+            assert 'SYNTHETIC_UNTRUSTED_INSTRUCTION' not in system_instructions
+            assert 'SYNTHETIC_UNTRUSTED_INSTRUCTION' in str(input)
+            message = ResponseOutputMessage(id='message_synthetic', type='message', role='assistant',
+                content=[ResponseOutputText(type='output_text', text=json.dumps(self.plan), annotations=[])],
+                status='completed')
+            return ModelResponse(output=[message], usage=Usage(), response_id='response_synthetic')
+
+        def stream_response(self, *args, **kwargs):
+            raise NotImplementedError
+
+
+@unittest.skipUnless(SDK_AVAILABLE, 'Install requirements.txt for the actual SDK test')
+class AgentSDKCases(unittest.TestCase):
+    def test_model_cannot_skip_unevaluated_manual_review(self):
+        spec = load_spec()
+        cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))
+        path = cases['cases'][0]['activity_ids']
+        # Synthetic mutation only, kept in memory: isolate this condition from
+        # unrelated unconfirmed branch rules in the customer's chosen graph.
+        for rule in spec['process_model']['business_rules']:
+            rule['user_confirmed'] = True
+        spec['process_model']['manual_review_conditions'] = [{
+            'activity_id': path[0], 'kind': 'exception_condition',
+            'condition_label': 'Synthetic missing evidence', 'response': 'pause_for_review',
+            'source': 'user_declared_unverified', 'evaluated_by_owg': False,
+            'automatic_branch_authorized': False, 'executable': False}]
+        spec['process_model_sha256'] = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
+        plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                'status': 'proposal', 'activity_ids': path, 'missing_business_inputs': []}
+        result = asyncio.run(propose({'text': 'SYNTHETIC_UNTRUSTED_INSTRUCTION'}, model=OfflineModel(plan), spec=spec))
+        self.assertEqual(result['plan']['status'], 'needs_clarification')
+        self.assertFalse(result['execution_permitted'])
+        self.assertFalse(result['shadow_check']['manual_review_conditions_evaluated'])
+
+    def test_actual_runner_structured_output_and_rejection(self):
+        spec = load_spec()
+        cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))
+        plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                'status': 'proposal', 'activity_ids': cases['cases'][0]['activity_ids'],
+                'missing_business_inputs': []}
+        if check_plan(plan, spec)['unconfirmed_rule_ids']:
+            plan.update(status='needs_clarification', activity_ids=[], missing_business_inputs=['Confirm the declared branch rules'])
+        result = asyncio.run(propose({'text': 'SYNTHETIC_UNTRUSTED_INSTRUCTION'}, model=OfflineModel(plan)))
+        self.assertFalse(result.get('execution_permitted', result.get('shadow_check', {}).get('execution_permitted')))
+        invalid = {**plan, 'status': 'proposal', 'activity_ids': ['__unknown_model_activity__']}
+        with self.assertRaises(ValueError):
+            asyncio.run(propose({'text': 'SYNTHETIC_UNTRUSTED_INSTRUCTION'}, model=OfflineModel(invalid)))
+
+
+if __name__ == '__main__':
+    unittest.main()
