@@ -44,6 +44,36 @@ activity. Timestamps must be full offset-aware ISO-8601 values.
   and repeated-activity count.
 - A scrollable observed-path diagram, variant selectors, and transition table.
 
+### Inspect a variant and its supporting cases
+
+The **Full imported log** metrics describe the whole file. Select any of the
+up to 20 returned variants to scope the activity counts, transition table,
+median case elapsed duration, and case examples to that exact full path.
+Click an activity in the map or the activity buttons to inspect its event and
+case counts and adjacent transitions. Map nodes also support Tab, Enter, and
+Space. **All activities** clears the activity filter.
+
+Each variant includes up to five case examples, independently of the older
+30-case overall sample. Expand a case to see ordered activity occurrences,
+source timestamps, and elapsed gaps. Repeated occurrences remain separate.
+Activity counts and transition gap statistics use **all matching cases**, not
+the example sample. Sampling is stated explicitly.
+
+Diagrams and example timelines show at most 24 events per path; activity
+buttons and statistics still cover the full path. Variants with identical
+display prefixes remain separate. The transition table shows at most 64
+matching transition types and warns if more are omitted. A selected activity
+filters transition rows; case examples continue to show their full bounded
+chronology for context.
+
+The additive API fields are `variants[].variant_id`, `activities`,
+`transitions`, `median_case_elapsed_seconds`, `case_examples`, and
+`case_examples_truncated`. Case summaries include `variant_id` and bounded
+`events` with position, activity, timestamp, and preceding elapsed gap. These
+ordinal variant IDs and case labels apply only within this response; they
+are not persistent process or business-record identifiers. The shared Jira
+projectors also receive these structural fields without extra provider reads.
+
 **Metrics do not prove:** waiting time, active labor, rework cause,
 successful business outcome, financial ROI, approved policy, or authorization
 for any agent action. Rows are the events the source chose to export; gaps

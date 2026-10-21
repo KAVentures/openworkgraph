@@ -22,6 +22,7 @@ MAX_ACTIVITIES = 64
 MAX_CASE_RESULTS = 30
 MAX_VARIANTS = 20
 MAX_PATH_STEPS = 24
+MAX_VARIANT_EXAMPLES = 5
 _REQUIRED = {"case_id", "activity", "timestamp"}
 _ALLOWED = _REQUIRED | {"source"}
 _ACTIVITY = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,63}$")
@@ -121,6 +122,10 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
     transition_gaps: dict[tuple[str, str], list[float]] = defaultdict(list)
     repeated_steps = 0
     cases: list[dict[str, Any]] = []
+    variant_cases: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    variant_gaps: dict[tuple[str, ...], dict[tuple[str, str], list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
 
     # Output opaque ordinal labels only, not customer keys or hashed keys that
     # can be guessed via enumeration. The labels are ephemeral to this analysis.
@@ -147,6 +152,7 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
                 gap_seconds = _seconds(rows[i - 1][1], rows[i][1])
                 gaps.append(gap_seconds)
                 transition_gaps[edge].append(gap_seconds)
+                variant_gaps[path][edge].append(gap_seconds)
         cases.append({
             "case": f"Case {case_index}",
             "event_count": len(rows),
@@ -159,7 +165,16 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
             "path": list(path[:MAX_PATH_STEPS]),
             "path_truncated": len(path) > MAX_PATH_STEPS,
             "case_end_is_business_completion": False,
+            "events": [{
+                "position": i + 1,
+                "activity": activity,
+                "observed_at": stamp.isoformat(),
+                "elapsed_since_previous_seconds": (
+                    round(_seconds(rows[i - 1][1], stamp), 3) if i else None
+                ),
+            } for i, (activity, stamp, _) in enumerate(rows[:MAX_PATH_STEPS])],
         })
+        variant_cases[path].append(cases[-1])
 
     node_rows = [{
         "activity": activity, "event_count": n,
@@ -201,12 +216,38 @@ def mine_csv_events(raw_bytes: bytes) -> dict[str, Any]:
         for row in repetition_signals
     ]
 
+    variant_ids = {path: f"variant_{index}" for index, (path, _) in enumerate(
+        variants.most_common(), start=1
+    )}
+    for path, examples in variant_cases.items():
+        for example in examples:
+            example["variant_id"] = variant_ids[path]
     variant_rows = [{
+        "variant_id": variant_ids[path],
         "observed_path": list(path[:MAX_PATH_STEPS]),
         "path_truncated": len(path) > MAX_PATH_STEPS,
         "path_event_count": len(path),
         "case_count": count,
         "fraction_of_cases": round(count / len(cases), 4),
+        # Counts and gap summaries use ALL cases in the exact full path, never
+        # the returned sample or truncated display prefix.
+        "activities": [{
+            "activity": activity, "event_count": occurrences * count,
+            "case_count": count,
+        } for activity, occurrences in Counter(path).items()],
+        "transitions": [{
+            "from": edge[0], "to": edge[1],
+            "transition_count": len(values), "case_count": count,
+            "median_elapsed_gap_seconds": round(median(values), 3),
+            "max_elapsed_gap_seconds": round(max(values), 3),
+            "gap_is_verified_waiting": False,
+            "edge_is_causal_dependency": False,
+        } for edge, values in variant_gaps[path].items()],
+        "median_case_elapsed_seconds": round(median(
+            case["duration_seconds"] for case in variant_cases[path]
+        ), 3),
+        "case_examples": variant_cases[path][:MAX_VARIANT_EXAMPLES],
+        "case_examples_truncated": count > MAX_VARIANT_EXAMPLES,
     } for path, count in variants.most_common(MAX_VARIANTS)]
 
     return {
