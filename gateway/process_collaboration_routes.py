@@ -87,6 +87,10 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
                   include_archived: bool = False, p=Depends(human)):
         return _response(store.inventory, p, after=after, limit=limit, include_archived=include_archived)
 
+    @router.get('/v1/human/process-opportunities')
+    def opportunities(currency: str = Query(default='USD',pattern='^(USD|EUR|GBP|SEK)$'),p=Depends(human)):
+        return _response(store.opportunity_report,p,currency=currency)
+
     @router.post('/v1/human/processes')
     async def publish(request: Request, p=Depends(human)):
         # Reject missing permissions before parsing any supplied model content.

@@ -256,6 +256,67 @@ class OrganizationProcessStore:
                 'next_after': items[-1]['workflow_id'] if len(rows) > cap else None,
                 'personal_knowledge_scanned': False, 'raw_evidence_scanned': False}
 
+    def opportunity_report(self, p, *, currency):
+        """Rank reviewed shared-design scenarios; never rank people or infer ROI."""
+        from shared.process_opportunities import OpportunityScenario
+        self.require_scope(p, 'org:process:read')
+        if currency not in {'USD','EUR','GBP','SEK'}:
+            raise ProcessCollaborationError('Choose a supported comparison currency',422)
+        counts={'active':0,'archived':0,'reviewed_design':0,'needs_review':0,'changes_requested':0,
+                'reviewed_without_scenario':0,'reviewed_scenarios_in_other_currencies':0}
+        opportunities=[]
+        with self.db.connect() as conn:
+            # Keep model/review/archive reads on one consistent snapshot. Audit
+            # separately after this read transaction, avoiding SQLite upgrades.
+            self.db._execute(conn,'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
+            records=self.db._execute(conn,'''SELECT p.workflow_id, p.archived, k.revision, k.payload
+                FROM gateway_shared_processes p JOIN workflow_knowledge k
+                ON k.owner = ? AND k.workflow_id = p.workflow_id AND k.revision =
+                  (SELECT MAX(v.revision) FROM workflow_knowledge v WHERE v.owner = k.owner AND v.workflow_id = k.workflow_id)
+                WHERE p.organization_id = ? ORDER BY p.workflow_id LIMIT 1001''',
+                (namespace(p.organization_id),p.organization_id)).fetchall()
+            for workflow_id,archived,revision,payload in records[:1000]:
+                if archived:
+                    counts['archived']+=1
+                    continue
+                counts['active']+=1
+                review=self._review_state(conn,p,workflow_id,int(revision))['status']
+                counts[review]+=1
+                if review!='reviewed_design':
+                    continue
+                record=json.loads(payload);model=record['process_model']
+                if not model.get('opportunity_scenario'):
+                    counts['reviewed_without_scenario']+=1
+                    continue
+                scenario=OpportunityScenario.model_validate(model['opportunity_scenario'])
+                if scenario.currency!=currency:
+                    counts['reviewed_scenarios_in_other_currencies']+=1
+                    continue
+                opportunities.append({
+                    'workflow_id':workflow_id,'revision':int(revision),'content_sha256':record['content_sha256'],
+                    'title':record['title'],'assumptions':scenario.model_dump(),'projection':scenario.projection(),
+                    'selected_baseline_supporting_count':model['supporting_case_count'],
+                    'baseline_support_unit':model.get('baseline_support_unit','declared_cases'),
+                    'baseline_count_is_verified_monthly_volume':False,
+                    'unconfirmed_rule_count':sum(not rule['user_confirmed'] for rule in model['business_rules']),
+                    'manual_review_condition_count':len(model.get('manual_review_conditions',[])),
+                    'unmapped_activity_count':sum(activity['kind']=='activity' and activity['implementation']=='unmapped'
+                                                  for activity in model['activities']),
+                })
+        opportunities.sort(key=lambda row:(-row['projection']['net_monthly_value_before_other_costs'],row['workflow_id']))
+        result={'format':'openworkgraph.organization-process-opportunities.v1','currency':currency,
+            'organization_id':p.organization_id,'generated_at':_now(),
+            'inventory_counts_in_scanned_records':counts,'shared_processes_scanned':min(len(records),1000),
+            'catalog_scan_truncated':len(records)>1000,'ranked_results_truncated':len(opportunities)>100,
+            'opportunities':opportunities[:100],
+            'ranking_basis':'declared_net_monthly_scenario_within_selected_currency',
+            'company_savings_total':None,'scenarios_may_overlap':True,
+            'labor_savings_measured':False,'business_outcomes_verified':False,'execution_authorized':False,
+            'personal_knowledge_scanned':False,'raw_evidence_scanned':False}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,action='process.opportunities.read',
+            details={'currency':currency,'scanned':result['shared_processes_scanned'],'returned':len(result['opportunities'])})
+        return result
+
     def save(self, p, request: SharedProcessWrite, workflow_id=None):
         self.require_scope(p, 'org:process:read')
         self.require_scope(p, 'org:process:write')

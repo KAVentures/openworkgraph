@@ -6,6 +6,36 @@ organization inventory, ownership, collaborator roles and independent revision
 review. It uses the existing append-only workflow knowledge store; it does not
 copy employees' evidence into a second process database.
 
+## Organization improvement backlog
+
+The portal's **Organization improvement backlog** compares saved scenarios on
+active, independently reviewed latest designs. Choose USD, EUR, GBP or SEK and
+load the report explicitly. It ranks by projected net monthly value within that
+currency, shows each volume/time/cost assumption, sensitivity range, simple
+payback and unresolved-rule/manual-review/unmapped-activity counts. Negative or
+zero net value has no positive payback estimate. Baseline support is kept
+separate from assumed monthly volume. These are planning scenarios, not measured
+labor, verified savings, staff rankings or execution permission.
+
+The shared editor can add, change or remove an opportunity scenario. Every
+change clears review; saving creates a new revision that must obtain independent
+review before appearing in the backlog. Archived designs, requested changes,
+unreviewed revisions and other currencies are excluded. Scenarios can overlap,
+so the report never adds their projections into a company savings total.
+
+`GET /v1/human/process-opportunities?currency=USD` requires the existing explicit
+organization process-read scope and uses the caller's tenant. It scans at most
+1,000 shared processes and returns at most 100 ranked scenarios, stating either
+bound. Inventory counts describe the scanned designs, including those without
+scenarios or using other currencies. Neither personal knowledge nor raw evidence
+is scanned. Audits retain only currency and scan/result counts.
+
+The report identifies its organization, generation time and exact model
+references. It is a snapshot; refresh to include subsequent changes. **Download
+scenarios report** explicitly exports its JSON. Changing currency or identity
+clears the in-memory report and disables its download. No automatic sharing,
+source-system access or browser persistence is introduced.
+
 ## Company sign-in
 
 Administrators can enable the portal's **Sign in with company account** button

@@ -15,11 +15,11 @@ or full competitor parity.
 | Visual exploration | Observed workflow lanes (#263), CSV activity/case inspection, desktop/Jira-to-catalog drafting | Shared interactive analysis across evidence sources; reviewed grouping corrections |
 | Task/case reconstruction | Exact-record interleaving lanes (#265) | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272), full-log structural conformance, explicitly retained local snapshots with complete case/event queries | Additional source adapters, coverage diagnostics and validated business-rule conformance |
-| Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped improvement backlog | Validated employee effort, business outcomes and tool suitability |
+| Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Real-time collaboration, richer rule clarification and business-policy approval lifecycle |
 | Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner, separately authorized customer MCP implementation, conditional writes, current shared-design checks, replay journal and independent source readback pinned to exact artifacts | Customer-specific tool mappings, production deployment and end-to-end business acceptance |
 | Testing and feedback | Agent traces/receipts, full-log structural comparison, workflow shadow tests, pinned terminal source-state checks | Live case evaluation, verified business outcomes and drift review |
-| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history/audit and opt-in company sign-in with process-only browser sessions | Deployment controls and operational reporting |
+| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history/audit and opt-in company sign-in with process-only browser sessions | Deployment controls and deployment-health reporting |
 
 The CSV drill-down connects diagram selections to exact variant statistics
 and bounded supporting examples. CSV preview remains ephemeral; reviewed designs are saved to the catalog.

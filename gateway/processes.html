@@ -173,6 +173,31 @@
       <div id="inventory"></div>
     </section>
     <section>
+      <h2>Organization improvement backlog</h2>
+      <p class="muted">
+        Compare scenarios attached to active, independently reviewed designs.
+        Values use the saved volume, time and cost assumptions; they are not
+        measured savings. Scenarios may overlap, so no company savings total is
+        calculated.
+      </p>
+      <label
+        >Comparison currency
+        <select id="opportunityCurrency">
+          <option>USD</option>
+          <option>EUR</option>
+          <option>GBP</option>
+          <option>SEK</option>
+        </select></label
+      >
+      <button id="loadOpportunities">
+        Load reviewed improvement scenarios
+      </button>
+      <button id="downloadOpportunities" disabled>
+        Download scenarios report
+      </button>
+      <div id="opportunityReport"></div>
+    </section>
+    <section>
       <h2>Publish or update a reviewed design</h2>
       <p class="muted">
         Export a reviewed design from OWG's local process catalog and select its
@@ -256,6 +281,7 @@
       (() => {
         "use strict";
         let candidateEditing = false;
+        let opportunityReport = null;
         let credentialScheme = "Bearer";
         let credential = "",
           selected = null,
@@ -321,6 +347,8 @@
           previewGeneration++;
           credential = "";
           credentialScheme = "Bearer";
+          opportunityReport = null;
+          $("downloadOpportunities").disabled = true;
           $("publish").disabled = true;
           selected = null;
           candidate = null;
@@ -343,6 +371,7 @@
             "selectedMeta",
             "reviewState",
             "exports",
+            "opportunityReport",
           ].forEach((id) => $(id).replaceChildren());
           $("selected").hidden = true;
           $("reviewed").checked = false;
@@ -480,6 +509,163 @@
           note("Loaded organization process inventory.");
         }
         $("load").onclick = () => run(() => inventory());
+        $("opportunityCurrency").onchange = () => {
+          opportunityReport = null;
+          $("downloadOpportunities").disabled = true;
+          $("opportunityReport").replaceChildren();
+        };
+        $("downloadOpportunities").onclick = () => {
+          if (!opportunityReport) return;
+          const url = URL.createObjectURL(
+            new Blob([JSON.stringify(opportunityReport, null, 2)], {
+              type: "application/json",
+            }),
+          );
+          const link = el("a");
+          link.href = url;
+          link.download =
+            "owg-process-opportunities-" + opportunityReport.currency + ".json";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        };
+        $("loadOpportunities").onclick = () =>
+          run(async () => {
+            opportunityReport = null;
+            $("downloadOpportunities").disabled = true;
+            $("opportunityReport").replaceChildren();
+            const result = await call(
+              "/v1/human/process-opportunities?" +
+                new URLSearchParams({
+                  currency: $("opportunityCurrency").value,
+                }),
+            );
+            const host = $("opportunityReport");
+            host.replaceChildren();
+            opportunityReport = result;
+            $("downloadOpportunities").disabled = false;
+            host.appendChild(
+              el(
+                "p",
+                "Organization " +
+                  result.organization_id +
+                  " · report generated " +
+                  result.generated_at +
+                  ". Refresh to include later changes.",
+              ),
+            );
+            const counts = result.inventory_counts_in_scanned_records;
+            host.appendChild(
+              el(
+                "p",
+                counts.active +
+                  " active designs · " +
+                  counts.reviewed_design +
+                  " independently reviewed · " +
+                  counts.needs_review +
+                  " awaiting review · " +
+                  counts.changes_requested +
+                  " with changes requested · " +
+                  counts.archived +
+                  " archived",
+              ),
+            );
+            host.appendChild(
+              el(
+                "p",
+                counts.reviewed_without_scenario +
+                  " reviewed designs have no value scenario; " +
+                  counts.reviewed_scenarios_in_other_currencies +
+                  " use another currency.",
+              ),
+            );
+            if (
+              result.catalog_scan_truncated ||
+              result.ranked_results_truncated
+            )
+              host.appendChild(
+                el(
+                  "p",
+                  "This report reached its scan or result limit; additional designs may be omitted.",
+                ),
+              );
+            if (!result.opportunities.length)
+              host.appendChild(
+                el(
+                  "p",
+                  "No reviewed improvement scenarios in this currency. Add assumptions to a process design, save a new revision and obtain independent review.",
+                ),
+              );
+            for (const row of result.opportunities) {
+              const card = el("article"),
+                projection = row.projection,
+                assumptions = row.assumptions;
+              card.append(
+                button(row.title + " · r" + row.revision, () =>
+                  open(row.workflow_id),
+                ),
+                el(
+                  "p",
+                  result.currency +
+                    " " +
+                    projection.net_monthly_value_before_other_costs +
+                    " projected net monthly value before other costs · sensitivity " +
+                    projection.sensitivity_net_monthly_low +
+                    " to " +
+                    projection.sensitivity_net_monthly_high,
+                ),
+                el(
+                  "p",
+                  projection.simple_payback_months == null
+                    ? "No positive simple payback under these assumptions."
+                    : "Simple payback: " +
+                        projection.simple_payback_months +
+                        " months under these assumptions.",
+                ),
+                el(
+                  "p",
+                  "Assumptions: " +
+                    assumptions.monthly_cases +
+                    " cases/month · " +
+                    assumptions.minutes_saved_per_case +
+                    " minutes saved/case · " +
+                    assumptions.eligible_fraction_percent +
+                    "% eligible · " +
+                    result.currency +
+                    " " +
+                    assumptions.loaded_hourly_cost +
+                    "/hour · " +
+                    result.currency +
+                    " " +
+                    assumptions.recurring_monthly_cost +
+                    " recurring/month · " +
+                    result.currency +
+                    " " +
+                    assumptions.one_time_implementation_cost +
+                    " implementation cost",
+                ),
+                el(
+                  "p",
+                  "Selected baseline support: " +
+                    row.selected_baseline_supporting_count +
+                    " " +
+                    row.baseline_support_unit +
+                    " (not verified monthly volume). " +
+                    row.unconfirmed_rule_count +
+                    " unconfirmed rules · " +
+                    row.manual_review_condition_count +
+                    " manual review conditions · " +
+                    row.unmapped_activity_count +
+                    " unmapped activities.",
+                ),
+              );
+              host.appendChild(card);
+            }
+            note(
+              "Loaded reviewed organization scenarios. No tools or source systems were contacted.",
+            );
+          });
         function preview(model, host) {
           host.replaceChildren();
           host.append(
@@ -968,10 +1154,92 @@
               }),
             ),
           );
+          host.appendChild(el("h4", "Opportunity scenario"));
+          if (model.opportunity_scenario) {
+            const scenario = model.opportunity_scenario;
+            host.appendChild(
+              el(
+                "p",
+                "Review each volume, time and cost assumption. These values are not measured savings; sensitivity is a planning range.",
+              ),
+            );
+            draftField(
+              host,
+              "Draft scenario currency",
+              scenario.currency,
+              (value) => (scenario.currency = value),
+              ["USD", "EUR", "GBP", "SEK"],
+            );
+            const fields = [
+              ["monthly_cases", "Monthly cases", 1, 10000000],
+              [
+                "minutes_saved_per_case",
+                "Minutes saved per eligible case",
+                0,
+                10080,
+              ],
+              [
+                "eligible_fraction_percent",
+                "Eligible fraction percent",
+                0,
+                100,
+              ],
+              ["loaded_hourly_cost", "Loaded hourly cost", 0, 1000000],
+              [
+                "recurring_monthly_cost",
+                "Recurring monthly cost",
+                0,
+                1000000000,
+              ],
+              [
+                "one_time_implementation_cost",
+                "One-time implementation cost",
+                0,
+                1000000000,
+              ],
+              ["sensitivity_percent", "Sensitivity percent", 0, 100],
+            ];
+            for (const [key, label, min, max] of fields) {
+              const input = draftField(
+                host,
+                "Draft scenario " + label,
+                scenario[key] ?? "",
+                (value) =>
+                  (scenario[key] = value === "" ? null : Number(value)),
+              );
+              input.type = "number";
+              input.step = "any";
+              input.min = String(min);
+              input.max = String(max);
+            }
+            host.appendChild(
+              button("Remove draft opportunity scenario", () =>
+                mutate(() => (model.opportunity_scenario = null)),
+              ),
+            );
+          } else {
+            host.appendChild(
+              button("Add draft opportunity scenario", () =>
+                mutate(
+                  () =>
+                    (model.opportunity_scenario = {
+                      currency: "USD",
+                      monthly_cases: 1,
+                      minutes_saved_per_case: 0,
+                      eligible_fraction_percent: 0,
+                      loaded_hourly_cost: 0,
+                      recurring_monthly_cost: 0,
+                      one_time_implementation_cost: 0,
+                      sensitivity_percent: 25,
+                    }),
+                ),
+              ),
+            );
+          }
           host.appendChild(
             el(
               "p",
-              "Existing source-state expectations and opportunity assumptions are retained and shown in the updated preview. This editor performs no source reads or business actions.",
+              "Existing source-state expectations are retained and shown in the updated preview. This editor performs no source reads or business actions.",
             ),
           );
           host.appendChild(
