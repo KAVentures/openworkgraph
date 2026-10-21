@@ -45,7 +45,8 @@ where = ["."]
 [tool.setuptools.package-data]
 # Bundled name lists for contextual AI-context redaction (US Census 1990: public
 # domain; Statistics Sweden 2022: CC0). See server/name_lexicon/README.md.
-server = ["name_lexicon/*.txt", "name_lexicon/README.md", "process_agent_templates/*.txt"]
+server = ["name_lexicon/*.txt", "name_lexicon/README.md"]
+shared = ["process_agent_templates/*.txt"]
 # The enterprise Gateway serves these identity/admin shells. Every data/action
 # request is still authenticated independently by the Gateway.
 gateway = ["processes.html", "process_graph.js", "admin_console.html", "me_page.html", "join_verify.html", "landing.html", "work_text_account.html", "qrcode.min.js", "qrcode.LICENSE"]

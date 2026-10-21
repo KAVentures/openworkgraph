@@ -17,7 +17,7 @@ or full competitor parity.
 | Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272), full-log structural conformance | Additional source adapters, coverage diagnostics and validated business-rule conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped improvement backlog | Validated employee effort, business outcomes and tool suitability |
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Real-time collaboration, richer rule clarification and business-policy approval lifecycle |
-| Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner and synthetic tests pinned to a saved revision | Authorized live tool bindings, deployment and end-to-end business tests |
+| Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner, separately authorized customer MCP implementation, conditional writes, replay journal and independent source readback pinned to exact artifacts | Customer-specific tool mappings, production deployment and end-to-end business acceptance |
 | Testing and feedback | Agent traces/receipts, full-log structural comparison, workflow shadow tests, pinned terminal source-state checks | Live case evaluation, verified business outcomes and drift review |
 | Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history and audit | Integrated employee SSO for process portal, deployment controls and operational reporting |
 
@@ -40,6 +40,10 @@ authors, exact-revision independent reviews, ownership and collaborator changes
 are committed with minimal audits on SQLite and PostgreSQL. A new revision
 requires a new review. Organization design reviews grant no business execution
 authority; local evidence remains separate.
+
+The generated implementation now passes an actual SDK MCP transport test against
+owned synthetic tools with conditional writes, independent source readback and
+replay prevention. No real business system was modified.
 
 The next acceptance scenario requires an authorized real workflow: map tools
 and case identity for one reviewed process, run its generated planner in a

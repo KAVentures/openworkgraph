@@ -82,6 +82,7 @@ def create_human_enterprise_app(
                 "explicit_group_scopes_required": True,
                 "personal_evidence_published_automatically": False,
                 "independent_revision_review": True,
+                "implementation_export_requires_independent_review": True,
                 "review_grants_execution_authority": False,
             },
             "oidc": "configured" if human_access.enabled else "disabled_by_default",

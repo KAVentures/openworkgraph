@@ -1,0 +1,518 @@
+"""Customer-run MCP implementation for one explicitly approved process/case.
+
+Default mode is offline review. A process design never grants tool permission.
+Customer intent files are client declarations, not signed policy attestations;
+the target MCP service must independently authorize every operation.
+"""
+import argparse
+import asyncio
+from contextlib import AsyncExitStack
+from datetime import datetime, timezone, timedelta
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+from urllib.parse import urlsplit
+
+from runtime import check_plan
+
+
+class ImplementationError(ValueError):
+    pass
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def _pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ImplementationError('Duplicate JSON fields are not accepted')
+        result[key] = value
+    return result
+
+
+def _constant(value):
+    raise ImplementationError('Nonstandard JSON values are not accepted')
+
+
+def load_object(path, limit=65536):
+    path = Path(path)
+    with path.open('rb') as stream:
+        content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise ImplementationError('Selected input exceeds its size limit')
+    try:
+        result = json.loads(content, object_pairs_hook=_pairs, parse_constant=_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ImplementationError('Selected input is not a valid JSON object') from None
+    if not isinstance(result, dict):
+        raise ImplementationError('Selected input must be a JSON object')
+    return result
+
+
+def pointer(document, path):
+    if not isinstance(path, str) or (path and not path.startswith('/')) or len(path) > 500:
+        raise ImplementationError('Binding inputs require bounded JSON Pointers')
+    result = document
+    try:
+        for part in path.split('/')[1:] if path else []:
+            if re.search(r'~(?![01])', part):
+                raise ValueError('invalid escape')
+            key = part.replace('~1', '/').replace('~0', '~')
+            if isinstance(result, dict):
+                result = result[key]
+            elif isinstance(result, list) and re.fullmatch(r'0|[1-9][0-9]*', key):
+                result = result[int(key)]
+            else:
+                raise ValueError('missing value')
+    except (KeyError, IndexError, ValueError, OverflowError):
+        raise ImplementationError('The selected case or tool result lacks a required binding input') from None
+    return result
+
+
+def endpoint(value, *, source=False):
+    if not isinstance(value, str) or len(value) > 2048 or any(ord(c) < 32 for c in value):
+        raise ImplementationError('Configure the customer tool and source endpoints before execution')
+    try:
+        url = urlsplit(value)
+        local = url.hostname in {'127.0.0.1', 'localhost', '::1'}
+        if (not url.hostname or url.username is not None or url.password is not None or url.query or url.fragment
+                or not (url.scheme == 'https' or (url.scheme == 'http' and local))
+                or (source and not local)):
+            raise ValueError('invalid endpoint')
+        _ = url.port
+    except ValueError:
+        raise ImplementationError('Use HTTPS or loopback HTTP without embedded credentials or URL parameters; source checks require local OWG') from None
+    return value.rstrip('/')
+
+
+def reference(spec):
+    return {key: spec[key] for key in ('workflow_id', 'revision', 'content_sha256')}
+
+
+def arguments_for(row, case):
+    constants, paths = row.get('constant_arguments', {}), row.get('argument_map', {})
+    if (not isinstance(constants, dict) or not isinstance(paths, dict) or len(constants) + len(paths) > 50
+            or set(constants) & set(paths) or any(not isinstance(k, str) or len(k) > 120 for k in list(constants) + list(paths))):
+        raise ImplementationError('Binding arguments must be distinct bounded objects')
+    result = dict(constants)
+    result.update({key: pointer(case, path) for key, path in paths.items()})
+    return result
+
+
+def tool_name(value):
+    return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:/-]{1,120}', value) is not None
+
+
+def predicate_value(row, case):
+    if 'result_equals_from_case' in row:
+        if 'result_equals' in row:
+            raise ImplementationError('Choose one explicit result predicate source')
+        return pointer(case, row['result_equals_from_case'])
+    return row.get('result_equals')
+
+
+def prepare(spec, plan_document, case, bindings):
+    if sys.version_info < (3, 11):
+        raise ImplementationError('Use Python 3.11 or newer for this implementation project')
+    if (spec.get('format') != 'openworkgraph.agent-runtime-project.v1'
+            or type(spec.get('revision')) is not int or spec['revision'] < 1
+            or not isinstance(spec.get('workflow_id'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', spec['workflow_id'])
+            or not isinstance(spec.get('content_sha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', spec['content_sha256'])):
+        raise ImplementationError('An exported versioned agent-runtime project is required')
+    model = spec.get('process_model')
+    if not isinstance(model, dict):
+        raise ImplementationError('A bounded process model is required')
+    for key, maximum in (('activities',40),('transitions',100),('business_rules',40),
+                         ('manual_review_conditions',12),('outcome_expectations',40)):
+        values = model.get(key, [])
+        if not isinstance(values, list) or len(values) > maximum:
+            raise ImplementationError('Process collections exceed this implementation contract')
+    plan = plan_document.get('plan', plan_document)
+    if not isinstance(plan, dict) or plan.get('status') != 'proposal':
+        raise ImplementationError('Resolve planner clarification before preparing an implementation')
+    checks = check_plan(plan, spec)
+    if not isinstance(case, dict) or not isinstance(bindings, dict):
+        raise ImplementationError('Case and bindings must be JSON objects')
+    if bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1' or digest(bindings.get('process_reference')) != digest(reference(spec)):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    rows = bindings.get('bindings')
+    if not isinstance(rows, list) or len(rows) > 40 or any(not isinstance(row, dict) for row in rows):
+        raise ImplementationError('Supply at most 40 explicit activity bindings')
+    model = spec['process_model']
+    activities = {a['id']: a for a in model['activities']}
+    mapped = {}
+    for row in rows:
+        activity = row.get('activity_id')
+        if not isinstance(activity, str) or activity not in activities or activity in mapped:
+            raise ImplementationError('Bindings require unique existing activity IDs')
+        mapped[activity] = row
+    requirements = []
+    if bindings.get('enabled') is not True:
+        requirements.append('customer_bindings_disabled')
+    if checks['unconfirmed_rule_ids']:
+        requirements.append('unconfirmed_branch_rules')
+    actions, humans, written = [], [], set()
+    for activity_id in plan['activity_ids']:
+        activity = activities[activity_id]
+        if activity['kind'] != 'activity':
+            continue
+        if activity['implementation'] == 'human':
+            humans.append(activity_id)
+            continue
+        row = mapped.get(activity_id, {})
+        tool = row.get('tool_name')
+        kind = row.get('operation_kind')
+        if row.get('authorized') is not True or kind not in {'read', 'write'} or not tool_name(tool):
+            requirements.append('missing_authorized_tool_binding:' + activity_id)
+            continue
+        arguments = arguments_for(row, case)
+        if not ({'result_equals', 'result_equals_from_case'} & set(row)) or not isinstance(row.get('result_pointer'), str):
+            requirements.append('missing_tool_result_predicate:' + activity_id)
+        precondition = None
+        if kind == 'write':
+            if activity_id in written:
+                requirements.append('repeated_write_activity_requires_a_specific_implementation:' + activity_id)
+            written.add(activity_id)
+            idempotency = row.get('idempotency')
+            if not isinstance(idempotency, dict):
+                requirements.append('missing_idempotency_contract:' + activity_id)
+            elif idempotency.get('mode') == 'argument_key':
+                key = idempotency.get('argument')
+                value = arguments.get(key) if isinstance(key, str) else None
+                if not isinstance(value, str) or not 1 <= len(value) <= 240:
+                    requirements.append('missing_idempotency_key:' + activity_id)
+            elif not (idempotency.get('mode') == 'provider_idempotent_operation' and idempotency.get('provider_semantics_reviewed') is True):
+                requirements.append('unreviewed_idempotency_contract:' + activity_id)
+            condition = row.get('precondition')
+            if not isinstance(condition, dict) or not tool_name(condition.get('tool_name')) or not isinstance(condition.get('result_pointer'), str) or not ({'result_equals', 'result_equals_from_case'} & set(condition)):
+                requirements.append('missing_fresh_precondition_contract:' + activity_id)
+            else:
+                precondition = {'tool_name': condition['tool_name'], 'arguments': arguments_for(condition, case),
+                                'result_pointer': condition['result_pointer'], 'result_equals': predicate_value(condition, case)}
+            concurrency = row.get('concurrency_control')
+            if not isinstance(concurrency, dict) or concurrency.get('mode') != 'expected_version' or concurrency.get('provider_semantics_reviewed') is not True:
+                requirements.append('missing_conditional_write_contract:' + activity_id)
+            elif (not isinstance(concurrency.get('argument'), str) or concurrency['argument'] not in arguments
+                    or type(arguments[concurrency['argument']]) not in {str, int}
+                    or (isinstance(arguments[concurrency['argument']], str) and not 1 <= len(arguments[concurrency['argument']]) <= 240)):
+                requirements.append('missing_expected_source_version:' + activity_id)
+        actions.append({'activity_id': activity_id, 'tool_name': tool, 'operation_kind': kind,
+                        'arguments': arguments, 'result_pointer': row.get('result_pointer'),
+                        'result_equals': predicate_value(row, case), 'precondition': precondition})
+    terminal = plan['activity_ids'][-1]
+    expected = [e for e in model.get('outcome_expectations', []) if e['terminal_activity_id'] == terminal]
+    if written and not any(e['user_confirmed'] for e in expected):
+        requirements.append('writes_require_a_confirmed_terminal_source_expectation')
+    outcome_rows = bindings.get('outcome_records', [])
+    if not isinstance(outcome_rows, list) or len(outcome_rows) > 40 or any(not isinstance(row, dict) for row in outcome_rows):
+        raise ImplementationError('Supply a bounded source-record mapping')
+    outcomes = []
+    for expectation in expected:
+        if not expectation['user_confirmed']:
+            requirements.append('unconfirmed_source_expectation')
+            continue
+        matched = [row for row in outcome_rows if row.get('terminal_activity_id') == terminal and row.get('operation') == expectation['operation']]
+        if len(matched) != 1:
+            requirements.append('missing_unique_source_record_mapping')
+            continue
+        ref = pointer(case, matched[0].get('resource_ref_pointer'))
+        if not isinstance(ref, str) or not re.fullmatch(r'owg:r:[0-9a-f]{32}', ref):
+            raise ImplementationError('Source checks require an exact observed OWG record reference')
+        outcomes.append({'terminal_activity_id': terminal, 'expected_operation': expectation['operation'], 'resource_ref': ref})
+    return {'plan': plan, 'actions': actions, 'human_activity_ids': sorted(set(humans)),
+            'manual_condition_ids': sorted(digest(c) for c in checks['manual_review_conditions']),
+            'outcomes': outcomes, 'requirements': sorted(set(requirements))}
+
+
+def review_template(spec, prepared, case, bindings):
+    return {'format': 'openworkgraph.customer-execution-intent.v1', 'process_reference': reference(spec),
+            'spec_sha256': digest(spec), 'plan_sha256': digest(prepared['plan']),
+            'case_sha256': digest(case), 'bindings_sha256': digest(bindings),
+            'customer_authorization_confirmed': False, 'source_reads_confirmed': False,
+            'expires_at': None, 'human_completed_activity_ids': [], 'manual_condition_confirmations': []}
+
+
+def validate_intent(spec, prepared, case, bindings, intent, *, now=None):
+    expected = review_template(spec, prepared, case, bindings)
+    if prepared['requirements']:
+        raise ImplementationError('Resolve all offline implementation requirements before execution')
+    if not isinstance(intent, dict) or set(intent) != set(expected) or any(digest(intent.get(key)) != digest(expected[key]) for key in (
+            'format', 'process_reference', 'spec_sha256', 'plan_sha256', 'case_sha256', 'bindings_sha256')):
+        raise ImplementationError('Customer intent must pin this exact specification, plan, case and bindings')
+    if intent.get('customer_authorization_confirmed') is not True:
+        raise ImplementationError('Separate customer authorization is required; process review is insufficient')
+    for key, maximum in (('human_completed_activity_ids', 40), ('manual_condition_confirmations', 12)):
+        values = intent.get(key, [])
+        if not isinstance(values, list) or len(values) > maximum or any(not isinstance(value, str) for value in values):
+            raise ImplementationError('Human resolution declarations must be bounded lists of stable identifiers')
+    try:
+        expiry = datetime.fromisoformat(str(intent.get('expires_at') or '').replace('Z', '+00:00'))
+        current = now or datetime.now(timezone.utc)
+        if expiry.tzinfo is None or not current < expiry <= current + timedelta(hours=24):
+            raise ValueError('expired')
+    except (ValueError, TypeError, OverflowError):
+        raise ImplementationError('Customer intent requires an aware future expiry within 24 hours') from None
+    if not set(prepared['human_activity_ids']) <= set(intent.get('human_completed_activity_ids', [])):
+        raise ImplementationError('Human activities need explicit completion declarations')
+    if not set(prepared['manual_condition_ids']) <= set(intent.get('manual_condition_confirmations', [])):
+        raise ImplementationError('Unevaluated manual conditions require separate human resolution declarations')
+    if prepared['outcomes'] and intent.get('source_reads_confirmed') is not True:
+        raise ImplementationError('Independent source reads require separate customer confirmation')
+    if prepared['actions']:
+        endpoint(bindings.get('tool_server_url'))
+    if prepared['outcomes']:
+        endpoint(bindings.get('source_api_url'), source=True)
+
+
+def _tool_client(url, token):
+    from agents import set_tracing_disabled
+    from agents.mcp import MCPServerStreamableHttp
+    set_tracing_disabled(True)
+    return MCPServerStreamableHttp(params={'url': url, 'headers': {'Authorization': 'Bearer ' + token},
+        'timeout': 20, 'sse_read_timeout': 30}, name='CustomerWorkflowTools',
+        max_retry_attempts=0, client_session_timeout_seconds=30, cache_tools_list=True, max_list_pages=8)
+
+
+async def _source_receipt(base, token, request):
+    try:
+        import httpx2 as httpx
+    except ImportError:
+        import httpx
+    async with asyncio.timeout(30):
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            async with client.stream('GET', base + '/v1/record-graph/operation-receipt',
+                params={key: request[key] for key in ('resource_ref', 'expected_operation')},
+                headers={'Authorization': 'Bearer ' + token}) as response:
+                response.raise_for_status()
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(content) + len(chunk) > 262144:
+                        raise ImplementationError('Source receipt exceeds its size bound')
+                    content.extend(chunk)
+    return json.loads(content, object_pairs_hook=_pairs, parse_constant=_constant)
+
+
+def source_summary(receipt, request, *, now=None):
+    matched = False
+    if isinstance(receipt, dict):
+        expected = {
+            'github_pr_merged': ('github', 'pull_request', 'merged'),
+            'jira_issue_resolved': ('jira', 'issue', 'done'),
+            'stripe_invoice_paid': ('stripe', 'invoice', 'paid'),
+            'stripe_refund_processor_succeeded': ('stripe', 'refund', 'succeeded'),
+        }.get(request['expected_operation'])
+        matched = (receipt.get('format') == 'openworkgraph.source-operation-receipt.v1'
+            and receipt.get('resource_ref') == request['resource_ref']
+            and receipt.get('expected_operation') == request['expected_operation']
+            and receipt.get('operation_verified') is True and receipt.get('read_only') is True
+            and receipt.get('availability') == 'source_reported'
+            and expected is not None
+            and (receipt.get('provider'), receipt.get('provider_record_kind'), receipt.get('provider_reported_state')) == expected
+            and receipt.get('verification_scope') == 'authenticated_source_provider_operational_state'
+            and all(receipt.get(key) is False for key in ('business_objective_verified', 'customer_outcome_verified',
+                    'agent_caused_operation_verified', 'agent_execution_authorized')))
+        try:
+            when = datetime.fromisoformat(str(receipt.get('verified_at') or '').replace('Z', '+00:00'))
+            age = ((now or datetime.now(timezone.utc)) - when).total_seconds()
+            matched = matched and when.tzinfo is not None and -300 <= age <= 900
+        except (ValueError, TypeError, OverflowError):
+            matched = False
+    return {'terminal_activity_id': request['terminal_activity_id'], 'expected_operation': request['expected_operation'],
+            'operation_verified': bool(matched), 'record_association': 'customer_selected_not_independently_established',
+            'agent_causality_verified': False, 'business_objective_verified': False}
+
+
+def source_ready_for_write(receipt, request):
+    # This OWG v1 reason is emitted only after its observed-record identity,
+    # provider type and fresh authenticated source read checks have succeeded.
+    # An unavailable verifier or already-matching terminal state stops writes.
+    return (isinstance(receipt, dict)
+        and receipt.get('format') == 'openworkgraph.source-operation-receipt.v1'
+        and receipt.get('resource_ref') == request['resource_ref']
+        and receipt.get('expected_operation') == request['expected_operation']
+        and receipt.get('availability') == 'unknown'
+        and receipt.get('reason') == 'provider_state_not_expected_operation'
+        and receipt.get('read_only') is True
+        and all(receipt.get(key) is False for key in ('operation_verified', 'business_objective_verified',
+            'customer_outcome_verified', 'agent_caused_operation_verified', 'agent_execution_authorized')))
+
+
+def _structured(result):
+    if isinstance(result, dict):
+        flag = result.get('isError', result.get('is_error'))
+        if flag is not None and flag is not False:
+            raise ImplementationError('The tool reported an error; its effects require review')
+        content = result.get('structuredContent', result.get('structured_content'))
+        blocks = result.get('content', [])
+    else:
+        flag = getattr(result, 'isError', getattr(result, 'is_error', None))
+        if flag is not None and flag is not False:
+            raise ImplementationError('The tool reported an error; its effects require review')
+        content = getattr(result, 'structuredContent', getattr(result, 'structured_content', None))
+        blocks = getattr(result, 'content', [])
+    if content is None and isinstance(blocks, list) and len(blocks) == 1:
+        block = blocks[0]
+        kind = block.get('type') if isinstance(block, dict) else getattr(block, 'type', None)
+        text = block.get('text') if isinstance(block, dict) else getattr(block, 'text', None)
+        if kind == 'text' and isinstance(text, str) and len(text.encode('utf-8')) <= 65536:
+            try:
+                content = json.loads(text, object_pairs_hook=_pairs, parse_constant=_constant)
+            except (ValueError, UnicodeError, RecursionError):
+                raise ImplementationError('Tool JSON text must be one bounded unambiguous object') from None
+    if not isinstance(content, dict):
+        raise ImplementationError('A structured tool result is required by this implementation')
+    return content
+
+
+def ensure_current(intent, now=None):
+    expiry = datetime.fromisoformat(intent['expires_at'].replace('Z', '+00:00'))
+    if (now or datetime.now(timezone.utc)) >= expiry:
+        raise ImplementationError('Customer intent expired; no further operations are permitted')
+
+
+async def execute_approved(spec, plan_document, case, bindings, intent, *, journal_directory,
+                           client_factory=_tool_client, receipt_reader=_source_receipt, now=None):
+    prepared = prepare(spec, plan_document, case, bindings)
+    validate_intent(spec, prepared, case, bindings, intent, now=now)
+    tool_token = os.environ.get('OWG_EXECUTION_MCP_TOKEN', '')
+    source_token = os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN', '')
+    if (prepared['actions'] and not tool_token) or (prepared['outcomes'] and not source_token):
+        raise ImplementationError('Configure the separate least-privilege customer tool and OWG source-read credentials')
+    execution_id = digest(intent)
+    folder = Path(journal_directory); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = folder / (execution_id + '.jsonl')
+    try:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise ImplementationError('This customer intent already has a journal; inspect it rather than retrying actions') from None
+    result = {'execution_id': execution_id, 'process_reference': reference(spec), 'actions': [], 'source_checks': [],
+        'model_invoked': False, 'business_objective_verified': False, 'agent_causality_verified': False,
+        'automatic_retries': False, 'customer_intent_is_signed_policy': False}
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as journal:
+        def record(phase, **details):
+            journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
+            journal.flush(); os.fsync(journal.fileno())
+        record('started', execution_id=execution_id, process_reference=reference(spec))
+        if any(action['operation_kind'] == 'write' for action in prepared['actions']):
+            result['source_preflight'] = []
+            for request in prepared['outcomes']:
+                try:
+                    ensure_current(intent, now)
+                    receipt = await receipt_reader(endpoint(bindings['source_api_url'], source=True), source_token, request)
+                except Exception:
+                    receipt = None
+                summary = source_summary(receipt, request, now=now)
+                summary['ready_for_write_attempt'] = source_ready_for_write(receipt, request)
+                result['source_preflight'].append(summary); record('source_preflight', **summary)
+            if not result['source_preflight'] or not all(row['ready_for_write_attempt'] for row in result['source_preflight']):
+                result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
+                record('stopped_before_tools', reason='source_verifier_unavailable_or_terminal_state_already_matches')
+                return result
+        try:
+            async with AsyncExitStack() as stack:
+                if prepared['actions']:
+                    client = await stack.enter_async_context(client_factory(endpoint(bindings['tool_server_url']), tool_token))
+                    ensure_current(intent, now)
+                    tools = await client.list_tools()
+                    names = {tool.get('name') if isinstance(tool, dict) else tool.name for tool in tools}
+                    required_names = {action['tool_name'] for action in prepared['actions']}
+                    required_names.update(action['precondition']['tool_name'] for action in prepared['actions'] if action['precondition'])
+                    if not required_names <= names:
+                        raise ImplementationError('A configured tool is unavailable; no actions were called')
+                    for index, action in enumerate(prepared['actions']):
+                        ensure_current(intent, now)
+                        if action['precondition']:
+                            condition = action['precondition']
+                            record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
+                            try:
+                                response = await client.call_tool(condition['tool_name'], condition['arguments'])
+                                content = _structured(response)
+                                if digest(pointer(content, condition['result_pointer'])) != digest(condition['result_equals']):
+                                    raise ImplementationError('Fresh precondition did not match')
+                            except Exception:
+                                result['actions'].append({'activity_id': action['activity_id'], 'status': 'precondition_not_established'})
+                                record('precondition_not_established', activity_id=action['activity_id'], attempt=index+1)
+                                break
+                        ensure_current(intent, now)
+                        record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
+                               arguments_sha256=digest(action['arguments']))
+                        status = 'uncertain'
+                        try:
+                            response = await client.call_tool(action['tool_name'], action['arguments'])
+                            content = _structured(response)
+                            if digest(pointer(content, action['result_pointer'])) != digest(action['result_equals']):
+                                status = 'tool_reported_failure'
+                            else:
+                                status = 'tool_returned_expected_structure'
+                        except Exception:
+                            status = 'uncertain'
+                        result['actions'].append({'activity_id': action['activity_id'], 'status': status})
+                        record(status, activity_id=action['activity_id'], attempt=index+1)
+                        if status != 'tool_returned_expected_structure':
+                            break
+        except ImplementationError:
+            record('implementation_contract_or_intent_not_established')
+            result['implementation_contract_or_intent_not_established'] = True
+        except Exception:
+            record('transport_or_tool_inventory_unavailable')
+            result['transport_or_tool_inventory_unavailable'] = True
+        for request in prepared['outcomes']:
+            attempted = False
+            try:
+                ensure_current(intent, now)
+                attempted = True
+                receipt = await receipt_reader(endpoint(bindings['source_api_url'], source=True), source_token, request)
+            except Exception:
+                receipt = None
+            summary = source_summary(receipt, request, now=now)
+            summary['source_request_attempted'] = attempted
+            result['source_checks'].append(summary); record('source_checked', **summary)
+        result['all_tool_results_matched'] = (len(result['actions']) == len(prepared['actions'])
+            and all(row['status'] == 'tool_returned_expected_structure' for row in result['actions']))
+        result['all_declared_operations_verified'] = bool(prepared['outcomes']) and all(row['operation_verified'] for row in result['source_checks'])
+        record('finished', all_tool_results_matched=result['all_tool_results_matched'],
+               all_declared_operations_verified=result['all_declared_operations_verified'])
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Review or explicitly execute one separately authorized customer MCP implementation')
+    for name in ('plan', 'case', 'bindings'):
+        parser.add_argument('--' + name, required=True)
+    parser.add_argument('--intent', help='Separately customer-reviewed exact-case intent JSON')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--execute-approved', action='store_true')
+    mode.add_argument('--write-review-template', help='Write a disabled intent template with exact artifact hashes')
+    parser.add_argument('--journal-directory', default=str(Path(__file__).parent / 'execution-journal'))
+    args = parser.parse_args()
+    spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=262144)
+    plan, case, bindings = load_object(args.plan), load_object(args.case), load_object(args.bindings)
+    prepared = prepare(spec, plan, case, bindings)
+    if args.write_review_template:
+        with Path(args.write_review_template).open('x', encoding='utf-8') as stream:
+            json.dump(review_template(spec, prepared, case, bindings), stream, indent=2)
+    if not args.execute_approved:
+        return {'mode': 'offline_customer_implementation_review', 'requirements': prepared['requirements'],
+                'process_reference': reference(spec), 'human_activity_ids': prepared['human_activity_ids'],
+                'manual_condition_ids': prepared['manual_condition_ids'],
+                'actions': [{'activity_id': row['activity_id'], 'tool_name': row['tool_name'],
+                    'operation_kind': row['operation_kind'], 'argument_names': sorted(row['arguments'])} for row in prepared['actions']],
+                'network_contacted': False, 'execution_authorized_by_owg': False}
+    if not args.intent:
+        raise ImplementationError('Supply a separate reviewed customer intent before execution')
+    return asyncio.run(execute_approved(spec, plan, case, bindings, load_object(args.intent), journal_directory=args.journal_directory))
+
+
+if __name__ == '__main__':
+    try:
+        print(json.dumps(main(), indent=2))
+    except ImplementationError as exc:
+        raise SystemExit(str(exc)) from None
+    except Exception:
+        raise SystemExit('Customer implementation stopped. Review bindings, intent, credentials and the local journal; do not automatically retry.') from None

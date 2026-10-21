@@ -33,7 +33,7 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
     archive=build_runtime_project(value)
     assert archive==build_runtime_project(value)
     with ZipFile(BytesIO(archive)) as zipfile:
-        assert len(zipfile.namelist())==11
+        assert len(zipfile.namelist())==14
         for name in zipfile.namelist():
             assert not name.startswith('/') and '..' not in name
             if name.endswith('.py'):
@@ -70,6 +70,9 @@ else: raise AssertionError('tampered model accepted')
 '''
     run=subprocess.run([sys.executable,'-c',code],cwd=tmp_path,capture_output=True,text=True,timeout=20)
     assert run.returncode==0,run.stderr
+    run=subprocess.run([sys.executable,'-m','unittest','-v','test_execution'],cwd=tmp_path,
+                       capture_output=True,text=True,timeout=30)
+    assert run.returncode==0,run.stdout+run.stderr
 
 
 def test_synthetic_route_coverage_is_bounded_and_reports_its_limits():

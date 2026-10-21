@@ -124,6 +124,13 @@ Authenticated endpoints under `/v1/human/processes` provide inventory and
 publication. `/{id}` reads or updates a design; `/access`, `/reviews`, `/archive`
 and `/forget` make explicitly confirmed changes; `/history` pages revisions;
 `/export?revision=N&format=json|bpmn|pdd` exports the exact saved revision.
+The additional `agent-project` format downloads the portable SDK project only
+for an active, independently reviewed exact revision. A new revision requires
+new peer review. Readers may download reviewed projects; process read permission
+never grants tool access or business execution. Bindings and customer intent
+remain disabled in every exported ZIP. See [the runtime contract](PROCESS_CATALOG.md#runnable-agent-project)
+for the separate customer authorization, concurrency, journal and source-check
+requirements. The downloaded runtime does not poll catalog review status.
 Inventory defaults to 20 processes and is bounded to 100 per page. History is
 bounded to 100 per page. Existing graph limits apply; JSON mutation bodies are
 bounded to 256 KiB and reject duplicate keys, nonstandard constants and unknown
