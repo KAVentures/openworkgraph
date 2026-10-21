@@ -38,6 +38,8 @@ def rich_evidence_row(row: dict[str, Any], *, include_identity: bool = False) ->
     only; consumers should inspect ``metadata`` whenever they need the complete
     captured context. Local screenshot paths are intentionally never exposed.
     """
+    from shared.core.private_browsing import suppress_private_browsing
+    row = suppress_private_browsing(row)
     meta = _metadata(row)
     page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
     target = meta.get("target") if isinstance(meta.get("target"), dict) else {}

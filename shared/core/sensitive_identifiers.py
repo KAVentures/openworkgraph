@@ -531,7 +531,8 @@ def redact_sensitive_identifiers(text: str, *, redact_adjacent_name: bool = Fals
 
 def sanitize_event_identifiers(event: dict[str, Any]) -> dict[str, Any]:
     """Return a deep copy safe for persistence while preserving event structure."""
-    e = copy.deepcopy(event)
+    from .private_browsing import suppress_private_browsing
+    e = copy.deepcopy(suppress_private_browsing(event))
 
     def walk(value: Any, *, key: str = "") -> Any:
         if isinstance(value, dict):

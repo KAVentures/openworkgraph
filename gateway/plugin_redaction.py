@@ -362,6 +362,8 @@ class PublicRedactor:
 
 
 def project(value: dict[str, Any], *, secret: str, principal: str, detail: str = "compact", owner_names: Iterable[str] = ()) -> dict[str, Any]:
+    from shared.core.private_browsing import suppress_private_browsing
+    value = suppress_private_browsing(value)
     if detail not in {"compact", "rich"}:
         raise ValueError("detail must be compact or rich")
     safe = PublicRedactor(secret=secret, principal=principal, owner_names=owner_names).visit(value, detail=detail)

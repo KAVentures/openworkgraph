@@ -388,6 +388,8 @@ def redact_for_ai(value: Any) -> tuple[Any, str]:
     # deliberately applies in Full mode: a full-detail toggle is not consent
     # to redisclose personal messaging excluded from capture.
     value = suppress_personal_chat_evidence(value)
+    from shared.core.private_browsing import suppress_private_browsing
+    value = suppress_private_browsing(value)
     detail = effective_detail()
     if detail["detail_level"] == DETAIL_FULL:
         return _annotate_representation(value, DETAIL_FULL), DETAIL_FULL

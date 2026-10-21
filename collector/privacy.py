@@ -5,6 +5,9 @@ from typing import Iterable
 
 
 def should_exclude(app: str, title: str, excluded_apps: Iterable[str], title_patterns: Iterable[str]) -> bool:
+    from shared.core.private_browsing import private_browser_window
+    if private_browser_window(app, title):
+        return True
     app_lower = (app or "").lower()
     if any(x.lower() in app_lower for x in excluded_apps if x):
         return True

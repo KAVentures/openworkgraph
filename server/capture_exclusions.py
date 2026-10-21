@@ -102,6 +102,10 @@ def apply_to_desktop_event(event: dict[str, Any], config: dict[str, Any]) -> dic
     allowlists and privacy path). Already-excluded events are returned as is.
     """
     meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    from shared.core.private_browsing import suppress_private_browsing
+    protected = suppress_private_browsing(event)
+    if protected.get("metadata", {}).get("excluded_by") == "private_browser_window":
+        return protected
     source = str(event.get("source") or meta.get("source") or "desktop").lower()
     if source in {"agent", "browser_extension"} or str(event.get("event_type") or "").startswith("browser_"):
         return event

@@ -6,6 +6,25 @@ This document describes the current v0.114 behavior. It is a technical descripti
 
 ## Local-first boundary
 
+### Explicit private-window markers
+
+Browser chrome markers such as Chrome's `(Incognito)` / Swedish and German
+`(Inkognito)` and Edge's `InPrivate` are excluded independently of older saved
+keyword lists. Detection requires an explicit marker and a browser application
+or browser name in the title (for legacy normalized context rows);
+ordinary titles about private equity or a brand named Inkognito retain context.
+This is a marker-based safeguard, not a claim that every private window on every
+platform exposes a detectable title marker.
+
+The same boundary protects retained evidence on local database reads, AI
+responses (including Full), hosted projections and exports. It preserves opaque
+event/session IDs, timestamps and durations, and removes titles, targets,
+resource/file references, clipboard linkage and screenshot paths. It does not
+delete or rewrite historical database rows, change access grants, or run a
+startup re-scan. Use the existing activity deletion controls when stored history
+itself must be removed. New capture and ingest apply the exclusion before those
+details can be stored.
+
 The current local server binds to loopback (`127.0.0.1`). Captured event data is stored on the local machine unless the user deliberately exports it or connects OpenWorkGraph to another system.
 
 Loopback binding alone is not treated as authentication. v0.48 adds installation-local capability controls around the local interfaces:
