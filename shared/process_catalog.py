@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from .process_model import ProcessModel
 from .workflow_knowledge import KnowledgeStore, KnowledgeWrite
+from .process_diagram import add_process_diagram
 
 ProcessID = Annotated[str, Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')]
 
@@ -135,6 +136,7 @@ def process_bpmn(packet: dict[str, Any]) -> str:
             ET.SubElement(flow, f'{{{ns}}}documentation').text = (
                 f'User-confirmed={rule.user_confirmed}: {rule.text}'
             )
+    add_process_diagram(root, process, entry_id='Activity_' + model.entry_activity_id)
     return ET.tostring(root, encoding='unicode') + '\n'
 
 
