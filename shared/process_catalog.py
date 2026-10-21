@@ -74,6 +74,7 @@ class ProcessCatalog:
                     'baseline_support_unit': model.get('baseline_support_unit', 'declared_cases'),
                     'baseline_count_is_declared_not_verified_monthly_volume': True,
                     'unconfirmed_rule_count': sum(not r['user_confirmed'] for r in model['business_rules']),
+                    'manual_review_condition_count': len(model.get('manual_review_conditions', [])),
                     'unmapped_activity_count': sum(a['kind'] == 'activity' and a['implementation'] == 'unmapped' for a in model['activities']),
                     'assumptions': assumption.model_dump(), 'projection': assumption.projection(),
                 })
@@ -116,7 +117,13 @@ def process_bpmn(packet: dict[str, Any]) -> str:
     )
     tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent'}
     for activity in model.activities:
-        ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})
+        node = ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})
+        for condition in model.manual_review_conditions:
+            if condition.activity_id == activity.id:
+                ET.SubElement(node, f'{{{ns}}}documentation').text = (
+                    f'UNEVALUATED manual review ({condition.kind}): {condition.condition_label}; '
+                    f'response: {condition.response}. No automatic branch is authorized.'
+                )
     rules = {r.id: r for r in model.business_rules}
     for index, edge in enumerate(model.transitions, 1):
         flow = ET.SubElement(process, f'{{{ns}}}sequenceFlow', {
@@ -145,6 +152,8 @@ def process_document(packet: dict[str, Any]) -> str:
     lines += [f'{a.id}: {a.label} ({a.kind}; suggested implementation: {a.implementation})' for a in model.activities]
     lines += ['', 'Proposed transitions:'] + [f'{e.source} → {e.target}; rule: {e.rule_id or "none"}' for e in model.transitions]
     lines += ['', 'Declared rules (not independently validated):'] + [f'{r.id}: {r.text} (user-confirmed={r.user_confirmed})' for r in model.business_rules]
+    lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [
+        f'{c.activity_id}: {c.kind} · {c.condition_label}; response: {c.response}' for c in model.manual_review_conditions]
     lines += ['', 'Declared source-state expectations:'] + [f'{e.terminal_activity_id}: {e.operation} (user-confirmed={e.user_confirmed})' for e in model.outcome_expectations]
     lines += ['', 'Unknowns: authoritative case identity, business authorization, exception handling,',
               'tool mappings and independently checked success must be validated for deployment.']

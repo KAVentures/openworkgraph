@@ -82,6 +82,24 @@ def test_synthetic_route_coverage_is_bounded_and_reports_its_limits():
         assert len(route['activity_ids'])<=80
 
 
+def test_generated_runtime_retains_and_reports_unevaluated_conditions(tmp_path):
+    value=packet()
+    value['process_model']['manual_review_conditions']=[{'activity_id':'a','kind':'exception_condition',
+        'condition_label':'Evidence missing','response':'pause_for_review'}]
+    with ZipFile(BytesIO(build_runtime_project(value))) as archive:
+        archive.extractall(tmp_path)
+    code='''from runtime import check_plan,load_spec
+spec=load_spec()
+result=check_plan({'revision':2,'content_sha256':'a'*64,'activity_ids':['a','b','c']},spec)
+assert result['manual_review_conditions'][0]['activity_id']=='a'
+assert result['manual_review_conditions'][0]['condition_label']=='Evidence missing'
+assert result['manual_review_conditions_evaluated'] is False
+assert result['execution_permitted'] is False
+'''
+    run=subprocess.run([sys.executable,'-c',code],cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert run.returncode==0,run.stderr
+
+
 @pytest.mark.parametrize('field,value', [('revision',True),('revision',0),('content_sha256','fake'),
                                         ('execution_authorization',True),('format','unknown')])
 def test_export_requires_saved_non_authorizing_revision(field,value):

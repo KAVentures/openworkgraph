@@ -75,6 +75,12 @@ def opportunity_review_script() -> Response:
     return FileResponse(ROOT / "dashboard" / "opportunity_review.js", media_type="application/javascript")
 
 
+@app.get("/process-decisions.js")
+def process_decision_script() -> Response:
+    """Optional local human-review ledger; never runs business decisions."""
+    return FileResponse(ROOT / "dashboard" / "process_decisions.js", media_type="application/javascript")
+
+
 @app.get("/process-designer.js")
 def process_designer_script() -> Response:
     """Static optional UI for reviewable proposed processes."""

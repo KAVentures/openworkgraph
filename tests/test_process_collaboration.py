@@ -32,7 +32,9 @@ def person(actor='alice',org='acme',scopes=SCOPES):
 def model():
     return ProcessModel(goal='Resolve a selected case',baseline_source='selected_csv_variant',
         baseline_path=['Open','Close'],activities=[{'id':'open','label':'Open'},{'id':'close','label':'Close'}],
-        transitions=[{'source':'open','target':'close'}],entry_activity_id='open',terminal_activity_ids=['close'])
+        transitions=[{'source':'open','target':'close'}],entry_activity_id='open',terminal_activity_ids=['close'],
+        manual_review_conditions=[{'activity_id':'open','kind':'exception_condition',
+            'condition_label':'Evidence missing','response':'pause_for_review'}])
 
 
 def write(title='Case process',expected=0,**kwargs):
@@ -98,6 +100,7 @@ def test_explicit_sharing_tenant_isolation_and_personal_knowledge_separation(sto
     assert shared['owner_actor_id']=='alice' and shared['author_actor_id']=='alice'
     assert shared['review']['status']=='needs_review'
     assert shared['process']['evidence_refs']==[]
+    assert shared['process']['process_model']['manual_review_conditions'][0]['condition_label']=='Evidence missing'
     assert not shared['raw_evidence_rows_included']
     assert store.knowledge.list(namespace('acme'),wid)['workflows'][0]==shared['process']
     assert store.inventory(person('bob'))['processes'][0]['workflow_id']==wid

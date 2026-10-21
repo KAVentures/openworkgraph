@@ -46,6 +46,9 @@ def check_plan(plan, spec=None):
         'requires_tool_mapping_ids': sorted({node for node in ids if nodes[node]['kind'] == 'activity'
                                             and nodes[node]['implementation'] != 'human'}),
         'human_activity_ids': sorted({node for node in ids if nodes[node]['implementation'] == 'human'}),
+        'manual_review_conditions': [condition for condition in model.get('manual_review_conditions', [])
+                                     if condition['activity_id'] in ids],
+        'manual_review_conditions_evaluated': False,
         'business_rules_evaluated': False,
         'execution_permitted': False,
         'source_outcome_verified': False,

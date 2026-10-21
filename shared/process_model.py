@@ -48,6 +48,17 @@ class OutcomeExpectation(StructuralModel):
     user_confirmed: StrictBool = False
 
 
+class ManualReviewCondition(StructuralModel):
+    activity_id: Identifier
+    kind: Literal['decision_point', 'exception_condition']
+    condition_label: ActivityLabel
+    response: Literal['pause_for_review', 'request_source_recheck', 'escalate_to_owner']
+    source: Literal['user_declared_unverified'] = 'user_declared_unverified'
+    evaluated_by_owg: Literal[False] = False
+    automatic_branch_authorized: Literal[False] = False
+    executable: Literal[False] = False
+
+
 class ProcessModel(StructuralModel):
     format: Literal['openworkgraph.process-model.v1'] = 'openworkgraph.process-model.v1'
     goal: str = Field(min_length=3, max_length=500)
@@ -63,6 +74,7 @@ class ProcessModel(StructuralModel):
     entry_activity_id: Identifier
     terminal_activity_ids: list[Identifier] = Field(min_length=1, max_length=40)
     outcome_expectations: list[OutcomeExpectation] = Field(default_factory=list, max_length=40)
+    manual_review_conditions: list[ManualReviewCondition] = Field(default_factory=list, max_length=12)
     opportunity_scenario: OpportunityScenario | None = None
     # These fields are deliberately immutable semantic assertions in every model.
     observed_path_is_policy: Literal[False] = False
@@ -90,6 +102,9 @@ class ProcessModel(StructuralModel):
         if len(set(ids)) != len(ids) or len(set(rules)) != len(rules):
             raise ValueError('Activity and rule IDs must be unique')
         known = set(ids)
+        conditions = [(c.activity_id, c.kind, c.condition_label.casefold()) for c in self.manual_review_conditions]
+        if len(set(conditions)) != len(conditions) or any(c[0] not in known for c in conditions):
+            raise ValueError('Manual review conditions must be unique and reference existing activities')
         if self.entry_activity_id not in known or not set(self.terminal_activity_ids) <= known:
             raise ValueError('Entry and terminal activities must exist')
         if len(set(self.terminal_activity_ids)) != len(self.terminal_activity_ids):

@@ -42,6 +42,28 @@ def branched_model():
     return ProcessModel.model_validate(value)
 
 
+def test_manual_review_conditions_are_persistent_nonexecuting_and_bound_to_activity_ids(tmp_path):
+    value=model().model_dump()
+    value['manual_review_conditions']=[{'activity_id':'b','kind':'exception_condition',
+        'condition_label':'Evidence missing','response':'pause_for_review'}]
+    graph=ProcessModel.model_validate(value)
+    catalog=ProcessCatalog(KnowledgeStore(GatewayDB(f'sqlite:///{tmp_path / "manual.db"}')),'alice')
+    saved=catalog.save(CatalogWrite(title='Manual exception review',process_model=graph,user_confirmed=True))
+    exported=catalog.export(saved['workflow_id'],1)
+    condition=exported['process_model']['manual_review_conditions'][0]
+    assert condition['activity_id']=='b' and not condition['executable']
+    assert not condition['evaluated_by_owg'] and not condition['automatic_branch_authorized']
+    assert 'Evidence missing' in process_bpmn(exported)
+    assert 'Evidence missing' in process_document(exported)
+    node=ET.fromstring(process_bpmn(exported)).find('.//*[@id="Activity_b"]')
+    assert 'UNEVALUATED manual review' in ''.join(node.itertext())
+    for change in [{'activity_id':'deleted'}, {'automatic_branch_authorized':True}, {'executable':True}, {'evaluated_by_owg':True}]:
+        invalid={**value,'manual_review_conditions':[{**value['manual_review_conditions'][0],**change}]}
+        with pytest.raises(ValidationError):ProcessModel.model_validate(invalid)
+    with pytest.raises(ValidationError):
+        ProcessModel.model_validate({**value,'manual_review_conditions':value['manual_review_conditions']*2})
+
+
 def test_catalog_reuses_knowledge_revisions_isolates_owners_and_pins_exports(tmp_path):
     store = KnowledgeStore(GatewayDB(f'sqlite:///{tmp_path / "knowledge.db"}'))
     catalog = ProcessCatalog(store, 'alice')

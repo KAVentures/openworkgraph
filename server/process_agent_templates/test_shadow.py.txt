@@ -21,6 +21,10 @@ class ShadowCases(unittest.TestCase):
                 self.assertTrue(result['valid_structure'])
                 self.assertFalse(result['execution_permitted'])
                 self.assertFalse(result['source_outcome_verified'])
+                self.assertFalse(result['manual_review_conditions_evaluated'])
+                expected = [condition for condition in self.spec['process_model'].get('manual_review_conditions', [])
+                            if condition['activity_id'] in case['activity_ids']]
+                self.assertEqual(result['manual_review_conditions'], expected)
 
     def test_unknown_activity_is_rejected(self):
         path = self.cases['cases'][0]['activity_ids'] + ['unknown_external_action']

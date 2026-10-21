@@ -471,6 +471,24 @@
             ),
           );
           host.appendChild(rules);
+          host.appendChild(el("h4", "Unverified manual review conditions"));
+          const conditions = el("ul");
+          (model.manual_review_conditions || []).forEach((c) =>
+            conditions.appendChild(
+              el(
+                "li",
+                c.activity_id +
+                  " · " +
+                  words(c.kind) +
+                  " · " +
+                  c.condition_label +
+                  " · " +
+                  words(c.response) +
+                  "; trigger not evaluated",
+              ),
+            ),
+          );
+          host.appendChild(conditions);
         }
         $("file").addEventListener("change", async () => {
           const generation = ++previewGeneration;
@@ -579,7 +597,8 @@
             " · " +
             (data.archived ? "archived" : "active") +
             (data.viewing_historical_revision
-              ? " · historical revision; latest is revision " + data.latest_revision
+              ? " · historical revision; latest is revision " +
+                data.latest_revision
               : "");
           preview(data.process.process_model, $("design"));
           $("update").disabled = !data.permissions.edit;

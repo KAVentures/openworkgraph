@@ -5,6 +5,7 @@
   'use strict';
   const FORMAT='openworkgraph.proposed-process-design.v1';
   const MAX_STEPS=40;
+  const MAX_RULES=12;
   let state=null;
   const id='owgProcessDesigner';
 
@@ -31,7 +32,37 @@
       changes_are_owner_proposals_not_observed:true
     };
   }
-  function packet(report,variant,target,goal,reviewed) {
+  function validateRules(target,rules=[]) {
+    if(!Array.isArray(rules)||rules.length>MAX_RULES)
+      throw new Error('At most 12 declared decisions/exceptions are supported.');
+    const validKinds=['decision_point','exception_condition'];
+    const validResponses=['pause_for_review','request_source_recheck','escalate_to_owner'];
+    const seen=new Set();
+    return rules.map((rule,i)=>{
+      if(!rule||typeof rule!=='object'||Array.isArray(rule)||
+         !Number.isInteger(rule.step_index)||rule.step_index<0||rule.step_index>=target.length||
+         !validKinds.includes(rule.kind)||!validResponses.includes(rule.response)||
+         typeof rule.condition_label!=='string'||
+         !/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(rule.condition_label.trim()))
+        throw new Error('Decision '+(i+1)+' needs a valid step, condition and safe review action.');
+      const condition=rule.condition_label.trim();
+      const identity=[rule.step_index,rule.kind,condition.toLowerCase()].join('|');
+      if(seen.has(identity))throw new Error('Duplicate declared decision or exception.');
+      seen.add(identity);
+      return {
+        step_index:rule.step_index,
+        at_activity:target[rule.step_index],
+        kind:rule.kind,
+        condition_label:condition,
+        response:rule.response,
+        source:'user_declared_unverified',
+        evaluated_by_owg:false,
+        automatic_branch_authorized:false,
+        executable:false
+      };
+    });
+  }
+  function packet(report,variant,target,goal,reviewed,rules=[]) {
     if(!reviewed)throw new Error('Explicit review is required before exporting a proposed process.');
     if(report?.format!=='openworkgraph.process-mining-csv-preview.v1' ||
        variant?.path_truncated || report?.input_rows<1 ||
@@ -55,6 +86,12 @@
         proposed_path:proposal,
         step_origins:proposal.map(step=>({step,source:'user_confirmed_design_entry'})),
         change_summary:diff(baseline,proposal),
+        decision_review_ledger:{
+          entries:validateRules(proposal,rules),
+          status:'unverified_user_declared_review_conditions',
+          executable:false,
+          verified_business_policy:false
+        },
         proposed_not_deployed:true
       },
       uncertainties:[
@@ -99,6 +136,8 @@
     selected();
     try{
       fn(state.target);
+      // Positional references cannot safely survive reordering/removing steps.
+      state.rules=[];
       state.reviewed=false;
       render();
     }catch(error){setMessage(error.message||'Could not change step.');}
@@ -160,6 +199,7 @@
     goal.placeholder='What should this process accomplish?';
     goal.addEventListener('input',()=>{state.goal=goal.value;state.reviewed=false;const check=document.getElementById('owgDesignerReviewed');if(check)check.checked=false;});
     host.appendChild(goal);
+    window.owgDecisionLedger?.render?.(state,host,render);
     const changes=diff(state.baseline,state.target);
     host.appendChild(elem('p','Proposed changes: '+changes.added.length+' added, '+changes.removed.length+' removed'+
       (changes.order_changed?' · order changed':'')+'. Review all process rules and exceptions separately.','muted'));
@@ -181,7 +221,7 @@
       if(!state)return;
       selected();
       try{
-        const output=packet(state.report,state.variant,state.target,state.goal,state.reviewed);
+        const output=packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules);
         if(!window.owgAgentStarter?.prepare)throw new Error('Agent starter unavailable. Reopen the local dashboard.');
         setMessage('Building the non-executable starter locally…');
         await window.owgAgentStarter.prepare(output);
@@ -215,7 +255,7 @@
     selected();
     let output;
     try{
-      output=packet(state.report,state.variant,state.target,state.goal,state.reviewed);
+      output=packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules);
     }catch(error){setMessage(error.message||'Review the draft before exporting.');return;}
     output.exported_at=new Date().toISOString();
     const blob=new Blob([JSON.stringify(output,null,2)+'\n'],{type:'application/json'});
@@ -233,7 +273,7 @@
       if(state){
         if(typeof window.confirm==='function'&&!window.confirm('Replace the unsaved proposed workflow?'))return;
       }
-      state={report,variant,baseline,target:baseline.slice(),goal:'',reviewed:false};
+      state={report,variant,baseline,target:baseline.slice(),goal:'',rules:[],reviewed:false};
       render();
       document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(error){
@@ -246,8 +286,8 @@
     reviewedDraft:()=>{
       if(!state)throw new Error('Open a complete observed variant in the process designer first.');
       selected();
-      return packet(state.report,state.variant,state.target,state.goal,state.reviewed);
+      return packet(state.report,state.variant,state.target,state.goal,state.reviewed,state.rules);
     }
   };
-  window.__owgProcessDesignModel={validStep,diff,packet};
+  window.__owgProcessDesignModel={validStep,diff,packet,validateRules};
 })();

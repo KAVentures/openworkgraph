@@ -30,7 +30,11 @@
     return {format:'openworkgraph.process-model.v1',goal:draft.business_goal_declared_by_user,owner_label:'',
       baseline_path:copy(draft.as_is.path),baseline_source:'selected_csv_variant',supporting_case_count:draft.as_is.supporting_case_count,
       activities,transitions:activities.slice(1).map((activity,i)=>({source:activities[i].id,target:activity.id,rule_id:null})),
-      business_rules:[],entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
+      business_rules:[],manual_review_conditions:(draft.to_be.decision_review_ledger?.entries||[]).map(condition=>({
+        activity_id:activities[condition.step_index]?.id,kind:condition.kind,condition_label:condition.condition_label,
+        response:condition.response,source:condition.source,evaluated_by_owg:condition.evaluated_by_owg,
+        automatic_branch_authorized:condition.automatic_branch_authorized,executable:condition.executable
+      })),entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
       observed_path_is_policy:false,execution_authorized:false,outcomes_verified:false};
   }
   async function saveDesigner(){
@@ -174,6 +178,7 @@
       row.appendChild(button('Remove '+activity.id,()=>mutate(()=>{
         model.activities.splice(index,1);model.transitions=model.transitions.filter(e=>e.source!==activity.id&&e.target!==activity.id);
         model.terminal_activity_ids=model.terminal_activity_ids.filter(id=>id!==activity.id);
+        model.manual_review_conditions=(model.manual_review_conditions||[]).filter(c=>c.activity_id!==activity.id);
       })));host.appendChild(row);
     });
     host.appendChild(button('Add activity',()=>mutate(()=>{
@@ -209,6 +214,23 @@
       if(model.business_rules.length>=40)throw new Error('Maximum 40 rules.');
       let i=1;while(model.business_rules.some(r=>r.id==='rule_'+i))i++;
       model.business_rules.push({id:'rule_'+i,text:'Describe the condition or exception',user_confirmed:false});
+    })));
+    host.appendChild(el('h4','Unverified manual review conditions'));
+    host.appendChild(el('p','These declared triggers are not evaluated. They preserve the decision and exception ledger using activity IDs; they do not authorize an automatic branch.'));
+    model.manual_review_conditions=model.manual_review_conditions||[];
+    model.manual_review_conditions.forEach((condition,index)=>{
+      const row=el('fieldset');row.appendChild(el('legend','Manual review '+(index+1)));
+      field(row,'Review activity '+(index+1),condition.activity_id,value=>condition.activity_id=value,model.activities.map(a=>a.id));
+      field(row,'Condition kind '+(index+1),condition.kind,value=>condition.kind=value,['decision_point','exception_condition']);
+      field(row,'Condition label '+(index+1),condition.condition_label,value=>condition.condition_label=value);
+      field(row,'Review response '+(index+1),condition.response,value=>condition.response=value,['pause_for_review','request_source_recheck','escalate_to_owner']);
+      row.appendChild(button('Remove manual review '+(index+1),()=>mutate(()=>model.manual_review_conditions.splice(index,1))));host.appendChild(row);
+    });
+    host.appendChild(button('Add manual review condition',()=>mutate(()=>{
+      if(model.manual_review_conditions.length>=12)throw new Error('Maximum 12 manual review conditions.');
+      model.manual_review_conditions.push({activity_id:model.activities[0]?.id||'missing',kind:'exception_condition',
+        condition_label:'Describe condition',response:'pause_for_review',source:'user_declared_unverified',
+        evaluated_by_owg:false,automatic_branch_authorized:false,executable:false});
     })));
     host.appendChild(el('h4','Independent source-state expectations'));
     host.appendChild(el('p','Declare which provider operation should be checked for a terminal activity. Confirmation describes the expected state; it does not grant execution rights or prove an agent caused it.'));
@@ -292,7 +314,7 @@
         ' · sensitivity '+p.sensitivity_net_monthly_low+' to '+p.sensitivity_net_monthly_high+
         ' · simple payback '+(p.simple_payback_months==null?'not positive':p.simple_payback_months+' months')));
       row.appendChild(el('p',item.unconfirmed_rule_count+' unconfirmed rules · '+item.unmapped_activity_count+
-        ' unmapped activities · owner: '+(item.declared_owner||'undeclared')));host.appendChild(row);
+        ' unmapped activities · '+(item.manual_review_condition_count||0)+' unevaluated review conditions · owner: '+(item.declared_owner||'undeclared')));host.appendChild(row);
     });
     if(!result.opportunities.length)host.appendChild(el('p','No saved scenarios in this currency. Add assumptions to a process and save a reviewed revision.'));
     host.appendChild(el('p',result.processes_without_scenarios_in_scanned_records+' processes have no scenario. '+

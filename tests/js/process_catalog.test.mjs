@@ -87,3 +87,21 @@ test('observed drafts preserve baseline labels and evidence references without p
   assert.equal(body.process_model.baseline_support_unit,'candidate_executions');
   assert.deepEqual(body.evidence_refs,['execution:abc']);
 });
+
+test('designer transfer retains manual conditions by stable IDs when activity labels repeat',()=>{
+  const {window}=fixture();
+  const m=window.__owgProcessCatalogModel.linearModel({
+    as_is:{path:['Review','Review'],supporting_case_count:1},
+    to_be:{proposed_path:['Review','Review'],decision_review_ledger:{entries:[{
+      step_index:1,at_activity:'Review',kind:'exception_condition',condition_label:'Evidence missing',
+      response:'pause_for_review',source:'user_declared_unverified',evaluated_by_owg:false,
+      automatic_branch_authorized:false,executable:false
+    }]}},business_goal_declared_by_user:'Resolve a selected case'});
+  const condition=m.manual_review_conditions[0];
+  assert.equal(condition.activity_id,'step_2');
+  assert.equal(condition.condition_label,'Evidence missing');
+  assert.equal(condition.evaluated_by_owg,false);
+  assert.equal(condition.automatic_branch_authorized,false);
+  assert.equal(condition.executable,false);
+  assert.equal(m.business_rules.length,0);
+});

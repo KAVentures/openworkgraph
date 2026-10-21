@@ -104,6 +104,10 @@ const pathModule = require("node:path");
       .locator("#selectedTitle")
       .filter({ hasText: "Shared support process · revision 1" })
       .waitFor();
+    assert.match(
+      await alice.locator("#design").textContent(),
+      /Evidence missing/,
+    );
     assert.equal(
       await alice
         .getByRole("button", { name: "Record design review", exact: true })

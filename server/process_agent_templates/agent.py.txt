@@ -31,6 +31,8 @@ Use only the supplied graph IDs. A proposed route starts at its entry, follows
 its transitions, includes routing nodes and ends at a declared terminal.
 Include the exact revision and content_sha256 from the process data.
 Natural-language rules are declarations, not established organizational policy.
+Manual review conditions are unevaluated human declarations. When a proposed
+route includes one, request human clarification; never decide its truth.
 If a branch depends on missing business facts or an unconfirmed rule, return
 needs_clarification with missing_business_inputs. Do not invent rule outcomes.
 A structurally valid route is a proposal only, not business authorization or
@@ -61,6 +63,13 @@ async def propose(case, *, model, spec=None):
     checks = check_plan(plan.model_dump(), spec)
     if checks['unconfirmed_rule_ids']:
         raise ValueError('Proposed route relies on unconfirmed business rules')
+    if checks['manual_review_conditions']:
+        # Enforce unresolved review independently of whatever the model claimed.
+        pending = ['Manual review required at ' + condition['activity_id'] + ': ' + condition['condition_label']
+                   for condition in checks['manual_review_conditions']]
+        return {'plan': {**plan.model_dump(), 'status': 'needs_clarification',
+                         'missing_business_inputs': (pending + plan.missing_business_inputs)[:40]},
+                'shadow_check': checks, 'execution_permitted': False, 'source_outcome_verified': False}
     return {'plan': plan.model_dump(), 'shadow_check': checks}
 
 

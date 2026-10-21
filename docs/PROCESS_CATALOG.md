@@ -10,6 +10,16 @@ separate authenticated ownership, collaborator roles and revision-specific
 design reviews. It excludes local evidence references and does not automatically
 synchronize private knowledge or carry local owner labels into permissions.
 
+Decision and exception ledger entries transfer from the designer to stable
+activity IDs in the catalog, including when labels repeat. The editor preserves
+them as **Unverified manual review conditions**, separately from proposed branch
+rules. Removing their activity removes its attached conditions; other graph
+edits retain their stable references. They appear in shared-design previews,
+revisioned JSON, descriptive BPMN activity documentation, PDDs and agent projects.
+Their triggers remain unevaluated. A generated planner must request human
+clarification for a route containing a manual review condition, even if its model
+proposes a route. No condition becomes automatic branching or policy approval.
+
 ## User flow
 
 1. Analyze an authorized CSV, choose a complete variant, and open the designer.

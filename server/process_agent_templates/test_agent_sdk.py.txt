@@ -1,5 +1,6 @@
 """Actual SDK Runner check with an in-memory model; no provider or tracing export."""
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import unittest
@@ -36,6 +37,27 @@ if SDK_AVAILABLE:
 
 @unittest.skipUnless(SDK_AVAILABLE, 'Install requirements.txt for the actual SDK test')
 class AgentSDKCases(unittest.TestCase):
+    def test_model_cannot_skip_unevaluated_manual_review(self):
+        spec = load_spec()
+        cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))
+        path = cases['cases'][0]['activity_ids']
+        # Synthetic mutation only, kept in memory: isolate this condition from
+        # unrelated unconfirmed branch rules in the customer's chosen graph.
+        for rule in spec['process_model']['business_rules']:
+            rule['user_confirmed'] = True
+        spec['process_model']['manual_review_conditions'] = [{
+            'activity_id': path[0], 'kind': 'exception_condition',
+            'condition_label': 'Synthetic missing evidence', 'response': 'pause_for_review',
+            'source': 'user_declared_unverified', 'evaluated_by_owg': False,
+            'automatic_branch_authorized': False, 'executable': False}]
+        spec['process_model_sha256'] = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
+        plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                'status': 'proposal', 'activity_ids': path, 'missing_business_inputs': []}
+        result = asyncio.run(propose({'text': 'SYNTHETIC_UNTRUSTED_INSTRUCTION'}, model=OfflineModel(plan), spec=spec))
+        self.assertEqual(result['plan']['status'], 'needs_clarification')
+        self.assertFalse(result['execution_permitted'])
+        self.assertFalse(result['shadow_check']['manual_review_conditions_evaluated'])
+
     def test_actual_runner_structured_output_and_rejection(self):
         spec = load_spec()
         cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))
