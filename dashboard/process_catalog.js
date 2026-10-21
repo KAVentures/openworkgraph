@@ -159,7 +159,10 @@
     field(host,'Process owner',model.owner_label,value=>model.owner_label=value);
     host.appendChild(el('h4','AS-IS observed baseline'));
     host.appendChild(el('p',model.baseline_path.join(' → ')));
-    host.appendChild(el('p','Baseline basis: '+model.baseline_source+' · '+(model.baseline_coverage||'complete_supplied_path')+' · '+model.supporting_case_count+' '+(model.baseline_support_unit||'declared_cases')+'. This does not verify task boundaries or business case identity.'));
+    const sourceName={selected_csv_variant:'Selected CSV variant',selected_observed_variant:'Selected desktop candidate',selected_source_audit:'Selected source audit',user_declared:'User-declared baseline'}[model.baseline_source];
+    const coverageName={complete_supplied_path:'Complete supplied path',bounded_candidate_sequence:'Bounded observed sequence',partial_source_audit:'Partial source audit'}[model.baseline_coverage||'complete_supplied_path'];
+    host.appendChild(el('p','Baseline: '+sourceName+' · '+coverageName+' · '+model.supporting_case_count+' '+
+      (model.baseline_support_unit==='candidate_executions'?'candidate executions':'supplied cases')+'. Task boundaries and business case identity are unverified.'));
     host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     const mutate=fn=>{fn();changed();renderEditor();};
