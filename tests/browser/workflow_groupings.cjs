@@ -26,6 +26,16 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Explore workflows',exact:true}).click();
    await page.locator('#owgExplorerStatus').filter({hasText:'candidate groups shown'}).waitFor();
    await page.locator('#owgExplorerCandidates button').first().click();
+   await page.getByRole('button',{name:'Explore combined candidate transitions',exact:true}).click();
+   const combined=page.locator('#owgExplorerCombinedMap');
+   assert.match(await combined.textContent(),/normalized structural steps/);
+   await combined.locator('svg g[role=button]').first().focus();await page.keyboard.press('Enter');
+   assert.match(await page.locator('#owgExplorerCombinedDetails').textContent(),/projected occurrences/);
+   await page.getByRole('button',{name:'Select supporting variant 1',exact:true}).click();
+   assert.equal(writes,0);
+   await page.setViewportSize({width:390,height:844});
+   assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+   await page.setViewportSize({width:1280,height:900});
    await page.getByRole('button',{name:'Name or regroup selected examples',exact:true}).click();
    await page.getByLabel('Reviewed workflow group name').fill('Invoice review');
    assert.equal(writes,0);
@@ -67,7 +77,7 @@ rows=c.execute('SELECT payload FROM workflow_knowledge').fetchall()
 assert all('SUPERSECRET' not in row[0] and 'patient@example.com' not in row[0] for row in rows)
 `,path.join(scratch,'data','workflow_observer.db'),path.join(scratch,'original-events.json')],{encoding:'utf8'});
    assert.equal(verified.status,0,verified.stderr);assert.deepEqual(errors,[]);
-   console.log('Reviewed grouping browser acceptance passed: exact retained selection, explicit save, reload, split, merge, rename, immutable history, corrected map, mobile and byte-for-byte canonical row preservation.');
+   console.log('Reviewed grouping browser acceptance passed: combined candidate transitions with keyboard/variant selection, exact retained selection, explicit save, reload, split, merge, rename, immutable history, corrected map, mobile and byte-for-byte canonical row preservation.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

@@ -14,6 +14,12 @@ ledger, while preserving inferred families and individual execution histories.
 4. Select a node to see its variant and step position. Use **Review selected
    examples** to request support-counted evidence for that variant, or
    **Copy AI handoff request** to ask an already connected AI to investigate it.
+5. For an inferred candidate, **Explore combined candidate transitions** draws
+   the normalized structural graph across all its projected executions, including
+   variants omitted from the lane sample. Select a node by mouse or keyboard
+   to inspect occurrence/execution counts, then explicitly select a displayed
+   supporting variant before drafting its route. The combined map does not
+   silently choose an execution or establish common business-case identity.
 
 The map uses `/v1/workflow-evidence/families` and
 `/v1/workflow-evidence` with their existing authenticated local context. No
@@ -27,7 +33,16 @@ user-reviewed knowledge; they do not modify canonical source evidence.
   or branches. Each lane is a candidate observed structural sequence, not
   an approved SOP, actual business task, or authorization.
 - Workflow identification remains heuristic; interleaved cases may be merged or
-  split incorrectly. Repeated steps are retained rather than deduplicated.
+  split incorrectly. The source projection collapses adjacent identical steps
+  and clips at 48 steps; nonadjacent repeated steps remain visible. These are
+  normalized structural steps, not canonical events.
+- The optional combined graph counts projected occurrences and distinct
+  supporting executions separately. It includes observed loops and alternate
+  transitions without claiming that every path composed from those edges was
+  ever observed. It provides no per-step timing, verified wait/labor, business
+  rules or authorization. Up to 64 high-frequency step types and 4,096 transition
+  types can be drawn; omitted types are stated separately while global
+  projection totals remain intact.
 - It displays at most 30 candidate groups, six variants per group, and 24 steps
   per variant. The UI shows when variants or steps are omitted.
 - The evidence API considers at most 25,000 source event rows for this read.
@@ -47,5 +62,11 @@ user-reviewed knowledge; they do not modify canonical source evidence.
 The view must not change existing capture, repeated-workflow results, evidence
 exports, Discovery Mode, MCP contracts, or permissions. Tests cover route/script
 installation, read-only calls, step repetition, exact variant separation,
-ID filtering, and bounded rendering. End-to-end browser and real dataset tests
-are still required before treating this as production-quality process mining.
+ID filtering, and bounded rendering. End-to-end browser checks include an owned synthetic dashboard-to-API flow, keyboard node inspection,
+explicit variant selection, mobile layout and byte-for-byte canonical-row
+preservation. Real customer datasets are still required for business validation.
+
+The families endpoint accepts `include_transition_maps=true` for this view.
+Its default stays false, preserving existing compact candidate/MCP payloads and
+avoiding graph construction for callers that do not request it. The map uses
+the same selected time window, authenticated evidence and source bounds.

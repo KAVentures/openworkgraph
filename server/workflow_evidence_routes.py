@@ -371,6 +371,7 @@ def get_workflow_evidence_families(
     rank_by_quality: bool = False,
     rank_by_navigation: bool = False,
     navigation_summary_only: bool = False,
+    include_transition_maps: bool = False,
 ) -> dict[str, Any]:
     try:
         return list_workflow_evidence_candidates(
@@ -385,6 +386,7 @@ def get_workflow_evidence_families(
             rank_by_quality=rank_by_quality,
             rank_by_navigation=rank_by_navigation,
             navigation_summary_only=navigation_summary_only,
+            include_transition_maps=include_transition_maps,
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc

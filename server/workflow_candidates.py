@@ -17,6 +17,60 @@ MAX_EXECUTION_IDS = 25
 MAX_VARIANTS = 12
 
 
+def candidate_transition_map(sequences: list[tuple[str, ...]], readable_sequences: list[tuple[str, ...]]) -> dict[str, Any]:
+    """All projected cluster members, independent of displayed variant samples.
+
+    Sequences already collapse adjacent repeats and clip at MAX_STEPS. Counts
+    describe that projection, never canonical events, business cases or time.
+    """
+    occurrences: Counter = Counter()
+    support: Counter = Counter()
+    transitions: Counter = Counter()
+    transition_support: Counter = Counter()
+    labels: dict[str, set[str]] = defaultdict(set)
+    for structural, readable in zip(sequences, readable_sequences):
+        # Never align unequal normalized sequences by guessed positions.
+        if len(structural) == len(readable):
+            for step, label in zip(structural, readable):
+                labels[step].add(label)
+    for sequence in sequences:
+        occurrences.update(sequence)
+        support.update(set(sequence))
+        pairs = list(zip(sequence, sequence[1:]))
+        transitions.update(pairs)
+        transition_support.update(set(pairs))
+    selected = sorted(sorted(occurrences, key=lambda step: (-occurrences[step], step))[:64])
+    identifiers = {step: f'candidate_step_{index}' for index, step in enumerate(selected)}
+    edges = [(pair, number) for pair, number in sorted(transitions.items())
+             if pair[0] in identifiers and pair[1] in identifiers]
+    starts = Counter(sequence[0] for sequence in sequences if sequence and sequence[0] in identifiers)
+    anchor = min(starts, key=lambda step: (-starts[step], step)) if starts else next(iter(identifiers), None)
+    return {
+        'format': 'openworkgraph.candidate-transition-map.v1',
+        'scope': 'all_cluster_projected_sequences',
+        'execution_count': len(sequences),
+        'projected_occurrence_count': sum(occurrences.values()),
+        'projected_transition_count': sum(transitions.values()),
+        'layout_anchor_activity_id': identifiers.get(anchor),
+        'activities': [{'id': identifiers[step], 'structural_step': step,
+                        'display_step': next(iter(labels[step])) if len(labels[step]) == 1 else step,
+                        'projected_occurrence_count': occurrences[step],
+                        'supporting_execution_count': support[step]} for step in selected],
+        'transitions': [{'source': identifiers[pair[0]], 'target': identifiers[pair[1]],
+                         'projected_transition_count': number,
+                         'supporting_execution_count': transition_support[pair]} for pair, number in edges],
+        'omitted_activity_count': len(occurrences) - len(selected),
+        'omitted_transition_type_count': len(transitions) - len(edges),
+        'maximum_projected_steps_per_execution': MAX_STEPS,
+        'adjacent_repeats_collapsed': True,
+        'canonical_event_counts': False,
+        'case_membership_verified': False,
+        'step_elapsed_times_available': False,
+        'combined_paths_are_observed_executions': False,
+        'execution_authorized': False,
+    }
+
+
 def _sequence(value: Iterable[Any] | None) -> tuple[str, ...]:
     out: list[str] = []
     for item in value or []:
@@ -227,6 +281,7 @@ def cluster_runs(
     limit: int = 100,
     min_cluster_quality: float = 0.0,
     rank_by_navigation: bool = False,
+    include_transition_maps: bool = False,
 ) -> list[dict[str, Any]]:
     """Cluster exact variants conservatively, then expose core + variations.
 
@@ -361,6 +416,8 @@ def cluster_runs(
             "observed_variations": _support_rows(readable_sequences),
             "exact_variants": variant_rows[:MAX_VARIANTS],
             "exact_variant_count": len(variant_rows),
+            **({'observed_transition_map': candidate_transition_map(structural_sequences, readable_sequences)}
+               if include_transition_maps else {}),
             "coarse_family_keys": sorted({
                 str(run.get("family_key") or "")
                 for run in members
