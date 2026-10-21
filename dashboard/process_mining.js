@@ -7,6 +7,7 @@
   let reference=null;
   let activeVariant=0;
   let activeActivity=null;
+  let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
     if(text!==undefined&&text!==null)el.textContent=String(text);
@@ -48,6 +49,7 @@
         return;
       }
       report=null;
+      generation++;analyzedFile=null;retainedDataset=null;retentionState(true);
       run.disabled=!file.files?.length;
       clearReport();
     });
@@ -57,6 +59,17 @@
     const status=make('p','No CSV selected. This feature is opt-in and does not change desktop recording.','muted');
     status.id='owgProcessStatus';status.setAttribute('role','status');card.appendChild(status);
     const output=make('div');output.id='owgProcessResults';card.appendChild(output);
+    const retention=make('details');retention.appendChild(make('summary','Retain or reopen a local event-log snapshot'));
+    retention.appendChild(make('p','Saving is separate from preview. It retains all structural activities, timestamps and case ordering in this local OWG database. Native case IDs and source values are discarded. No AI access or synchronization is enabled. Snapshots expire after the selected period; you can delete them here.','muted'));
+    const consentLabel=make('label');const consent=make('input');consent.type='checkbox';consent.id='owgLogConsent';
+    consent.addEventListener('change',()=>retentionState());
+    consentLabel.append(consent,make('span',' I authorize retaining this selected event log locally.'));
+    const days=make('select');days.id='owgLogDays';days.setAttribute('aria-label','Local event-log retention period');
+    for(const value of [1,7,30]){const option=make('option',value+' days');option.value=String(value);days.appendChild(option);}
+    const save=button('Save analyzed log locally',saveLog);save.id='owgLogSave';save.disabled=true;
+    retention.append(consentLabel,days,save,button('List saved local logs',listLogs));
+    const inventory=make('div');inventory.id='owgLogInventory';retention.appendChild(inventory);
+    const cases=make('div');cases.id='owgLogCases';retention.appendChild(cases);card.appendChild(retention);
     const style=make('style');style.textContent=[
       '#owgProcessCSV .owg-process-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}',
       '#owgProcessCSV .owg-pmetrics{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}',
@@ -75,6 +88,7 @@
   }
   function clearReport(){
     const host=document.getElementById('owgProcessResults');if(host)host.replaceChildren();
+    document.getElementById('owgLogCases')?.replaceChildren();
     window.owgProcessDesigner?.reset?.();
     window.owgOpportunityReview?.reset?.();
   }
@@ -86,6 +100,7 @@
     const control=document.getElementById('owgProcessAnalyze');
     if(!file)return;
     if(file.size>MAX_UPLOAD){setStatus('File exceeds the 1 MiB upload limit.');return;}
+    const attempt=++generation;analyzedFile=null;retainedDataset=null;retentionState(true);
     report=null;clearReport();control.disabled=true;setStatus('Analyzing selected CSV on this local OWG service…');
     try{
       await window.__owgAuthReady;
@@ -97,13 +112,95 @@
         throw new Error(String(error?.detail||('Local import failed ('+response.status+')')));
       }
       const result=await response.json();
+      if(attempt!==generation)return;
       if(result.format!=='openworkgraph.process-mining-csv-preview.v1')
         throw new Error('Unexpected process-mining response.');
-      report=result;activeVariant=0;activeActivity=null;render();
+      report=result;analyzedFile=file;activeVariant=0;activeActivity=null;render();retentionState();
       setStatus('Local analysis complete. Case labels are temporary; nothing was stored in OWG. Refresh or leave this page to discard this preview.');
     }catch(error){
-      setStatus('Unable to analyze: '+String(error?.message||'Unknown error'));
-    }finally{control.disabled=false;}
+      if(attempt===generation)setStatus('Unable to analyze: '+String(error?.message||'Unknown error'));
+    }finally{if(attempt===generation)control.disabled=false;}
+  }
+  function retentionState(reset=false){
+    const consent=document.getElementById('owgLogConsent'),save=document.getElementById('owgLogSave');
+    if(reset&&consent)consent.checked=false;
+    if(save)save.disabled=!(report&&analyzedFile&&!retainedDataset&&consent?.checked);
+  }
+  async function logRequest(path,options){
+    await window.__owgAuthReady;
+    const response=await fetch('/v1/process-mining/datasets'+path,{...options,cache:'no-store'});
+    const value=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(String(value.detail||'Local log request failed'));
+    return value;
+  }
+  async function saveLog(){
+    if(!report||!analyzedFile||retainedDataset||!document.getElementById('owgLogConsent')?.checked)return;
+    const attempt=generation,file=analyzedFile,save=document.getElementById('owgLogSave');save.disabled=true;
+    try{
+      const value=await logRequest('?'+new URLSearchParams({retention_days:document.getElementById('owgLogDays').value}),{
+        method:'POST',headers:{'Content-Type':'text/csv','X-OWG-Retention-Confirmed':'true'},body:file});
+      if(attempt!==generation)return;
+      retainedDataset=value.dataset_id;report.import_retained=true;render();retentionState(true);
+      setStatus('Saved a minimized local snapshot. Expires '+value.expires_at+'. Native case IDs and source values were discarded.');
+      await listLogs();
+    }catch(error){if(attempt===generation){retentionState();setStatus('Unable to save log: '+error.message);}}
+  }
+  async function listLogs(){
+    const attempt=++inventoryGeneration,host=document.getElementById('owgLogInventory');
+    try{
+      const value=await logRequest('');if(attempt!==inventoryGeneration)return;
+      host.replaceChildren();
+      if(!safe(value.datasets).length)host.appendChild(make('p','No retained local logs.'));
+      for(const dataset of safe(value.datasets)){
+        const row=make('div');row.append(make('p',dataset.dataset_id+' · '+dataset.case_count+' cases · '+dataset.event_count+' events · expires '+dataset.expires_at),
+          button('Open '+dataset.dataset_id,()=>openLog(dataset.dataset_id)),
+          button('Delete '+dataset.dataset_id,()=>deleteLog(dataset.dataset_id)));host.appendChild(row);
+      }
+    }catch(error){if(attempt===inventoryGeneration)setStatus('Unable to list logs: '+error.message);}
+  }
+  async function openLog(id){
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before opening this saved log?'))return;
+    const attempt=++generation;analyzedFile=null;report=null;clearReport();retentionState(true);
+    document.getElementById('owgProcessFile').value='';document.getElementById('owgProcessAnalyze').disabled=true;
+    try{
+      const value=await logRequest('/report?'+new URLSearchParams({dataset_id:id,...(reference||{})}));if(attempt!==generation)return;
+      if(value.format!=='openworkgraph.process-mining-csv-preview.v1')throw new Error('Unexpected saved-log response');
+      report=value;retainedDataset=id;activeVariant=0;activeActivity=null;render();
+      setStatus('Opened retained local snapshot. Expires '+value.expires_at+'. Diagram examples remain sampled; browse all cases below.');
+      await browseCases(id,0,attempt);
+    }catch(error){if(attempt===generation)setStatus('Unable to open log: '+error.message);}
+  }
+  async function browseCases(id,after=0,attempt=generation){
+    try{
+      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25}));if(attempt!==generation)return;
+      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3','All retained cases · dataset ordinals'));
+      for(const entry of safe(value.cases)){
+        const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id));
+        const events=make('div');row.appendChild(events);let loaded=false;
+        row.addEventListener('toggle',()=>{if(row.open&&!loaded){loaded=true;browseEvents(id,entry.case_number,events,0,attempt);}});host.appendChild(row);
+      }
+      if(after)host.appendChild(button('First cases',()=>browseCases(id,0,attempt)));
+      if(value.has_more)host.appendChild(button('Next cases',()=>browseCases(id,value.next_after,attempt)));
+    }catch(error){if(attempt===generation)setStatus('Unable to browse cases: '+error.message);}
+  }
+  async function browseEvents(id,number,host,after,attempt){
+    try{
+      const value=await logRequest('/events?'+new URLSearchParams({dataset_id:id,case_number:number,after,limit:100}));if(attempt!==generation)return;
+      host.replaceChildren();
+      const list=make('ol');for(const event of safe(value.events)){
+        const row=make('li',event.position+'. '+event.activity+' · '+event.observed_at+' · preceding gap '+seconds(event.elapsed_since_previous_seconds));list.appendChild(row);
+      }host.appendChild(list);
+      if(after)host.appendChild(button('First events',()=>browseEvents(id,number,host,0,attempt)));
+      if(value.has_more)host.appendChild(button('Next events',()=>browseEvents(id,number,host,value.next_after,attempt)));
+    }catch(error){if(attempt===generation)host.replaceChildren(make('p','Unable to read events: '+error.message));}
+  }
+  async function deleteLog(id){
+    if(!window.confirm('Delete this retained local log, including all of its case timelines? Saved process designs and independent downloads remain separate.'))return;
+    try{
+      await logRequest('/forget?'+new URLSearchParams({dataset_id:id}),{method:'POST',headers:{'X-OWG-Deletion-Confirmed':'true'}});
+      if(retainedDataset===id){generation++;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);document.getElementById('owgLogCases').replaceChildren();}
+      await listLogs();setStatus('Deleted local event-log snapshot.');
+    }catch(error){setStatus('Unable to delete log: '+error.message);}
   }
   function metric(label,value){
     const host=make('div',null,'owg-pmetric');
@@ -258,7 +355,7 @@
         host.appendChild(disclosure);
       });
       host.appendChild(make('p','Showing '+safe(variant.case_examples).length+' of '+variant.case_count+
-        ' cases in this variant. Temporary case labels apply only to this import.'+
+        ' cases in this variant. Case labels apply only within this dataset or preview.'+
         (variant.case_examples_truncated?' Additional case examples are omitted.':''),'muted'));
     }
     host.appendChild(make('h3',activeActivity?'Selected activity · adjacent transitions in this variant':'Selected variant · observed transitions'));
@@ -274,7 +371,7 @@
     });
     table.append(head,body);wrapper.appendChild(table);host.appendChild(wrapper);
     if(edges.length>64)host.appendChild(make('p','Only the first 64 transition types are shown.','muted'));
-    host.appendChild(make('p','Transition gaps use all matching events in this variant. Case IDs and source values are never returned; the CSV preview is not saved.','muted'));
+    host.appendChild(make('p','Transition gaps use all matching events in this variant. Native case IDs and source values are never returned. '+(report.import_retained?'This snapshot was explicitly retained locally.':'This CSV preview is not saved.'),'muted'));
     window.owgOpportunityReview?.render?.(report);
   }
   function setReference(value){

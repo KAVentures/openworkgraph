@@ -77,8 +77,10 @@ knowledge records retain their existing per-actor boundary; this UI does not
 introduce organization collaboration or publish local designs to the Gateway.
 
 Delete explicitly removes all saved revisions for this local process. Downloaded
-exports are independent copies. Native case IDs, raw event logs and imported
-CSV content are not persisted. The model's labels, goals, declared rules and
+exports are independent copies. The catalog never persists native case IDs or raw event logs. Separate
+[explicitly retained log snapshots](PROCESS_MINING_CSV.md#explicitly-retained-local-snapshots)
+can preserve minimized structural case timelines under their own retention
+controls; catalog Save does not retain an import. The model's labels, goals, declared rules and
 explicitly supplied evidence references are persisted only on Save.
 
 ## API

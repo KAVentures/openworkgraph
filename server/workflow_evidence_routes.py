@@ -92,6 +92,24 @@ def process_designer_script() -> Response:
     )
 
 
+async def _process_csv_body(request: Request) -> bytes:
+    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
+    if content_type != "text/csv":
+        raise HTTPException(status_code=415, detail="CSV requests must use text/csv")
+    try:
+        length = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Content-Length") from None
+    if length > MAX_PROCESS_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
+    payload = bytearray()
+    async for chunk in request.stream():
+        if len(payload) + len(chunk) > MAX_PROCESS_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
 @app.post("/v1/process-mining/preview")
 async def process_mining_csv_preview(
     request: Request, workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
@@ -107,22 +125,9 @@ async def process_mining_csv_preview(
         raise HTTPException(status_code=422, detail='conformance requires both process ID and exact revision')
     if workflow_id is not None:
         reference = _catalog_record(workflow_id, revision)
-    content_type = str(request.headers.get("content-type") or "").lower().split(";", 1)[0].strip()
-    if content_type != "text/csv":
-        raise HTTPException(status_code=415, detail="CSV requests must use text/csv")
+    payload = await _process_csv_body(request)
     try:
-        length = int(request.headers.get("content-length") or "0")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid Content-Length") from None
-    if length > MAX_PROCESS_CSV_BYTES:
-        raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
-    payload = bytearray()
-    async for chunk in request.stream():
-        if len(payload) + len(chunk) > MAX_PROCESS_CSV_BYTES:
-            raise HTTPException(status_code=413, detail="CSV exceeds the 1 MiB limit")
-        payload.extend(chunk)
-    try:
-        report = mine_csv_events(bytes(payload), reference_model=(
+        report = mine_csv_events(payload, reference_model=(
             ProcessModel.model_validate(reference['process_model']) if reference else None
         ))
         if reference:
@@ -131,9 +136,81 @@ async def process_mining_csv_preview(
             }
     except ProcessMiningCSVError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    finally:
-        payload.clear()
     return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+
+from .process_log_store import ProcessLogStore, ProcessLogError
+
+_process_logs = ProcessLogStore()
+_LOG_ID = r'^log_[a-f0-9]{32}$'
+
+
+def _require_process_log_dashboard(request):
+    auth = str(request.headers.get('authorization') or '')
+    if not auth.lower().startswith('owg-session ') or not dashboard_session_valid(auth[len('owg-session '):].strip()):
+        raise HTTPException(403, 'Local dashboard session required for retained process logs')
+
+
+def _log_response(operation, *args, **kwargs):
+    try:
+        return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control':'no-store'})
+    except LookupError:
+        raise HTTPException(404, 'Retained process log or case not found or expired') from None
+    except (ProcessLogError, ProcessMiningCSVError) as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.post('/v1/process-mining/datasets')
+async def retain_process_log(request: Request, retention_days: int = Query(ge=1, le=30)):
+    _require_process_log_dashboard(request)
+    if request.headers.get('x-owg-retention-confirmed') != 'true':
+        raise HTTPException(403, 'Explicit local event-log retention confirmation required')
+    raw = await _process_csv_body(request)
+    return _log_response(_process_logs.save, raw, retention_days=retention_days, confirmed=True)
+
+
+@app.get('/v1/process-mining/datasets')
+def retained_process_logs(request: Request):
+    _require_process_log_dashboard(request)
+    return _log_response(_process_logs.inventory)
+
+
+@app.get('/v1/process-mining/datasets/report')
+def retained_process_report(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
+                            workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
+                            revision: int | None = Query(default=None, ge=1)):
+    _require_process_log_dashboard(request)
+    if (workflow_id is None) != (revision is None):
+        raise HTTPException(422,'Comparison requires a process ID and exact revision together')
+    reference = _catalog_record(workflow_id,revision) if workflow_id else None
+    return _log_response(_process_logs.report, dataset_id,
+        reference_model=ProcessModel.model_validate(reference['process_model']) if reference else None,
+        reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
+
+
+@app.get('/v1/process-mining/datasets/cases')
+def retained_process_cases(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
+                           after: int = Query(default=0, ge=0), limit: int = Query(default=25, ge=1, le=100),
+                           activity: str | None = Query(default=None, max_length=64),
+                           variant_id: str | None = Query(default=None, pattern=r'^variant_[0-9]{1,4}$')):
+    _require_process_log_dashboard(request)
+    return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id)
+
+
+@app.get('/v1/process-mining/datasets/events')
+def retained_process_events(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
+                            case_number: int = Query(ge=1), after: int = Query(default=0, ge=0),
+                            limit: int = Query(default=100, ge=1, le=100)):
+    _require_process_log_dashboard(request)
+    return _log_response(_process_logs.events, dataset_id, case_number, after=after, limit=limit)
+
+
+@app.post('/v1/process-mining/datasets/forget')
+def forget_process_log(request: Request, dataset_id: str = Query(pattern=_LOG_ID)):
+    _require_process_log_dashboard(request)
+    if request.headers.get('x-owg-deletion-confirmed') != 'true':
+        raise HTTPException(403, 'Explicit local snapshot deletion confirmation required')
+    return _log_response(_process_logs.forget, dataset_id, confirmed=True)
 
 
 @app.get("/process-graph.js")

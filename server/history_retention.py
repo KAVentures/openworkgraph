@@ -352,7 +352,13 @@ def cleanup_expired_history(*, startup: bool = False) -> dict[str, Any]:
         memory_pruned = run_memory.prune(now=now)
     except Exception:
         memory_pruned = 0
-    return {"startup": startup, "cleanups": results, "run_memory_pruned": memory_pruned}
+    try:
+        from .process_log_store import ProcessLogStore
+        process_logs_pruned = ProcessLogStore().prune()
+    except Exception:
+        process_logs_pruned = 0
+    return {"startup": startup, "cleanups": results, "run_memory_pruned": memory_pruned,
+            "process_logs_pruned": process_logs_pruned}
 
 
 def cleanup_ephemeral_session(kind: str, session_id: str) -> dict[str, Any]:

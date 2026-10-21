@@ -91,11 +91,56 @@ and exclusions may make the process incomplete.
   as entered and should never contain customer names or sensitive data.
 - Raw case IDs and source column values never leave the API as output.
   Output uses temporary ordinal labels (Case 1, Case 2, etc.).
-- No import, source values, or mined result is persisted, sent to hosted AI,
+- During preview, no import, source values, or mined result is persisted, sent to hosted AI,
   stored as OWG evidence, or written to a new database. Analysis state
   remains in the dashboard tab until it is cleared or unloaded.
 - `Cache-Control: no-store` for the response. No new grants, background
   capture, provider integrations, or any source-system write.
+
+## Explicitly retained local snapshots
+
+Preview remains ephemeral. The separate **Retain or reopen a local event-log
+snapshot** controls let a dashboard user explicitly authorize saving the analyzed
+file for 1, 7 or 30 days. Save retains all validated structural activities,
+timestamps, per-case ordering, summary metrics and input quality diagnostics.
+Native case IDs and source values are discarded before storage. Ordinal case
+numbers remain stable only within that snapshot; they cannot identify a business
+record or join later imports. No observation, knowledge, AI access, source
+connection or synchronization is enabled.
+
+Use **List saved local logs** to reopen after a refresh. The diagram retains its
+bounded examples; the separate case browser pages through every case and every
+event, including paths longer than the 24-event diagram limit. **Delete** removes
+the snapshot and all its stored cases/events. Saved designs and independent
+exports remain separate. Expired snapshots cannot be read and are pruned before
+snapshot operations and during normal history-retention cleanup. The same local
+SQLite database is used; this creates no second evidence collector.
+
+At most 20 snapshots are retained, each within the existing 1 MiB / 5,000 event /
+1,000 case / 64 activity import bounds. Quota checking and inserts are serialized;
+partial imports roll back. This is a bounded local event-log inventory, not a
+high-volume enterprise ingestion pipeline. All retained-log endpoints require a
+local dashboard session; ordinary API/MCP bearer access does not expose them.
+Responses use no-store caching.
+
+- `POST /v1/process-mining/datasets?retention_days=1..30`: text/csv and an explicit
+  `X-OWG-Retention-Confirmed: true` header.
+- `GET /v1/process-mining/datasets`: local inventory and expiry times.
+- `GET /v1/process-mining/datasets/report?dataset_id=log_...`: saved summary.
+  Optional `workflow_id` and exact `revision` together compare every retained
+  case/path with that saved model without changing the snapshot. Selecting a
+  catalog reference before reopening a snapshot uses this comparison.
+- `GET /v1/process-mining/datasets/cases?dataset_id=...&after=0&limit=25`:
+  up to 100 cases per page, with optional exact `activity` and `variant_id` filters.
+- `GET /v1/process-mining/datasets/events?dataset_id=...&case_number=1&after=0&limit=100`:
+  complete ordered case events in pages of up to 100. Repeats and tied timestamps
+  remain distinct; their supplied order is not independently verified.
+- `POST /v1/process-mining/datasets/forget?dataset_id=...`: requires an explicit
+  `X-OWG-Deletion-Confirmed: true` header.
+
+Native identity authoritativeness, log completeness, business outcomes, active
+labor and causality remain unverified. Retention is an explicit separate action;
+merely opening the page, choosing a file or analyzing does not retain an import.
 
 ## Remaining for full process-mining parity
 
