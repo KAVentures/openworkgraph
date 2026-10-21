@@ -58,3 +58,5 @@ Integration: from a reviewed AS-IS/TO-BE proposal, select **Download agent start
 The BPMN file is only a descriptive linear model, not an executable RPA workflow. Its source labels are user-reviewed structural data; decisions, gateways, connector mappings and production authorization must be designed separately.
 
 Integration note: the downloadable starter is based on the current merged OWG process-mining and opportunity-review stack. The generated runner still has no live actions.
+
+The starter ZIP also includes `preflight.request.template.json`, a deliberately non-passing synthetic agent-preflight request compatible with the opt-in local Evidence → Agent plan preflight tool. All its actions are manual-only and synthetic outcomes unknown until explicitly edited and reviewed.

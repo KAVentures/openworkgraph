@@ -74,7 +74,8 @@ def test_zip_is_deterministic_minimal_and_not_an_executable_business_agent():
     with ZipFile(BytesIO(first)) as archive:
         names = archive.namelist()
         assert names == [
-            "README.md", "AGENTS.md", "workflow.spec.json", "process.bpmn",
+            "README.md", "AGENTS.md", "workflow.spec.json",
+            "preflight.request.template.json", "process.bpmn",
             "dry_run.py", "tests/test_contract.py",
         ]
         assert all(not name.startswith("/") and ".." not in name for name in names)
@@ -84,6 +85,15 @@ def test_zip_is_deterministic_minimal_and_not_an_executable_business_agent():
         assert spec["to_be"]["steps"][1]["activity"] == "Validate"
         assert all(not item["action_permission_granted"] and item["tool"] is None
                    for item in spec["to_be"]["steps"])
+        sample=json.loads(archive.read("preflight.request.template.json"))
+        assert sample["format"]=="openworkgraph.agent-plan-preflight.v1"
+        assert sample["workflow"]==spec
+        assert sample["candidate"]["intent"]=="shadow_only"
+        assert all(item["action_kind"]=="manual_review"
+                   for item in sample["candidate"]["proposed_actions"])
+        assert all(item["mock_result"]=="mock_unknown"
+                   for item in sample["simulated_cases"][0]["mock_steps"])
+        assert sample["simulated_cases"][0]["claimed_outcome"]=="unknown"
         assert spec["security"]["live_actions_possible"] is False
         assert spec["security"]["source_records_included"] is False
         assert "TOP SECRET" not in str(spec)
