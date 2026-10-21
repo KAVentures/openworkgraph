@@ -576,7 +576,10 @@ class KnowledgeForget(BaseModel):
 
 @app.post("/v1/workflow-knowledge/forget")
 def forget_workflow_knowledge(request: KnowledgeForget) -> dict[str, Any]:
-    return _knowledge.forget("local", request.workflow_id)
+    try:
+        return _knowledge.forget("local", request.workflow_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from None
 
 # Versioned process designs reuse workflow_knowledge and its owner boundary.
 from pydantic import ValidationError

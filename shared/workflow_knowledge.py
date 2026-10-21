@@ -113,6 +113,10 @@ class KnowledgeStore:
     def forget(self, owner: str, workflow_id: str) -> dict[str, Any]:
         self.initialize()
         with self.db.connect() as conn:
+            row = self.db._execute(conn, 'SELECT payload FROM workflow_knowledge WHERE owner = ? AND workflow_id = ? ORDER BY revision DESC LIMIT 1',
+                                   (owner, workflow_id)).fetchone()
+            if row and json.loads(row[0]).get('execution_grouping'):
+                raise ValueError('Use reviewed workflow grouping controls to delete classifications')
             cursor = self.db._execute(conn, "DELETE FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?", (owner, workflow_id))
         return {"status": "deleted", "versions_deleted": cursor.rowcount}
 

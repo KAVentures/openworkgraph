@@ -120,6 +120,8 @@ def test_knowledge_compatibility_owner_isolation_and_grouping_preservation(group
     with pytest.raises(ValueError):store.knowledge.save('local',KnowledgeWrite(workflow_id='group_'+'f'*32,
         title='Bypass classification checks',procedure='Not a reviewed grouping write',source_client='test',
         user_confirmed=True,execution_grouping=ExecutionGrouping(execution_ids=[A])))
+    with pytest.raises(ValueError):store.knowledge.forget('local',first['workflow_id'])
+    assert store.get(first['workflow_id'])==first
     portable=KnowledgeWrite(workflow_id='normal',title='Normal',procedure='User knowledge',source_client='test',user_confirmed=True).portable()
     assert 'execution_grouping' not in portable
 
@@ -153,6 +155,8 @@ with TestClient(app) as client:
     assert saved.status_code==200,saved.text
     assert saved.headers['cache-control']=='no-store'
     value=saved.json();identifier=value['workflow_id']
+    denied=client.post('/v1/workflow-knowledge/forget',headers=headers,json={'workflow_id':identifier})
+    assert denied.status_code==409
     assert value['execution_grouping']['execution_ids']==ids[:2]
     assert 'SUPERSECRET' not in saved.text and 'patient@example.com' not in saved.text
     split=client.post(base+'/move',headers=headers,json={'source_id':identifier,'source_revision':1,
