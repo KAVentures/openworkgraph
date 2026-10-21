@@ -336,7 +336,7 @@
       host.appendChild(element('p','Combined map unavailable. Use the separate observed variant lanes.','muted'));return;
     }
     const activities=safeArray(map.activities).map(node=>({...node,
-      label:readable(node.structural_step,candidate.surface_labels),kind:'activity',
+      label:readable(node.display_step||node.structural_step,candidate.surface_labels),kind:'activity',
       observed_summary:count(node.projected_occurrence_count)+' projected steps · '+count(node.supporting_execution_count)+' executions'}));
     const byId=new Map(activities.map(node=>[node.id,node]));
     const transitions=safeArray(map.transitions).map(edge=>({...edge,
@@ -351,7 +351,7 @@
     const info=element('div','Select a node to inspect projection counts and displayed supporting variants.','muted');
     info.id='owgExplorerCombinedDetails';info.setAttribute('role','status');info.tabIndex=-1;
     try{
-      const drawing=window.owgProcessGraph.draw({activities,transitions,entry_activity_id:activities[0]?.id},selected=>{
+      const drawing=window.owgProcessGraph.draw({activities,transitions,entry_activity_id:map.layout_anchor_activity_id||activities[0]?.id},selected=>{
         const node=byId.get(selected.id);if(!node)return;
         // A combined selection does not silently choose a complete execution.
         selectedExample=null;

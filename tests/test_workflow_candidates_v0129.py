@@ -120,6 +120,7 @@ def test_combined_map_counts_projected_repeats_and_execution_support_separately(
     assert graph['execution_count'] == 5
     assert nodes['a']['projected_occurrence_count'] == 8
     assert nodes['a']['supporting_execution_count'] == 5
+    assert graph['layout_anchor_activity_id'] == nodes['a']['id']
     edges = {(row['source'], row['target']): row for row in graph['transitions']}
     assert edges[nodes['b']['id'], nodes['a']['id']]['projected_transition_count'] == 3
     assert edges[nodes['a']['id'], nodes['c']['id']]['supporting_execution_count'] == 5
@@ -159,3 +160,15 @@ def test_dense_combined_map_marks_omissions_without_changing_global_counts():
     assert graph['projected_occurrence_count'] == 880
     assert graph['projected_transition_count'] == 800
     assert len(graph['transitions']) <= 4096
+
+
+def test_combined_map_uses_only_unambiguous_aligned_readable_labels():
+    runs = [_run('execution:labels1', ['tool:opaque', 'action:save'], ['Friendly tool', 'Save'], 'labels'),
+            _run('execution:labels2', ['tool:opaque', 'action:save'], ['Friendly tool', 'Save'], 'labels')]
+    cluster, = cluster_runs(runs, include_transition_maps=True)
+    nodes = {row['structural_step']: row for row in cluster['observed_transition_map']['activities']}
+    assert nodes['tool:opaque']['display_step'] == 'Friendly tool'
+    runs[1]['semantic_steps'] = ['A different label', 'Save']
+    cluster, = cluster_runs(runs, include_transition_maps=True)
+    nodes = {row['structural_step']: row for row in cluster['observed_transition_map']['activities']}
+    assert nodes['tool:opaque']['display_step'] == 'tool:opaque'
