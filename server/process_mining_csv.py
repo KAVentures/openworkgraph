@@ -51,12 +51,8 @@ def _seconds(a: datetime, b: datetime) -> float:
     return max(0.0, (b - a).total_seconds())
 
 
-def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None) -> dict[str, Any]:
-    """Parse a small explicitly selected, schema-limited CSV entirely in memory.
-
-    Strictly no storage or provider connections. No raw case IDs, user titles,
-    source values, or arbitrary column contents are included in the result.
-    """
+def parse_csv_events(raw_bytes: bytes) -> list[tuple[str, str, datetime, int]]:
+    """Validate one bounded CSV; callers must discard native case IDs after use."""
     if not isinstance(raw_bytes, bytes) or not raw_bytes or len(raw_bytes) > MAX_BYTES:
         raise ProcessMiningCSVError("CSV must be a nonempty file of at most 1 MiB")
     try:
@@ -110,6 +106,13 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         raise ProcessMiningCSVError("CSV could not be parsed") from None
     if not event_rows:
         raise ProcessMiningCSVError("CSV has no events")
+
+    return event_rows
+
+
+def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None) -> dict[str, Any]:
+    """Preview only: no retention, provider calls or source identifiers in output."""
+    event_rows = parse_csv_events(raw_bytes)
 
     by_case: dict[str, list[tuple[str, datetime, int]]] = defaultdict(list)
     for case_id, activity, stamp, line_index in event_rows:

@@ -76,6 +76,8 @@ jobs:
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
+      - name: Verify explicit local log retention and complete case browsing
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_logs.cjs
       - name: Verify BPMN external-modeler round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
       - name: Install isolated generated-project SDK runtime

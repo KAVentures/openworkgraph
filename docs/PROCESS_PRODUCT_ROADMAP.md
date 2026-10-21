@@ -14,7 +14,7 @@ or full competitor parity.
 | --- | --- | --- |
 | Visual exploration | Observed workflow lanes (#263), CSV activity/case inspection, desktop/Jira-to-catalog drafting | Shared interactive analysis across evidence sources; reviewed grouping corrections |
 | Task/case reconstruction | Exact-record interleaving lanes (#265) | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
-| Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272), full-log structural conformance | Additional source adapters, coverage diagnostics and validated business-rule conformance |
+| Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272), full-log structural conformance, explicitly retained local snapshots with complete case/event queries | Additional source adapters, coverage diagnostics and validated business-rule conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped improvement backlog | Validated employee effort, business outcomes and tool suitability |
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Real-time collaboration, richer rule clarification and business-policy approval lifecycle |
 | Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner, separately authorized customer MCP implementation, conditional writes, current shared-design checks, replay journal and independent source readback pinned to exact artifacts | Customer-specific tool mappings, production deployment and end-to-end business acceptance |
@@ -22,8 +22,9 @@ or full competitor parity.
 | Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, revision history and audit | Integrated employee SSO for process portal, deployment controls and operational reporting |
 
 The CSV drill-down connects diagram selections to exact variant statistics
-and bounded supporting examples. CSV analysis itself remains ephemeral; only explicitly reviewed designs are
-saved to the catalog. Neither establishes authoritative cross-system case identity.
+and bounded supporting examples. CSV preview remains ephemeral; reviewed designs are saved to the catalog.
+A separate confirmed action can retain minimized local snapshots with expiry,
+complete case/event pagination and deletion. Neither establishes authoritative cross-system case identity.
 
 ## Shared foundation and next acceptance scenario
 
