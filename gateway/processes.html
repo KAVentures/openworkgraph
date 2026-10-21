@@ -409,6 +409,12 @@
           host.append(
             el("h3", "Process design"),
             el("p", "Declared goal: " + model.goal),
+            el(
+              "p",
+              "Declared owner label: " +
+                (model.owner_label || "none") +
+                "; this label grants no permissions.",
+            ),
             el("h4", "AS-IS baseline"),
           );
           const baseline = el("ol");
@@ -489,6 +495,57 @@
             ),
           );
           host.appendChild(conditions);
+          host.appendChild(
+            el(
+              "p",
+              "Entry: " +
+                model.entry_activity_id +
+                " · terminal activities: " +
+                model.terminal_activity_ids.join(", "),
+            ),
+          );
+          host.appendChild(
+            el(
+              "p",
+              "Baseline source: " +
+                words(model.baseline_source) +
+                " · declared support: " +
+                model.supporting_case_count +
+                " " +
+                words(model.baseline_support_unit || "declared cases"),
+            ),
+          );
+          host.appendChild(el("h4", "Declared source-state expectations"));
+          const expectations = el("ul");
+          (model.outcome_expectations || []).forEach((e) =>
+            expectations.appendChild(
+              el(
+                "li",
+                e.terminal_activity_id +
+                  " · " +
+                  words(e.operation) +
+                  " · " +
+                  (e.user_confirmed ? "user confirmed" : "unconfirmed"),
+              ),
+            ),
+          );
+          host.appendChild(expectations);
+          host.appendChild(el("h4", "Opportunity assumptions"));
+          if (model.opportunity_scenario) {
+            host.appendChild(
+              el(
+                "p",
+                "Declared assumptions; savings have not been measured or verified.",
+              ),
+            );
+            const assumptions = el("dl");
+            Object.entries(model.opportunity_scenario).forEach(
+              ([key, value]) => {
+                assumptions.append(el("dt", words(key)), el("dd", value));
+              },
+            );
+            host.appendChild(assumptions);
+          } else host.appendChild(el("p", "No opportunity scenario declared."));
         }
         $("file").addEventListener("change", async () => {
           const generation = ++previewGeneration;
