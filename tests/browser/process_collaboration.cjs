@@ -186,6 +186,17 @@ const pathModule = require("node:path");
       .locator("#reviewState")
       .filter({ hasText: "Design review: reviewed design." })
       .waitFor();
+    await bob.getByRole("button",{name:"Load reviewed improvement scenarios",exact:true}).click();
+    await bob.getByRole("status").filter({hasText:"Loaded reviewed organization scenarios."}).waitFor();
+    assert.match(await bob.locator("#opportunityReport").textContent(),/900 projected net monthly value/);
+    const scenarioDownload=bob.waitForEvent("download");
+    await bob.getByRole("button",{name:"Download scenarios report",exact:true}).click();
+    const scenarioFile=await scenarioDownload;
+    const scenarioPath=pathModule.join(scratch,"scenarios.json");await scenarioFile.saveAs(scenarioPath);
+    const scenarioReport=JSON.parse(await fs.readFile(scenarioPath,"utf8"));
+    assert.equal(scenarioReport.organization_id,"acme");assert.equal(scenarioReport.currency,"USD");
+    assert.equal(scenarioReport.company_savings_total,null);assert.equal(scenarioReport.labor_savings_measured,false);
+    assert.equal(scenarioReport.opportunities[0].revision,1);
     const implementationDownload = bob.waitForEvent("download");
     await bob
       .getByRole("button", {
@@ -230,6 +241,7 @@ const pathModule = require("node:path");
       ),
       "Draft activity open",
     );
+    await alice.getByLabel("Draft scenario Monthly cases",{exact:true}).fill("120");
     await alice
       .getByLabel("Draft business goal", { exact: true })
       .fill("Resolve the reviewed case after checking its evidence");
@@ -384,6 +396,9 @@ const pathModule = require("node:path");
         .isDisabled(),
       true,
     );
+    await alice.getByRole("button",{name:"Load reviewed improvement scenarios",exact:true}).click();
+    await alice.getByRole("status").filter({hasText:"Loaded reviewed organization scenarios."}).waitFor();
+    assert.match(await alice.locator("#opportunityReport").textContent(),/No reviewed improvement scenarios/);
     assert.equal(designWrites, 3);
     assert.match(await alice.locator("#design").textContent(), /Decide case/);
     assert.equal(
@@ -470,6 +485,7 @@ const pathModule = require("node:path");
     await download.saveAs(path);
     const exported = JSON.parse(await fs.readFile(path, "utf8"));
     assert.equal(exported.revision, 1);
+    assert.equal(exported.process_model.opportunity_scenario.monthly_cases,100);
     assert.equal(exported.collaboration_review.status, "reviewed_design");
     assert.equal(exported.execution_authorization, false);
     // A pending local file read must not repopulate a disconnected identity's page.
@@ -502,6 +518,8 @@ const pathModule = require("node:path");
       false,
     );
     assert.equal(await alice.locator("#comment").inputValue(), "");
+    assert.equal(await alice.locator("#opportunityReport").textContent(), "");
+    assert.equal(await alice.getByRole("button",{name:"Download scenarios report",exact:true}).isDisabled(),true);
     await reader.setViewportSize({ width: 390, height: 844 });
     assert.equal(
       await reader.evaluate(
