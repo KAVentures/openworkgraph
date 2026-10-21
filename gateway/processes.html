@@ -1117,6 +1117,19 @@
               ),
             ),
           );
+          const project = button("Download SDK implementation project", () =>
+            download("agent-project"),
+          );
+          project.disabled =
+            data.archived || data.review.status !== "reviewed_design";
+          $("exports").appendChild(project);
+          if (project.disabled)
+            $("exports").appendChild(
+              el(
+                "p",
+                "Implementation export requires an active process and independent review of this exact revision. Customer tool permissions remain separate.",
+              ),
+            );
           renderMembers();
         }
         function renderMembers() {
@@ -1326,7 +1339,9 @@
             "owg-shared-process-r" +
             record.revision +
             "." +
-            { json: "json", bpmn: "bpmn", pdd: "txt" }[format];
+            { json: "json", bpmn: "bpmn", pdd: "txt", "agent-project": "zip" }[
+              format
+            ];
           document.body.appendChild(a);
           a.click();
           a.remove();

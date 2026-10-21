@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from shared.process_catalog import ProcessCatalog, process_bpmn, process_document
+from shared.process_agent_project import build_runtime_project
 from .process_collaboration import (
     OrganizationProcessStore, ProcessCollaborationError, SharedProcessWrite,
     ProcessAccessWrite, ProcessReviewWrite, ProcessArchiveWrite, ProcessDeleteWrite, namespace,
@@ -132,7 +133,7 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
 
     @router.get('/v1/human/processes/{workflow_id}/export')
     def export(workflow_id: str = APIPath(pattern=_ID), revision: int = Query(ge=1),
-               format: str = Query(default='json', pattern='^(json|bpmn|pdd)$'), p=Depends(human)):
+               format: str = Query(default='json', pattern='^(json|bpmn|pdd|agent-project)$'), p=Depends(human)):
         try:
             detail = store.detail(p, workflow_id, revision=revision)
             packet = ProcessCatalog(store.knowledge, namespace(p.organization_id)).export(workflow_id, revision)
@@ -144,11 +145,15 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         packet['organization_id'] = p.organization_id
         packet['owner_actor_id_at_export'] = detail['owner_actor_id']
         packet['revision_author_actor_id'] = detail['author_actor_id']
+        if format == 'agent-project' and (detail['archived'] or detail['review']['status'] != 'reviewed_design'):
+            raise HTTPException(409, 'An active process and independent review of this exact revision are required before implementation export')
         store.db.audit(organization_id=p.organization_id, principal_id=p.audit_id,
                        action='process.exported', details={'workflow_id': workflow_id, 'revision': revision, 'format': format})
         packet['shared_design_is_business_policy'] = False
         headers = {'Cache-Control': 'no-store', 'Content-Disposition':
-                   f'attachment; filename="owg-shared-process-r{revision}.{ {"json":"json","bpmn":"bpmn","pdd":"txt"}[format]}"'}
+                   f'attachment; filename="owg-shared-process-r{revision}.{ {"json":"json","bpmn":"bpmn","pdd":"txt","agent-project":"zip"}[format]}"'}
+        if format == 'agent-project':
+            return Response(build_runtime_project(packet), media_type='application/zip', headers=headers)
         if format == 'json':
             return JSONResponse(packet, headers=headers)
         return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet) + '\nOrganization design review: ' + detail['review']['status'] + '\nThis review is not business-policy approval or execution authority.\n',

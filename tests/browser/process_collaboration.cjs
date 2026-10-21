@@ -124,6 +124,15 @@ const pathModule = require("node:path");
         .isDisabled(),
       true,
     );
+    assert.equal(
+      await alice
+        .getByRole("button", {
+          name: "Download SDK implementation project",
+          exact: true,
+        })
+        .isDisabled(),
+      true,
+    );
     await alice
       .getByRole("button", { name: "Add collaborator", exact: true })
       .click();
@@ -177,6 +186,37 @@ const pathModule = require("node:path");
       .locator("#reviewState")
       .filter({ hasText: "Design review: reviewed design." })
       .waitFor();
+    const implementationDownload = bob.waitForEvent("download");
+    await bob
+      .getByRole("button", {
+        name: "Download SDK implementation project",
+        exact: true,
+      })
+      .click();
+    const implementation = await implementationDownload;
+    const implementationPath = pathModule.join(scratch, "implementation.zip");
+    await implementation.saveAs(implementationPath);
+    const checked = spawn(
+      process.env.OWG_BROWSER_PYTHON || "python",
+      [
+        "-c",
+        'import json,sys;from zipfile import ZipFile;z=ZipFile(sys.argv[1]);assert "execute.py" in z.namelist();assert json.loads(z.read("tool-bindings.example.json"))["enabled"] is False;assert json.loads(z.read("customer-intent.example.json"))["customer_authorization_confirmed"] is False',
+        implementationPath,
+      ],
+      { stdio: "ignore" },
+    );
+    await new Promise((resolve, reject) => {
+      checked.on("error", reject);
+      checked.on("exit", (code) =>
+        code === 0
+          ? resolve()
+          : reject(
+              new Error(
+                "Shared implementation ZIP did not preserve disabled grants",
+              ),
+            ),
+      );
+    });
     await alice
       .getByRole("button", { name: "Edit selected design", exact: true })
       .click();
@@ -334,6 +374,15 @@ const pathModule = require("node:path");
     assert.match(
       await alice.locator("#reviewState").textContent(),
       /needs review/,
+    );
+    assert.equal(
+      await alice
+        .getByRole("button", {
+          name: "Download SDK implementation project",
+          exact: true,
+        })
+        .isDisabled(),
+      true,
     );
     assert.equal(designWrites, 3);
     assert.match(await alice.locator("#design").textContent(), /Decide case/);

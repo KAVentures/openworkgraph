@@ -1,9 +1,11 @@
 """Shared process isolation, exact revision review, role revocation and atomic updates."""
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 import json
 import os
 from uuid import uuid4
 from urllib.parse import urlsplit,parse_qsl,urlencode,urlunsplit
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -284,6 +286,7 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
         assert saved.status_code==200,saved.text
         assert saved.headers['cache-control']=='no-store'
         first=saved.json();wid=first['process']['workflow_id'];url='/v1/human/processes/'+wid
+        assert client.get(url+'/export',headers=headers('alice'),params={'revision':1,'format':'agent-project'}).status_code==409
         invalid=write('PRIVATE TITLE',expected=1).model_dump()
         invalid['process_model']['goal']='PRIVATE GOAL'
         invalid['process_model']['transitions']=[]
@@ -303,6 +306,13 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
             exported=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':fmt})
             assert exported.status_code==200,exported.text
             assert exported.headers['cache-control']=='no-store'
+        implementation=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':'agent-project'})
+        assert implementation.status_code==200
+        with ZipFile(BytesIO(implementation.content)) as archive:
+            assert 'execute.py' in archive.namelist()
+            assert json.loads(archive.read('tool-bindings.example.json'))['enabled'] is False
+            assert json.loads(archive.read('customer-intent.example.json'))['customer_authorization_confirmed'] is False
+            assert json.loads(archive.read('workflow.spec.json'))['revision']==1
         history=client.get(url+'/history',headers=headers('reader')).json()
         assert history['workflows'][0]['revision']==1
         for body in [b'{"user_confirmed":true,"user_confirmed":false}',b'{"n":NaN}',b'['*2000+b']'*2000]:

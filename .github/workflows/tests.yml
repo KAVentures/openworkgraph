@@ -78,6 +78,12 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
       - name: Verify BPMN external-modeler round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
+      - name: Install isolated generated-project SDK runtime
+        run: |
+          python -m venv "$RUNNER_TEMP/owg-agent-sdk"
+          "$RUNNER_TEMP/owg-agent-sdk/bin/python" -m pip install openai-agents==0.24.0
+      - name: Verify customer MCP implementation and independent source readback
+        run: OWG_AGENT_SDK_PYTHON="$RUNNER_TEMP/owg-agent-sdk/bin/python" python -m pytest -q tests/test_process_customer_runtime.py
 
   browser-js:
     runs-on: ubuntu-latest

@@ -147,10 +147,32 @@ limits. It never claims full branch-condition or customer-case coverage.
 
 Explicitly running `python agent.py --case authorized-case.json --model MODEL`
 uses the customer's configured model provider and sends that chosen case and
-process data. OWG never executes the downloaded project. Tool bindings,
-authoritative case identity, approvals, idempotency and independent source
-outcome checks still require implementation before live business automation.
-A structural plan or shadow-test pass does not prove a live business result.
+process data. OWG never executes the downloaded project. The ZIP also contains a separate customer-run MCP implementation helper. It
+starts in offline review mode with disabled bindings and authorization. An
+operator must map current tools and JSON Pointer arguments, review result
+predicates and provider-enforced concurrency/idempotency contracts, and approve
+an expiring intent pinned to the exact specification, plan, case and bindings.
+The model planner has no business tools and cannot approve its own intent.
+
+Each write requires a fresh read precondition, an expected-version argument,
+an idempotency contract and a confirmed terminal source expectation. The helper
+checks the existing local OWG source verifier before tools; an unavailable
+verifier or already-matching terminal state blocks writes. It records a minimized
+exclusive journal before attempts, performs no automatic retries, rejects replay
+of the same intent, and checks independent source state afterward. It stops on
+uncertain effects or unexpected structured results. Downloaded projects do not
+monitor later catalog revisions; re-export and review after process changes.
+
+Use the generated README for separate offline-review and explicitly approved
+execution commands. Credentials are supplied separately through fixed environment
+variables; neither credentials nor business cases are included in the export.
+Intent files are local declarations, not signed approvals or target-service
+permission. Customer service-side IAM, actual provider conditional-write and
+idempotency semantics, authoritative case identity, and production acceptance
+remain necessary. This helper supplies no deployment service, rollback or
+distributed exactly-once guarantee. A source-state match does not establish agent
+causality or business-goal completion. A structural plan or shadow-test pass does
+not prove a live business result.
 
 ## Desktop and source-audit entry points
 
