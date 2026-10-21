@@ -40,6 +40,12 @@ const path = require('node:path');
     await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Local analysis complete.'}).waitFor();
     assert.equal(saveRequests,0);
+    await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+    assert.equal(await page.locator('#owgObservedTransitionMap g[role=button]').count(),3);
+    await page.getByRole('button',{name:'Inspect observed activity Step 1',exact:true}).press('Enter');
+    assert.match(await page.locator('#owgObservedActivityDetails').textContent(),/1505 recorded events across 35 cases/);
+    await page.getByRole('button',{name:'Inspect variant 1 · 35 cases',exact:true}).click();
+    assert.match(await page.locator('#owgProcessActivityDetails').textContent(),/1505 recorded events/);
     await page.getByText('Retain or reopen a local event-log snapshot',{exact:true}).click();
     assert(await page.getByRole('button',{name:'Save analyzed log locally',exact:true}).isDisabled());
     await page.getByLabel('I authorize retaining this selected event log locally.').check();
@@ -67,6 +73,10 @@ assert 'PRIVATE_CASE' not in text and 'PRIVATE_SOURCE' not in text
 assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
     assert.equal(disk.status,0,disk.stderr);
+    await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+    await page.getByRole('button',{name:'Inspect observed activity Step 0',exact:true}).click();
+    await page.getByRole('button',{name:'Browse retained cases for Step 0',exact:true}).click();
+    await page.locator('#owgLogCases h3').filter({hasText:'Retained cases containing Step 0'}).waitFor();
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
     page.once('dialog',dialog=>dialog.accept());

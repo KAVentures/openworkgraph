@@ -12,7 +12,7 @@ or full competitor parity.
 
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
-| Visual exploration | Observed workflow lanes (#263), CSV activity/case inspection, desktop/Jira-to-catalog drafting | Shared interactive analysis across evidence sources; reviewed grouping corrections |
+| Visual exploration | Observed workflow lanes (#263), combined observed transition maps with all-case counts, CSV activity/case inspection, desktop/Jira-to-catalog drafting | Shared interactive analysis across evidence sources; reviewed grouping corrections |
 | Task/case reconstruction | Exact-record interleaving lanes (#265) | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266), single Jira audit (#270), selected Jira cases (#272), full-log structural conformance, explicitly retained local snapshots with complete case/event queries | Additional source adapters, coverage diagnostics and validated business-rule conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |

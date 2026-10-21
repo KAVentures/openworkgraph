@@ -8,6 +8,7 @@
   let activeVariant=0;
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
+  let observedExpanded=false, observedSelection=null;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
     if(text!==undefined&&text!==null)el.textContent=String(text);
@@ -87,6 +88,7 @@
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
   }
   function clearReport(){
+    observedExpanded=false;observedSelection=null;
     const host=document.getElementById('owgProcessResults');if(host)host.replaceChildren();
     document.getElementById('owgLogCases')?.replaceChildren();
     window.owgProcessDesigner?.reset?.();
@@ -140,7 +142,7 @@
       const value=await logRequest('?'+new URLSearchParams({retention_days:document.getElementById('owgLogDays').value}),{
         method:'POST',headers:{'Content-Type':'text/csv','X-OWG-Retention-Confirmed':'true'},body:file});
       if(attempt!==generation)return;
-      retainedDataset=value.dataset_id;report.import_retained=true;render();retentionState(true);
+      retainedDataset=value.dataset_id;report.import_retained=true;report.dataset_id=value.dataset_id;report.expires_at=value.expires_at;render();retentionState(true);
       setStatus('Saved a minimized local snapshot. Expires '+value.expires_at+'. Native case IDs and source values were discarded.');
       await listLogs();
     }catch(error){if(attempt===generation){retentionState();setStatus('Unable to save log: '+error.message);}}
@@ -170,17 +172,17 @@
       await browseCases(id,0,attempt);
     }catch(error){if(attempt===generation)setStatus('Unable to open log: '+error.message);}
   }
-  async function browseCases(id,after=0,attempt=generation){
+  async function browseCases(id,after=0,attempt=generation,activity=null){
     try{
-      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25}));if(attempt!==generation)return;
-      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3','All retained cases · dataset ordinals'));
+      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25,...(activity?{activity}:{})}));if(attempt!==generation)return;
+      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',activity?'Retained cases containing '+activity:'All retained cases · dataset ordinals'));
       for(const entry of safe(value.cases)){
         const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id));
         const events=make('div');row.appendChild(events);let loaded=false;
         row.addEventListener('toggle',()=>{if(row.open&&!loaded){loaded=true;browseEvents(id,entry.case_number,events,0,attempt);}});host.appendChild(row);
       }
-      if(after)host.appendChild(button('First cases',()=>browseCases(id,0,attempt)));
-      if(value.has_more)host.appendChild(button('Next cases',()=>browseCases(id,value.next_after,attempt)));
+      if(after)host.appendChild(button('First cases',()=>browseCases(id,0,attempt,activity)));
+      if(value.has_more)host.appendChild(button('Next cases',()=>browseCases(id,value.next_after,attempt,activity)));
     }catch(error){if(attempt===generation)setStatus('Unable to browse cases: '+error.message);}
   }
   async function browseEvents(id,number,host,after,attempt){
@@ -269,6 +271,7 @@
         ' possible incomplete prefixes. All cases and full variants are compared.'));
       host.appendChild(make('p','Routing decisions are traversed structurally; rule conditions, business compliance, source completeness and successful outcomes are not evaluated.','muted'));
     }
+    renderObservedMap(host);
     host.appendChild(make('h3','Observed process variants'));
     const variants=safe(report.variants);
     const controls=make('div',null,'owg-variants');
@@ -373,6 +376,46 @@
     if(edges.length>64)host.appendChild(make('p','Only the first 64 transition types are shown.','muted'));
     host.appendChild(make('p','Transition gaps use all matching events in this variant. Native case IDs and source values are never returned. '+(report.import_retained?'This snapshot was explicitly retained locally.':'This CSV preview is not saved.'),'muted'));
     window.owgOpportunityReview?.render?.(report);
+  }
+  function renderObservedMap(host){
+    if(!window.owgProcessGraph?.drawObserved)return;
+    const control=button(observedExpanded?'Hide combined transition map':'Explore all observed transitions',()=>{
+      observedExpanded=!observedExpanded;render();
+    });
+    control.setAttribute('aria-expanded',String(observedExpanded));host.appendChild(control);
+    if(!observedExpanded)return;
+    host.appendChild(make('h3','All observed activity transitions'));
+    host.appendChild(make('p','Counts cover every case in this imported log. Arrows show observed adjacent pairs, not causal dependencies or approved routes. A route through this combined map may never occur in one case; inspect exact variants below for complete paths.','muted'));
+    try{
+      const drawing=window.owgProcessGraph.drawObserved(report,activity=>{
+        observedSelection=activity.label;render();document.getElementById('owgObservedActivityDetails')?.focus();
+      });
+      drawing.id='owgObservedTransitionMap';drawing.style.maxHeight='520px';drawing.style.overflow='auto';
+      host.appendChild(drawing);
+    }catch{
+      host.appendChild(make('p','Combined graph unavailable for this response. Variant paths and statistics remain available.','muted'));
+    }
+    const selected=safe(report.activities).find(row=>row.activity===observedSelection);
+    if(!selected)return;
+    const details=make('section');details.id='owgObservedActivityDetails';details.tabIndex=-1;
+    details.append(make('h4',selected.activity+' · full imported log'),
+      make('p',selected.event_count+' recorded events across '+selected.case_count+' cases. Repeated occurrences remain separate.'));
+    const variants=safe(report.variants).map((variant,index)=>({variant,index})).filter(({variant})=>safe(variant.activities).some(row=>row.activity===selected.activity));
+    if(variants.length){
+      details.appendChild(make('p','Inspect a displayed supporting variant:'));
+      for(const {variant,index} of variants)details.appendChild(button('Inspect variant '+(index+1)+' · '+variant.case_count+' cases',()=>{
+        activeVariant=index;activeActivity=selected.activity;render();document.getElementById('owgProcessActivityDetails')?.focus();
+      }));
+    }else details.appendChild(make('p','No displayed variant contains this activity. The bounded variant sample may omit supporting paths.'));
+    if(report.dataset_id)details.appendChild(button('Browse retained cases for '+selected.activity,()=>browseCases(report.dataset_id,0,generation,selected.activity)));
+    const table=make('table'),head=make('thead'),header=make('tr'),body=make('tbody');
+    for(const title of ['From','To','Transitions','Cases','Median elapsed gap'])header.appendChild(make('th',title));head.appendChild(header);
+    for(const edge of safe(report.transitions).filter(edge=>edge.from===selected.activity||edge.to===selected.activity)){
+      const row=make('tr');for(const value of [edge.from,edge.to,edge.transition_count,edge.case_count,seconds(edge.median_elapsed_gap_seconds)])row.appendChild(make('td',value));body.appendChild(row);
+    }
+    table.append(head,body);const scroll=make('div',null,'owg-process-table');scroll.appendChild(table);details.appendChild(scroll);
+    details.appendChild(make('p','Elapsed gaps are not verified waiting or active labor. The first and last events are not independently verified case start or completion.','muted'));
+    host.appendChild(details);
   }
   function setReference(value){
     reference=value?{workflow_id:value.workflow_id,revision:String(value.revision)}:null;

@@ -44,6 +44,28 @@ activity. Timestamps must be full offset-aware ISO-8601 values.
   and repeated-activity count.
 - A scrollable observed-path diagram, variant selectors, and transition table.
 
+### Explore all observed transitions
+
+**Explore all observed transitions** draws the activity graph across every case
+in the imported log. It includes forks, joins and loops using observed adjacent
+pairs. Node badges show event and distinct-case counts; transition tooltips show
+frequency, case counts and median elapsed gaps. Select a node with the mouse or
+keyboard to inspect all its adjacent transitions and open a displayed supporting
+variant. For an explicitly retained snapshot, **Browse retained cases** queries
+all matching cases, including those outside the diagram/example sample.
+
+This graph shares OWG's renderer with the process designer, with distinct
+observed-data labels and limits. It supports the CSV contract's 64 activities
+and 4,096 possible transition types; a bounded scroll area contains dense maps.
+The designer retains its separate 40-activity/100-transition model limits.
+
+Each arrow means recorded adjacency within a supplied case, not causality,
+automatic branch policy or a required business dependency. Paths composed across
+the combined graph can be absent from all real cases; exact variants remain the
+source for complete observed sequences. No graph selection saves data, creates
+a design, joins sources or enables an agent. Elapsed gaps remain distinct from
+verified waiting and active labor.
+
 ### Inspect a variant and its supporting cases
 
 The **Full imported log** metrics describe the whole file. Select any of the
