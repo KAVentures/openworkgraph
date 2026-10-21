@@ -130,7 +130,17 @@ new peer review. Readers may download reviewed projects; process read permission
 never grants tool access or business execution. Bindings and customer intent
 remain disabled in every exported ZIP. See [the runtime contract](PROCESS_CATALOG.md#runnable-agent-project)
 for the separate customer authorization, concurrency, journal and source-check
-requirements. The downloaded runtime does not poll catalog review status.
+requirements. Shared-catalog SDK projects carry only the organization origin in addition to
+the allowlisted model. Configure a separate catalog URL and delegated process
+read token to run them. `GET /v1/human/processes/{id}/implementation-status?revision=N`
+returns a minimized, no-store check of the pinned reference, normalized model
+digest, latest revision, archive state and independent design review. It returns
+no labels, rules, people, comments or evidence, and grants no execution permission.
+The same tenant and explicit process-read scope apply as for catalog detail.
+Checks occur before tool actions and after write preconditions. An unavailable,
+changed, archived or no-longer-reviewed design stops further calls; an in-flight
+remote action cannot be undone by a later status change. Previously downloaded
+projects without this feature require re-export.
 Inventory defaults to 20 processes and is bounded to 100 per page. History is
 bounded to 100 per page. Existing graph limits apply; JSON mutation bodies are
 bounded to 256 KiB and reject duplicate keys, nonstandard constants and unknown

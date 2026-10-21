@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import re
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 
 from runtime import check_plan
 
@@ -125,6 +125,11 @@ def prepare(spec, plan_document, case, bindings):
             or not isinstance(spec.get('workflow_id'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', spec['workflow_id'])
             or not isinstance(spec.get('content_sha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', spec['content_sha256'])):
         raise ImplementationError('An exported versioned agent-runtime project is required')
+    origin = spec.get('organization_catalog_reference')
+    if origin is not None and (not isinstance(origin, dict) or set(origin) != {'organization_id'}
+            or not isinstance(origin['organization_id'], str) or not 1 <= len(origin['organization_id']) <= 200
+            or any(ord(c) < 32 for c in origin['organization_id'])):
+        raise ImplementationError('A valid shared-catalog organization reference is required')
     model = spec.get('process_model')
     if not isinstance(model, dict):
         raise ImplementationError('A bounded process model is required')
@@ -268,6 +273,8 @@ def validate_intent(spec, prepared, case, bindings, intent, *, now=None):
         endpoint(bindings.get('tool_server_url'))
     if prepared['outcomes']:
         endpoint(bindings.get('source_api_url'), source=True)
+    if spec.get('organization_catalog_reference'):
+        endpoint(bindings.get('process_catalog_url'))
 
 
 def _tool_client(url, token):
@@ -279,15 +286,14 @@ def _tool_client(url, token):
         max_retry_attempts=0, client_session_timeout_seconds=30, cache_tools_list=True, max_list_pages=8)
 
 
-async def _source_receipt(base, token, request):
+async def _read_json(url, token, parameters):
     try:
         import httpx2 as httpx
     except ImportError:
         import httpx
     async with asyncio.timeout(30):
         async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-            async with client.stream('GET', base + '/v1/record-graph/operation-receipt',
-                params={key: request[key] for key in ('resource_ref', 'expected_operation')},
+            async with client.stream('GET', url, params=parameters,
                 headers={'Authorization': 'Bearer ' + token}) as response:
                 response.raise_for_status()
                 content = bytearray()
@@ -296,6 +302,28 @@ async def _source_receipt(base, token, request):
                         raise ImplementationError('Source receipt exceeds its size bound')
                     content.extend(chunk)
     return json.loads(content, object_pairs_hook=_pairs, parse_constant=_constant)
+
+
+async def _source_receipt(base, token, request):
+    return await _read_json(base + '/v1/record-graph/operation-receipt', token,
+        {key: request[key] for key in ('resource_ref', 'expected_operation')})
+
+
+async def _catalog_state(base, token, spec):
+    return await _read_json(base + '/v1/human/processes/' + quote(spec['workflow_id'], safe='') + '/implementation-status',
+        token, {'revision': spec['revision']})
+
+
+def catalog_is_current(state, spec):
+    return (isinstance(state, dict)
+        and state.get('format') == 'openworkgraph.process-implementation-state.v1'
+        and state.get('organization_id') == spec['organization_catalog_reference']['organization_id']
+        and digest(state.get('process_reference')) == digest(reference(spec))
+        and state.get('process_model_sha256') == spec.get('process_model_sha256')
+        and type(state.get('latest_revision')) is int and state['latest_revision'] == spec['revision']
+        and state.get('archived') is False and state.get('review_status') == 'reviewed_design'
+        and state.get('current_independent_design_review') is True
+        and state.get('execution_authorization') is False)
 
 
 def source_summary(receipt, request, *, now=None):
@@ -377,11 +405,14 @@ def ensure_current(intent, now=None):
 
 
 async def execute_approved(spec, plan_document, case, bindings, intent, *, journal_directory,
-                           client_factory=_tool_client, receipt_reader=_source_receipt, now=None):
+                           client_factory=_tool_client, receipt_reader=_source_receipt, catalog_reader=_catalog_state, now=None):
     prepared = prepare(spec, plan_document, case, bindings)
     validate_intent(spec, prepared, case, bindings, intent, now=now)
     tool_token = os.environ.get('OWG_EXECUTION_MCP_TOKEN', '')
     source_token = os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN', '')
+    catalog_token = os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN', '')
+    if spec.get('organization_catalog_reference') and not catalog_token:
+        raise ImplementationError('Configure a separate organization catalog read credential')
     if (prepared['actions'] and not tool_token) or (prepared['outcomes'] and not source_token):
         raise ImplementationError('Configure the separate least-privilege customer tool and OWG source-read credentials')
     execution_id = digest(intent)
@@ -399,6 +430,27 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
         record('started', execution_id=execution_id, process_reference=reference(spec))
+        async def check_catalog():
+            if not spec.get('organization_catalog_reference'):
+                return
+            ensure_current(intent, now)
+            try:
+                state = await catalog_reader(endpoint(bindings['process_catalog_url']), catalog_token, spec)
+                current = catalog_is_current(state, spec)
+            except Exception:
+                current = False
+            result['catalog_current_at_last_check'] = bool(current)
+            record('catalog_checked', current_independent_design_review=bool(current))
+            if not current:
+                raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
+            ensure_current(intent, now)
+        try:
+            await check_catalog()
+        except ImplementationError:
+            result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
+            record('stopped_before_tools', reason='shared_design_not_current_or_unavailable')
+            return result
+
         if any(action['operation_kind'] == 'write' for action in prepared['actions']):
             result['source_preflight'] = []
             for request in prepared['outcomes']:
@@ -426,6 +478,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     if not required_names <= names:
                         raise ImplementationError('A configured tool is unavailable; no actions were called')
                     for index, action in enumerate(prepared['actions']):
+                        await check_catalog()
                         ensure_current(intent, now)
                         if action['precondition']:
                             condition = action['precondition']
@@ -439,6 +492,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                                 result['actions'].append({'activity_id': action['activity_id'], 'status': 'precondition_not_established'})
                                 record('precondition_not_established', activity_id=action['activity_id'], attempt=index+1)
                                 break
+                        await check_catalog()
                         ensure_current(intent, now)
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))

@@ -108,3 +108,16 @@ assert result['execution_permitted'] is False
 def test_export_requires_saved_non_authorizing_revision(field,value):
     with pytest.raises(ValueError):
         build_runtime_project({**packet(),field:value})
+
+
+def test_shared_origin_is_bounded_and_does_not_copy_catalog_identity_details():
+    value=packet()|{'organization_catalog_reference':{'organization_id':'acme'},
+        'owner_actor_id_at_export':'PRIVATE_OWNER','collaboration_review':{'comment':'PRIVATE_COMMENT'}}
+    with ZipFile(BytesIO(build_runtime_project(value))) as archive:
+        spec=json.loads(archive.read('workflow.spec.json'))
+        assert spec['organization_catalog_reference']=={'organization_id':'acme'}
+        assert 'PRIVATE_' not in archive.read('workflow.spec.json').decode()
+        assert json.loads(archive.read('tool-bindings.example.json'))['process_catalog_url'] is None
+    for origin in ({'organization_id':''},{'organization_id':'a','extra':'b'}, {'organization_id':True}):
+        with pytest.raises(ValueError):
+            build_runtime_project(value|{'organization_catalog_reference':origin})

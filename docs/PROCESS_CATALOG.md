@@ -160,8 +160,14 @@ checks the existing local OWG source verifier before tools; an unavailable
 verifier or already-matching terminal state blocks writes. It records a minimized
 exclusive journal before attempts, performs no automatic retries, rejects replay
 of the same intent, and checks independent source state afterward. It stops on
-uncertain effects or unexpected structured results. Downloaded projects do not
-monitor later catalog revisions; re-export and review after process changes.
+uncertain effects or unexpected structured results. Projects exported directly from the organization catalog additionally require a
+separate catalog read token and configured catalog URL. They check the exact
+organization, model digest and latest active independent review before tool
+actions, including after fresh write preconditions. A changed, archived,
+unreviewed or unavailable design stops further calls. Local-only exports have no
+organization origin and perform no catalog reads. Re-export and review after
+process changes. The freshness check is not an atomic lock with a remote write
+and cannot cancel in-flight actions.
 
 Use the generated README for separate offline-review and explicitly approved
 execution commands. Credentials are supplied separately through fixed environment

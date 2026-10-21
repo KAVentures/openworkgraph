@@ -120,6 +120,11 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
     async def forget(request: Request, workflow_id: str = APIPath(pattern=_ID), p=Depends(human)):
         return await run_in_threadpool(_response, store.delete, p, workflow_id, await _body(request, ProcessDeleteWrite))
 
+    @router.get('/v1/human/processes/{workflow_id}/implementation-status')
+    def implementation_status(workflow_id: str = APIPath(pattern=_ID),
+                              revision: int = Query(ge=1), p=Depends(human)):
+        return _response(store.implementation_state, p, workflow_id, revision=revision)
+
     @router.get('/v1/human/processes/{workflow_id}/history')
     def history(workflow_id: str = APIPath(pattern=_ID),
                 before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100), p=Depends(human)):
@@ -153,6 +158,7 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         headers = {'Cache-Control': 'no-store', 'Content-Disposition':
                    f'attachment; filename="owg-shared-process-r{revision}.{ {"json":"json","bpmn":"bpmn","pdd":"txt","agent-project":"zip"}[format]}"'}
         if format == 'agent-project':
+            packet['organization_catalog_reference'] = {'organization_id': p.organization_id}
             return Response(build_runtime_project(packet), media_type='application/zip', headers=headers)
         if format == 'json':
             return JSONResponse(packet, headers=headers)

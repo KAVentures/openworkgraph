@@ -52,6 +52,12 @@ def synthetic_routes(model: ProcessModel) -> dict:
             'customer_cases_used': False, 'unexplored_paths_may_remain': True}
 
 
+def process_model_digest(model: dict) -> str:
+    """Digest the validated normalized model, independent of export metadata."""
+    value = ProcessModel.model_validate(model).model_dump()
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
 def build_runtime_project(packet: dict) -> bytes:
     if packet.get('format') != 'openworkgraph.versioned-process-export.v1':
         raise ValueError('An exact saved process revision is required')
@@ -68,7 +74,14 @@ def build_runtime_project(packet: dict) -> bytes:
     spec.update(format='openworkgraph.agent-runtime-project.v1', process_model=model.model_dump(),
                 execution_authorization=False, source_records_included=False,
                 generated_for='openai-agents-python', live_business_tools=[])
-    spec['process_model_sha256'] = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
+    spec['process_model_sha256'] = process_model_digest(spec['process_model'])
+    origin = packet.get('organization_catalog_reference')
+    if origin is not None:
+        if (not isinstance(origin, dict) or set(origin) != {'organization_id'}
+                or not isinstance(origin['organization_id'], str) or not 1 <= len(origin['organization_id']) <= 200
+                or any(ord(c) < 32 for c in origin['organization_id'])):
+            raise ValueError('A bounded organization catalog reference is required')
+        spec['organization_catalog_reference'] = dict(origin)
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py')}
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
@@ -77,7 +90,8 @@ def build_runtime_project(packet: dict) -> bytes:
     process_reference = {key: spec[key] for key in ('workflow_id', 'revision', 'content_sha256')}
     files['tool-bindings.example.json'] = json.dumps({
         'format':'openworkgraph.customer-mcp-bindings.v1', 'process_reference':process_reference,
-        'enabled':False, 'tool_server_url':None, 'source_api_url':'http://127.0.0.1:8787', 'bindings': [
+        'enabled':False, 'tool_server_url':None, 'source_api_url':'http://127.0.0.1:8787',
+        'process_catalog_url':None, 'bindings': [
         {'activity_id': a.id, 'suggested_implementation': a.implementation,
          'tool_name':None, 'operation_kind':'unmapped', 'authorized':False,
          'argument_map':{}, 'constant_arguments':{}, 'result_pointer':None, 'result_equals':None,
@@ -152,6 +166,14 @@ def build_runtime_project(packet: dict) -> bytes:
         'No tools are added to\n'
         'the model planner. No credentials, bindings or cases are automatically\n'
         'uploaded by OWG. The caller supplies and controls these separate grants.\n\n'
+        'Shared-catalog projects also require process_catalog_url and a separate\n'
+        'OWG_EXECUTION_CATALOG_READ_TOKEN with organization process read scope.\n'
+        'Before each tool action, including after a write precondition, the runner\n'
+        'checks the exact normalized model, organization, latest revision and\n'
+        'active independent review. Changed, archived or unavailable designs stop\n'
+        'further actions. This read is not execution permission or an atomic lock\n'
+        'with remote writes; it cannot cancel an in-flight request. Local-only\n'
+        'exports carry no shared-catalog origin and perform no catalog reads.\n\n'
         'The runner records a minimized exclusive local journal before attempting\n'
         'actions. Before writes it checks that the selected observed-record source\n'
         'verifier is available and the terminal operation is not already matched.\n'
