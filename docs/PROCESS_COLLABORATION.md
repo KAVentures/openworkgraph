@@ -118,9 +118,9 @@ knowledge is neither searched nor automatically published.
 
 ## Identity and permissions
 
-Configure existing [human OIDC access](HUMAN_ACCESS.md). The page currently
-accepts an access token from that integration; it is an advanced process-team
-interface, not a complete browser SSO login flow. Tokens stay in page memory,
+Configure existing [human OIDC access](HUMAN_ACCESS.md). The page supports the
+opt-in company sign-in described above and an advanced delegated access-token
+option from that integration. Tokens stay in page memory,
 are cleared from the input after connection, and are never stored in browser
 storage or URLs. Disconnecting, reloading or switching identity clears the page.
 Use the deployment's HTTPS endpoint. OIDC-disabled deployments reject data

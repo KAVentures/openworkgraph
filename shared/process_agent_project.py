@@ -58,7 +58,7 @@ def process_model_digest(model: dict) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def build_runtime_project(packet: dict) -> bytes:
+def build_runtime_spec(packet: dict) -> dict:
     if packet.get('format') != 'openworkgraph.versioned-process-export.v1':
         raise ValueError('An exact saved process revision is required')
     if (type(packet.get('revision')) is not int or packet['revision'] < 1
@@ -82,6 +82,12 @@ def build_runtime_project(packet: dict) -> bytes:
                 or any(ord(c) < 32 for c in origin['organization_id'])):
             raise ValueError('A bounded organization catalog reference is required')
         spec['organization_catalog_reference'] = dict(origin)
+    return spec
+
+
+def build_runtime_project(packet: dict) -> bytes:
+    spec = build_runtime_spec(packet)
+    model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py')}
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
