@@ -483,6 +483,8 @@ class GatewayDB:
         actor_id: str | None = None,
         device_id: str | None = None,
         limit: int = 50,
+        exclude_event_types: tuple[str, ...] = (),
+        since: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = ["organization_id = ?"]
         params: list[Any] = [organization_id]
@@ -493,6 +495,13 @@ class GatewayDB:
             clauses.append("device_id = ?")
             params.append(device_id)
         instant = "CAST(observed_at AS TIMESTAMPTZ)" if self.is_postgres else "julianday(observed_at)"
+        if exclude_event_types:
+            clauses.append("event_type NOT IN (" + ",".join("?" for _ in exclude_event_types) + ")")
+            params.extend(exclude_event_types)
+        if since:
+            bound = "CAST(? AS TIMESTAMPTZ)" if self.is_postgres else "julianday(?)"
+            clauses.append(f"{instant} >= {bound}")
+            params.append(since)
         sql = f"SELECT * FROM evidence_events WHERE {' AND '.join(clauses)} ORDER BY {instant} DESC, event_id DESC LIMIT ?"
         params.append(max(1, min(int(limit), 500)))
         with self.connect() as conn:

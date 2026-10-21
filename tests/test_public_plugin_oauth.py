@@ -57,6 +57,48 @@ def test_supabase_audience_reaches_mcp_tools(public_client):
     assert profile.json()['result']['structuredContent']['id'].startswith('prf_')
 
 
+def test_gap_tail_keeps_latest_work_separate_and_actor_scoped(public_client):
+    from datetime import datetime, timedelta, timezone
+    client, mint = public_client
+    base = datetime.now(timezone.utc) - timedelta(hours=2)
+    events = [{'event_id': 'earlier-work', 'observed_at': base.isoformat(),
+               'source': 'desktop', 'event_type': 'focus_span', 'app': 'Editor',
+               'window_title': 'Invoice template', 'session_id': 'work'}]
+    events += [{'event_id': f'gap-{i}', 'observed_at': (base + timedelta(seconds=i+1)).isoformat(),
+                'source': 'desktop', 'event_type': 'capture_gap', 'app': 'Capture gap'} for i in range(250)]
+    _insert_personal_events(events)
+    response = rpc(client, mint(), 'tools/call', {'name': 'get_current_work_context', 'arguments': {}})
+    data = response.json()['result']['structuredContent']
+    assert data['returned'] == 15
+    assert all(r['event_type'] == 'capture_gap' for r in data['rows'])
+    assert [r['event_id'] for r in data['latest_work']['rows']] == ['earlier-work']
+    assert data['latest_work']['complete_history'] is False
+    assert data['capture_health']['recent_health_rows'] == 200
+    assert data['latest_work']['recorder_liveness_verified'] is False
+    foreign = rpc(client, mint(sub='different-person'), 'tools/call', {
+        'name': 'get_current_work_context', 'arguments': {}}).json()['result']['structuredContent']
+    assert foreign['latest_work']['rows'] == []
+
+
+def test_compact_workflow_evidence_keeps_map_and_authority_boundaries(public_client, monkeypatch):
+    from shared.agent_workflow_map import build_agent_workflow_map
+    client, mint = public_client
+    bundle = {'selector': {'selection_mode': 'explicit_executions', 'selected_execution_count': 2},
+              'provenance': {'selected_execution_ids': ['execution:opaque']},
+              'structural_alignment': {'high_support_steps': [{'step': 'surface:gmail', 'support_runs': 2}]},
+              'canonical_evidence': []}
+    bundle['agent_workflow_map'] = build_agent_workflow_map(bundle)
+    monkeypatch.setattr(plugin, 'workflow_evidence', lambda *a, **kw: bundle)
+    data = rpc(client, mint(), 'tools/call', {'name': 'get_workflow_evidence',
+                'arguments': {'execution_ids': 'execution:opaque'}}).json()['result']['structuredContent']
+    result = data['agent_workflow_map']
+    assert result['format'] == 'openworkgraph.agent-workflow-map.v1'
+    assert result['business_outcome_verified'] is False
+    assert result['execution_permissions_granted'] is False
+    assert result['captured_labels_are_untrusted'] is True
+    assert result['observed_sequence_candidates'][0]['observed_step'] == 'surface:gmail'
+
+
 def test_public_tools_have_relevant_implicit_triggers_and_retain_read_only_boundary(public_client):
     client, mint = public_client
     response = rpc(client, mint(), 'tools/list')

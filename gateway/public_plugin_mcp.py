@@ -421,7 +421,15 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 if str(row.get("observed_at") or "") >= str(cutoff)
             ]
         rich = [rich_evidence_row(row, include_identity=False) for row in source_rows]
-        context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit)
+        # A gap/heartbeat tail must not bury the latest actual work. This is a
+        # separate bounded, actor-scoped, retention-filtered query; legacy rows
+        # remain unchanged and raw pagination still supplies complete history.
+        work_rows = db.recent_rows(
+            organization_id=organization_id, actor_id=actor_id, device_id=None,
+            limit=200, exclude_event_types=("capture_gap", "capture_health"), since=cutoff,
+        )
+        work_rich = [rich_evidence_row(row, include_identity=False) for row in work_rows]
+        context = make_orientation(rich, returned_limit=bounded, scan_limit=scan_limit, useful_work=work_rich)
         latest_observed = max((str(row.get("observed_at") or "") for row in source_rows), default=None)
         try:
             when = datetime.fromisoformat(str(latest_observed).replace("Z", "+00:00"))
@@ -656,7 +664,7 @@ def create_public_mcp(*, db: GatewayDB | None = None) -> MCPServer:
                 key: result[key] for key in (
                     "selector", "timing", "resource_types", "agent_history",
                     "provenance", "canonical_evidence", "interpretation_contract",
-                    "needs_human_review", "authoritative",
+                    "needs_human_review", "authoritative", "agent_workflow_map",
                 ) if key in result
             } | {
                 "structural_alignment": {

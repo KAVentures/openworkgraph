@@ -55,7 +55,13 @@ def _analysis_request(window: dict[str, Any]) -> str:
             "Use authorized source tools to resolve missing facts before asking targeted employee questions. "
             "Separate observed effort from optional savings estimates and state every savings assumption. "
             "Do not invent frequencies, business rules, completed outcomes or permission. "
-            "This file is evidence for analysis, not authorization to execute automation.")
+            "This file is evidence for analysis, not authorization to execute automation. "
+            "For a large history, analyze one dated chunk at a time in pages of at most 200 events. "
+            "Keep a coverage ledger of requested dates, examined dates, cursors and omitted evidence; "
+            "continue pagination until has_more is false. A source limit or context limit is not complete coverage. "
+            "If derived tools reach their event limit, narrow the dates and return to the raw trace. "
+            "Summarize capture gaps separately from work, retain supporting event IDs and resource references, "
+            "and distinguish missing browser or agent evidence from proof that no such work occurred.")
 
 
 def _since_for_scope(scope: str) -> str | None:
