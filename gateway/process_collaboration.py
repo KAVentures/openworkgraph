@@ -235,6 +235,29 @@ class OrganizationProcessStore:
             self._audit(conn, p, 'process.implementation_state.read', workflow_id=workflow_id, revision=revision)
             return result
 
+    def inspect_shadow_report(self, p, workflow_id, request):
+        from shared.process_shadow_review import inspect_shadow_report
+        self.require_scope(p, 'org:process:read')
+        if request.workflow_id != workflow_id:
+            raise ProcessCollaborationError('Report selection does not match this shared process', 422)
+        with self.db.connect() as conn:
+            detail = self._detail(conn, p, workflow_id, revision=request.revision)
+            record = detail['process']
+            packet = {key: record[key] for key in ('workflow_id', 'revision', 'content_sha256', 'process_model')}
+            packet.update(format='openworkgraph.versioned-process-export.v1', execution_authorization=False,
+                          organization_catalog_reference={'organization_id': p.organization_id})
+            try:
+                result = inspect_shadow_report(packet, request.report, latest_revision=detail['latest_revision'])
+            except ValueError:
+                raise ProcessCollaborationError('Report does not match this exact shared process specification', 422) from None
+            result.update(organization_id=p.organization_id, shared_design_review_status=detail['review']['status'],
+                minimal_inspection_audit_persisted=True,
+                active_independently_reviewed_revision_at_inspection=(not detail['archived']
+                    and not detail['viewing_historical_revision'] and detail['review']['status']=='reviewed_design'))
+            self._audit(conn, p, 'process.shadow_report.inspected', workflow_id=workflow_id, revision=request.revision,
+                        case_count=request.report.case_count, matching_case_count=request.report.matching_case_count)
+            return result
+
     def inventory(self, p, *, after='', limit=20, include_archived=False):
         self.require_scope(p, 'org:process:read')
         with self.db.connect() as conn:

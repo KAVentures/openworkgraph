@@ -140,6 +140,14 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         except ProcessCollaborationError as exc:
             raise HTTPException(exc.status, str(exc)) from None
 
+    @router.post('/v1/human/processes/{workflow_id}/shadow-review')
+    async def shadow_review(request: Request, workflow_id: str = APIPath(pattern=_ID), p=Depends(human)):
+        from shared.process_shadow_review import ShadowReviewRequest
+        if 'org:process:read' not in p.scopes:
+            raise HTTPException(403, 'Missing process permission: org:process:read')
+        return await run_in_threadpool(_response, store.inspect_shadow_report, p, workflow_id,
+                                      await _body(request, ShadowReviewRequest))
+
     @router.get('/v1/human/processes/{workflow_id}/export')
     def export(workflow_id: str = APIPath(pattern=_ID), revision: int = Query(ge=1),
                format: str = Query(default='json', pattern='^(json|bpmn|pdd|agent-project)$'), p=Depends(human)):
