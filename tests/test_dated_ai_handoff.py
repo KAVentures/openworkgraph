@@ -265,12 +265,24 @@ assert db.protect_existing_titles() == 0
 
 def test_upgrade_responds_to_health_before_heavy_title_migration(tmp_path):
     run(r'''
-import time
+import asyncio
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import patch
 from server import db
 started=Event()
 finished=Event()
+release=Event()
+scheduled=[]
+original_call_later=asyncio.BaseEventLoop.call_later
+def controlled_timer(loop, delay, callback, *args, **kwargs):
+    if callback is db.protect_existing_titles_in_background:
+        assert delay >= 3.0
+        handle=SimpleNamespace(cancelled=False)
+        handle.cancel=lambda: setattr(handle,'cancelled',True)
+        scheduled.append((callback,handle))
+        return handle
+    return original_call_later(loop,delay,callback,*args,**kwargs)
 # Simulate an existing installation with a pending historical re-protection.
 db.init_db()
 insert_events([event('prior_history', A, 'Invoice for Acme')])
@@ -283,23 +295,27 @@ def expensive_history_scan(*,batch_size,pause_seconds):
     assert batch_size <= 200
     assert pause_seconds >= 0.01
     started.set()
-    time.sleep(1.0)
+    assert release.wait(15), 'test did not release the background migration'
     finished.set()
-with patch.object(db,'protect_existing_titles',expensive_history_scan):
-    began=time.monotonic()
+with patch.object(db,'protect_existing_titles',expensive_history_scan), patch.object(asyncio.BaseEventLoop,'call_later',controlled_timer):
     with TestClient(app) as c:
-        # ASGI lifespan finishes before migration. The launcher sees /health.
-        assert time.monotonic()-began < 2.5
-        response=c.get('/health')
-        assert response.status_code == 200,response.text
-        assert not started.is_set(), 'title migration launched before health became available'
+        try:
+            # Control only the migration timer, preserving real ASGI startup,
+            # requests and worker dispatch without runner-speed assumptions.
+            assert len(scheduled)==1
+            response=c.get('/health')
+            assert response.status_code == 200,response.text
+            assert not started.is_set(), 'title migration ran synchronously during startup'
+            assert db.title_protection_complete() is False
+            scheduled[0][0]()
+            assert started.wait(10), 'deferred migration never started'
+            assert c.get('/health').status_code == 200
+            assert not finished.is_set(), 'health check did not overlap the blocked migration'
+        finally:
+            release.set()
+        assert finished.wait(10)
         assert db.title_protection_complete() is False
-        assert started.wait(5), 'deferred migration never started'
-        check=time.monotonic()
-        assert c.get('/health').status_code == 200
-        assert time.monotonic()-check < 0.8, 'slow migration blocked health'
-        assert finished.wait(5)
-        assert db.title_protection_complete() is False
+    assert scheduled[0][1].cancelled
 ''', tmp_path)
 
 

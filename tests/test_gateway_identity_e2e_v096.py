@@ -47,16 +47,23 @@ def gateway(tmp_path):
         [sys.executable, "-m", "uvicorn", "gateway.human_enterprise_app:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        try:
-            if httpx.get(base + "/health", timeout=0.5).status_code == 200:
-                break
-        except Exception:
+    ready = False
+    # Reuse one direct loopback client. Rebuilding TLS/proxy state on every
+    # attempt can consume the polling window before a healthy server is probed.
+    with httpx.Client(trust_env=False, timeout=0.5) as health_client:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and proc.poll() is None:
+            try:
+                if health_client.get(base + "/health").status_code == 200:
+                    ready = True
+                    break
+            except httpx.HTTPError:
+                pass
             time.sleep(0.1)
-    else:
+    if not ready:
         proc.terminate()
-        raise AssertionError("Gateway did not start: " + (proc.stderr.read() if proc.stderr else ""))
+        _, error = proc.communicate(timeout=10)
+        raise AssertionError("Gateway health did not become ready: " + (error or ""))
     try:
         yield base
     finally:
