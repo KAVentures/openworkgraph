@@ -613,6 +613,8 @@ def install_identity(
 
     @app.post("/v1/sso/start")
     def sso_start(body: SSOStartRequest) -> dict[str, Any]:
+        if body.purpose == 'processes':
+            raise HTTPException(422, 'Start process sign-in from the shared-process portal')
         context: dict[str, Any] = {}
         if body.purpose == "join":
             invite = roster.peek_personal_invite(db, body.invite_token.strip())
@@ -629,7 +631,7 @@ def install_identity(
             raise HTTPException(status_code=502, detail="the company sign-in provider could not be reached") from exc
 
     @app.get("/sso/callback", include_in_schema=False)
-    def sso_callback(code: str = "", state: str = "", error: str = "", error_description: str = "") -> Response:
+    def sso_callback(request: Request, code: str = "", state: str = "", error: str = "", error_description: str = "") -> Response:
         if error:
             return RedirectResponse("/?error=" + quote((error_description or error)[:200]), status_code=303)
         try:
@@ -639,6 +641,11 @@ def install_identity(
         except Exception:
             return RedirectResponse("/?error=" + quote("company sign-in failed; try again"), status_code=303)
         try:
+            if purpose == 'processes':
+                handler = getattr(app.state, 'process_sso_callback', None)
+                if handler:
+                    return handler(request, context, identity)
+                return RedirectResponse('/processes#error=Company%20sign-in%20is%20not%20enabled',status_code=303)
             if purpose == "admin":
                 admin, session = accounts.login_sso(db, email=identity["email"])
                 db.audit(organization_id="*", principal_id=admin.audit_id, action="admin.login", details={"method": "sso"})

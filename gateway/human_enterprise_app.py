@@ -60,7 +60,12 @@ def create_human_enterprise_app(
     from .process_collaboration_routes import build_process_router
     process_store = OrganizationProcessStore(db)
     extend_lifespan(app, startup=process_store.initialize)
-    app.include_router(build_process_router(process_store, app.state.human_principal_dependency))
+    from .process_signin import ProcessSessionStore, build_process_signin_router
+    process_sessions = ProcessSessionStore(db,human_access)
+    extend_lifespan(app,startup=process_sessions.initialize)
+    sign_in_router, process_human = build_process_signin_router(app,process_sessions,human_access,app.state.human_principal_dependency)
+    app.include_router(sign_in_router)
+    app.include_router(build_process_router(process_store, process_human))
     app.state.organization_process_store = process_store
 
     previous_health = _take_get_endpoint(app, "/health")
