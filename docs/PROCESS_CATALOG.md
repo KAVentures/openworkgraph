@@ -149,6 +149,14 @@ Input-schema fingerprints from inspection are checked against current metadata
 before execution; changed schemas stop calls pending review. These fingerprints
 are content identifiers, not signed approval or proof of provider semantics.
 
+The project also includes a [reviewed-case shadow evaluator](PROCESS_SHADOW_EVALUATION.md).
+It compares captured plans offline or explicitly runs the no-tools planner for
+selected authorized cases. Expected routes are withheld from model input.
+Minimized reports identify exact suite/specification hashes, mismatches and
+review needs without case values or model questions. Customer expectations are
+declarations; agreement does not establish business truth or source outcomes.
+The evaluator grants no execution permission and never updates the process.
+
 The project contains an OpenAI Agents SDK 0.24 planner, structured response
 schema, offline graph validator, bounded synthetic route examples, missing tool
 binding declarations and executable unit tests. Process data stays in the

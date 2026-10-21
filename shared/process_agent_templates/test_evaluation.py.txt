@@ -1,0 +1,163 @@
+"""Reviewed case comparisons; owned synthetic data and no business services."""
+import asyncio
+from copy import deepcopy
+import json
+from pathlib import Path
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from evaluate import compare, validate_suite, run_planner
+from execute import ImplementationError, digest, reference
+from test_execution import fixture
+
+
+def evaluation_fixture():
+    spec, plan, case, _, _ = fixture()
+    plan['missing_business_inputs'] = []
+    suite = {'format': 'openworkgraph.reviewed-shadow-cases.v1', 'process_reference': reference(spec),
+        'spec_sha256': digest(spec), 'reviewed_by_customer': True, 'case_inputs_authorized': True,
+        'cases': [{'id': 'case_1', 'category': 'normal', 'input': case,
+            'expected': {'status': 'proposal', 'accepted_routes': [plan['activity_ids']], 'review_confirmed': True}},
+            {'id': 'case_2', 'category': 'missing_facts', 'input': {'text': 'PRIVATE_MISSING_FACTS'},
+            'expected': {'status': 'needs_clarification', 'accepted_routes': [], 'review_confirmed': True}}]}
+    results = {'format': 'openworkgraph.shadow-plan-results.v1', 'process_reference': reference(spec),
+        'spec_sha256': digest(spec), 'suite_sha256': digest(suite), 'results': [
+            {'case_id': 'case_1', 'plan': plan}, {'case_id': 'case_2', 'plan': {**plan,
+            'status': 'needs_clarification', 'activity_ids': [], 'missing_business_inputs': ['PRIVATE_QUESTION']}}]}
+    return spec, suite, results
+
+
+class EvaluationCases(unittest.TestCase):
+    def setUp(self):
+        self.spec, self.suite, self.results = evaluation_fixture()
+
+    def test_matching_reviewed_normal_and_missing_fact_cases_have_minimized_reports(self):
+        report = compare(self.spec, self.suite, self.results)
+        self.assertEqual(report['matching_case_count'], 2)
+        self.assertFalse(report['review_required'])
+        for key in ('source_outcomes_verified', 'execution_authorized', 'business_tools_called',
+                    'process_model_updated', 'independent_business_ground_truth_verified',
+                    'representative_population_coverage_established'):
+            self.assertIs(report[key], False)
+        for secret in ('SYNTHETIC_PRIVATE_RECORD', 'PRIVATE_MISSING_FACTS', 'PRIVATE_QUESTION'):
+            self.assertNotIn(secret, json.dumps(report))
+
+    def test_stale_duplicate_unreviewed_unauthorized_and_tampered_suites_are_rejected(self):
+        for field, value in [('reviewed_by_customer', False), ('case_inputs_authorized', False),
+                             ('spec_sha256', 'c'*64), ('cases', [])]:
+            with self.subTest(field=field), self.assertRaises(ImplementationError):
+                validate_suite(self.spec, self.suite | {field: value})
+        for mutation in ('duplicate', 'unreviewed', 'bad_route', 'identifier'):
+            suite = deepcopy(self.suite)
+            if mutation == 'duplicate': suite['cases'].append(deepcopy(suite['cases'][0]))
+            elif mutation == 'unreviewed': suite['cases'][0]['expected']['review_confirmed'] = False
+            elif mutation == 'identifier': suite['cases'][0]['id'] = 'PRIVATE_CUSTOMER_NAME'
+            else: suite['cases'][0]['expected']['accepted_routes'] = [['unknown_activity']]
+            with self.subTest(mutation=mutation), self.assertRaises(ImplementationError):
+                validate_suite(self.spec, suite)
+        with self.assertRaises(ImplementationError):
+            compare(self.spec, self.suite, self.results | {'suite_sha256': 'c'*64})
+        results = deepcopy(self.results); results['results'][1]['case_id'] = 'case_1'
+        with self.assertRaises(ImplementationError): compare(self.spec, self.suite, results)
+
+    def test_bad_plan_and_unexpected_clarification_are_counted_without_copying_text(self):
+        for changed, reason in [({'revision': True}, 'invalid_or_stale_plan'),
+                                ({'activity_ids': ['resolve', 'done']}, 'invalid_route'),
+                                ({'status': 'needs_clarification', 'missing_business_inputs': ['PRIVATE_QUESTION']}, 'unexpected_clarification'),
+                                ({'missing_business_inputs': ['PRIVATE_QUESTION']}, 'proposal_has_unresolved_inputs')]:
+            results = deepcopy(self.results); results['results'][0]['plan'].update(changed)
+            report = compare(self.spec, self.suite, results)
+            self.assertEqual(report['matching_case_count'], 1)
+            self.assertEqual(report['cases'][0]['reason'], reason)
+            self.assertTrue(report['review_required'])
+            self.assertNotIn('PRIVATE_QUESTION', json.dumps(report))
+        results = deepcopy(self.results); results['results'][1]['plan']['missing_business_inputs'] = []
+        self.assertEqual(compare(self.spec, self.suite, results)['cases'][1]['reason'], 'clarification_without_question')
+
+    def test_review_expectations_cannot_bypass_manual_conditions(self):
+        spec = deepcopy(self.spec)
+        spec['process_model']['manual_review_conditions'] = [{'activity_id': 'resolve',
+            'kind': 'exception_condition', 'condition_label': 'Missing authorization', 'response': 'pause_for_review'}]
+        spec['process_model_sha256'] = digest(spec['process_model'])
+        suite = deepcopy(self.suite); suite['spec_sha256'] = digest(spec)
+        with self.assertRaises(ImplementationError): validate_suite(spec, suite)
+        suite['cases'][0]['expected'] = {'status': 'needs_clarification', 'accepted_routes': [], 'review_confirmed': True}
+        results = deepcopy(self.results); results.update(spec_sha256=digest(spec), suite_sha256=digest(suite))
+        self.assertEqual(compare(spec, suite, results)['cases'][0]['reason'], 'unresolved_review_bypassed')
+
+    def test_structurally_valid_alternative_is_still_a_reviewed_case_mismatch(self):
+        spec = deepcopy(self.spec)
+        spec['process_model']['activities'].insert(1, {'id': 'choose', 'label': 'Choose',
+            'kind': 'decision', 'implementation': 'unmapped'})
+        spec['process_model']['transitions'] = [
+            {'source': 'resolve', 'target': 'choose'},
+            {'source': 'choose', 'target': 'readback', 'rule_id': 'inspect'},
+            {'source': 'choose', 'target': 'done', 'rule_id': 'skip'},
+            {'source': 'readback', 'target': 'done'}]
+        spec['process_model']['business_rules'] = [
+            {'id': 'inspect', 'text': 'Inspection required', 'user_confirmed': True},
+            {'id': 'skip', 'text': 'Inspection unnecessary', 'user_confirmed': True}]
+        spec['process_model_sha256'] = digest(spec['process_model'])
+        suite = deepcopy(self.suite); suite['spec_sha256'] = digest(spec)
+        suite['cases'][0]['expected']['accepted_routes'] = [['resolve', 'choose', 'readback', 'done']]
+        results = deepcopy(self.results); results.update(spec_sha256=digest(spec), suite_sha256=digest(suite))
+        results['results'][0]['plan']['activity_ids'] = ['resolve', 'choose', 'done']
+        self.assertEqual(compare(spec, suite, results)['cases'][0]['reason'], 'unexpected_route')
+        # A reviewer cannot approve this route without confirming its used rule.
+        spec['process_model']['business_rules'][0]['user_confirmed'] = False
+        spec['process_model_sha256'] = digest(spec['process_model']); suite['spec_sha256'] = digest(spec)
+        with self.assertRaises(ImplementationError): validate_suite(spec, suite)
+
+    def test_offline_cli_performs_no_network_and_reports_failure_exit_status(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in [('workflow.spec.json', self.spec), ('suite.json', self.suite), ('results.json', self.results)]:
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            # Copy only the stdlib runtime, proving offline comparison needs no SDK.
+            for name in ('evaluate.py', 'execute.py', 'runtime.py'):
+                (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
+            command = [sys.executable, '-c',
+                'import evaluate,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("evaluate.py",run_name="__main__")',
+                '--cases', 'suite.json', '--results', 'results.json', '--output', 'report.json']
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(run.returncode, 0)
+            self.results['results'][0]['plan']['activity_ids'] = ['unknown']
+            (root / 'results.json').write_text(json.dumps(self.results), encoding='utf-8')
+            command[-1] = 'mismatch.json'
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+
+
+try:
+    from test_agent_sdk import OfflineModel, SDK_AVAILABLE
+except ImportError:
+    SDK_AVAILABLE = False
+
+
+@unittest.skipUnless(SDK_AVAILABLE, 'Install requirements.txt for actual SDK evaluation')
+class EvaluationSDKCases(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_planner_sees_case_inputs_without_review_expectations(self):
+        spec, suite, results = evaluation_fixture()
+        suite['cases'] = suite['cases'][:1]
+        suite['cases'][0]['input']['text'] = 'SYNTHETIC_UNTRUSTED_INSTRUCTION'
+        # Existing real SDK fake verifies user-data isolation, no tools/traces.
+        class HeldOutModel(OfflineModel):
+            async def get_response(self,*args,**kwargs):
+                self_input=kwargs.get('input',args[1] if len(args)>1 else '')
+                assert 'accepted_routes' not in str(self_input) and 'review_confirmed' not in str(self_input)
+                return await super().get_response(*args,**kwargs)
+        result = await run_planner(spec, suite, model=HeldOutModel(results['results'][0]['plan']))
+        self.assertEqual(compare(spec, suite, result)['matching_case_count'], 1)
+
+    async def test_unreviewed_suites_stop_before_the_planner(self):
+        spec, suite, _ = evaluation_fixture(); suite['reviewed_by_customer'] = False
+        with patch('agent.propose', side_effect=AssertionError('model must not run')):
+            with self.assertRaises(ImplementationError): await run_planner(spec, suite, model='unused')
+
+
+if __name__ == '__main__': unittest.main()
