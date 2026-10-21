@@ -83,11 +83,18 @@ def build_runtime_project(packet: dict) -> bytes:
             raise ValueError('A bounded organization catalog reference is required')
         spec['organization_catalog_reference'] = dict(origin)
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py')}
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'
     files['synthetic-cases.json'] = json.dumps(synthetic_routes(model), indent=2) + '\n'
     process_reference = {key: spec[key] for key in ('workflow_id', 'revision', 'content_sha256')}
+    files['shadow-cases.example.json'] = json.dumps({
+        'format':'openworkgraph.reviewed-shadow-cases.v1', 'process_reference':process_reference,
+        'spec_sha256':hashlib.sha256(json.dumps(spec, sort_keys=True, allow_nan=False).encode()).hexdigest(),
+        'reviewed_by_customer':False, 'case_inputs_authorized':False,
+        'cases':[{'id':'case_1', 'category':'missing_facts', 'input':{},
+                  'expected':{'status':'needs_clarification', 'accepted_routes':[], 'review_confirmed':False}}]
+    }, indent=2) + '\n'
     files['tool-bindings.example.json'] = json.dumps({
         'format':'openworkgraph.customer-mcp-bindings.v1', 'process_reference':process_reference,
         'enabled':False, 'tool_server_url':None, 'source_api_url':'http://127.0.0.1:8787',
@@ -141,6 +148,25 @@ def build_runtime_project(packet: dict) -> bytes:
         'Unevaluated manual review conditions are retained by stable activity ID.\n'
         'A route containing one requires human clarification even if the model\n'
         'returns a proposal. Neither the model nor the validator evaluates its trigger.\n\n'
+        '## Compare human-reviewed shadow cases\n\n'
+        'shadow-cases.example.json is an unapproved template, separate from synthetic graph routes.\n'
+        'Provide up to 50 explicitly authorized normal, exception or missing-fact cases,\n'
+        'review each expected route or clarification and the exact spec/suite hashes.\n'
+        'Customer review flags are declarations, not signed policy or independently verified truth.\n'
+        'Offline comparison uses previously captured plans with the documented exact references:\n\n'
+        '```sh\npython evaluate.py --cases reviewed-cases.json --results captured-plans.json --output shadow-report.json\n```\n\n'
+        'Captured plans use format openworkgraph.shadow-plan-results.v1, process_reference,\n'
+        'spec_sha256, suite_sha256 and results: [{case_id, plan}]. Each plan has revision,\n'
+        'content_sha256, status, activity_ids and missing_business_inputs. Include every case once.\n'
+        'Hashes use execute.digest; editing a suite changes suite_sha256.\n'
+        'Alternatively, --model YOUR_MODEL instead of --results explicitly sends case INPUT VALUES\n'
+        'to that provider through the existing tracing-disabled, no-tools planner. Human expectations\n'
+        'are withheld from model input. Reports contain opaque case IDs, hashes and bounded reason codes,\n'
+        'without raw case values, model questions or business text. Hashes are identifiers, not anonymization.\n'
+        'Exit status 2 means mismatches need review; existing reports are never overwritten.\n'
+        'Comparison establishes agreement with the selected customer expectations only. It does not\n'
+        'prove representative coverage, business rule truth, live outcomes or execution authorization.\n'
+        'Review mismatches against source evidence before making a new catalog revision. No model is updated automatically.\n\n'
         '## Inspect current tools and propose disabled mappings\n\n'
         'Install requirements.txt first. Configure the customer MCP metadata credential\n'
         'in OWG_EXECUTION_MCP_TOKEN, then explicitly inspect its current catalog:\n\n'

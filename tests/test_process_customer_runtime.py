@@ -152,7 +152,7 @@ for name,data in [('plan.json',plan),('case.json',case),('bindings.json',binding
             catalog=json.loads((project/'tool-catalog.json').read_text())
             assert {tool['name'] for tool in catalog['tools']}=={'read_case','resolve_case'}
             assert stats()['tool_calls']==[] and stats()['source_reads']==0 and stats()['catalog_reads']==0
-            configuration_tests=run('-m','unittest','-v','test_configuration')
+            configuration_tests=run('-m','unittest','-v','test_configuration','test_evaluation')
             assert configuration_tests.returncode==0,configuration_tests.stdout+configuration_tests.stderr
             pinned=run('-c',r'''
 import json
