@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
+from datetime import datetime, timedelta, timezone
 from .export_window import selection, sql_bounds
 from .exporter import _analysis_request
 from .db import connect
@@ -30,6 +31,12 @@ def analysis_preview(request: Request, scope: str = "current", since: str | None
                               + " ORDER BY julianday(observed_at), id LIMIT 1", params).fetchone()
         last = conn.execute("SELECT observed_at FROM events" + where
                             + " ORDER BY julianday(observed_at) DESC, id DESC LIMIT 1", params).fetchone()
+        last_work = conn.execute("SELECT observed_at FROM events" + where
+                                + (" AND " if where else " WHERE ")
+                                + "event_type NOT IN ('capture_gap','capture_health') AND app != 'Excluded'"
+                                + " ORDER BY julianday(observed_at) DESC, id DESC LIMIT 1", params).fetchone()
+        days = conn.execute("SELECT date(observed_at) AS day, COUNT(*) AS count FROM events" + where
+                            + " GROUP BY date(observed_at) HAVING day IS NOT NULL ORDER BY day LIMIT 32", params).fetchall()
     from .ai_context import redact_contextually
     from shared.history_policy import active_ai_history_access
     from .work_text_capture import get_policy
@@ -39,12 +46,30 @@ def analysis_preview(request: Request, scope: str = "current", since: str | None
     for row in grouped:
         counts[row["event_type"]] = counts.get(row["event_type"], 0) + row["count"]
         sources[row["source"]] = sources.get(row["source"], 0) + row["count"]
+    chunks = []
+    for row in days[:31]:
+        first = datetime.fromisoformat(row['day']).replace(tzinfo=timezone.utc)
+        end = first + timedelta(days=1)
+        if window['since']:
+            first = max(first, datetime.fromisoformat(window['since'].replace('Z', '+00:00')))
+        if window['until']:
+            end = min(end, datetime.fromisoformat(window['until'].replace('Z', '+00:00')))
+        chunks.append({'since': first.isoformat(), 'until': end.isoformat(), 'event_rows': row['count']})
+    health_rows = counts.get('capture_gap', 0) + counts.get('capture_health', 0)
     return {
         "window": window,
         "first_observed_at": bounds[0] if bounds else None,
         "last_observed_at": last[0] if last else None,
         "canonical_rows": sum(counts.values()), "event_types": counts,
         "sources": sources, "retained_rows": available,
+        "work_evidence": {"ordinary_event_rows": sum(counts.values()) - health_rows,
+                          "health_event_rows": health_rows,
+                          "last_work_observed_at": last_work[0] if last_work else None,
+                          "recorder_liveness_verified": False},
+        "analysis_plan": {"page_size": 200, "date_chunks": chunks,
+                          "more_dates_not_listed": len(days) > 31,
+                          "complete_history_claimed": False,
+                          "chunks_respect_selected_window": True},
         "redacted_examples": redact_contextually([dict(x) for x in samples]),
         "local_ai_enabled": ai_access_enabled(),
         "local_ai_history_access": active_ai_history_access(),

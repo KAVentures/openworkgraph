@@ -2,7 +2,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let period = 'week', start = '', end = '', preview = null, generation = 0;
+  let period = 'week', start = '', end = '', preview = null, generation = 0, pending = null;
   const dateInput = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
@@ -41,17 +41,21 @@
   }
   async function refresh() {
     const seq=++generation; preview=null;
-    document.querySelectorAll('[data-period-summary]').forEach(x=>x.textContent='Checking selected evidence…');
+    pending?.abort(); pending=new AbortController();
+    document.querySelectorAll('[data-period-summary]').forEach(x=>{
+      x.setAttribute('aria-busy','true');
+      x.innerHTML='<progress aria-label="Checking selected evidence"></progress> Checking selected evidence…';
+    });
     try {
-      const d=await api('/v1/analysis-preview?'+new URLSearchParams(selection()));
+      const d=await api('/v1/analysis-preview?'+new URLSearchParams(selection()),{signal:pending.signal});
       if(seq!==generation)return;preview=d;
       const text=d.canonical_rows
         ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
         : d.retained_rows ? 'No activity in this selection. Saved work is available; choose another period.' : 'No saved evidence yet. Work normally after enabling recording.';
-      document.querySelectorAll('[data-period-summary]').forEach(x=>x.textContent=text);
+      document.querySelectorAll('[data-period-summary]').forEach(x=>{x.textContent=text;x.removeAttribute('aria-busy');});
     } catch(e) {
       if(seq!==generation)return;
-      document.querySelectorAll('[data-period-summary]').forEach(x=>x.textContent=e.message);
+      document.querySelectorAll('[data-period-summary]').forEach(x=>{x.textContent=e.message;x.removeAttribute('aria-busy');});
     }
   }
   async function prepare() {
@@ -67,8 +71,10 @@
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>Selected: ${esc(d.window.since||'all available history')} to ${esc(d.window.until||'the latest retained evidence')} (end exclusive, UTC). Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
         <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. Visible work text is not included in this activity package. Typed values and clipboard contents are not included.</p>
+        <p>Latest work event: ${esc(d.work_evidence?.last_work_observed_at||'none in this period')}. Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing a file does not change those permissions.</p>
       </div>
+      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p><ul>${(d.analysis_plan?.date_chunks||[]).map(x=>`<li>${esc(x.since)} to ${esc(x.until)}: ${esc(x.event_rows)} events</li>`).join('')}</ul>${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
       <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect the downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox">Include detailed chronological evidence (more events and labels for deeper investigation)</label>
       <p>Downloaded evidence is redacted. Gaps and foreground time are not measured lost work or savings.</p>

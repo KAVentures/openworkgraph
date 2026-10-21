@@ -4,6 +4,20 @@ OpenWorkGraph remains a **workflow memory**, not another RPA engine. The existin
 authorized `get_workflow_evidence` tool and `/v1/workflow-evidence` endpoint now
 include an additive `agent_workflow_map` field. Existing exports include it too.
 
+Hosted compact responses include the bounded map as well as rich responses.
+The map does not replace canonical trace pagination or grant execution rights.
+`get_current_work_context` keeps its existing recent `rows` and adds separate
+`latest_work` and `capture_health` sections. The former looks back through at most
+200 non-health records within the same actor and retention scope, so gap tails
+do not hide older work. It is still a bounded overview, not complete history or
+proof that recording is active.
+
+For large histories, Prepare for AI lists up to 31 UTC date chunks intersected
+with the selected period. It reports when additional dates are not listed.
+Analyze each selected date with bounded raw pages and maintain a coverage ledger;
+empty inferred clusters do not prevent analysis. The downloaded package still
+contains the full selected evidence, and preparing it changes no AI permissions.
+
 ## Map → feed → do
 
 1. **Map:** Ask an agent to call `find_repeated_workflows`, select a cluster's
