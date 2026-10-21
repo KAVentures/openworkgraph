@@ -98,3 +98,32 @@ tool. Downloaded reports remain independent files under customer control.
 `revision` and the minimized `report`, within the existing 128 KiB bounded JSON
 limit. It requires a local dashboard session; ordinary API/MCP bearers cannot
 upload these reports. Responses use `Cache-Control: no-store`.
+
+## Inspect an organization project's report
+
+The Gateway's **Shared processes** page supports **Minimized shared shadow
+report** for an opened exact revision. Its separate inspection button explicitly
+sends the report to that organization's Gateway. Browser validation first rejects
+extra fields, case/model text, native case IDs, malformed metadata and other
+process references. Selection alone sends nothing. The server repeats strict
+validation, binds the specification to the authenticated organization, and
+reports whether the revision is still latest, active and independently reviewed.
+Neither a design review nor matching evaluation expectations grants execution.
+
+Use a report from that organization's SDK project: local projects and other
+organizations produce different specification hashes even when their process
+IDs and graphs match. Reading historical reports is permitted without approving
+their implementation. Changing the selected revision, candidate, file or identity
+clears the temporary display; late responses cannot restore it.
+
+The JSON report is not retained. A minimal organization audit records actor,
+process/revision, case count and matching count, without case IDs, case hashes,
+suite/results hashes or model text. Hashes in an uploaded report are identifiers,
+not anonymization. Existing process-read scope is required, tenant isolation is
+preserved and private personal knowledge is not searched.
+
+`POST /v1/human/processes/{workflow_id}/shadow-review` uses the same selected
+`workflow_id`, strict integer `revision` and minimized `report` body as local
+inspection. The Gateway's bounded JSON, process-only session/delegated identity
+and no-store response controls apply. Inspection changes no model or review,
+calls no business/source/model service and claims no independent business truth.

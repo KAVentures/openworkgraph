@@ -232,6 +232,24 @@
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
       <div class="actions" id="exports"></div>
+      <fieldset>
+        <legend>Shadow evaluation review</legend>
+        <p class="muted">
+          Inspect a minimized report from this shared revision's SDK project.
+          Only structural case IDs, hashes, counts and reason codes may be sent
+          to this organization's Gateway. Inspection keeps the report temporary;
+          authenticity, business truth and source outcomes remain unverified.
+        </p>
+        <label
+          >Minimized shared shadow report
+          <input id="shadowFile" type="file" accept=".json,application/json"
+        /></label>
+        <button id="inspectShadow">
+          Send minimized report for organization inspection
+        </button>
+        <button id="clearShadow">Clear shadow review</button>
+        <div id="shadowResult" role="status"></div>
+      </fieldset>
       <div class="grid">
         <fieldset>
           <legend>Revision review</legend>
@@ -282,6 +300,128 @@
         "use strict";
         let candidateEditing = false;
         let opportunityReport = null;
+        let shadowGeneration = 0;
+        const shadowReasons = new Set([
+          "matches_reviewed_expectation",
+          "invalid_or_stale_plan",
+          "invalid_route",
+          "unresolved_review_bypassed",
+          "proposal_has_unresolved_inputs",
+          "expected_clarification",
+          "unexpected_route",
+          "clarification_without_question",
+          "unknown_activity_in_clarification",
+          "unexpected_clarification",
+        ]);
+        function clearShadowReview() {
+          shadowGeneration++;
+          $("shadowFile").value = "";
+          $("shadowResult").replaceChildren();
+        }
+        function minimizedShadowReport(value) {
+          const fail = () => {
+            throw new Error(
+              "Choose a valid minimized shadow report without case values, model text or extra fields. Nothing was sent.",
+            );
+          };
+          const object = (row, keys) =>
+            row &&
+            typeof row === "object" &&
+            !Array.isArray(row) &&
+            Object.keys(row).length === keys.length &&
+            keys.every((key) => Object.hasOwn(row, key));
+          const hash = (value) =>
+            typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+          const integer = (value, min = 0) =>
+            Number.isInteger(value) && value >= min && value <= 50;
+          const falseFlags = [
+            "independent_business_ground_truth_verified",
+            "representative_population_coverage_established",
+            "business_rules_evaluated",
+            "case_inputs_and_model_text_included",
+            "business_tools_called",
+            "execution_authorized",
+            "source_outcomes_verified",
+            "process_model_updated",
+          ];
+          const rootKeys = [
+            "format",
+            "process_reference",
+            "spec_sha256",
+            "suite_sha256",
+            "results_sha256",
+            "evaluated_at",
+            "case_count",
+            "matching_case_count",
+            "reason_counts",
+            "cases",
+            "expectations_are_customer_declarations",
+            "review_required",
+            ...falseFlags,
+          ];
+          if (
+            !object(value, rootKeys) ||
+            value.format !== "openworkgraph.shadow-evaluation.v1" ||
+            !object(value.process_reference, [
+              "workflow_id",
+              "revision",
+              "content_sha256",
+            ]) ||
+            value.process_reference.workflow_id !==
+              selected.process.workflow_id ||
+            value.process_reference.revision !== selected.process.revision ||
+            value.process_reference.content_sha256 !==
+              selected.process.content_sha256 ||
+            !["spec_sha256", "suite_sha256", "results_sha256"].every((key) =>
+              hash(value[key]),
+            ) ||
+            typeof value.evaluated_at !== "string" ||
+            value.evaluated_at.length > 64 ||
+            !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+              value.evaluated_at,
+            ) ||
+            !integer(value.case_count, 1) ||
+            !integer(value.matching_case_count) ||
+            value.expectations_are_customer_declarations !== true ||
+            typeof value.review_required !== "boolean" ||
+            falseFlags.some((key) => value[key] !== false) ||
+            !Array.isArray(value.cases) ||
+            value.cases.length !== value.case_count ||
+            !value.reason_counts ||
+            typeof value.reason_counts !== "object" ||
+            Array.isArray(value.reason_counts) ||
+            Object.entries(value.reason_counts).some(
+              ([key, count]) => !shadowReasons.has(key) || !integer(count, 1),
+            )
+          )
+            fail();
+          const seen = new Set();
+          for (const row of value.cases) {
+            if (
+              !object(row, [
+                "case_id",
+                "category",
+                "case_sha256",
+                "matches_reviewed_expectation",
+                "reason",
+                "review_required",
+              ]) ||
+              typeof row.case_id !== "string" ||
+              !/^case_[0-9]{1,4}$/.test(row.case_id) ||
+              seen.has(row.case_id) ||
+              !["normal", "exception", "missing_facts"].includes(
+                row.category,
+              ) ||
+              !hash(row.case_sha256) ||
+              !shadowReasons.has(row.reason) ||
+              typeof row.matches_reviewed_expectation !== "boolean" ||
+              typeof row.review_required !== "boolean"
+            )
+              fail();
+            seen.add(row.case_id);
+          }
+          return value;
+        }
         let credentialScheme = "Bearer";
         let credential = "",
           selected = null,
@@ -341,6 +481,7 @@
           return response.json();
         }
         function clear() {
+          clearShadowReview();
           candidateEditing = false;
           $("reviewed").disabled = false;
           $("sharing").disabled = false;
@@ -827,6 +968,7 @@
           } else host.appendChild(el("p", "No opportunity scenario declared."));
         }
         function draftChanged() {
+          clearShadowReview();
           $("reviewed").checked = false;
           $("sharing").checked = false;
         }
@@ -1263,6 +1405,7 @@
         }
         $("revise").onclick = () =>
           run(() => {
+            clearShadowReview();
             if (!selected?.permissions.edit)
               throw new Error("Open a current process you can edit.");
             candidate = {
@@ -1275,6 +1418,7 @@
             $("preview").scrollIntoView({ block: "start" });
           });
         $("file").addEventListener("change", async () => {
+          clearShadowReview();
           candidateEditing = false;
           $("reviewed").disabled = false;
           $("sharing").disabled = false;
@@ -1373,6 +1517,7 @@
           note("Opened exact saved revision " + data.process.revision + ".");
         }
         function render(data) {
+          clearShadowReview();
           selected = data;
           members = data.members.map((m) => ({ ...m }));
           $("selected").hidden = false;
@@ -1461,6 +1606,97 @@
             );
           renderMembers();
         }
+        $("shadowFile").addEventListener("change", () => {
+          shadowGeneration++;
+          $("shadowResult").replaceChildren();
+        });
+        $("clearShadow").onclick = clearShadowReview;
+        $("inspectShadow").onclick = () =>
+          run(async () => {
+            shadowGeneration++;
+            $("shadowResult").replaceChildren();
+            const generation = shadowGeneration,
+              selection = selected,
+              source = $("shadowFile").files[0];
+            if (!selection || !source || source.size > 128 * 1024)
+              throw new Error(
+                "Choose a minimized report of at most 128 KiB for the selected saved revision.",
+              );
+            let value;
+            try {
+              value = JSON.parse(await source.text());
+            } catch {
+              throw new Error("Invalid report JSON. Nothing was sent.");
+            }
+            if (generation !== shadowGeneration || selected !== selection)
+              return;
+            const report = minimizedShadowReport(value);
+            const result = await call(
+              "/v1/human/processes/" +
+                selection.process.workflow_id +
+                "/shadow-review",
+              {
+                workflow_id: selection.process.workflow_id,
+                revision: selection.process.revision,
+                report,
+              },
+            );
+            if (generation !== shadowGeneration || selected !== selection)
+              return;
+            const host = $("shadowResult");
+            host.appendChild(
+              el(
+                "h3",
+                result.report.matching_case_count +
+                  " of " +
+                  result.report.case_count +
+                  " cases match customer expectations",
+              ),
+            );
+            host.appendChild(
+              el(
+                "p",
+                "Exact organization specification matched · revision " +
+                  result.process_reference.revision +
+                  ". " +
+                  (result.references_latest_revision_at_inspection
+                    ? "Latest saved revision at inspection."
+                    : "Historical revision; latest is " +
+                      result.latest_revision_at_inspection +
+                      "."),
+              ),
+            );
+            host.appendChild(
+              el(
+                "p",
+                result.active_independently_reviewed_revision_at_inspection
+                  ? "This revision has current independent design review; that review grants no business execution authority."
+                  : "This revision is not an active independently reviewed latest design. Recheck its status before implementation.",
+              ),
+            );
+            const list = el("ul");
+            for (const row of result.report.cases)
+              list.appendChild(
+                el(
+                  "li",
+                  row.case_id +
+                    " · " +
+                    words(row.category) +
+                    " · " +
+                    words(row.reason),
+                ),
+              );
+            host.appendChild(list);
+            host.appendChild(
+              el(
+                "p",
+                "Customer-supplied report and expectations remain unverified. No report is retained, process model changed, business tool called or execution approved. A minimal inspection audit records case counts.",
+              ),
+            );
+            note(
+              "Minimized shadow report inspected for this exact organization design.",
+            );
+          });
         function renderMembers() {
           const host = $("members");
           host.replaceChildren();

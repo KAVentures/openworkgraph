@@ -186,17 +186,33 @@ const pathModule = require("node:path");
       .locator("#reviewState")
       .filter({ hasText: "Design review: reviewed design." })
       .waitFor();
-    await bob.getByRole("button",{name:"Load reviewed improvement scenarios",exact:true}).click();
-    await bob.getByRole("status").filter({hasText:"Loaded reviewed organization scenarios."}).waitFor();
-    assert.match(await bob.locator("#opportunityReport").textContent(),/900 projected net monthly value/);
-    const scenarioDownload=bob.waitForEvent("download");
-    await bob.getByRole("button",{name:"Download scenarios report",exact:true}).click();
-    const scenarioFile=await scenarioDownload;
-    const scenarioPath=pathModule.join(scratch,"scenarios.json");await scenarioFile.saveAs(scenarioPath);
-    const scenarioReport=JSON.parse(await fs.readFile(scenarioPath,"utf8"));
-    assert.equal(scenarioReport.organization_id,"acme");assert.equal(scenarioReport.currency,"USD");
-    assert.equal(scenarioReport.company_savings_total,null);assert.equal(scenarioReport.labor_savings_measured,false);
-    assert.equal(scenarioReport.opportunities[0].revision,1);
+    await bob
+      .getByRole("button", {
+        name: "Load reviewed improvement scenarios",
+        exact: true,
+      })
+      .click();
+    await bob
+      .getByRole("status")
+      .filter({ hasText: "Loaded reviewed organization scenarios." })
+      .waitFor();
+    assert.match(
+      await bob.locator("#opportunityReport").textContent(),
+      /900 projected net monthly value/,
+    );
+    const scenarioDownload = bob.waitForEvent("download");
+    await bob
+      .getByRole("button", { name: "Download scenarios report", exact: true })
+      .click();
+    const scenarioFile = await scenarioDownload;
+    const scenarioPath = pathModule.join(scratch, "scenarios.json");
+    await scenarioFile.saveAs(scenarioPath);
+    const scenarioReport = JSON.parse(await fs.readFile(scenarioPath, "utf8"));
+    assert.equal(scenarioReport.organization_id, "acme");
+    assert.equal(scenarioReport.currency, "USD");
+    assert.equal(scenarioReport.company_savings_total, null);
+    assert.equal(scenarioReport.labor_savings_measured, false);
+    assert.equal(scenarioReport.opportunities[0].revision, 1);
     const implementationDownload = bob.waitForEvent("download");
     await bob
       .getByRole("button", {
@@ -211,8 +227,27 @@ const pathModule = require("node:path");
       process.env.OWG_BROWSER_PYTHON || "python",
       [
         "-c",
-        'import json,sys;from zipfile import ZipFile;z=ZipFile(sys.argv[1]);assert "execute.py" in z.namelist();assert json.loads(z.read("tool-bindings.example.json"))["enabled"] is False;assert json.loads(z.read("customer-intent.example.json"))["customer_authorization_confirmed"] is False',
+        `import json,sys
+from pathlib import Path
+from zipfile import ZipFile
+z=ZipFile(sys.argv[1]);assert 'execute.py' in z.namelist()
+assert json.loads(z.read('tool-bindings.example.json'))['enabled'] is False
+assert json.loads(z.read('customer-intent.example.json'))['customer_authorization_confirmed'] is False
+root=Path(sys.argv[2]);root.mkdir();z.extractall(root);sys.path.insert(0,str(root))
+from runtime import load_spec
+from execute import reference,digest
+from evaluate import compare
+spec=load_spec()
+suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),'spec_sha256':digest(spec),
+'reviewed_by_customer':True,'case_inputs_authorized':True,'cases':[{'id':'case_1','category':'missing_facts',
+'input':{'text':'SYNTHETIC_PRIVATE_CASE'},'expected':{'status':'needs_clarification','accepted_routes':[],'review_confirmed':True}}]}
+results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),'spec_sha256':digest(spec),
+'suite_sha256':digest(suite),'results':[{'case_id':'case_1','plan':{'revision':spec['revision'],
+'content_sha256':spec['content_sha256'],'status':'needs_clarification','activity_ids':[],
+'missing_business_inputs':['SYNTHETIC_PRIVATE_QUESTION']}}]}
+(root/'report.json').write_text(json.dumps(compare(spec,suite,results)),encoding='utf-8')`,
         implementationPath,
+        pathModule.join(scratch, "shared-runtime"),
       ],
       { stdio: "ignore" },
     );
@@ -228,6 +263,75 @@ const pathModule = require("node:path");
             ),
       );
     });
+    const shadowReport = JSON.parse(
+      await fs.readFile(
+        pathModule.join(scratch, "shared-runtime", "report.json"),
+        "utf8",
+      ),
+    );
+    let shadowRequests = 0;
+    bob.on("request", (request) => {
+      if (new URL(request.url()).pathname.endsWith("/shadow-review")) {
+        shadowRequests++;
+        assert(!request.postData().includes("SYNTHETIC_PRIVATE_"));
+      }
+    });
+    for (const invalid of [
+      { ...shadowReport, raw_case: "SYNTHETIC_PRIVATE_CASE" },
+      {
+        ...shadowReport,
+        cases: [
+          { ...shadowReport.cases[0], case_id: "SYNTHETIC_PRIVATE_CASE" },
+        ],
+      },
+    ]) {
+      await bob
+        .getByLabel("Minimized shared shadow report", { exact: true })
+        .setInputFiles({
+          name: "invalid-report.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(invalid)),
+        });
+      assert.equal(shadowRequests, 0);
+      await bob
+        .getByRole("button", {
+          name: "Send minimized report for organization inspection",
+          exact: true,
+        })
+        .click();
+      await waitStatus(
+        bob,
+        "Choose a valid minimized shadow report without case values, model text or extra fields. Nothing was sent.",
+      );
+      assert.equal(shadowRequests, 0);
+    }
+    await bob
+      .getByLabel("Minimized shared shadow report", { exact: true })
+      .setInputFiles({
+        name: "shadow-report.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(shadowReport)),
+      });
+    assert.equal(shadowRequests, 0);
+    await bob
+      .getByRole("button", {
+        name: "Send minimized report for organization inspection",
+        exact: true,
+      })
+      .click();
+    await bob
+      .locator("#shadowResult h3")
+      .filter({ hasText: "1 of 1 cases match customer expectations" })
+      .waitFor();
+    assert.equal(shadowRequests, 1);
+    assert.match(
+      await bob.locator("#shadowResult").textContent(),
+      /current independent design review/,
+    );
+    await bob
+      .getByRole("button", { name: "Clear shadow review", exact: true })
+      .click();
+    assert.equal(await bob.locator("#shadowResult").textContent(), "");
     await alice
       .getByRole("button", { name: "Edit selected design", exact: true })
       .click();
@@ -241,7 +345,9 @@ const pathModule = require("node:path");
       ),
       "Draft activity open",
     );
-    await alice.getByLabel("Draft scenario Monthly cases",{exact:true}).fill("120");
+    await alice
+      .getByLabel("Draft scenario Monthly cases", { exact: true })
+      .fill("120");
     await alice
       .getByLabel("Draft business goal", { exact: true })
       .fill("Resolve the reviewed case after checking its evidence");
@@ -396,9 +502,20 @@ const pathModule = require("node:path");
         .isDisabled(),
       true,
     );
-    await alice.getByRole("button",{name:"Load reviewed improvement scenarios",exact:true}).click();
-    await alice.getByRole("status").filter({hasText:"Loaded reviewed organization scenarios."}).waitFor();
-    assert.match(await alice.locator("#opportunityReport").textContent(),/No reviewed improvement scenarios/);
+    await alice
+      .getByRole("button", {
+        name: "Load reviewed improvement scenarios",
+        exact: true,
+      })
+      .click();
+    await alice
+      .getByRole("status")
+      .filter({ hasText: "Loaded reviewed organization scenarios." })
+      .waitFor();
+    assert.match(
+      await alice.locator("#opportunityReport").textContent(),
+      /No reviewed improvement scenarios/,
+    );
     assert.equal(designWrites, 3);
     assert.match(await alice.locator("#design").textContent(), /Decide case/);
     assert.equal(
@@ -485,7 +602,10 @@ const pathModule = require("node:path");
     await download.saveAs(path);
     const exported = JSON.parse(await fs.readFile(path, "utf8"));
     assert.equal(exported.revision, 1);
-    assert.equal(exported.process_model.opportunity_scenario.monthly_cases,100);
+    assert.equal(
+      exported.process_model.opportunity_scenario.monthly_cases,
+      100,
+    );
     assert.equal(exported.collaboration_review.status, "reviewed_design");
     assert.equal(exported.execution_authorization, false);
     // A pending local file read must not repopulate a disconnected identity's page.
@@ -519,7 +639,12 @@ const pathModule = require("node:path");
     );
     assert.equal(await alice.locator("#comment").inputValue(), "");
     assert.equal(await alice.locator("#opportunityReport").textContent(), "");
-    assert.equal(await alice.getByRole("button",{name:"Download scenarios report",exact:true}).isDisabled(),true);
+    assert.equal(
+      await alice
+        .getByRole("button", { name: "Download scenarios report", exact: true })
+        .isDisabled(),
+      true,
+    );
     await reader.setViewportSize({ width: 390, height: 844 });
     assert.equal(
       await reader.evaluate(

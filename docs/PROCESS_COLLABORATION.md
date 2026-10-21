@@ -36,6 +36,14 @@ scenarios report** explicitly exports its JSON. Changing currency or identity
 clears the in-memory report and disables its download. No automatic sharing,
 source-system access or browser persistence is introduced.
 
+## Shadow evaluation review
+
+Shared designs can also [inspect minimized shadow evaluation reports](PROCESS_SHADOW_EVALUATION.md#inspect-an-organization-projects-report)
+from their exact organization SDK exports. Selection stays in the browser;
+an explicit action sends only validated structural report fields for inspection.
+Reports remain unverified customer declarations and are temporary. Minimal audit
+counts are retained, with no case values, model messages or automatic changes.
+
 ## Company sign-in
 
 Administrators can enable the portal's **Sign in with company account** button
