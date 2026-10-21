@@ -55,6 +55,14 @@ def create_human_enterprise_app(
 
     install_roster_mapping(app, db)
 
+    from shared.lifespan import extend_lifespan
+    from .process_collaboration import OrganizationProcessStore
+    from .process_collaboration_routes import build_process_router
+    process_store = OrganizationProcessStore(db)
+    extend_lifespan(app, startup=process_store.initialize)
+    app.include_router(build_process_router(process_store, app.state.human_principal_dependency))
+    app.state.organization_process_store = process_store
+
     previous_health = _take_get_endpoint(app, "/health")
     previous_capabilities = _take_get_endpoint(app, "/v1/capabilities")
     previous_runtime = _take_get_endpoint(app, "/v1/admin/runtime")
@@ -70,6 +78,12 @@ def create_human_enterprise_app(
     def capabilities() -> dict[str, Any]:
         payload = dict(previous_capabilities() if previous_capabilities else {})
         payload["human_access"] = {
+            "process_collaboration": {
+                "explicit_group_scopes_required": True,
+                "personal_evidence_published_automatically": False,
+                "independent_revision_review": True,
+                "review_grants_execution_authority": False,
+            },
             "oidc": "configured" if human_access.enabled else "disabled_by_default",
             "service_token_compatibility": True,
             "self_read_default": bool(human_access.self_read_enabled),

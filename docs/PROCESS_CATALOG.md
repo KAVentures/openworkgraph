@@ -4,6 +4,12 @@ The local Evidence page now connects the CSV designer to the existing
 `workflow_knowledge` store. No second model database or collector is introduced.
 Saving is explicit; selecting or analyzing a CSV still retains no import.
 
+An exact saved JSON export can also be explicitly published to the Gateway's
+[shared organization catalog](PROCESS_COLLABORATION.md). Publication creates
+separate authenticated ownership, collaborator roles and revision-specific
+design reviews. It excludes local evidence references and does not automatically
+synchronize private knowledge or carry local owner labels into permissions.
+
 ## User flow
 
 1. Analyze an authorized CSV, choose a complete variant, and open the designer.

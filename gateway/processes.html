@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>OWG · Shared processes</title>
+    <style nonce="__NONCE__">
+      :root {
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        color: #25372e;
+        background: #f5f6f2;
+      }
+      body {
+        max-width: 1120px;
+        margin: auto;
+        padding: 24px;
+      }
+      h1,
+      h2,
+      h3 {
+        line-height: 1.2;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+        background: #ecf3ed;
+        border: 1px solid #7c9788;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin: 4px;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+      input,
+      textarea {
+        padding: 8px;
+        border: 1px solid #aab9ad;
+        border-radius: 5px;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      label {
+        display: block;
+        margin: 10px 0;
+      }
+      textarea {
+        display: block;
+        width: 100%;
+      }
+      section,
+      .box {
+        background: white;
+        border: 1px solid #d8e0d7;
+        border-radius: 10px;
+        padding: 18px;
+        margin: 16px 0;
+      }
+      .muted {
+        color: #526358;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+      .scroll {
+        overflow: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 480px;
+      }
+      td,
+      th {
+        padding: 8px;
+        text-align: left;
+        border-bottom: 1px solid #dce4dc;
+        overflow-wrap: anywhere;
+      }
+      ol,
+      ul {
+        padding-left: 24px;
+      }
+      #status {
+        white-space: pre-wrap;
+      }
+      .actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      :focus-visible {
+        outline: 3px solid #447459;
+        outline-offset: 3px;
+      }
+      fieldset {
+        border: 1px solid #d8e0d7;
+        margin: 12px 0;
+        min-width: 0;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      @media (max-width: 700px) {
+        body {
+          padding: 12px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        section {
+          padding: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Shared processes</h1>
+    <p>
+      Review process designs with your organization. A design review does not
+      approve business policy or authorize an agent.
+    </p>
+    <section aria-label="Organization sign-in">
+      <h2>Connect your delegated identity</h2>
+      <p class="muted">
+        Use an access token from your existing company OIDC integration. It
+        stays in this page's memory. Your administrator must explicitly assign
+        process permissions; evidence access alone is insufficient.
+      </p>
+      <label
+        >Delegated access token
+        <input id="token" type="password" autocomplete="off" maxlength="16384"
+      /></label>
+      <div class="actions">
+        <button id="connect">Connect</button
+        ><button id="disconnect">Disconnect and clear page</button>
+      </div>
+      <p id="identity" class="muted">Not connected.</p>
+    </section>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section>
+      <h2>Organization inventory</h2>
+      <label
+        ><input id="includeArchived" type="checkbox" /> Include archived
+        processes</label
+      ><button id="load">Load shared processes</button>
+      <div id="inventory"></div>
+    </section>
+    <section>
+      <h2>Publish or update a reviewed design</h2>
+      <p class="muted">
+        Export a reviewed design from OWG's local process catalog and select its
+        JSON file. Previewing the file sends nothing. Publishing shares the
+        model, including baseline labels, goals and declared rules. Raw event
+        histories and local evidence references are excluded.
+      </p>
+      <label
+        >Reviewed process export
+        <input id="file" type="file" accept=".json,application/json"
+      /></label>
+      <div id="preview"></div>
+      <label>Process title <input id="title" maxlength="240" /></label>
+      <label
+        ><input id="reviewed" type="checkbox" /> I reviewed this exact design
+        and its labels and rules.</label
+      >
+      <label
+        ><input id="sharing" type="checkbox" /> I confirm this model may be
+        shared with readers of my organization's process catalog.</label
+      >
+      <div class="actions">
+        <button id="publish" disabled>Publish as a new shared process</button
+        ><button id="update" disabled>
+          Save as the selected process's next revision
+        </button>
+      </div>
+    </section>
+    <section id="selected" hidden>
+      <h2 id="selectedTitle"></h2>
+      <p id="selectedMeta"></p>
+      <div id="design"></div>
+      <div class="actions" id="exports"></div>
+      <div class="grid">
+        <fieldset>
+          <legend>Revision review</legend>
+          <p id="reviewState"></p>
+          <div id="reviews"></div>
+          <label
+            >Review comment
+            <textarea id="comment" rows="3" maxlength="2000"></textarea>
+          </label>
+          <label
+            ><input id="reviewConfirm" type="checkbox" /> I reviewed this exact
+            saved revision.</label
+          ><button id="approve">Record design review</button
+          ><button id="changes">Request changes</button>
+          <p class="muted">
+            Authors cannot approve their own revision. Saving a new revision
+            requires a new review. Review comments remain user-provided context.
+          </p>
+        </fieldset>
+        <fieldset>
+          <legend>Ownership and collaborators</legend>
+          <p class="muted">
+            Use organization actor IDs from your identity mapping. Each
+            collaborator also needs the corresponding OIDC process permission.
+          </p>
+          <div id="members"></div>
+          <button id="addMember">Add collaborator</button>
+          <label
+            >New owner actor ID (process administrators only)
+            <input id="owner" maxlength="512"
+          /></label>
+          <label
+            ><input id="accessConfirm" type="checkbox" /> I reviewed these
+            ownership and role changes.</label
+          ><button id="saveAccess">Save access</button>
+        </fieldset>
+      </div>
+      <div class="actions">
+        <button id="history">Load revision history</button
+        ><button id="archive">Archive process</button
+        ><button id="delete">Delete all shared revisions and reviews</button>
+      </div>
+      <div id="historyList"></div>
+    </section>
+    <script nonce="__NONCE__">
+      (() => {
+        "use strict";
+        let credential = "",
+          selected = null,
+          candidate = null,
+          members = [],
+          busy = false,
+          previewGeneration = 0;
+        const $ = (id) => document.getElementById(id);
+        const el = (tag, text) => {
+          const n = document.createElement(tag);
+          if (text != null) n.textContent = String(text);
+          return n;
+        };
+        const words = (value) => String(value).replaceAll("_", " ");
+        const note = (text) => {
+          $("status").textContent = String(text || "");
+        };
+        function button(text, fn) {
+          const n = el("button", text);
+          n.type = "button";
+          n.addEventListener("click", () => run(fn));
+          return n;
+        }
+        async function run(fn) {
+          if (busy) {
+            note("Wait for the current process request.");
+            return;
+          }
+          busy = true;
+          try {
+            await fn();
+          } catch (error) {
+            note(error.message || "Process request failed.");
+          } finally {
+            busy = false;
+          }
+        }
+        async function call(path, body) {
+          if (!credential)
+            throw new Error("Connect your delegated identity first.");
+          const response = await fetch(path, {
+            cache: "no-store",
+            headers: {
+              Authorization: "Bearer " + credential,
+              ...(body ? { "Content-Type": "application/json" } : {}),
+            },
+            ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(
+              typeof data.detail === "string"
+                ? data.detail
+                : "Invalid process request (" + response.status + ")",
+            );
+          }
+          return response.json();
+        }
+        function clear() {
+          previewGeneration++;
+          credential = "";
+          $("publish").disabled = true;
+          selected = null;
+          candidate = null;
+          members = [];
+          $("token").value = "";
+          $("file").value = "";
+          $("title").value = "";
+          $("comment").value = "";
+          $("owner").value = "";
+          $("reviewConfirm").checked = false;
+          $("accessConfirm").checked = false;
+          [
+            "inventory",
+            "preview",
+            "design",
+            "members",
+            "historyList",
+            "reviews",
+            "selectedTitle",
+            "selectedMeta",
+            "reviewState",
+            "exports",
+          ].forEach((id) => $(id).replaceChildren());
+          $("selected").hidden = true;
+          $("reviewed").checked = false;
+          $("sharing").checked = false;
+          $("update").disabled = true;
+          $("identity").textContent = "Not connected.";
+          note(
+            "Page memory cleared. No browser credential or process cache is stored.",
+          );
+        }
+        $("disconnect").onclick = () => {
+          if (busy) {
+            note("Wait for the current request before disconnecting.");
+            return;
+          }
+          clear();
+        };
+        $("connect").onclick = () =>
+          run(async () => {
+            const presented = $("token").value.trim();
+            clear();
+            credential = presented;
+            try {
+              const who = await call("/v1/human/me");
+              $("publish").disabled = !(
+                who.scopes.includes("org:process:read") &&
+                who.scopes.includes("org:process:write")
+              );
+              $("identity").textContent =
+                "Organization " +
+                who.organization_id +
+                " · actor " +
+                who.actor_id +
+                " · " +
+                who.scopes
+                  .filter((s) => s.startsWith("org:process:"))
+                  .join(", ");
+              await inventory();
+            } catch (error) {
+              clear();
+              throw error;
+            }
+          });
+        async function inventory(after = "") {
+          const result = await call(
+            "/v1/human/processes?" +
+              new URLSearchParams({
+                after,
+                include_archived: String($("includeArchived").checked),
+              }),
+          );
+          const host = $("inventory");
+          host.replaceChildren();
+          result.processes.forEach((item) => {
+            const row = el("p");
+            row.append(
+              button(item.title + " · r" + item.revision, () =>
+                open(item.workflow_id),
+              ),
+              el(
+                "span",
+                " · owner " +
+                  item.owner_actor_id +
+                  " · " +
+                  words(item.review_status) +
+                  (item.archived ? " · archived" : ""),
+              ),
+            );
+            host.appendChild(row);
+          });
+          if (!result.processes.length)
+            host.appendChild(
+              el(
+                "p",
+                "No shared processes on this page. Private knowledge and raw evidence are not searched.",
+              ),
+            );
+          if (result.has_more)
+            host.appendChild(
+              button("Next processes", () => inventory(result.next_after)),
+            );
+          note("Loaded organization process inventory.");
+        }
+        $("load").onclick = () => run(() => inventory());
+        function preview(model, host) {
+          host.replaceChildren();
+          host.append(
+            el("h3", "Process design"),
+            el("p", "Declared goal: " + model.goal),
+            el("h4", "AS-IS baseline"),
+          );
+          const baseline = el("ol");
+          model.baseline_path.forEach((label) =>
+            baseline.appendChild(el("li", label)),
+          );
+          host.appendChild(baseline);
+          host.append(
+            el(
+              "p",
+              "Baseline coverage: " +
+                words(model.baseline_coverage || "supplied path") +
+                ". Source identity and task boundaries are not verified.",
+            ),
+            el("h4", "TO-BE activities"),
+          );
+          const table = el("table"),
+            head = el("tr");
+          ["Activity", "Label", "Type", "Suggested implementation"].forEach(
+            (text) => head.appendChild(el("th", text)),
+          );
+          table.appendChild(head);
+          model.activities.forEach((a) => {
+            const row = el("tr");
+            [a.id, a.label, words(a.kind), words(a.implementation)].forEach(
+              (value) => row.appendChild(el("td", value)),
+            );
+            table.appendChild(row);
+          });
+          const wrap = el("div");
+          wrap.className = "scroll";
+          wrap.appendChild(table);
+          host.appendChild(wrap);
+          host.appendChild(el("h4", "Proposed transitions"));
+          const edges = el("ul");
+          model.transitions.forEach((e) =>
+            edges.appendChild(
+              el(
+                "li",
+                e.source +
+                  " → " +
+                  e.target +
+                  (e.rule_id ? " · rule " + e.rule_id : ""),
+              ),
+            ),
+          );
+          host.appendChild(edges);
+          host.appendChild(el("h4", "Declared rules"));
+          const rules = el("ul");
+          model.business_rules.forEach((r) =>
+            rules.appendChild(
+              el(
+                "li",
+                r.id +
+                  ": " +
+                  r.text +
+                  " · " +
+                  (r.user_confirmed ? "user confirmed" : "unconfirmed"),
+              ),
+            ),
+          );
+          host.appendChild(rules);
+        }
+        $("file").addEventListener("change", async () => {
+          const generation = ++previewGeneration;
+          candidate = null;
+          $("preview").replaceChildren();
+          $("reviewed").checked = false;
+          $("sharing").checked = false;
+          const file = $("file").files[0];
+          if (!file) return;
+          if (file.size > 256 * 1024) {
+            note("Select an export of at most 256 KiB.");
+            return;
+          }
+          try {
+            const contents = await file.text();
+            if (generation !== previewGeneration || $("file").files[0] !== file)
+              return;
+            const data = JSON.parse(contents);
+            if (data.format !== "openworkgraph.versioned-process-export.v1")
+              throw new Error(
+                "Select a versioned process-catalog JSON export.",
+              );
+            preview(data.process_model, $("preview"));
+            candidate = {
+              title: String(data.title || ""),
+              process_model: data.process_model,
+            };
+            $("title").value = candidate.title;
+            note("File previewed in this browser. Nothing has been published.");
+          } catch (error) {
+            if (generation !== previewGeneration) return;
+            candidate = null;
+            note(error.message || "Could not preview this export.");
+          }
+        });
+        $("title").addEventListener("input", () => {
+          $("reviewed").checked = false;
+          $("sharing").checked = false;
+        });
+        function reviewedCandidate() {
+          if (!candidate || !$("reviewed").checked || !$("sharing").checked)
+            throw new Error(
+              "Preview and review the exact model and explicitly confirm organization sharing.",
+            );
+          return {
+            title: $("title").value,
+            process_model: candidate.process_model,
+            user_confirmed: true,
+            organization_sharing_confirmed: true,
+          };
+        }
+        $("publish").onclick = () =>
+          run(async () => {
+            const result = await call("/v1/human/processes", {
+              ...reviewedCandidate(),
+              expected_revision: 0,
+            });
+            render(result);
+            $("reviewed").checked = false;
+            $("sharing").checked = false;
+            note(
+              "Shared design published as revision 1. It has not received an independent design review.",
+            );
+          });
+        $("update").onclick = () =>
+          run(async () => {
+            if (!selected || !selected.permissions.edit)
+              throw new Error("Open a process you are allowed to edit.");
+            const result = await call(
+              "/v1/human/processes/" + selected.process.workflow_id,
+              {
+                ...reviewedCandidate(),
+                expected_revision: selected.process.revision,
+              },
+            );
+            render(result);
+            $("reviewed").checked = false;
+            $("sharing").checked = false;
+            note(
+              "New revision saved. Earlier revision reviews do not approve this new design.",
+            );
+          });
+        async function open(id, revision) {
+          const params = revision
+            ? "?" + new URLSearchParams({ revision: String(revision) })
+            : "";
+          const data = await call(
+            "/v1/human/processes/" + encodeURIComponent(id) + params,
+          );
+          render(data);
+          note("Opened exact saved revision " + data.process.revision + ".");
+        }
+        function render(data) {
+          selected = data;
+          members = data.members.map((m) => ({ ...m }));
+          $("selected").hidden = false;
+          $("selectedTitle").textContent =
+            data.process.title + " · revision " + data.process.revision;
+          $("selectedMeta").textContent =
+            "Owner actor " +
+            data.owner_actor_id +
+            " · author actor " +
+            data.author_actor_id +
+            " · your role " +
+            data.your_role +
+            " · " +
+            (data.archived ? "archived" : "active") +
+            (data.viewing_historical_revision
+              ? " · historical revision; latest is revision " + data.latest_revision
+              : "");
+          preview(data.process.process_model, $("design"));
+          $("update").disabled = !data.permissions.edit;
+          $("reviewConfirm").checked = false;
+          $("comment").value = "";
+          $("accessConfirm").checked = false;
+          $("owner").value = "";
+          $("owner").disabled = !data.permissions.transfer_owner;
+          $("reviewState").textContent =
+            "Design review: " +
+            words(data.review.status) +
+            ". This is not business-policy approval or execution authority.";
+          $("reviews").replaceChildren();
+          data.review.reviews.forEach((review) =>
+            $("reviews").appendChild(
+              el(
+                "p",
+                review.reviewer_actor_id +
+                  " · " +
+                  words(review.decision) +
+                  " · " +
+                  review.reviewed_at +
+                  " · " +
+                  review.comment,
+              ),
+            ),
+          );
+          if (data.review.reviews_truncated)
+            $("reviews").appendChild(
+              el(
+                "p",
+                "Additional reviewer summaries are omitted. Status counts cover all latest reviewer decisions.",
+              ),
+            );
+          $("approve").disabled =
+            !data.permissions.review ||
+            data.author_actor_id === data.your_actor_id;
+          $("changes").disabled = !data.permissions.review;
+          $("saveAccess").disabled = !data.permissions.manage;
+          $("addMember").disabled = !data.permissions.manage;
+          $("archive").disabled = !data.permissions.manage;
+          $("delete").disabled =
+            !data.permissions.manage || data.viewing_historical_revision;
+          $("archive").textContent = data.archived
+            ? "Restore archived process"
+            : "Archive process";
+          $("historyList").replaceChildren();
+          $("exports").replaceChildren();
+          ["json", "bpmn", "pdd"].forEach((format) =>
+            $("exports").appendChild(
+              button("Export saved " + format.toUpperCase(), () =>
+                download(format),
+              ),
+            ),
+          );
+          renderMembers();
+        }
+        function renderMembers() {
+          const host = $("members");
+          host.replaceChildren();
+          members.forEach((member, index) => {
+            const row = el("div"),
+              identity = el("input");
+            identity.value = member.actor_id;
+            identity.maxLength = 512;
+            identity.setAttribute(
+              "aria-label",
+              "Collaborator " + (index + 1) + " actor ID",
+            );
+            identity.disabled = !selected.permissions.manage;
+            identity.addEventListener("input", () => {
+              member.actor_id = identity.value;
+              $("accessConfirm").checked = false;
+            });
+            const role = el("select");
+            ["viewer", "editor", "reviewer"].forEach((value) => {
+              const opt = el("option", value);
+              opt.value = value;
+              role.appendChild(opt);
+            });
+            role.value = member.role;
+            role.setAttribute(
+              "aria-label",
+              "Collaborator " + (index + 1) + " role",
+            );
+            role.disabled = !selected.permissions.manage;
+            role.addEventListener("change", () => {
+              member.role = role.value;
+              $("accessConfirm").checked = false;
+            });
+            const remove = button("Remove collaborator " + (index + 1), () => {
+              members.splice(index, 1);
+              $("accessConfirm").checked = false;
+              renderMembers();
+            });
+            remove.disabled = !selected.permissions.manage;
+            row.append(identity, role, remove);
+            host.appendChild(row);
+          });
+        }
+        $("addMember").onclick = () => {
+          if (busy) return;
+          if (!selected?.permissions.manage) return;
+          if (members.length >= 50) {
+            note("Maximum 50 collaborators.");
+            return;
+          }
+          members.push({ actor_id: "", role: "viewer" });
+          $("accessConfirm").checked = false;
+          renderMembers();
+        };
+        $("owner").addEventListener("input", () => {
+          $("accessConfirm").checked = false;
+        });
+        $("saveAccess").onclick = () =>
+          run(async () => {
+            if (!$("accessConfirm").checked)
+              throw new Error(
+                "Review ownership and collaborator changes first.",
+              );
+            const body = {
+              expected_access_revision: selected.access_revision,
+              members,
+              user_confirmed: true,
+            };
+            if ($("owner").value.trim())
+              body.new_owner_actor_id = $("owner").value.trim();
+            render(
+              await call(
+                "/v1/human/processes/" +
+                  selected.process.workflow_id +
+                  "/access",
+                body,
+              ),
+            );
+            note(
+              "Ownership and collaborator roles saved. OIDC process scopes are still required.",
+            );
+          });
+        async function review(decision) {
+          if (!$("reviewConfirm").checked)
+            throw new Error("Review this exact saved revision first.");
+          const record = selected.process;
+          render(
+            await call(
+              "/v1/human/processes/" + record.workflow_id + "/reviews",
+              {
+                revision: record.revision,
+                content_sha256: record.content_sha256,
+                expected_review_number: selected.your_review_number,
+                decision,
+                comment: $("comment").value,
+                user_confirmed: true,
+              },
+            ),
+          );
+          note(
+            "Design review recorded against the exact revision and content hash.",
+          );
+        }
+        $("approve").onclick = () => run(() => review("reviewed_design"));
+        $("changes").onclick = () => run(() => review("changes_requested"));
+        $("comment").addEventListener("input", () => {
+          $("reviewConfirm").checked = false;
+        });
+        $("archive").onclick = () =>
+          run(async () => {
+            if (!selected) return;
+            if (
+              !window.confirm(
+                selected.archived
+                  ? "Restore this shared process?"
+                  : "Archive this shared process and prevent edits and reviews?",
+              )
+            )
+              return;
+            render(
+              await call(
+                "/v1/human/processes/" +
+                  selected.process.workflow_id +
+                  "/archive",
+                {
+                  expected_access_revision: selected.access_revision,
+                  archived: !selected.archived,
+                  user_confirmed: true,
+                },
+              ),
+            );
+            note("Archive state updated.");
+          });
+        $("delete").onclick = () =>
+          run(async () => {
+            if (
+              !selected ||
+              !window.confirm(
+                "Delete ALL shared revisions, membership and reviews? Downloaded copies remain separate.",
+              )
+            )
+              return;
+            await call(
+              "/v1/human/processes/" + selected.process.workflow_id + "/forget",
+              {
+                expected_revision: selected.process.revision,
+                expected_access_revision: selected.access_revision,
+                user_confirmed: true,
+              },
+            );
+            selected = null;
+            $("selected").hidden = true;
+            $("update").disabled = true;
+            await inventory();
+            note(
+              "Shared revisions and reviews deleted. Private local knowledge was not changed.",
+            );
+          });
+        async function history(before) {
+          const params = new URLSearchParams({ limit: "10" });
+          if (before) params.set("before_revision", String(before));
+          const id = selected.process.workflow_id;
+          const result = await call(
+            "/v1/human/processes/" + id + "/history?" + params,
+          );
+          const host = $("historyList");
+          host.replaceChildren();
+          result.workflows.forEach((record) =>
+            host.appendChild(
+              button(
+                "Open revision " + record.revision + " · " + record.saved_at,
+                () => open(id, record.revision),
+              ),
+            ),
+          );
+          if (result.has_more)
+            host.appendChild(
+              button("Older revisions", () =>
+                history(result.next_before_revision),
+              ),
+            );
+        }
+        $("history").onclick = () => run(() => history());
+        async function download(format) {
+          const record = selected.process;
+          const response = await fetch(
+            "/v1/human/processes/" +
+              record.workflow_id +
+              "/export?" +
+              new URLSearchParams({
+                revision: String(record.revision),
+                format,
+              }),
+            {
+              cache: "no-store",
+              headers: { Authorization: "Bearer " + credential },
+            },
+          );
+          if (!response.ok)
+            throw new Error("Could not export the saved shared revision.");
+          const url = URL.createObjectURL(await response.blob()),
+            a = el("a");
+          a.href = url;
+          a.download =
+            "owg-shared-process-r" +
+            record.revision +
+            "." +
+            { json: "json", bpmn: "bpmn", pdd: "txt" }[format];
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+          note(
+            "Exported saved revision " +
+              record.revision +
+              "; no business activity was executed.",
+          );
+        }
+      })();
+    </script>
+  </body>
+</html>

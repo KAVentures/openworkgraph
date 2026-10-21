@@ -77,20 +77,26 @@ class KnowledgeStore:
         data = request.portable()
         self.initialize()
         with self.db.connect() as conn:
-            current = self.db._execute(conn, "SELECT MAX(revision) FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?", (owner, request.workflow_id)).fetchone()[0] or 0
-            if int(current) != request.expected_revision:
-                raise ValueError("Revision changed; reload the workflow and review the proposed update")
-            if current and request.process_model is None:
-                prior = self.db._execute(conn, "SELECT payload FROM workflow_knowledge WHERE owner = ? AND workflow_id = ? AND revision = ?", (owner, request.workflow_id, current)).fetchone()
-                if prior and json.loads(prior[0]).get("process_model"):
-                    raise ValueError("Process graph must be preserved; use the process catalog to edit this workflow")
-            revision = int(current) + 1
-            try:
-                self.db._execute(conn, "INSERT INTO workflow_knowledge(owner, workflow_id, revision, payload) VALUES (?, ?, ?, ?)", (owner, request.workflow_id, revision, json.dumps(data)))
-            except Exception as exc:
-                if isinstance(exc, sqlite3.IntegrityError) or getattr(exc, "sqlstate", None) == "23505":
-                    raise ValueError("Revision changed; reload the workflow and review the proposed update") from exc
-                raise
+            return self.save_in_transaction(conn, owner, request, portable=data)
+
+    def save_in_transaction(self, conn: Any, owner: str, request: KnowledgeWrite,
+                            *, portable: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Append to an initialized store inside the caller's metadata transaction."""
+        data = request.portable() if portable is None else portable
+        current = self.db._execute(conn, "SELECT MAX(revision) FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?", (owner, request.workflow_id)).fetchone()[0] or 0
+        if int(current) != request.expected_revision:
+            raise ValueError("Revision changed; reload the workflow and review the proposed update")
+        if current and request.process_model is None:
+            prior = self.db._execute(conn, "SELECT payload FROM workflow_knowledge WHERE owner = ? AND workflow_id = ? AND revision = ?", (owner, request.workflow_id, current)).fetchone()
+            if prior and json.loads(prior[0]).get("process_model"):
+                raise ValueError("Process graph must be preserved; use the process catalog to edit this workflow")
+        revision = int(current) + 1
+        try:
+            self.db._execute(conn, "INSERT INTO workflow_knowledge(owner, workflow_id, revision, payload) VALUES (?, ?, ?, ?)", (owner, request.workflow_id, revision, json.dumps(data)))
+        except Exception as exc:
+            if isinstance(exc, sqlite3.IntegrityError) or getattr(exc, "sqlstate", None) == "23505":
+                raise ValueError("Revision changed; reload the workflow and review the proposed update") from exc
+            raise
         return data | {"revision": revision}
 
     def forget(self, owner: str, workflow_id: str) -> dict[str, Any]:

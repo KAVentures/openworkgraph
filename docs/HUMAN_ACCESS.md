@@ -49,6 +49,7 @@ Supported scopes:
 - `org:evidence:read` — raw evidence for any actor in the organization. This is intentionally explicit and should be narrowly assigned.
 - `aggregate:read` — thresholded organization patterns only; no actor identifiers are returned.
 - `pseudonymous:evidence:read` — organization evidence with actor/device/session identifiers replaced by stable HMAC pseudonyms. This is a separate permission and is **not** a claim of anonymization.
+- `org:process:read`, `org:process:write`, `org:process:review`, `org:process:admin` — separately assigned permissions for explicitly published organization process designs. See [shared process collaboration](PROCESS_COLLABORATION.md) for role checks, revision review and an example group map. Evidence scopes do not grant process permissions.
 
 Human raw-trace requests default to the caller's own actor even when the caller has a broader scope. Reading another actor requires an explicit `actor_id` parameter and the corresponding team or organization permission.
 
