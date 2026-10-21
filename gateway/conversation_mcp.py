@@ -152,6 +152,8 @@ file reads, unshared chat transcripts, or organization-wide reads are provided."
         Requires self:knowledge:write and user_confirmed=true. Never infer review
         from captured text. expected_revision prevents overwriting newer rules.
         Confirmation is client-declared, not an organizational policy attestation.
+        Execution classifications require the local reviewed-grouping controls;
+        this generic knowledge writer cannot create or replace them.
         """
         p = person()
         if "self:knowledge:write" not in p.scopes:

@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field, StrictBool
 
 from .process_model import ProcessModel
+from .execution_grouping import ExecutionGrouping
 
 
 class KnowledgeWrite(BaseModel):
@@ -25,6 +26,7 @@ class KnowledgeWrite(BaseModel):
     expected_revision: int = Field(default=0, ge=0)
     user_confirmed: StrictBool = False
     process_model: ProcessModel | None = None
+    execution_grouping: ExecutionGrouping | None = None
 
     def portable(self) -> dict[str, Any]:
         if not self.user_confirmed:
@@ -32,6 +34,8 @@ class KnowledgeWrite(BaseModel):
         data = self.model_dump(exclude={"user_confirmed", "expected_revision"})
         if data["process_model"] is None:
             data.pop("process_model")
+        if data['execution_grouping'] is None:
+            data.pop('execution_grouping')
         if any(len(value) > 2000 for key in ("user_explanations", "decision_rules", "unresolved_questions", "evidence_refs") for value in data[key]):
             raise ValueError("Knowledge list entries must not exceed 2000 characters")
         data.update({"format": "openworkgraph.workflow-knowledge.v1",
@@ -80,8 +84,11 @@ class KnowledgeStore:
             return self.save_in_transaction(conn, owner, request, portable=data)
 
     def save_in_transaction(self, conn: Any, owner: str, request: KnowledgeWrite,
-                            *, portable: dict[str, Any] | None = None) -> dict[str, Any]:
+                            *, portable: dict[str, Any] | None = None,
+                            allow_execution_grouping: bool = False) -> dict[str, Any]:
         """Append to an initialized store inside the caller's metadata transaction."""
+        if request.execution_grouping is not None and not allow_execution_grouping:
+            raise ValueError('Use reviewed workflow grouping controls to classify executions')
         data = request.portable() if portable is None else portable
         current = self.db._execute(conn, "SELECT MAX(revision) FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?", (owner, request.workflow_id)).fetchone()[0] or 0
         if int(current) != request.expected_revision:
@@ -90,6 +97,10 @@ class KnowledgeStore:
             prior = self.db._execute(conn, "SELECT payload FROM workflow_knowledge WHERE owner = ? AND workflow_id = ? AND revision = ?", (owner, request.workflow_id, current)).fetchone()
             if prior and json.loads(prior[0]).get("process_model"):
                 raise ValueError("Process graph must be preserved; use the process catalog to edit this workflow")
+        if current and request.execution_grouping is None:
+            prior = self.db._execute(conn, "SELECT payload FROM workflow_knowledge WHERE owner = ? AND workflow_id = ? AND revision = ?", (owner, request.workflow_id, current)).fetchone()
+            if prior and json.loads(prior[0]).get('execution_grouping'):
+                raise ValueError('Reviewed execution grouping must be preserved when updating this knowledge record')
         revision = int(current) + 1
         try:
             self.db._execute(conn, "INSERT INTO workflow_knowledge(owner, workflow_id, revision, payload) VALUES (?, ?, ?, ?)", (owner, request.workflow_id, revision, json.dumps(data)))

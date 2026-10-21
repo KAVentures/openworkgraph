@@ -38,6 +38,7 @@
     return s.replace(/_/g, ' ');
   }
   function titleFor(cluster) {
+    if(cluster.reviewed_label)return String(cluster.reviewed_label).slice(0,120);
     const labels = cluster.surface_labels || {};
     const steps = safeArray(cluster.core_steps).length ? cluster.core_steps : cluster.core_structural_steps;
     return safeArray(steps).slice(0, 3).map(step => readable(step, labels)).filter(Boolean).join(' → ') || 'Observed workflow candidate';
@@ -230,8 +231,9 @@
     const host = document.getElementById('owgExplorerDetail');
     if (!host) return;
     host.replaceChildren();
-    host.appendChild(element('h3', titleFor(candidate)));
-    host.appendChild(element('p',
+    host.appendChild(element('h3',(candidate.reviewed_label?'Reviewed group · ':'')+titleFor(candidate)));
+    host.appendChild(element('p',candidate.reviewed_label?
+      'User-declared classification · '+count(candidate.execution_count)+' selected retained executions · '+count(candidate.exact_variant_count)+' observed variants. This does not verify common business cases, intent or handoffs.':
       'Observed candidate · ' + count(candidate.execution_count) + ' executions · ' +
       count(candidate.exact_variant_count) + ' exact sequence variants · structural specificity ' +
       Number(candidate.cluster_quality || 0).toFixed(2) + ' (not task confidence)', 'muted'));
@@ -297,6 +299,13 @@
       ' The map shows no unobserved actions, values, or inferred authorization.', 'muted'));
     const actions = element('div', null, 'owg-explorer-actions');
     actions.appendChild(button('Review selected examples', () => inspect(candidate, selectedExample), true));
+    const regroup=button('Name or regroup selected examples',()=>{
+      if(!window.owgWorkflowGroups?.stage){status('Reviewed grouping controls unavailable. Reopen the local dashboard.');return;}
+      window.owgWorkflowGroups.stage({execution_ids:selectedIds(candidate,selectedExample),title:titleFor(candidate),...currentWindow});
+    },true);
+    regroup.disabled=!!candidate.reviewed_label;
+    if(regroup.disabled)regroup.title='Use the reviewed group editor to rename, split or move these classifications.';
+    actions.appendChild(regroup);
     actions.appendChild(button('Draft selected variant in process catalog',()=>{
       const lane=selectedExample;
       if(!lane||!lane.exact||lane.omittedSteps){status('Select a node in a complete displayed exact variant before drafting. Core summaries and clipped lanes cannot be used.');return;}
@@ -374,7 +383,9 @@
     const instruction = ids.length
       ? 'Use OpenWorkGraph get_workflow_evidence(execution_ids="' + ids.join(',') + '"). '
       : 'Find and inspect the exact executions behind this OpenWorkGraph workflow candidate. ';
-    const prompt = instruction +
+    const reviewed = candidate.reviewed_workflow_id ?
+      'Read get_workflow_knowledge(workflow_id="'+candidate.reviewed_workflow_id+'"); require revision '+candidate.reviewed_revision+' before using that user-declared classification. If it changed, reload and clarify. It does not verify intent, business-case joins or permission. ' : '';
+    const prompt = reviewed + instruction +
       'Reconstruct what was observed using canonical evidence, verify business case identity and outcomes with current authorized source tools, ' +
       'identify workflow variations and unknown rules, and propose an improved workflow plus an agent implementation plan. ' +
       'Do not treat observed steps as required policy, do not infer permission to write, and do not invent missing values or results.';
@@ -385,6 +396,22 @@
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
   window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable};
+  window.owgWorkflowExplorer=Object.freeze({
+    showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
+      const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
+      const variants=clusters.flatMap(cluster=>safeArray(cluster.exact_variants));
+      const candidate={candidate_cluster_id:'reviewed_'+workflow_id+'_r'+revision,reviewed_label:label,reviewed_workflow_id:workflow_id,reviewed_revision:revision,
+        execution_ids:safeArray(bundle.selector?.execution_ids),execution_count:count(bundle.selector?.selected_execution_count),
+        exact_variants:variants,exact_variant_count:variants.length,surface_labels:bundle.structural_alignment?.surface_labels||{},
+        core_steps:clusters[0]?.core_steps||[]};
+      selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=bundle;currentWindow=filter;
+      renderCandidates();renderDetail(candidate);
+    },
+    clearReviewed(label){
+      selectedId='';selectedExample=null;activeBundle=null;renderCandidates();
+      clearDetail(label?'Reviewed group · '+label+'. Loadable source details are required to draw its observed variants.':'Choose an inferred candidate or load a reviewed classification to inspect observed variants.');
+    }
+  });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install);
   else install();
 })();

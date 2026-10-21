@@ -1,8 +1,10 @@
-# Visual workflow explorer (initial milestone)
+# Visual workflow explorer
 
-OpenWorkGraph now offers a read-only **Explore observed workflows** card on the
-local Overview page. It builds on the existing evidence API rather than
-introducing a second collector, persistent process database, or model call.
+OpenWorkGraph offers **Explore observed workflows** on the local Overview page.
+Its automatic projection reads the existing evidence API, with no second
+collector or model call. Separate [reviewed grouping controls](WORKFLOW_GROUPINGS.md)
+can name, split and combine selected classifications in the existing knowledge
+ledger, while preserving inferred families and individual execution histories.
 
 ## Using the view
 
@@ -15,8 +17,9 @@ introducing a second collector, persistent process database, or model call.
 
 The map uses `/v1/workflow-evidence/families` and
 `/v1/workflow-evidence` with their existing authenticated local context. No
-new storage, network destination, write API, AI grants, or recording permissions
-are introduced.
+storage, network destination, AI grants or recording permissions are introduced
+by map inspection. Reviewed grouping saves are separate explicit writes to
+user-reviewed knowledge; they do not modify canonical source evidence.
 
 ## Semantics and known limits
 
@@ -33,9 +36,11 @@ are introduced.
 - Titles and labels are drawn using DOM `textContent`, not HTML from event
   data. Canonical event drill-down stays in the existing Evidence/Export/MCP
   surfaces. A compact evidence inspection does not persist new information.
-- The first milestone has no process-mining case join, visual model editor,
-  ROI analysis, AS-IS/TO-BE authoring, or direct agent execution. Those are
-  separate additive milestones.
+- Automatic family labels and boundaries remain heuristic. Load a reviewed
+  group to inspect variants for its exact selected executions, or use the
+  process catalog for proposed design/versioning, the CSV explorer for event-log
+  maps and the organization catalog for collaboration and scenarios. None of
+  these projections establishes an authoritative business-case join.
 
 ## Regression gates
 
