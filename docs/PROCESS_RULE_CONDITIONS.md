@@ -80,6 +80,9 @@ The separate customer executor reports
 before tools or source calls. A successful dashboard check cannot remove this
 guard. A customer-specific implementation must establish its authoritative fact
 source and review the decision semantics before automating these conditions.
+[Reviewed current-source invariant bindings](RUNTIME_SOURCE_RULE_BINDINGS.md)
+provide a limited implementation for supported provider fields; all other
+structured conditions retain this guard.
 
 ## Shared organization checks
 

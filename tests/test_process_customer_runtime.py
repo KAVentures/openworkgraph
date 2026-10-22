@@ -23,8 +23,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.skipif(not os.getenv('OWG_AGENT_SDK_PYTHON'),reason='Set an isolated Agents SDK interpreter for the real MCP implementation check')
-@pytest.mark.parametrize('shared_catalog',[False,True])
-def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,shared_catalog):
+@pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True)])
+def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,shared_catalog,source_invariant):
     sdk=os.environ['OWG_AGENT_SDK_PYTHON']
     model=ProcessModel(goal='Resolve a selected synthetic case',baseline_source='user_declared',
         baseline_path=['Resolve','Read case','Done'],activities=[
@@ -34,6 +34,12 @@ def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source
         transitions=[{'source':'resolve','target':'readback'},{'source':'readback','target':'done'}],
         entry_activity_id='resolve',terminal_activity_ids=['done'],outcome_expectations=[
             {'terminal_activity_id':'done','operation':'jira_issue_resolved','user_confirmed':True}])
+    if source_invariant:
+        raw=model.model_dump()
+        raw['business_rules']=[{'id':'approved_source','text':'Reviewed current source invariant','user_confirmed':True,
+            'predicate':{'match':'all','conditions':[{'path':'/source/state','operator':'eq','expected':'merged'}]}}]
+        raw['transitions'][0]['rule_id']='approved_source'
+        model=ProcessModel.model_validate(raw)
     packet={'format':'openworkgraph.versioned-process-export.v1','workflow_id':'synthetic','revision':1,
         'content_sha256':'a'*64,'process_model':model.model_dump(),'execution_authorization':False}
     if shared_catalog:packet['organization_catalog_reference']={'organization_id':'synthetic-org'}
@@ -56,7 +62,7 @@ from server.open_work_outcomes import source_operation_receipt
 from threading import Lock
 guard=Lock()
 completed_requests={}
-state={'version':3,'resolved':False,'tool_calls':[],'source_reads':0,'catalog_reads':0,'catalog_current':True}
+state={'version':3,'resolved':False,'tool_calls':[],'source_reads':0,'catalog_reads':0,'catalog_current':True,'source_rule_reads':0}
 @mcp.tool()
 def read_case(issue:str)->dict:
     with guard:
@@ -96,6 +102,20 @@ async def source(request):
                 'source_state':'done' if state['resolved'] else 'open',
                 'verified_operational_outcome':{'verified':state['resolved'],'kind':'jira_issue_resolved'}}}
     return JSONResponse(source_operation_receipt(ref,op,record_reader=graph))
+async def rule_source(request):
+    from server.process_source_rule_checks import SourceRuleCheck,current_source_state_receipt
+    state['source_rule_reads']+=1
+    assert request.query_params.get('confirm_source_read')=='true'
+    selection=SourceRuleCheck(resource_ref=request.query_params['resource_ref'],source_type=request.query_params['source_type'])
+    def graph(ref,**kwargs):
+        assert ref=='owg:r:'+'c'*32 and kwargs['required_source_type']==('github','pull_request','github.com')
+        return {'resource_ref':ref,'record_observed':True,'record_type':{'provider':'github','kind':'pull_request'},
+            'record_identity_complete_within_retained_window':True,'source_event_limit_reached':False,
+            'source_rows_scoped_to_exact_record':True,'source_evidence':{
+                'provider':'github','availability':'source_reported','source_state_reported':True,'source_state':'merged',
+                'verification_method':'explicit_opt_in_authenticated_local_github_cli_read',
+                'verified_at':datetime.now(timezone.utc).isoformat()}}
+    return JSONResponse(current_source_state_receipt(selection,record_reader=graph))
 async def catalog(request):
     state['catalog_reads']+=1
     return JSONResponse({'format':'openworkgraph.process-implementation-state.v1','organization_id':'synthetic-org',
@@ -108,7 +128,7 @@ async def revoke(request):
     return JSONResponse({'changed':True})
 async def stats(request):return JSONResponse(state)
 from starlette.routing import Route
-app.router.routes.extend([Route('/v1/record-graph/operation-receipt',source,methods=['GET']),Route('/test-state',stats,methods=['GET']),
+app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,methods=['GET']),Route('/v1/record-graph/operation-receipt',source,methods=['GET']),Route('/test-state',stats,methods=['GET']),
     Route('/v1/human/processes/synthetic/implementation-status',catalog,methods=['GET']),
     Route('/test-revoke',revoke,methods=['POST'])])
 ''',encoding='utf-8')
@@ -119,7 +139,8 @@ app.router.routes.extend([Route('/v1/record-graph/operation-receipt',source,meth
         WORKFLOW_OBSERVER_CONFIG=str(tmp_path/'config.json'),PYTHONPATH=str(ROOT),OWG_TEST_SERVER_URL=base,
         OWG_EXECUTION_MCP_TOKEN='SYNTHETIC_TOOL_SECRET',OWG_EXECUTION_SOURCE_READ_TOKEN='SYNTHETIC_SOURCE_SECRET',
         OWG_EXECUTION_CATALOG_READ_TOKEN='SYNTHETIC_CATALOG_SECRET',
-        OWG_TEST_MODEL_DIGEST=json.loads((project/'workflow.spec.json').read_text())['process_model_sha256'])
+        OWG_TEST_MODEL_DIGEST=json.loads((project/'workflow.spec.json').read_text())['process_model_sha256'],
+        OWG_TEST_SOURCE_INVARIANT='1' if source_invariant else '0')
     env['NO_PROXY']=','.join(filter(None,[env.get('NO_PROXY',''),'127.0.0.1','localhost','::1']))
     def stats():
         with urlopen(Request(base+'/test-state',headers={'Authorization':'Bearer SYNTHETIC_SOURCE_SECRET'}),timeout=2) as response:
@@ -141,6 +162,11 @@ app.router.routes.extend([Route('/v1/record-graph/operation-receipt',source,meth
 import json,os
 from test_execution import fixture
 _,plan,case,bindings,_=fixture()
+if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1':
+    case['approved_record']='owg:r:'+'c'*32
+    bindings['source_rule_checks']=[{'rule_id':'approved_source','source_type':'github_pull_request',
+        'resource_ref_pointer':'/approved_record','mode':'invariant_before_each_action',
+        'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
 bindings.update(tool_server_url=os.environ['OWG_TEST_SERVER_URL']+'/mcp',source_api_url=os.environ['OWG_TEST_SERVER_URL'],
     process_catalog_url=os.environ['OWG_TEST_SERVER_URL'])
 for name,data in [('plan.json',plan),('case.json',case),('bindings.json',bindings)]:
@@ -189,6 +215,8 @@ json.dump(bindings,open('bindings.json','w'))
             assert observed['tool_calls']==['read_case','resolve_case','read_case']
             assert observed['resolved'] is True and observed['version']==4
             assert observed['source_reads']==2
+            assert observed['source_rule_reads']==(4 if source_invariant else 0)
+            assert report['source_rules_matched_at_completion'] is True
             repeated=run(*args,'--intent','intent.json','--execute-approved')
             assert repeated.returncode!=0
             assert stats()==observed
@@ -205,6 +233,7 @@ json.dump(bindings,open('bindings.json','w'))
                 after=stats()
                 assert after['tool_calls']==observed['tool_calls'] and after['source_reads']==2
                 assert after['catalog_reads']==6
+                assert after['source_rule_reads']==observed['source_rule_reads']
             for private in ('SYNTHETIC_TOOL_SECRET','SYNTHETIC_SOURCE_SECRET','SYNTHETIC_CATALOG_SECRET','SYNTHETIC_PRIVATE_RECORD'):
                 assert private not in execute.stdout+execute.stderr
         finally:

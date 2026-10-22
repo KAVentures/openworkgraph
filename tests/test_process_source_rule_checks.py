@@ -155,6 +155,7 @@ model={'goal':'Check selected case','baseline_source':'user_declared','baseline_
         'predicate':{'match':'all','conditions':[{'path':'/source/state','operator':'eq','expected':'paid'}]}}],
     'entry_activity_id':'review','terminal_activity_ids':['close']}
 with TestClient(app) as client:
+    os.environ['WORKFLOW_OBSERVER_RUN_STARTED_AT']=datetime.now(timezone.utc).isoformat()
     stamp=datetime.now(timezone.utc).isoformat()
     db.insert_events([{'event_id':'owned-source-proof','observed_at':stamp,'device_id':'synthetic',
         'session_id':'synthetic','app':'Google Chrome','window_title':'Owned workflow','event_type':'browser_click',
@@ -195,6 +196,38 @@ with TestClient(app) as client:
     assert result['case_association_verified'] is False and result['generated_agent_source_fact_guard_resolved'] is False
     assert calls==['https://api.stripe.com/v1/account','https://api.stripe.com/v1/invoices/'+ID]
     for value in ('PRIVATE_',ID,ACCOUNT,'99999999','paid'):assert value not in response.text,value
+    with sqlite3.connect(database) as conn:assert '\n'.join(conn.iterdump())==before
+    state_path='/v1/record-graph/state-receipt'
+    bearer={'Authorization':'Bearer '+local_auth.ensure_api_token()}
+    params={**body,'confirm_source_read':'true'}
+    count=len(calls)
+    assert client.get(state_path,params=params).status_code==401
+    assert client.get(state_path,params=body,headers=bearer).status_code==403
+    assert client.get(state_path,params={**params,'source_type':'PRIVATE_INVALID'},headers=bearer).status_code==422
+    assert len(calls)==count
+    response=client.get(state_path,params=params,headers=bearer)
+    assert response.status_code==200 and response.headers['cache-control']=='no-store'
+    receipt=response.json()
+    assert receipt['format']=='openworkgraph.source-state-receipt.v1'
+    assert receipt['source_state_verified'] and receipt['provider_reported_state']=='paid',receipt
+    assert receipt['case_association_verified'] is False and receipt['agent_execution_authorized'] is False
+    assert len(calls)==count+2
+    for value in ('PRIVATE_',ID,ACCOUNT,'99999999'):assert value not in response.text
+    assert client.get(state_path,params={**params,'resource_ref':UNSEEN},headers=bearer).json()['source_state_verified'] is False
+    assert len(calls)==count+2
+    from shared.history_policy import set_ai_history_access
+    from datetime import timedelta
+    set_ai_history_access(mode='selected_range',since=(datetime.now(timezone.utc)-timedelta(days=2)).isoformat(),
+        until=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat())
+    assert client.get(state_path,params={**params,'since':'2000-01-01T00:00:00Z'},headers=bearer).json()['source_state_verified'] is False
+    assert len(calls)==count+2
+    set_ai_history_access(mode='all_saved')
+    assert client.get(state_path,params=params,headers=bearer).json()['source_state_verified'] is True
+    assert len(calls)==count+4
+    from server.ai_access import set_ai_access
+    set_ai_access(False)
+    assert client.get(state_path,params=params,headers=bearer).status_code==403
+    assert len(calls)==count+4
     with sqlite3.connect(database) as conn:assert '\n'.join(conn.iterdump())==before
 '''
     env=os.environ.copy();env.update(WORKFLOW_OBSERVER_DATA=str(tmp_path/'data'),

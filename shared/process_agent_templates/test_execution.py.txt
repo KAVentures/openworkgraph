@@ -98,6 +98,94 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):await self.run_case()
         self.assertFalse(self.tools.calls)
         self.assertFalse(self.source_requests)
+    def invariant_fixture(self):
+        spec,plan,case,bindings,intent=deepcopy(self.data)
+        spec['process_model']['business_rules']=[{'id':'current_source','text':'Customer reviewed invariant',
+            'user_confirmed':True,'predicate':{'match':'all','conditions':[
+                {'path':'/source/state','operator':'eq','expected':'merged'}]}}]
+        spec['process_model']['transitions'][0]['rule_id']='current_source'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        case['approved_record']='owg:r:'+'c'*32
+        bindings['source_rule_checks']=[{'rule_id':'current_source','source_type':'github_pull_request',
+            'resource_ref_pointer':'/approved_record','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
+        intent=review_template(spec,prepare(spec,plan,case,bindings),case,bindings)
+        intent.update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+            expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+        return spec,plan,case,bindings,intent
+    def invariant_receipt(self,request):
+        from process_source_state import state_receipt
+        return state_receipt(request['resource_ref'],request['source_type'],
+            {'source':{'provider':'github','record_kind':'pull_request','state':'merged'}},
+            datetime.now(timezone.utc).isoformat(),'source_state_reported',True)
+    async def test_reviewed_source_invariants_are_refreshed_before_actions_and_not_retained(self):
+        data=self.invariant_fixture();checks=[]
+        async def reader(base,token,request):
+            self.assertEqual(token,'SYNTHETIC_SOURCE_SECRET')
+            checks.append(len(self.tools.calls));return self.invariant_receipt(request)
+        report=await execute_approved(*data,journal_directory=Path(self.folder.name)/'journal',
+            client_factory=lambda *args:self.tools,receipt_reader=self.source,source_state_reader=reader)
+        self.assertEqual(checks,[0,1,2,3])
+        self.assertTrue(report['all_tool_results_matched'])
+        self.assertTrue(report['source_rules_matched_at_completion'])
+        self.assertEqual([r['status'] for r in report['source_rule_checks']],['matched']*4)
+        journal=''.join(p.read_text() for p in (Path(self.folder.name)/'journal').glob('*'))
+        for private in ('merged','SYNTHETIC_SOURCE_SECRET',data[2]['approved_record']):
+            self.assertNotIn(private,journal)
+        self.assertFalse(report['source_rule_reads_are_atomic_with_actions'])
+    async def test_changed_source_after_fresh_tool_precondition_stops_the_write(self):
+        data=self.invariant_fixture();checks=[]
+        async def reader(base,token,request):
+            checks.append(len(self.tools.calls));value=self.invariant_receipt(request)
+            if self.tools.calls:value['provider_reported_state']='open'
+            return value
+        report=await execute_approved(*data,journal_directory=Path(self.folder.name)/'journal',
+            client_factory=lambda *args:self.tools,receipt_reader=self.source,source_state_reader=reader)
+        self.assertEqual([name for name,args in self.tools.calls],['read_case'])
+        self.assertFalse(report['all_tool_results_matched'])
+        self.assertFalse(report['source_rules_matched_at_completion'])
+        self.assertEqual(report['source_rule_checks'][1]['status'],'not_matched')
+    async def test_unknown_or_false_source_stops_before_mcp_inventory(self):
+        from datetime import timedelta
+        for mutation in ('false','missing','stale','wrong_ref','wrong_kind','authority','exception','absence'):
+            data=self.invariant_fixture()
+            if mutation=='absence':
+                data[0]['process_model']['business_rules'][0]['predicate']['conditions'][0]={'path':'/source/state','operator':'not_exists'}
+                data[0]['process_model_sha256']=digest(data[0]['process_model'])
+                data[4]['spec_sha256']=digest(data[0])
+            async def reader(base,token,request):
+                value=self.invariant_receipt(request)
+                if mutation=='false':value['provider_reported_state']='open'
+                if mutation in ('missing','absence'):return None
+                if mutation=='stale':value['verified_at']=(datetime.now(timezone.utc)-timedelta(seconds=121)).isoformat()
+                if mutation=='wrong_ref':value['resource_ref']='owg:r:'+'d'*32
+                if mutation=='wrong_kind':value['provider_record_kind']='issue'
+                if mutation=='authority':value['agent_execution_authorized']=True
+                if mutation=='exception':raise RuntimeError('PRIVATE_SOURCE_ERROR')
+                return value
+            def no_client(*args):raise AssertionError('MCP must not be opened')
+            report=await execute_approved(*data,journal_directory=Path(self.folder.name)/mutation,
+                client_factory=no_client,receipt_reader=self.source,source_state_reader=reader)
+            self.assertTrue(report['stopped_before_tools'])
+            self.assertFalse(self.tools.calls)
+            self.assertFalse(self.source_requests)
+    async def test_source_invariant_bindings_require_supported_paths_and_separate_confirmation(self):
+        for mutation in ('unreviewed','non_atomic','unsupported','extra','duplicate','no_consent','no_token'):
+            data=self.invariant_fixture();binding=data[3]['source_rule_checks'][0]
+            if mutation=='unreviewed':binding['record_semantics_reviewed']=False
+            if mutation=='non_atomic':binding['non_atomic_reads_reviewed']=False
+            if mutation=='unsupported':data[0]['process_model']['business_rules'][0]['predicate']['conditions'][0]['path']='/customer/credit'
+            if mutation=='extra':binding['facts']={'state':'merged'}
+            if mutation=='duplicate':data[3]['source_rule_checks'].append(deepcopy(binding))
+            data[0]['process_model_sha256']=digest(data[0]['process_model'])
+            data[4].update(spec_sha256=digest(data[0]),bindings_sha256=digest(data[3]))
+            if mutation=='no_consent':data[4]['source_reads_confirmed']=False
+            async def no_read(*args):raise AssertionError('No provider access is allowed')
+            with patch.dict('os.environ',{'OWG_EXECUTION_SOURCE_READ_TOKEN':'' if mutation=='no_token' else 'SYNTHETIC_SOURCE_SECRET'}):
+                with self.assertRaises(ImplementationError):
+                    await execute_approved(*data,journal_directory=Path(self.folder.name)/mutation,
+                        client_factory=lambda *args:self.tools,receipt_reader=no_read,source_state_reader=no_read)
+            self.assertFalse(self.tools.calls)
     def shared_fixture(self):
         data=deepcopy(self.data)
         data[0]['organization_catalog_reference']={'organization_id':'synthetic-org'}
