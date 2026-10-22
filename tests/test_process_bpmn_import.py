@@ -169,7 +169,8 @@ def test_unsupported_semantics_are_rejected_instead_of_flattened(content):
     b'<?xml version="1.0" encoding="ISO-8859-1"?><definitions/>',
     xml('<task id="a"/>').replace(b'<process',b'<import location="https://invalid.example"/><process'),
     xml('<task id="a"/>').replace(b'</definitions>',b'<process id="other"/></definitions>'),
-])
+],ids=['empty','oversized','invalid_utf8','malformed','external_entity','internal_entity',
+       'wrong_encoding','external_import','multiple_processes'])
 def test_bounds_entities_encoding_external_imports_and_multiple_processes_fail_closed(raw):
     with pytest.raises(BPMNImportError) as error:import_bpmn(raw)
     assert 'PRIVATE_EXPANSION' not in str(error.value)
