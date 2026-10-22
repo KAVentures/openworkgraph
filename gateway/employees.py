@@ -32,6 +32,7 @@ from typing import Any
 from shared.time_utils import normalize_timestamp
 from .auth import DEVICE_SCOPES, issue_token, token_hash
 from .db import GatewayDB
+from .fleet_health import recorder_status
 
 PERSON_TOKEN_PREFIX = "owg_enroll_person"
 MAX_INVITE_DAYS = 30
@@ -704,9 +705,12 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
     with db.connect() as conn:
         devices = _all(
             db, conn,
-            """SELECT t.device_id, t.actor_id, t.created_at, t.token_id, d.employee_id, d.identity_source, d.linked_at
+            """SELECT t.device_id, t.actor_id, t.created_at, t.token_id, d.employee_id, d.identity_source, d.linked_at,
+                      h.received_at, h.collector_state, h.capture_policy, h.collector_age_seconds
                FROM access_tokens t LEFT JOIN gateway_device_identity d
                  ON d.organization_id = t.organization_id AND d.device_id = t.device_id
+               LEFT JOIN recorder_heartbeats h ON h.organization_id = t.organization_id
+                 AND h.actor_id = t.actor_id AND h.device_id = t.device_id
                WHERE t.organization_id = ? AND t.token_type = 'device' AND t.revoked_at IS NULL
                ORDER BY t.created_at DESC""",
             (org,),
@@ -723,6 +727,7 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
     for e in employees:
         e["devices"] = []
     unlinked = []
+    status_time = datetime.now(timezone.utc)
     for d in devices:
         act = by_device.get(d["device_id"]) or {}
         item = {
@@ -732,6 +737,8 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
             "last_evidence_at": act.get("last_evidence"),
             "events": int(act.get("events") or 0),
             "identity_source": d.get("identity_source") or "self_reported",
+            "recorder_status": recorder_status(d if d.get('received_at') else None,
+                enrolled_at=d['created_at'],identity_linked_at=d.get('linked_at'),now=status_time),
         }
         owner = by_id.get(d.get("employee_id") or "") or by_actor.get(d["actor_id"])
         if owner and item["identity_source"] != "self_reported":

@@ -19,7 +19,7 @@ or full competitor parity.
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules with bounded structured predicates and per-activity responsibilities, supported BPMN draft import with exclusive merge routing and retained manual guards, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Parallel/interprocess semantics, real-time collaboration, richer rule clarification and business-policy approval lifecycle |
 | Implementation | Starter ZIP (#269), runnable OpenAI Agents SDK planner, current-tool inspection and disabled mapping proposals, source-aware nonexecuting route proposals using reviewed current-source invariants, separately authorized customer MCP implementation, conditional writes, current shared-design checks, replay journal and independent source readback pinned to exact artifacts | Customer-specific tool mappings, production deployment and end-to-end business acceptance |
 | Testing and feedback | Agent traces/receipts, full-log structural comparison, workflow shadow tests, ephemeral exact-revision checks of confirmed predicates against authorized caller-declared facts, reviewed-case route/clarification evaluation including bounded current-source invariant batches, exact-revision local/organization catalog report review, pinned terminal source-state checks, full-snapshot path/activity/transition/timing change review against an exact saved process | Continuous live case evaluation, verified business outcomes and business-rule drift |
-| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, paginated owner-filtered design-readiness diagnostics, revision history/audit and opt-in company sign-in with process-only browser sessions | Deployment controls and deployment-health reporting |
+| Company rollout | Existing Gateway, organization/deployment infrastructure, explicitly shared process inventory, scoped editor/reviewer roles, paginated owner-filtered design-readiness diagnostics, revision history/audit and opt-in company sign-in with process-only browser sessions, admin fleet status from fresh content-free device reports | Additional deployment controls, connector health and rollout diagnostics |
 
 The CSV drill-down connects diagram selections to exact variant statistics
 and bounded supporting examples. CSV preview remains ephemeral; reviewed designs are saved to the catalog.
@@ -91,3 +91,8 @@ small explicitly authorized batches against customer-reviewed routes and
 clarifications, using per-case fresh invariant receipts and the existing report
 review flow. Historical ground truth, representative coverage, production
 outcomes and automatic process-model changes remain open.
+
+[Company fleet status](FLEET_RECORDER_STATUS.md) uses existing authenticated
+recorder heartbeats with identity/freshness checks. Evidence age remains a
+separate signal; missing reports do not establish stopped recorders or unhealthy
+connectors. The admin view provides no remote recording controls.
