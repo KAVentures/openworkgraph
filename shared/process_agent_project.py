@@ -89,7 +89,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
@@ -253,6 +253,18 @@ def build_runtime_project(packet: dict) -> bytes:
         'The normal agent.py mode still pauses on structured rules. Planning\n'
         'does not enable bindings or create execution intent. Review a proposal\n'
         'separately before execute.py; that executor reads fresh source state.\n\n'
+        'For a reviewed batch of up to eight current-source cases, run:\n'
+        'python evaluate_sources.py --cases reviewed-cases.json --bindings bindings.json\n'
+        '  --model MODEL --output new-report.json --confirm-source-reads\n'
+        '  --confirm-model-rule-check-sharing\n'
+        'Review and authorize every case input and expected route/clarification first.\n'
+        'Only inputs and bounded source rule statuses reach the model; expectations\n'
+        'are withheld. Each case uses its own current snapshot, not historical case\n'
+        'truth or an atomic batch snapshot. At most eight records per case and a\n'
+        'five-minute whole-batch deadline apply. The minimized report uses the\n'
+        'existing shadow-review screens and remains a customer assertion. No\n'
+        'business tools, execution intent, outcome verification or model updates\n'
+        'are enabled. Offline evaluate.py still pauses on structured source rules.\n\n'
         'Shared-catalog projects also require process_catalog_url and a separate\n'
         'OWG_EXECUTION_CATALOG_READ_TOKEN with organization process read scope.\n'
         'Before each tool action, including after a write precondition, the runner\n'

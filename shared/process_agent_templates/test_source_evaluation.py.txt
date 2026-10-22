@@ -1,0 +1,167 @@
+"""Actual SDK shadow batches against owned snapshots, never business actions."""
+import asyncio
+from copy import deepcopy
+from datetime import timedelta
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import AsyncMock,patch
+
+from evaluate import compare
+from evaluate_sources import evaluate_current_sources
+from execute import ImplementationError,digest,reference
+import test_source_planning as planning_tests
+
+
+@unittest.skipUnless(planning_tests.SDK_AVAILABLE,'Install requirements.txt for current-source SDK evaluation')
+class SourceEvaluationCases(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp=planning_tests.SourcePlanningCases.asyncSetUp
+    source=planning_tests.SourcePlanningCases.source
+    model=planning_tests.SourcePlanningCases.model
+
+    def suite(self,count=1):
+        return {'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(self.spec),
+            'spec_sha256':digest(self.spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':f'case_{i+1}','category':'normal','input':deepcopy(self.case),
+                'expected':{'status':'proposal','accepted_routes':[self.plan['activity_ids']],
+                            'review_confirmed':True}} for i in range(count)]}
+
+    async def evaluate(self,suite=None,**options):
+        return await evaluate_current_sources(self.spec,suite or self.suite(),self.bindings,
+            model=options.pop('model',self.model()),source_state_reader=options.pop('source_state_reader',self.source),
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,
+            clock=lambda:self.now[0],**options)
+
+    async def test_normal_and_missing_source_cases_match_without_disclosing_expectations_or_receipts(self):
+        suite=self.suite(2)
+        suite['cases'][1]['category']='missing_facts'
+        suite['cases'][1]['expected']={'status':'needs_clarification','accepted_routes':[],'review_confirmed':True}
+        owner=self
+        async def source(*args):
+            value=await owner.source(*args)
+            if len(owner.reads)==2:value['source_state_verified']=False
+            return value
+        report,summary=await self.evaluate(suite,source_state_reader=source)
+        self.assertEqual(report['matching_case_count'],2);self.assertFalse(report['review_required'])
+        self.assertEqual(summary['source_receipt_request_count'],2)
+        self.assertEqual(report['suite_sha256'],digest(suite))
+        self.assertEqual(report['spec_sha256'],digest(self.spec))
+        self.assertEqual(len(self.model_calls),2)
+        for payload in self.model_calls:
+            self.assertNotIn('accepted_routes',json.dumps(payload));self.assertNotIn('review_confirmed',json.dumps(payload))
+        for secret in ('SYNTHETIC_SOURCE_SECRET','SYNTHETIC_UNTRUSTED_INSTRUCTION','merged',self.case['approved_record']):
+            self.assertNotIn(secret,json.dumps(report))
+        for flag in ('business_tools_called','execution_authorized','source_outcomes_verified',
+                     'case_inputs_and_model_text_included','business_rules_evaluated',
+                     'independent_business_ground_truth_verified','process_model_updated'):
+            self.assertIs(report[flag],False)
+        self.assertFalse(summary['historical_case_facts_verified']);self.assertFalse(summary['case_association_verified'])
+
+    async def test_false_stale_unavailable_or_unknown_sources_cannot_match_an_expected_proposal(self):
+        for changes in ({'provider_reported_state':'open'},{'source_state_verified':False}):
+            self.receipt_mutation=changes
+            report,_=await self.evaluate()
+            self.assertTrue(report['review_required'])
+            self.assertEqual(report['cases'][0]['reason'],'unexpected_clarification')
+        self.receipt_mutation={}
+        report,_=await self.evaluate(model=self.model(advance=True))
+        self.assertTrue(report['review_required'])
+        async def unavailable(*args):raise RuntimeError('PRIVATE_SOURCE_ERROR')
+        report,_=await self.evaluate(source_state_reader=unavailable)
+        self.assertTrue(report['review_required']);self.assertNotIn('PRIVATE_SOURCE_ERROR',json.dumps(report))
+
+    async def test_every_case_and_consent_is_validated_before_any_source_or_model_calls(self):
+        for missing in ('source_reads_confirmed','share_rule_checks_with_model_confirmed'):
+            options={'source_reads_confirmed':True,'share_rule_checks_with_model_confirmed':True};options[missing]=False
+            with self.assertRaises(ImplementationError):
+                await evaluate_current_sources(self.spec,self.suite(),self.bindings,model=self.model(),
+                    source_state_reader=self.source,**options)
+        for mutation in ('unreviewed','stale','late_bad_route','late_missing_record','too_many','unbound'):
+            suite=self.suite(2);bindings=deepcopy(self.bindings)
+            if mutation=='unreviewed':suite['reviewed_by_customer']=False
+            elif mutation=='stale':suite['spec_sha256']='f'*64
+            elif mutation=='late_bad_route':suite['cases'][1]['expected']['accepted_routes']=[['unknown']]
+            elif mutation=='late_missing_record':suite['cases'][1]['input'].pop('approved_record')
+            elif mutation=='too_many':suite=self.suite(9)
+            else:bindings['source_rule_checks']=[]
+            with self.subTest(mutation=mutation),self.assertRaises(ImplementationError):
+                await evaluate_current_sources(self.spec,suite,bindings,model=self.model(),source_state_reader=self.source,
+                    source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True)
+        self.assertEqual(self.reads,[]);self.assertEqual(self.model_calls,[])
+
+    async def test_imported_results_and_empty_contexts_cannot_bypass_source_guards(self):
+        suite=self.suite()
+        results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(self.spec),
+            'spec_sha256':digest(self.spec),'suite_sha256':digest(suite),
+            'results':[{'case_id':'case_1','plan':self.plan}]}
+        with self.assertRaises(ImplementationError):compare(self.spec,suite,results)
+        report=compare(self.spec,suite,results,source_rule_contexts={})
+        self.assertEqual(report['cases'][0]['reason'],'unresolved_review_bypassed')
+        self.assertTrue(report['review_required']);self.assertEqual(self.reads,[])
+
+    async def test_each_case_is_compared_at_its_own_freshness_boundary(self):
+        async def source(*args):
+            self.now[0]+=timedelta(seconds=70)
+            value=await self.source(*args);value['verified_at']=self.now[0].isoformat()
+            return value
+        report,summary=await self.evaluate(self.suite(3),source_state_reader=source)
+        self.assertEqual(report['matching_case_count'],3)
+        self.assertEqual(summary['source_receipt_request_count'],3)
+
+    async def test_revoked_final_shared_review_aborts_batch(self):
+        self.spec['organization_catalog_reference']={'organization_id':'synthetic-org'}
+        self.bindings['process_catalog_url']='https://catalog.example.test'
+        calls=[]
+        async def catalog(*args):
+            calls.append(True)
+            return {'format':'openworkgraph.process-implementation-state.v1','organization_id':'synthetic-org',
+                'process_reference':reference(self.spec),'process_model_sha256':self.spec['process_model_sha256'],
+                'latest_revision':1,'archived':False,'review_status':'reviewed_design',
+                'current_independent_design_review':len(calls)==1,'execution_authorization':False}
+        with patch.dict('os.environ',{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            with self.assertRaises(ImplementationError):await self.evaluate(self.suite(2),catalog_reader=catalog)
+        self.assertEqual(len(calls),2);self.assertEqual(len(self.reads),1)
+
+    async def test_manual_guards_cannot_be_reviewed_away_by_expected_routes(self):
+        self.spec['process_model']['manual_review_conditions']=[{'activity_id':'resolve',
+            'kind':'exception_condition','condition_label':'Human policy review','response':'pause_for_review'}]
+        self.spec['process_model_sha256']=digest(self.spec['process_model'])
+        with self.assertRaises(ImplementationError):await self.evaluate()
+        self.assertEqual(self.reads,[]);self.assertEqual(self.model_calls,[])
+        suite=self.suite();suite['cases'][0]['expected']={'status':'needs_clarification',
+            'accepted_routes':[],'review_confirmed':True}
+        report,_=await self.evaluate(suite)
+        self.assertEqual(report['matching_case_count'],1)
+
+    async def test_cli_writes_only_complete_new_reports_and_preserves_existing_files(self):
+        import evaluate_sources
+        report,summary=await self.evaluate()
+        with TemporaryDirectory() as directory:
+            output=Path(directory)/'report.json'
+            argv=['evaluate_sources.py','--cases','suite.json','--bindings','bindings.json',
+                '--model','synthetic','--output',str(output),'--confirm-source-reads',
+                '--confirm-model-rule-check-sharing']
+            runner=AsyncMock(return_value=(report,summary))
+            with patch('sys.argv',argv),patch('evaluate_sources.load_object',side_effect=[self.spec,self.suite(),self.bindings]), \
+                    patch('evaluate_sources.evaluate_current_sources',runner),patch('builtins.print'):
+                self.assertEqual(await asyncio.to_thread(evaluate_sources.main),0)
+            self.assertEqual(json.loads(output.read_text(encoding='utf-8')),report)
+            with patch('sys.argv',argv),patch('evaluate_sources.evaluate_current_sources',runner):
+                with self.assertRaises(ImplementationError):await asyncio.to_thread(evaluate_sources.main)
+            self.assertEqual(runner.await_count,1)
+            output.unlink()
+            with patch('sys.argv',argv),patch('evaluate_sources.load_object',side_effect=[self.spec,self.suite(),self.bindings]), \
+                    patch('evaluate_sources.evaluate_current_sources',AsyncMock(side_effect=TimeoutError)):
+                with self.assertRaises(TimeoutError):await asyncio.to_thread(evaluate_sources.main)
+            self.assertFalse(output.exists())
+
+    async def test_batch_deadline_cancels_without_a_partial_report(self):
+        real_timeout=asyncio.timeout
+        async def stalled(*args):await asyncio.sleep(60)
+        with patch('evaluate_sources.asyncio.timeout',side_effect=lambda seconds:real_timeout(0)):
+            with self.assertRaises(TimeoutError):await self.evaluate(source_state_reader=stalled)
+        self.assertEqual(self.model_calls,[])
+
+
+if __name__=='__main__':unittest.main()

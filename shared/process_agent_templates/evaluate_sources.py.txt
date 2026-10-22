@@ -1,0 +1,100 @@
+"""Small explicitly authorized live-source shadow batches; no business actions.
+
+Expectations are customer declarations. Current states do not attest historical
+case truth, population coverage, business policy or execution permission.
+"""
+import argparse
+import asyncio
+from copy import deepcopy
+import json
+from pathlib import Path
+
+from evaluate import validate_suite,compare,evaluation_report
+from execute import (ImplementationError,digest,load_object,reference,endpoint,source_rule_bindings,
+                     _source_state_receipt,_catalog_state)
+from plan_sources import _propose_with_source_context
+from runtime import check_plan
+
+
+def validate_source_suite(spec,suite,bindings):
+    cases=validate_suite(spec,suite,allow_current_source_rules=True)
+    if len(cases)>8:raise ImplementationError('Select at most eight current-source shadow cases')
+    if (not isinstance(bindings,dict) or bindings.get('format')!='openworkgraph.customer-mcp-bindings.v1'
+        or digest(bindings.get('process_reference'))!=digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    endpoint(bindings.get('source_api_url'),source=True)
+    structured=[rule['id'] for rule in spec['process_model'].get('business_rules',[]) if rule.get('predicate') is not None]
+    total_records=0
+    for case in cases:
+        requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured},case['input'],bindings)
+        if not requests:raise ImplementationError('Every case needs at least one reviewed current-source invariant binding')
+        selected={(row['resource_ref'],row['source_type']) for row in requests}
+        if len(selected)>8:raise ImplementationError('Use at most eight selected source records per case')
+        total_records+=len(selected)
+        for route in case['expected']['accepted_routes']:
+            checks=check_plan({**reference(spec),'activity_ids':route},spec)
+            _bound,missing=source_rule_bindings(spec,checks,case['input'],bindings)
+            if missing:raise ImplementationError('Expected routes require reviewed source bindings for every structured rule')
+    return cases,total_records
+
+
+async def evaluate_current_sources(spec,suite,bindings,*,model,source_reads_confirmed=False,
+                                   share_rule_checks_with_model_confirmed=False,
+                                   source_state_reader=_source_state_receipt,catalog_reader=_catalog_state,clock=None):
+    if source_reads_confirmed is not True or share_rule_checks_with_model_confirmed is not True:
+        raise ImplementationError('Separately confirm batch source reads and sharing case inputs/rule results with the selected model')
+    spec=deepcopy(spec);suite=deepcopy(suite);bindings=deepcopy(bindings)
+    cases,_records=validate_source_suite(spec,suite,bindings)
+    rows=[];plans=[];request_count=0
+    # The deadline covers the complete batch, including sources and the model.
+    # Earlier per-case comparisons remain as-of their own case, not a single
+    # atomic or historical snapshot. Contexts are discarded after comparison.
+    async with asyncio.timeout(300):
+        for case in cases:
+            result,context=await _propose_with_source_context(case['input'],bindings,model=model,spec=spec,
+                source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,
+                source_state_reader=source_state_reader,catalog_reader=catalog_reader,clock=clock)
+            if result['source_planning']['catalog_review_current_at_completion'] is False:
+                raise ImplementationError('Current independent shared design review is unavailable')
+            request_count+=result['source_planning']['source_receipt_request_count']
+            single_suite={**suite,'cases':[case]}
+            single_results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
+                'spec_sha256':digest(spec),'suite_sha256':digest(single_suite),
+                'results':[{'case_id':case['id'],'plan':result['plan']}]}
+            checked=compare(spec,single_suite,single_results,source_rule_contexts={case['id']:context})
+            rows.extend(checked['cases']);plans.extend(single_results['results'])
+            del context,result,checked
+    results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
+        'spec_sha256':digest(spec),'suite_sha256':digest(suite),'results':plans}
+    report=evaluation_report(spec,suite,results,rows)
+    summary={'evaluation_basis':'per_case_current_source_invariants_and_customer_expectations',
+        'case_count':report['case_count'],'matching_case_count':report['matching_case_count'],
+        'review_required':report['review_required'],'source_receipt_request_count':request_count,
+        'historical_case_facts_verified':False,'case_association_verified':False,
+        'business_tools_called':False,'execution_authorized':False,'source_outcomes_verified':False}
+    return report,summary
+
+
+def main():
+    parser=argparse.ArgumentParser(description='Evaluate up to eight reviewed current-source cases; no business actions')
+    parser.add_argument('--cases',required=True)
+    parser.add_argument('--bindings',required=True)
+    parser.add_argument('--model',required=True)
+    parser.add_argument('--output',required=True,help='New minimized report; never overwrites an existing file')
+    parser.add_argument('--confirm-source-reads',action='store_true')
+    parser.add_argument('--confirm-model-rule-check-sharing',action='store_true')
+    args=parser.parse_args()
+    if Path(args.output).exists():raise ImplementationError('Choose a new evaluation report file')
+    spec=load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
+    report,summary=asyncio.run(evaluate_current_sources(spec,load_object(args.cases,limit=262144),
+        load_object(args.bindings),model=args.model,source_reads_confirmed=args.confirm_source_reads,
+        share_rule_checks_with_model_confirmed=args.confirm_model_rule_check_sharing))
+    with Path(args.output).open('x',encoding='utf-8') as stream:json.dump(report,stream,indent=2,allow_nan=False)
+    print(json.dumps(summary,indent=2))
+    return 2 if report['review_required'] else 0
+
+
+if __name__=='__main__':
+    try:raise SystemExit(main())
+    except ImplementationError as exc:raise SystemExit(str(exc)) from None
+    except Exception:raise SystemExit('Current-source shadow evaluation stopped. Review consent, exact inputs and source/catalog access. No execution was approved.') from None

@@ -25,7 +25,7 @@ def _path(value):
             and all(isinstance(node, str) and 1 <= len(node) <= 64 for node in value))
 
 
-def validate_suite(spec, suite):
+def validate_suite(spec, suite, *, allow_current_source_rules=False):
     validate_spec(spec)
     if (suite.get('format') != 'openworkgraph.reviewed-shadow-cases.v1'
             or not _same_reference(spec, suite.get('process_reference'))
@@ -64,13 +64,13 @@ def validate_suite(spec, suite):
                 checks = check_plan({**reference(spec), 'activity_ids': route}, spec)
             except ValueError:
                 raise ImplementationError('A reviewed expected route is outside the current process graph') from None
-            if checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or checks.get('unevaluated_structured_rule_ids'):
+            if checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or (checks.get('unevaluated_structured_rule_ids') and not allow_current_source_rules):
                 raise ImplementationError('Expected proposals cannot bypass unconfirmed rules or unresolved manual review')
     return cases
 
 
-def validate_results(spec, suite, results):
-    cases = validate_suite(spec, suite)
+def validate_results(spec, suite, results, *, allow_current_source_rules=False):
+    cases = validate_suite(spec, suite, allow_current_source_rules=allow_current_source_rules)
     if (results.get('format') != 'openworkgraph.shadow-plan-results.v1'
             or not _same_reference(spec, results.get('process_reference'))
             or results.get('spec_sha256') != digest(spec)
@@ -87,9 +87,9 @@ def validate_results(spec, suite, results):
     return found
 
 
-def compare(spec, suite, results):
-    plans = validate_results(spec, suite, results)
-    rows, counts = [], Counter()
+def compare(spec, suite, results, *, source_rule_contexts=None):
+    plans = validate_results(spec, suite, results, allow_current_source_rules=source_rule_contexts is not None)
+    rows = []
     for case in suite['cases']:
         plan, reason, checks = plans[case['id']], None, None
         # Malformed or stale individual model output is a failed case, never an
@@ -109,7 +109,13 @@ def compare(spec, suite, results):
                 checks = check_plan(plan, spec)
             except ValueError:
                 reason = 'invalid_route'
-            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or checks.get('unevaluated_structured_rule_ids')):
+            unresolved=checks.get('unevaluated_structured_rule_ids',[]) if checks else []
+            if unresolved and source_rule_contexts is not None:
+                context=source_rule_contexts.get(case['id'])
+                verified=(context.check_rules(unresolved,spec,case['input']) if context is not None else [])
+                unresolved=[rule_id for rule_id in unresolved if not any(
+                    row['rule_id']==rule_id and row['status']=='matched' for row in verified)]
+            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or unresolved):
                 reason = 'unresolved_review_bypassed'
             if reason is None:
                 if plan['missing_business_inputs']:
@@ -126,10 +132,15 @@ def compare(spec, suite, results):
             reason = 'unexpected_clarification'
         reason = reason or 'matches_reviewed_expectation'
         matched = reason == 'matches_reviewed_expectation'
-        counts[reason] += 1
         rows.append({'case_id': case['id'], 'category': case['category'], 'case_sha256': digest(case['input']),
                      'matches_reviewed_expectation': matched, 'reason': reason,
                      'review_required': not matched})
+    return evaluation_report(spec,suite,results,rows)
+
+
+def evaluation_report(spec,suite,results,rows):
+    """Aggregate already checked case rows; no provider claims or raw inputs."""
+    counts=Counter(row['reason'] for row in rows)
     return {'format': 'openworkgraph.shadow-evaluation.v1', 'process_reference': reference(spec),
         'spec_sha256': digest(spec), 'suite_sha256': digest(suite), 'results_sha256': digest(results),
         'evaluated_at': datetime.now(timezone.utc).isoformat(), 'case_count': len(rows),

@@ -42,7 +42,7 @@ class SourcePlanningContext:
         return self.check_rules(self.requests,spec,case)
 
 
-async def propose_with_sources(case,bindings,*,model,spec=None,source_reads_confirmed=False,
+async def _propose_with_source_context(case,bindings,*,model,spec=None,source_reads_confirmed=False,
                                share_rule_checks_with_model_confirmed=False,
                                source_state_reader=_source_state_receipt,catalog_reader=_catalog_state,clock=None):
     if source_reads_confirmed is not True or share_rule_checks_with_model_confirmed is not True:
@@ -83,7 +83,8 @@ async def propose_with_sources(case,bindings,*,model,spec=None,source_reads_conf
     # Importing the SDK/model path happens only after consent and input checks.
     from agent import propose
     report=await propose(case,model=model,spec=spec,source_rule_context=context)
-    if not await check_catalog():
+    catalog_current=await check_catalog()
+    if not catalog_current:
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Current independent process review is unavailable'])
     used=report.get('shadow_check',{}).get('unevaluated_structured_rule_ids',[])
     final_checks=context.check_rules(structured,spec,case)
@@ -94,10 +95,16 @@ async def propose_with_sources(case,bindings,*,model,spec=None,source_reads_conf
             'source_receipt_request_count':len(selected_records),'rule_checks':final_checks,
             'process_reference':reference(spec),'bindings_sha256':digest(bindings),
             'source_values_sent_to_model':False,'source_receipts_included':False,
+            'catalog_review_current_at_completion':catalog_current if spec.get('organization_catalog_reference') else None,
             'model_received_rule_check_results':True,'business_tools_registered':False,
             'business_actions_attempted':False,'case_association_verified':False,
             'historical_case_facts_verified':False,'business_outcomes_verified':False,
             'source_rule_reads_are_atomic_with_actions':False,'execution_authorized':False})
+    return report,context
+
+
+async def propose_with_sources(case,bindings,**options):
+    report,_context=await _propose_with_source_context(case,bindings,**options)
     return report
 
 
