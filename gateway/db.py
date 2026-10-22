@@ -351,6 +351,17 @@ class GatewayDB:
         """Only the enrolled device identity is trusted, never body-supplied IDs."""
         at = _now()
         with self.connect() as conn:
+            # Fence the status write against credential replacement/revocation.
+            # No provider or other slow work runs while this lock is held.
+            if not self.is_postgres:
+                conn.execute('BEGIN IMMEDIATE')
+            active = self._execute(conn, """SELECT token_id FROM access_tokens
+                WHERE token_id = ? AND organization_id = ? AND actor_id = ? AND device_id = ?
+                AND token_type = 'device' AND revoked_at IS NULL""" +
+                (' FOR UPDATE' if self.is_postgres else ''),
+                (principal.token_id,principal.organization_id,principal.actor_id,principal.device_id)).fetchone()
+            if not active:
+                return
             self._execute(conn, """
                 INSERT INTO recorder_heartbeats(
                     organization_id, actor_id, device_id, received_at,

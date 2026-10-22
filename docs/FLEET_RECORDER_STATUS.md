@@ -62,3 +62,6 @@ normal authenticated heartbeat. Existing connectors need no protocol change.
 Schema initialization is repeatable, and SQLite serializes its migration check
 with the update. Tests include equal enrollment/report timestamps, overlapping
 revocation and writes, and repeat startup over a populated legacy schema.
+The short report transaction locks the active credential before writing, fencing
+it against concurrent revocation; no provider or other slow work runs under that
+lock. Database tests verify this fence directly on SQLite and PostgreSQL.

@@ -192,3 +192,41 @@ def test_legacy_heartbeat_schema_upgrade_preserves_rows_but_requires_a_new_bound
     assert not _reported_recorder_state(db,organization_id='acme',actor_id='alice')['fresh_authenticated_device_report']
     db.report_recorder_heartbeat(db.authenticate('owned'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
     assert _reported_recorder_state(db,organization_id='acme',actor_id='alice')['local_recorder_state']=='paused'
+
+
+def test_report_write_fences_revocation_on_both_databases(store,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import sqlite3
+    db=store.db
+    db.put_token(token_id='owned',token='owned',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    principal=db.authenticate('owned');locked=Event();release=Event();original=db._execute
+    def execute(conn,sql,params=()):
+        result=original(conn,sql,params)
+        if 'SELECT token_id FROM access_tokens' in sql and "token_type = 'device'" in sql:
+            locked.set()
+            assert release.wait(10),'Release owned heartbeat transaction'
+        return result
+    monkeypatch.setattr(db,'_execute',execute)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(db.report_recorder_heartbeat,principal,
+            collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+        try:
+            assert locked.wait(10)
+            if db.is_postgres:
+                import psycopg
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    with db.connect() as conn:
+                        original(conn,"SELECT token_id FROM access_tokens WHERE token_id = 'owned' FOR UPDATE NOWAIT")
+            else:
+                with pytest.raises(sqlite3.OperationalError,match='locked'):
+                    with db.connect() as conn:
+                        conn.execute('PRAGMA busy_timeout=0')
+                        original(conn,"UPDATE access_tokens SET revoked_at = 'owned-test' WHERE token_id = 'owned'")
+        finally:
+            release.set()
+        future.result(timeout=10)
+    monkeypatch.setattr(db,'_execute',original)
+    assert db.revoke_token('owned')
+    assert db.last_recorder_heartbeat(organization_id='acme',actor_id='alice') is None
