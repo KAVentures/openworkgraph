@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from functools import lru_cache
 
 # Browser detection is deliberately name/pattern based rather than hard-coded to
 # one vendor. This covers the common enterprise browsers and lets admins add
@@ -35,12 +36,20 @@ def is_browser_app(app: str, custom_patterns: Iterable[str] | None = None) -> bo
     value = _normalize_app_name(app)
     if not value:
         return False
+    # Analytics calls this millions of times on large histories; normalizing
+    # the pattern list per call dominated 300k-event workflow queries.
+    custom = tuple(str(p) for p in custom_patterns if p) if custom_patterns else ()
+    return _is_browser_name(value, custom)
 
-    patterns = list(DEFAULT_BROWSER_APP_PATTERNS)
-    if custom_patterns:
-        patterns.extend(custom_patterns)
 
-    normalized = [_normalize_app_name(p) for p in patterns if p]
+@lru_cache(maxsize=64)
+def _normalized_patterns(custom: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(_normalize_app_name(p) for p in (*DEFAULT_BROWSER_APP_PATTERNS, *custom) if p)
+
+
+@lru_cache(maxsize=4096)
+def _is_browser_name(value: str, custom: tuple[str, ...]) -> bool:
+    normalized = _normalized_patterns(custom)
     # Exact match first, then phrase containment for channel/build names such as
     # "Google Chrome Beta" or "Firefox ESR".
     if value in normalized:
