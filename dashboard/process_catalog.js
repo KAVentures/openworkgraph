@@ -4,12 +4,14 @@
   let record=null, model=null, reviewed=false, busy=false, after='';
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
+  let ruleCheckGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
-  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();}
+  function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
+  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -164,6 +166,7 @@
     wrap.appendChild(drawing);return wrap;
   }
   function renderEditor(){
+    clearRuleChecks();
     clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
@@ -219,6 +222,7 @@
       field(row,'Rule text '+rule.id,rule.text,value=>{rule.text=value;rule.user_confirmed=false;check.checked=false;});
       const label=el('label',' User-confirmed rule '),check=el('input');check.type='checkbox';check.checked=rule.user_confirmed;
       check.addEventListener('change',()=>{rule.user_confirmed=check.checked;changed();});label.appendChild(check);row.appendChild(label);
+      window.owgProcessRuleEditor?.render(rule,row,()=>{check.checked=false;changed();});
       row.appendChild(button('Remove rule '+rule.id,()=>mutate(()=>{
         model.business_rules.splice(index,1);model.transitions.forEach(e=>{if(e.rule_id===rule.id)e.rule_id=null;});
       })));host.appendChild(row);
@@ -314,8 +318,53 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision)renderShadowReview(host);
+    if(record.revision){renderRuleChecks(host);renderShadowReview(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
+  }
+  function renderRuleChecks(host){
+    const section=el('section');section.append(el('h4','Check declared conditions against case facts'),
+      el('p','Choose an authorized JSON file containing cases with opaque labels (case_1 etc.) and facts. Confirmed structured predicates are checked against those supplied values only; missing facts stay unknown. Optional activity_ids describe a proposed route, not proof of observed execution. No data is sent to an AI or retained. Unsaved model edits are excluded.'));
+    const label=el('label','Choose authorized case-facts JSON '),file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Choose authorized case-facts JSON');label.appendChild(file);
+    const consentLabel=el('label',' I authorize local analysis of the case facts in this selected file. '),consent=el('input');consent.type='checkbox';consentLabel.appendChild(consent);
+    const run=button('Check facts against saved rules',()=>locked(async()=>{
+      if(!consent.checked)throw new Error('Confirm authorization for the selected case facts.');
+      const source=file.files?.[0];if(!source||source.size>128*1024)throw new Error('Choose a case-facts JSON file of at most 128 KiB.');
+      clearRuleChecks();const generation=ruleCheckGeneration,selected=record;
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/process-catalog/check-rules?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision}),
+        {method:'POST',headers:{'Content-Type':'application/json','X-OWG-Case-Facts-Authorized':'true'},body:source,cache:'no-store'});
+      const result=await response.json().catch(()=>({}));if(generation!==ruleCheckGeneration||record!==selected)return;
+      if(!response.ok)throw new Error(String(result.detail||'Case rule check unavailable'));
+      if(result.format!=='openworkgraph.declared-rule-case-check.v1')throw new Error('Unexpected rule-check response');
+      const counts=result.rule_result_counts||{};
+      output.append(el('h4',result.case_count+' supplied case-fact reports'),
+        el('p','Exact revision '+result.process_reference.revision+' · '+result.process_reference.content_sha256+'. '+
+          (result.references_latest_revision_at_check?'This was the latest saved revision at check time.':'A newer revision '+result.latest_revision_at_check+' exists.')),
+        el('p','Declared predicate results: '+Number(counts.matched||0)+' matched · '+Number(counts.not_matched||0)+' not matched · '+Number(counts.unknown||0)+' unknown. '+
+          Number(counts.not_evaluated_unconfirmed||0)+' unconfirmed and '+Number(counts.not_evaluated_unstructured||0)+' unstructured definitions were not evaluated.'),
+        el('p','Facts are caller-supplied and unverified. These are descriptive comparisons, not policy compliance, observed-case conformance, business outcomes or permission to execute. A structural match alone does not check business facts.'));
+      const reasons={matched:'Matched declared comparison',not_matched:'Did not match declared comparison',unknown:'Unknown: missing or incompatible fact',
+        not_on_proposed_route:'Not on proposed route',not_evaluated_unconfirmed:'Definition not confirmed',not_evaluated_unstructured:'No structured predicate',not_evaluated_invalid_route:'Proposed route outside graph'};
+      for(const item of result.cases){
+        const group=el('details');group.append(el('summary',item.case_id+' · '+(item.proposed_route_supplied?(item.proposed_route_structure_matches?'proposed route fits graph':'proposed route differs from graph'):'no route supplied')));
+        if(item.manual_review_condition_count_on_proposed_route)group.appendChild(el('p',item.manual_review_condition_count_on_proposed_route+' manual review conditions on this route remain unevaluated. Predicate results do not remove those guards.'));
+        const list=el('ul');for(const rule of item.rules){
+          const row=el('li'),detail=el('details');detail.appendChild(el('summary',rule.rule_id+' · '+reasons[rule.status]));
+          const clauses=el('ol');for(const condition of rule.conditions)clauses.appendChild(el('li',reasons[condition.status]+' · '+condition.reason.replaceAll('_',' ')));
+          detail.appendChild(clauses);row.appendChild(detail);list.appendChild(row);
+        }group.appendChild(list);output.appendChild(group);
+      }
+      output.appendChild(button('Download minimized rule-check report',()=>{
+        const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
+        const anchor=el('a');anchor.href=url;anchor.download='owg-declared-rule-check-r'+selected.revision+'.json';
+        document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+      }));
+      status('Declared rule check complete for saved revision '+selected.revision+'. No facts or report were retained and no model was changed.');
+    }));run.disabled=true;
+    const output=el('div');output.id='owgCatalogRuleCheckResult';output.setAttribute('role','status');
+    file.addEventListener('change',()=>{clearRuleChecks();consent.checked=false;run.disabled=true;});
+    consent.addEventListener('change',()=>{clearRuleChecks();run.disabled=!consent.checked||!file.files?.length;});
+    section.append(label,consentLabel,run,output);host.appendChild(section);
   }
   function renderShadowReview(host){
     const section=el('section');section.appendChild(el('h4','Review a shadow evaluation'));

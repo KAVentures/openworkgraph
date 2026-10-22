@@ -82,6 +82,12 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
                         media_type='application/javascript', headers={
                             'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
 
+    @router.get('/process-rule-editor.js',include_in_schema=False)
+    def rule_editor_script():
+        from pathlib import Path
+        return Response(Path(__file__).with_name('process_rule_editor.js').read_text(encoding='utf-8'),
+            media_type='application/javascript',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
     @router.get('/v1/human/processes')
     def inventory(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100),
                   include_archived: bool = False, p=Depends(human)):

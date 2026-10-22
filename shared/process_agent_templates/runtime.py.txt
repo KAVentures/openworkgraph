@@ -37,7 +37,7 @@ def check_plan(plan, spec=None):
     used_rules = {edges[pair]['rule_id'] for pair in zip(ids, ids[1:]) if edges[pair].get('rule_id')}
     unconfirmed = sorted(rule['id'] for rule in model['business_rules']
                          if rule['id'] in used_rules and not rule['user_confirmed'])
-    return {
+    checks = {
         'mode': 'offline_structural_shadow_check',
         'workflow_id': spec['workflow_id'], 'revision': spec['revision'],
         'content_sha256': spec['content_sha256'],
@@ -53,3 +53,10 @@ def check_plan(plan, spec=None):
         'execution_permitted': False,
         'source_outcome_verified': False,
     }
+    structured = sorted(rule['id'] for rule in model['business_rules']
+                        if rule['id'] in used_rules and rule.get('predicate') is not None)
+    if structured:
+        # A declaration/data comparison cannot attest fresh source facts or
+        # become permission for the customer executor to choose a branch.
+        checks['unevaluated_structured_rule_ids'] = structured
+    return checks

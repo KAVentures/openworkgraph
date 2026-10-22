@@ -86,6 +86,18 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
     async def run_case(self,data=None):
         return await execute_approved(*(data or self.data),journal_directory=Path(self.folder.name)/'journal',
             client_factory=lambda *args:self.tools,receipt_reader=self.source)
+    async def test_declared_predicate_needs_source_fact_implementation_before_any_io(self):
+        spec,plan,case,bindings,intent=self.data
+        spec['process_model']['business_rules']=[{'id':'version_rule','text':'Version approved',
+            'user_confirmed':True,'predicate':{'match':'all','conditions':[
+                {'path':'/version','operator':'eq','expected':3}]}}]
+        spec['process_model']['transitions'][0]['rule_id']='version_rule'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        intent['spec_sha256']=digest(spec)
+        self.assertIn('structured_rule_source_fact_implementation_missing',prepare(spec,plan,case,bindings)['requirements'])
+        with self.assertRaises(ImplementationError):await self.run_case()
+        self.assertFalse(self.tools.calls)
+        self.assertFalse(self.source_requests)
     def shared_fixture(self):
         data=deepcopy(self.data)
         data[0]['organization_catalog_reference']={'organization_id':'synthetic-org'}

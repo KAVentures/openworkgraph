@@ -384,3 +384,27 @@ def test_real_authenticated_api_and_nonce_portal(tmp_path):
         for body in [b'{"user_confirmed":true,"user_confirmed":false}',b'{"n":NaN}',b'['*2000+b']'*2000]:
             assert client.post('/v1/human/processes',headers={**headers('alice'),'Content-Type':'application/json'},content=body).status_code==422
         assert client.post('/v1/human/processes',headers={**headers('alice'),'Content-Type':'application/json'},content=b'x'*262145).status_code==413
+
+
+def test_structured_predicate_versions_preserve_definition_and_require_new_peer_review(store):
+    declared=model().model_dump()
+    declared['business_rules']=[{'id':'approval','text':'Approval supplied','user_confirmed':True,
+        'predicate':{'match':'all','conditions':[{'path':'/approval','operator':'eq','expected':True}]}}]
+    declared['transitions'][0]['rule_id']='approval'
+    first=store.save(person(),SharedProcessWrite(title='Declared approval',process_model=declared,
+        user_confirmed=True,organization_sharing_confirmed=True))
+    process=first['process'];wid=process['workflow_id']
+    grant(store,wid,members=[ProcessMember(actor_id='bob',role='reviewer')])
+    store.review(person('bob'),wid,review(process))
+    assert store.implementation_state(person(),wid,revision=1)['current_independent_design_review']
+    changed=json.loads(json.dumps(declared));changed['business_rules'][0]['predicate']['conditions'][0]['expected']=False
+    second=store.save(person(),SharedProcessWrite(title='Declared approval',process_model=changed,
+        expected_revision=1,user_confirmed=True,organization_sharing_confirmed=True),wid)
+    assert second['process']['content_sha256']!=process['content_sha256']
+    assert second['review']['status']=='needs_review'
+    assert not store.implementation_state(person(),wid,revision=1)['current_independent_design_review']
+    old=store.detail(person('bob'),wid,revision=1)
+    assert old['process']['process_model']['business_rules'][0]['predicate']['conditions'][0]['expected'] is True
+    assert second['process']['process_model']['business_rules'][0]['predicate']['conditions'][0]['expected'] is False
+    store.review(person('bob'),wid,review(second['process']))
+    assert store.implementation_state(person(),wid,revision=2)['current_independent_design_review']

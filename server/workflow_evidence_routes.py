@@ -773,6 +773,29 @@ async def import_process_bpmn_draft(request: Request) -> Response:
     return JSONResponse(result,headers={'Cache-Control':'no-store'})
 
 
+@app.get('/process-rule-editor.js')
+def process_rule_editor_script() -> Response:
+    return FileResponse(ROOT / 'gateway' / 'process_rule_editor.js',media_type='application/javascript')
+
+
+@app.post('/v1/process-catalog/check-rules')
+async def check_declared_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_rule_checks import RuleCaseBatch,check_case_rules
+    _require_dashboard(request)
+    if request.headers.get('x-owg-case-facts-authorized')!='true':
+        raise HTTPException(403,'explicit local case-fact analysis authorization required')
+    try:body=RuleCaseBatch.model_validate(await _process_json(request))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded case-fact check') from None
+    record=_catalog_record(workflow_id,revision)
+    result=check_case_rules(record,body.cases)
+    latest=_catalog_record(workflow_id)
+    result['latest_revision_at_check']=latest['revision']
+    result['references_latest_revision_at_check']=latest['revision']==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
 @app.get('/v1/process-catalog')
 def list_process_catalog(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100)) -> Response:
     page = _knowledge.page('local', after=after, limit=limit)

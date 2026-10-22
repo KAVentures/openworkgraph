@@ -386,6 +386,12 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     await alice
       .getByLabel("I confirm declared rule rule_1", { exact: true })
       .check();
+    const predicateEditor=alice.locator('.owg-rule-predicate').filter({hasText:'Structured conditions · rule_1'});
+    await predicateEditor.locator('summary').click();
+    await predicateEditor.getByLabel('Predicate field rule_1',{exact:true}).fill('/evidence/sufficient');
+    await predicateEditor.getByLabel('Predicate expected value rule_1',{exact:true}).fill('true');
+    await predicateEditor.getByRole('button',{name:'Add declared condition for rule_1',exact:true}).click();
+    assert.equal(await alice.getByLabel('I confirm declared rule rule_1',{exact:true}).isChecked(),false);
     await alice
       .getByLabel("Draft rule rule_1", { exact: true })
       .fill("Reviewed evidence is sufficient");
@@ -521,6 +527,7 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       await alice.locator("#opportunityReport").textContent(),
       /No reviewed improvement scenarios/,
     );
+    assert.match(await alice.locator('#design').textContent(), /Declared predicate.*evidence\/sufficient/);
     assert.equal(designWrites, 3);
     assert.match(await alice.locator("#design").textContent(), /Decide case/);
     assert.equal(

@@ -63,10 +63,12 @@ async def propose(case, *, model, spec=None):
     checks = check_plan(plan.model_dump(), spec)
     if checks['unconfirmed_rule_ids']:
         raise ValueError('Proposed route relies on unconfirmed business rules')
-    if checks['manual_review_conditions']:
+    if checks['manual_review_conditions'] or checks.get('unevaluated_structured_rule_ids'):
         # Enforce unresolved review independently of whatever the model claimed.
         pending = ['Manual review required at ' + condition['activity_id'] + ': ' + condition['condition_label']
                    for condition in checks['manual_review_conditions']]
+        pending += ['Structured rule requires a reviewed case-fact implementation: ' + rule_id
+                    for rule_id in checks.get('unevaluated_structured_rule_ids', [])]
         return {'plan': {**plan.model_dump(), 'status': 'needs_clarification',
                          'missing_business_inputs': (pending + plan.missing_business_inputs)[:40]},
                 'shadow_check': checks, 'execution_permitted': False, 'source_outcome_verified': False}

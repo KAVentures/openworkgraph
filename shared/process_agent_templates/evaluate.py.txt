@@ -64,7 +64,7 @@ def validate_suite(spec, suite):
                 checks = check_plan({**reference(spec), 'activity_ids': route}, spec)
             except ValueError:
                 raise ImplementationError('A reviewed expected route is outside the current process graph') from None
-            if checks['unconfirmed_rule_ids'] or checks['manual_review_conditions']:
+            if checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or checks.get('unevaluated_structured_rule_ids'):
                 raise ImplementationError('Expected proposals cannot bypass unconfirmed rules or unresolved manual review')
     return cases
 
@@ -109,7 +109,7 @@ def compare(spec, suite, results):
                 checks = check_plan(plan, spec)
             except ValueError:
                 reason = 'invalid_route'
-            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions']):
+            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or checks.get('unevaluated_structured_rule_ids')):
                 reason = 'unresolved_review_bypassed'
             if reason is None:
                 if plan['missing_business_inputs']:
