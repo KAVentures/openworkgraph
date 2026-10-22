@@ -48,3 +48,17 @@ those credentials. A revoked or replaced credential cannot establish current
 recorder status. An ineligible newer report does not bury another eligible
 computer's report. Future timestamps are unknown, and the hosted collector
 signal flag includes elapsed time since receipt in its 45-second window.
+
+Heartbeats are bound internally to the submitting device credential ID. Both the
+admin join and hosted lookup require that exact credential to remain active;
+matching timestamps alone cannot establish a replacement credential's status.
+The write also checks that the submitting credential is still active, preventing
+an old in-flight request from replacing a new credential's report. Actual bearer
+tokens are never retained in heartbeat rows or returned by these summaries.
+
+Startup adds the binding column to legacy SQLite/PostgreSQL tables without
+deleting existing metadata. Legacy unbound rows remain unknown until the next
+normal authenticated heartbeat. Existing connectors need no protocol change.
+Schema initialization is repeatable, and SQLite serializes its migration check
+with the update. Tests include equal enrollment/report timestamps, overlapping
+revocation and writes, and repeat startup over a populated legacy schema.

@@ -66,7 +66,7 @@ def test_device_join_matches_organization_actor_and_current_credential(store):
     db.put_token(token_id='new',token='new',token_type='device',organization_id='acme',actor_id='alice',
         device_id='same-device',scopes={'evidence:write'},replace_device=True)
     alice=next(row for row in people_and_devices(db,'acme')['unlinked_devices'] if row['actor_id']=='alice')
-    assert alice['recorder_status']['report_status']=='predates_enrollment'
+    assert alice['recorder_status']['report_status']=='no_report'
     db.report_recorder_heartbeat(db.authenticate('new'),collector_state='stopped',capture_policy='stopped',collector_age_seconds=None)
     assert people_and_devices(db,'acme')['unlinked_devices'][0]['recorder_status']['status']=='stopped_reported'
 
@@ -147,3 +147,48 @@ def test_hosted_status_counts_elapsed_collector_age_and_rejects_future_reports(s
     value=_reported_recorder_state(db,organization_id='acme',actor_id='alice')
     assert value['local_recorder_state']=='unknown_to_hosted_connector'
     assert not value['fresh_authenticated_device_report'] and not value['desktop_collector_heartbeat_verified']
+
+
+def test_equal_timestamps_and_inflight_old_requests_cannot_reuse_replacement_identity(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db;init_employee_schema(db)
+    db.put_token(token_id='old',token='old',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    old=db.authenticate('old')
+    db.report_recorder_heartbeat(old,collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    db.put_token(token_id='new',token='new',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'},replace_device=True)
+    stamp=datetime.now(timezone.utc).isoformat()
+    with db.connect() as conn:
+        db._execute(conn,'UPDATE access_tokens SET created_at = ?',(stamp,))
+        db._execute(conn,'UPDATE recorder_heartbeats SET received_at = ?',(stamp,))
+    def hosted():return _reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert not hosted()['fresh_authenticated_device_report']
+    assert people_and_devices(db,'acme')['unlinked_devices'][0]['recorder_status']['status']=='unknown'
+    db.report_recorder_heartbeat(db.authenticate('new'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    assert hosted()['local_recorder_state']=='paused'
+    # A request authenticated before revocation cannot overwrite the new report.
+    db.report_recorder_heartbeat(old,collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    assert hosted()['local_recorder_state']=='paused'
+
+
+def test_legacy_heartbeat_schema_upgrade_preserves_rows_but_requires_a_new_bound_report(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    db.put_token(token_id='owned',token='owned',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    with db.connect() as conn:
+        db._execute(conn,'DROP TABLE recorder_heartbeats')
+        db._execute(conn,'''CREATE TABLE recorder_heartbeats (
+            organization_id TEXT NOT NULL,actor_id TEXT NOT NULL,device_id TEXT NOT NULL,
+            received_at TEXT NOT NULL,collector_state TEXT NOT NULL,capture_policy TEXT NOT NULL,
+            collector_age_seconds INTEGER,PRIMARY KEY(organization_id,actor_id,device_id))''')
+        db._execute(conn,'INSERT INTO recorder_heartbeats VALUES (?,?,?,?,?,?,?)',
+            ('acme','alice','owned',datetime.now(timezone.utc).isoformat(),'recording','recording',0))
+    db.init();db.init()  # Repeated startup is safe and preserves legacy metadata.
+    with db.connect() as conn:
+        assert db._execute(conn,'SELECT COUNT(*) FROM recorder_heartbeats').fetchone()[0]==1
+        assert db._execute(conn,'SELECT device_token_id FROM recorder_heartbeats').fetchone()[0]==''
+    assert not _reported_recorder_state(db,organization_id='acme',actor_id='alice')['fresh_authenticated_device_report']
+    db.report_recorder_heartbeat(db.authenticate('owned'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    assert _reported_recorder_state(db,organization_id='acme',actor_id='alice')['local_recorder_state']=='paused'

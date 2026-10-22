@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS recorder_heartbeats (
   collector_state TEXT NOT NULL,
   capture_policy TEXT NOT NULL,
   collector_age_seconds INTEGER,
+  device_token_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (organization_id, actor_id, device_id)
 );
 CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS recorder_heartbeats (
   collector_state TEXT NOT NULL,
   capture_policy TEXT NOT NULL,
   collector_age_seconds INTEGER,
+  device_token_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (organization_id, actor_id, device_id)
 );
 CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
@@ -215,8 +217,14 @@ class GatewayDB:
             if self.is_postgres:
                 for statement in [x.strip() for x in POSTGRES_SCHEMA.split(";") if x.strip()]:
                     conn.execute(statement)
+                conn.execute("ALTER TABLE recorder_heartbeats ADD COLUMN IF NOT EXISTS device_token_id TEXT NOT NULL DEFAULT ''")
             else:
                 conn.executescript(SQLITE_SCHEMA)
+                # Serialize legacy-schema inspection and upgrade across starters.
+                conn.execute('BEGIN IMMEDIATE')
+                columns={row[1] for row in conn.execute('PRAGMA table_info(recorder_heartbeats)').fetchall()}
+                if 'device_token_id' not in columns:
+                    conn.execute("ALTER TABLE recorder_heartbeats ADD COLUMN device_token_id TEXT NOT NULL DEFAULT ''")
 
     def _execute(self, conn, sql: str, params: tuple[Any, ...] = ()):
         if self.is_postgres:
@@ -346,16 +354,21 @@ class GatewayDB:
             self._execute(conn, """
                 INSERT INTO recorder_heartbeats(
                     organization_id, actor_id, device_id, received_at,
-                    collector_state, capture_policy, collector_age_seconds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    collector_state, capture_policy, collector_age_seconds, device_token_id
+                ) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (
+                    SELECT 1 FROM access_tokens t WHERE t.token_id = ?
+                    AND t.organization_id = ? AND t.actor_id = ? AND t.device_id = ?
+                    AND t.token_type = 'device' AND t.revoked_at IS NULL)
                 ON CONFLICT(organization_id,actor_id,device_id)
                 DO UPDATE SET received_at=excluded.received_at,
                   collector_state=excluded.collector_state,
                   capture_policy=excluded.capture_policy,
-                  collector_age_seconds=excluded.collector_age_seconds
+                  collector_age_seconds=excluded.collector_age_seconds,
+                  device_token_id=excluded.device_token_id
             """, (
                 principal.organization_id, principal.actor_id, principal.device_id,
-                at, collector_state, capture_policy, collector_age_seconds,
+                at, collector_state, capture_policy, collector_age_seconds, principal.token_id,
+                principal.token_id, principal.organization_id, principal.actor_id, principal.device_id,
             ))
 
     def last_recorder_heartbeat(
@@ -373,7 +386,7 @@ class GatewayDB:
                        h.collector_age_seconds, t.created_at AS device_enrolled_at
                 FROM recorder_heartbeats h JOIN access_tokens t
                   ON t.organization_id = h.organization_id AND t.actor_id = h.actor_id
-                 AND t.device_id = h.device_id AND t.token_type = 'device'
+                 AND t.device_id = h.device_id AND t.token_id = h.device_token_id AND t.token_type = 'device'
                  AND t.revoked_at IS NULL AND h.received_at >= t.created_at
                 WHERE h.organization_id = ? AND h.actor_id = ?
                 ORDER BY h.received_at DESC, t.created_at DESC LIMIT 1
