@@ -80,3 +80,29 @@ The separate customer executor reports
 before tools or source calls. A successful dashboard check cannot remove this
 guard. A customer-specific implementation must establish its authoritative fact
 source and review the decision semantics before automating these conditions.
+
+## Shared organization checks
+
+The organization workspace supports the same raw-file analysis against a
+selected shared revision, including historical revisions. This is an explicitly
+remote transfer: its separate consent states that the selected facts will be
+sent to the organization's Gateway. Selecting a file or ticking consent performs
+no request. Replacing the file, clearing results, editing a draft, opening a
+revision or disconnecting invalidates pending results and resets consent where
+appropriate. No credentials or case facts enter browser storage.
+
+`POST /v1/human/processes/{workflow_id}/check-rules?revision=…` requires a
+delegated human identity with `org:process:read`, access to that organization's
+shared process, and `X-OWG-Case-Facts-Authorized: true`. Service/admin tokens and
+personal evidence scopes do not substitute for that permission. Scope and
+process access are checked before reading facts and again during the check.
+The same 128 KiB body and predicate/fact bounds apply; no source/model calls or
+model/review changes occur. Current independent design review is reported as
+context and never treated as fact authenticity or execution authorization.
+
+The Gateway stores a minimal inspection audit containing workflow ID, revision
+and case count, without facts, case labels, predicate outcomes or the comparison
+report. The response sets `minimal_inspection_audit_persisted: true`. All fact
+and comparison-retention flags remain false. An explicit minimized-report
+download creates an external copy. Shared checks do not read personal local
+snapshots or implicitly share employee observations.

@@ -33,13 +33,13 @@ def _invalid_constant(value):
     raise ValueError('nonstandard JSON constant')
 
 
-async def _body(request: Request, model: type[_MODEL]) -> _MODEL:
+async def _body(request: Request, model: type[_MODEL], *, maximum: int = 256 * 1024) -> _MODEL:
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
         raise HTTPException(415, 'application/json required')
     data = bytearray()
     async for chunk in request.stream():
-        if len(data) + len(chunk) > 256 * 1024:
-            raise HTTPException(413, 'Shared process request exceeds 256 KiB')
+        if len(data) + len(chunk) > maximum:
+            raise HTTPException(413, 'Shared process request exceeds '+str(maximum // 1024)+' KiB')
         data.extend(chunk)
     try:
         return model.model_validate(json.loads(data, object_pairs_hook=_object, parse_constant=_invalid_constant))
@@ -145,6 +145,18 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
             return JSONResponse(result, headers={'Cache-Control': 'no-store'})
         except ProcessCollaborationError as exc:
             raise HTTPException(exc.status, str(exc)) from None
+
+    @router.post('/v1/human/processes/{workflow_id}/check-rules')
+    async def check_rules(request: Request, workflow_id: str = APIPath(pattern=_ID),
+                          revision: int = Query(ge=1), p=Depends(human)):
+        from shared.process_rule_checks import RuleCaseBatch
+        if request.headers.get('x-owg-case-facts-authorized')!='true':
+            raise HTTPException(403, 'Explicit case-fact transfer authorization required')
+        # Check scope and row access before reading the facts; the store checks
+        # them again after parsing, using the current organization identity.
+        await run_in_threadpool(_response, store.detail, p, workflow_id, revision=revision)
+        batch=await _body(request, RuleCaseBatch, maximum=128 * 1024)
+        return await run_in_threadpool(_response, store.check_declared_rules, p, workflow_id, revision, batch)
 
     @router.post('/v1/human/processes/{workflow_id}/shadow-review')
     async def shadow_review(request: Request, workflow_id: str = APIPath(pattern=_ID), p=Depends(human)):

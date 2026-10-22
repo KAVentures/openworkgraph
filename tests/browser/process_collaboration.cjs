@@ -528,6 +528,45 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       /No reviewed improvement scenarios/,
     );
     assert.match(await alice.locator('#design').textContent(), /Declared predicate.*evidence\/sufficient/);
+    const factPayload=Buffer.from(JSON.stringify({cases:[
+      {case_id:'case_1',facts:{evidence:{sufficient:true},unused:'PRIVATE_SHARED_CASE_FACT'}},
+      {case_id:'case_2',facts:{evidence:{sufficient:false}}},{case_id:'case_3',facts:{}}]}));
+    let sharedFactChecks=0;alice.on('request',request=>{if(new URL(request.url()).pathname.endsWith('/check-rules'))sharedFactChecks++;});
+    await alice.getByLabel('Authorized shared case-facts JSON',{exact:true}).setInputFiles({name:'owned-shared-facts.json',mimeType:'application/json',buffer:factPayload});
+    assert.equal(sharedFactChecks,0);assert(await alice.locator('#checkRuleFacts').isDisabled());
+    await alice.getByLabel("I authorize sending this selected case-facts file to this organization's Gateway.",{exact:true}).check();
+    assert.equal(sharedFactChecks,0);
+    const checkedFacts=alice.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/check-rules'));
+    await alice.locator('#checkRuleFacts').click();const sharedCheck=await (await checkedFacts).json();
+    assert.equal(sharedCheck.process_reference.revision,2);assert.equal(sharedCheck.organization_id,'acme');
+    assert.equal(sharedCheck.rule_result_counts.matched,1);assert.equal(sharedCheck.rule_result_counts.not_matched,1);
+    assert.equal(sharedCheck.rule_result_counts.unknown,1);assert(!JSON.stringify(sharedCheck).includes('PRIVATE_SHARED_CASE_FACT'));
+    await alice.locator('#ruleFactsResult').getByText('3 supplied case-fact reports',{exact:true}).waitFor();
+    assert(!(await alice.locator('#ruleFactsResult').textContent()).includes('PRIVATE_SHARED_CASE_FACT'));
+    const sharedRuleDownload=alice.waitForEvent('download');
+    await alice.getByRole('button',{name:'Download minimized shared rule-check report',exact:true}).click();
+    const downloadedRules=await sharedRuleDownload,downloadedRulesPath=pathModule.join(scratch,'shared-rule-check.json');
+    await downloadedRules.saveAs(downloadedRulesPath);
+    const downloadedRuleText=await fs.readFile(downloadedRulesPath,'utf8');
+    assert(!downloadedRuleText.includes('PRIVATE_SHARED_CASE_FACT'));
+    assert.equal(JSON.parse(downloadedRuleText).process_reference.revision,2);
+    await alice.locator('#clearRuleFacts').click();assert.equal(await alice.locator('#ruleFactsResult').textContent(),'');
+    assert.equal(await alice.locator('#ruleFactsConsent').isChecked(),false);
+    assert.equal(await alice.locator('#ruleFactsFile').inputValue(),'');
+    // Clearing while a permitted request is pending must also discard its late result.
+    let releaseRuleRequest;const pendingRuleGate=new Promise(resolve=>releaseRuleRequest=resolve);
+    await alice.route('**/check-rules?*',async route=>{await pendingRuleGate;await route.continue();});
+    await alice.getByLabel('Authorized shared case-facts JSON',{exact:true}).setInputFiles({name:'owned-shared-facts.json',mimeType:'application/json',buffer:factPayload});
+    await alice.locator('#ruleFactsConsent').check();
+    const pendingRequest=alice.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/check-rules'));
+    await alice.locator('#checkRuleFacts').click();await pendingRequest;
+    await alice.locator('#clearRuleFacts').click();
+    const lateResponse=alice.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/check-rules'));
+    releaseRuleRequest();await lateResponse;
+    await alice.unroute('**/check-rules?*');
+    await alice.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await alice.locator('#ruleFactsResult').textContent(),'');
+
     assert.equal(designWrites, 3);
     assert.match(await alice.locator("#design").textContent(), /Decide case/);
     assert.equal(

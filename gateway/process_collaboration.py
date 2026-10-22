@@ -235,6 +235,25 @@ class OrganizationProcessStore:
             self._audit(conn, p, 'process.implementation_state.read', workflow_id=workflow_id, revision=revision)
             return result
 
+    def check_declared_rules(self, p, workflow_id, revision, batch):
+        from shared.process_rule_checks import check_case_rules
+        self.require_scope(p, 'org:process:read')
+        with self.db.connect() as conn:
+            detail=self._detail(conn,p,workflow_id,revision=revision)
+            result=check_case_rules(detail['process'],batch.cases)
+            result.update(organization_id=p.organization_id,
+                latest_revision_at_check=detail['latest_revision'],
+                references_latest_revision_at_check=not detail['viewing_historical_revision'],
+                shared_design_review_status=detail['review']['status'],
+                active_independently_reviewed_revision_at_check=(not detail['archived']
+                    and not detail['viewing_historical_revision'] and detail['review']['status']=='reviewed_design'),
+                minimal_inspection_audit_persisted=True)
+            # Record the authorized operation, never fact values, rule outcomes
+            # or opaque case labels. No changes to the model/review/evidence.
+            self._audit(conn,p,'process.declared_rules.checked',workflow_id=workflow_id,
+                        revision=revision,case_count=len(batch.cases))
+            return result
+
     def inspect_shadow_report(self, p, workflow_id, request):
         from shared.process_shadow_review import inspect_shadow_report
         self.require_scope(p, 'org:process:read')
