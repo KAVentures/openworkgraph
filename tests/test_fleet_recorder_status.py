@@ -66,7 +66,7 @@ def test_device_join_matches_organization_actor_and_current_credential(store):
     db.put_token(token_id='new',token='new',token_type='device',organization_id='acme',actor_id='alice',
         device_id='same-device',scopes={'evidence:write'},replace_device=True)
     alice=next(row for row in people_and_devices(db,'acme')['unlinked_devices'] if row['actor_id']=='alice')
-    assert alice['recorder_status']['report_status']=='predates_enrollment'
+    assert alice['recorder_status']['report_status']=='no_report'
     db.report_recorder_heartbeat(db.authenticate('new'),collector_state='stopped',capture_policy='stopped',collector_age_seconds=None)
     assert people_and_devices(db,'acme')['unlinked_devices'][0]['recorder_status']['status']=='stopped_reported'
 
@@ -98,3 +98,135 @@ def test_admin_api_keeps_device_and_ordinary_integration_tokens_out_and_uses_rep
         assert item()['recorder_status']['status']=='unknown'
         assert client.delete('/v1/admin/devices/acme/owned-computer',headers=admin).status_code==200
         assert not client.get('/v1/admin/people/acme',headers=admin).json()['employees'][0]['devices']
+
+
+def test_hosted_status_requires_active_current_identity_and_does_not_bury_another_report(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    for name,org,actor in [('alice','acme','alice'),('other','other','alice'),('bob','acme','bob')]:
+        db.put_token(token_id=name,token=name,token_type='device',organization_id=org,
+            actor_id=actor,device_id='same',scopes={'evidence:write'})
+        db.report_recorder_heartbeat(db.authenticate(name),collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    def state():return _reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert state()['desktop_collector_heartbeat_verified']
+    assert db.revoke_token('alice')
+    assert state()['local_recorder_state']=='unknown_to_hosted_connector'
+    assert not state()['fresh_authenticated_device_report']
+    db.put_token(token_id='replacement',token='replacement',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='same',scopes={'evidence:write'})
+    assert state()['local_recorder_state']=='unknown_to_hosted_connector'
+    # A valid second device is still eligible when the newest prior-device
+    # report cannot establish status for its replacement credential.
+    db.put_token(token_id='second',token='second',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='second',scopes={'evidence:write'})
+    db.report_recorder_heartbeat(db.authenticate('second'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE access_tokens SET created_at = ? WHERE token_id = 'second'",
+                    ((datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat(),))
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ? WHERE organization_id = 'acme' AND device_id = 'second'",
+                    ((datetime.now(timezone.utc)-timedelta(seconds=10)).isoformat(),))
+    assert state()['local_recorder_state']=='paused'
+    db.report_recorder_heartbeat(db.authenticate('replacement'),collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    assert state()['desktop_collector_heartbeat_verified']
+
+
+def test_hosted_status_counts_elapsed_collector_age_and_rejects_future_reports(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    db.put_token(token_id='device',token='device',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    db.report_recorder_heartbeat(db.authenticate('device'),collector_state='recording',capture_policy='recording',collector_age_seconds=40)
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE access_tokens SET created_at = ?",((datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat(),))
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ?",((datetime.now(timezone.utc)-timedelta(seconds=10)).isoformat(),))
+    value=_reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert value['fresh_authenticated_device_report'] and value['local_recorder_state']=='recording'
+    assert not value['desktop_collector_heartbeat_verified']
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ?",((datetime.now(timezone.utc)+timedelta(minutes=2)).isoformat(),))
+    value=_reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert value['local_recorder_state']=='unknown_to_hosted_connector'
+    assert not value['fresh_authenticated_device_report'] and not value['desktop_collector_heartbeat_verified']
+
+
+def test_equal_timestamps_and_inflight_old_requests_cannot_reuse_replacement_identity(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db;init_employee_schema(db)
+    db.put_token(token_id='old',token='old',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    old=db.authenticate('old')
+    db.report_recorder_heartbeat(old,collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    db.put_token(token_id='new',token='new',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'},replace_device=True)
+    stamp=datetime.now(timezone.utc).isoformat()
+    with db.connect() as conn:
+        db._execute(conn,'UPDATE access_tokens SET created_at = ?',(stamp,))
+        db._execute(conn,'UPDATE recorder_heartbeats SET received_at = ?',(stamp,))
+    def hosted():return _reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert not hosted()['fresh_authenticated_device_report']
+    assert people_and_devices(db,'acme')['unlinked_devices'][0]['recorder_status']['status']=='unknown'
+    db.report_recorder_heartbeat(db.authenticate('new'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    assert hosted()['local_recorder_state']=='paused'
+    # A request authenticated before revocation cannot overwrite the new report.
+    db.report_recorder_heartbeat(old,collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    assert hosted()['local_recorder_state']=='paused'
+
+
+def test_legacy_heartbeat_schema_upgrade_preserves_rows_but_requires_a_new_bound_report(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    db.put_token(token_id='owned',token='owned',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    with db.connect() as conn:
+        db._execute(conn,'DROP TABLE recorder_heartbeats')
+        db._execute(conn,'''CREATE TABLE recorder_heartbeats (
+            organization_id TEXT NOT NULL,actor_id TEXT NOT NULL,device_id TEXT NOT NULL,
+            received_at TEXT NOT NULL,collector_state TEXT NOT NULL,capture_policy TEXT NOT NULL,
+            collector_age_seconds INTEGER,PRIMARY KEY(organization_id,actor_id,device_id))''')
+        db._execute(conn,'INSERT INTO recorder_heartbeats VALUES (?,?,?,?,?,?,?)',
+            ('acme','alice','owned',datetime.now(timezone.utc).isoformat(),'recording','recording',0))
+    db.init();db.init()  # Repeated startup is safe and preserves legacy metadata.
+    with db.connect() as conn:
+        assert db._execute(conn,'SELECT COUNT(*) FROM recorder_heartbeats').fetchone()[0]==1
+        assert db._execute(conn,'SELECT device_token_id FROM recorder_heartbeats').fetchone()[0]==''
+    assert not _reported_recorder_state(db,organization_id='acme',actor_id='alice')['fresh_authenticated_device_report']
+    db.report_recorder_heartbeat(db.authenticate('owned'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    assert _reported_recorder_state(db,organization_id='acme',actor_id='alice')['local_recorder_state']=='paused'
+
+
+def test_report_write_fences_revocation_on_both_databases(store,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import sqlite3
+    db=store.db
+    db.put_token(token_id='owned',token='owned',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    principal=db.authenticate('owned');locked=Event();release=Event();original=db._execute
+    def execute(conn,sql,params=()):
+        result=original(conn,sql,params)
+        if 'SELECT token_id FROM access_tokens' in sql and "token_type = 'device'" in sql:
+            locked.set()
+            assert release.wait(10),'Release owned heartbeat transaction'
+        return result
+    monkeypatch.setattr(db,'_execute',execute)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(db.report_recorder_heartbeat,principal,
+            collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+        try:
+            assert locked.wait(10)
+            if db.is_postgres:
+                import psycopg
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    with db.connect() as conn:
+                        original(conn,"SELECT token_id FROM access_tokens WHERE token_id = 'owned' FOR UPDATE NOWAIT")
+            else:
+                with pytest.raises(sqlite3.OperationalError,match='locked'):
+                    with db.connect() as conn:
+                        conn.execute('PRAGMA busy_timeout=0')
+                        original(conn,"UPDATE access_tokens SET revoked_at = 'owned-test' WHERE token_id = 'owned'")
+        finally:
+            release.set()
+        future.result(timeout=10)
+    monkeypatch.setattr(db,'_execute',original)
+    assert db.revoke_token('owned')
+    assert db.last_recorder_heartbeat(organization_id='acme',actor_id='alice') is None

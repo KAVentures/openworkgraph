@@ -710,7 +710,7 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
                FROM access_tokens t LEFT JOIN gateway_device_identity d
                  ON d.organization_id = t.organization_id AND d.device_id = t.device_id
                LEFT JOIN recorder_heartbeats h ON h.organization_id = t.organization_id
-                 AND h.actor_id = t.actor_id AND h.device_id = t.device_id
+                 AND h.actor_id = t.actor_id AND h.device_id = t.device_id AND h.device_token_id = t.token_id
                WHERE t.organization_id = ? AND t.token_type = 'device' AND t.revoked_at IS NULL
                ORDER BY t.created_at DESC""",
             (org,),

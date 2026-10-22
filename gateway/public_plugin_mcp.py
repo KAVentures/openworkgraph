@@ -146,26 +146,14 @@ def _reported_recorder_state(
     report = db.last_recorder_heartbeat(
         organization_id=organization_id, actor_id=actor_id,
     )
-    age = None
-    try:
-        when = datetime.fromisoformat(str((report or {}).get("received_at") or "").replace("Z", "+00:00"))
-        if when.tzinfo:
-            age = max(0, int((datetime.now(timezone.utc) - when).total_seconds()))
-    except (TypeError, ValueError, OverflowError):
-        pass
-    fresh = age is not None and age <= 60
-    claimed = str((report or {}).get("collector_state") or "")
-    local_collector_age = (report or {}).get("collector_age_seconds")
-    allowed = {"recording", "paused", "stopped", "no_recent_collector_heartbeat"}
-    verified = fresh and claimed in allowed
+    from .fleet_health import recorder_status
+    status = recorder_status(report,enrolled_at=(report or {}).get('device_enrolled_at',''))
+    fresh = status['fresh_authenticated_device_report']
     return {
-        "local_recorder_state": claimed if verified else "unknown_to_hosted_connector",
-        "fresh_authenticated_device_report": bool(fresh),
-        "last_device_report_age_seconds": age,
-        "desktop_collector_heartbeat_verified": bool(
-            fresh and claimed == "recording"
-            and isinstance(local_collector_age, int) and local_collector_age <= 45
-        ),
+        "local_recorder_state": status['recorder_state'] if fresh else "unknown_to_hosted_connector",
+        "fresh_authenticated_device_report": fresh,
+        "last_device_report_age_seconds": status['report_age_seconds'],
+        "desktop_collector_heartbeat_verified": status['collector_signal_recent'],
         "recorder_state_is_based_on_event_timestamp": False,
         "status_report_contains_work_content": False,
         "stale_report_is_not_proof_recorder_stopped": True,
