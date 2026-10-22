@@ -337,9 +337,11 @@
     }
     const activities=safeArray(map.activities).map(node=>({...node,
       label:readable(node.display_step||node.structural_step,candidate.surface_labels),kind:'activity',
+      observed_count:node.projected_occurrence_count,
       observed_summary:count(node.projected_occurrence_count)+' projected steps · '+count(node.supporting_execution_count)+' executions'}));
     const byId=new Map(activities.map(node=>[node.id,node]));
     const transitions=safeArray(map.transitions).map(edge=>({...edge,
+      observed_count:edge.projected_transition_count,
       observed_summary:(byId.get(edge.source)?.label||'')+' → '+(byId.get(edge.target)?.label||'')+' · '+
         count(edge.projected_transition_count)+' projected transitions in '+count(edge.supporting_execution_count)+' executions; step timing unavailable'}));
     host.appendChild(element('h4','Combined candidate transition map'));
@@ -371,7 +373,7 @@
         }
         if(!found)info.appendChild(element('p','No supporting variant is included in the displayed lane sample. Narrow the period or inspect the source evidence.'));
         info.focus();
-      },{observed:true});
+      },{observed:true,projected:true});
       host.appendChild(drawing);host.appendChild(info);
     }catch{
       host.appendChild(element('p','This combined projection exceeds the renderer limits. Use the separate observed variant lanes.','muted'));

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const source=fs.readFileSync(new URL('../../gateway/process_graph.js',import.meta.url),'utf8');
 class Element {
-  constructor(tag){this.tag=tag;this.attrs={};this.children=[];this.handlers={};this.textContent='';}
+  constructor(tag){this.tag=tag;this.attrs={};this.children=[];this.handlers={};this.textContent='';this.style={};}
   setAttribute(key,value){this.attrs[key]=value;}
   appendChild(value){this.children.push(value);return value;}
   append(...values){this.children.push(...values);}
@@ -100,4 +100,60 @@ test('dense observed maps stay bounded and finite while keeping their own larger
  assert(Number(svg.attrs.height)<10000);
  assert.throws(()=>graph.drawObserved({activities:[...activities,{activity:'Too many'}],transitions:[]}),/bounded/);
  assert.throws(()=>graph.drawObserved({activities,transitions:[...transitions,transitions[0]]}),/bounded/);
+});
+
+test('zoom and fit preserve finite geometry, exact identity and original process data without I/O',()=>{
+ const graph=fixture(),input=model(),before=JSON.stringify(input),selected=[];
+ const drawing=graph.draw(input,activity=>selected.push(activity.id));
+ const find=label=>drawing.walk().find(node=>node.tag==='button'&&node.textContent===label);
+ const svg=drawing.walk().find(node=>node.tag==='svg'),viewport=drawing.walk().find(node=>node.className==='owg-graph-viewport');
+ const width=Number(svg.attrs.width);assert.equal(viewport.attrs.tabindex,'0');
+ assert.match(viewport.attrs['aria-label'],/arrow keys to pan/);
+ find('Zoom in').handlers.click();assert(Number(svg.attrs.width)>width);
+ find('Actual size').handlers.click();assert.equal(Number(svg.attrs.width),width);
+ viewport.clientWidth=180;find('Fit graph').handlers.click();assert(Number(svg.attrs.width)<=156.000001);
+ assert.equal(viewport.scrollLeft,0);assert.equal(viewport.scrollTop,0);
+ for(let i=0;i<100;i++)find('Zoom out').handlers.click();
+ assert.equal(find('Zoom out').disabled,true);assert.equal(Number(svg.attrs.width),width*.01);
+ for(let i=0;i<100;i++)find('Zoom in').handlers.click();
+ assert.equal(find('Zoom in').disabled,true);assert.equal(Number(svg.attrs.width),width*3);
+ assert(Number.isFinite(Number(svg.attrs.height)));
+ drawing.walk().find(node=>node.attrs['aria-label']==='Select activity accept').handlers.click();
+ assert.deepEqual(selected,['accept']);assert.equal(JSON.stringify(input),before);
+ assert.equal(drawing.walk().filter(node=>node.tag==='select').length,0);
+});
+
+test('observed emphasis uses numerical counts and gaps, preserves zero/unknown and hides no data',()=>{
+ const input={activities:[{activity:'Open',event_count:20,case_count:10},{activity:'Close',event_count:10,case_count:10}],
+  transitions:[{from:'Open',to:'Close',transition_count:10,case_count:10,median_elapsed_gap_seconds:120},
+   {from:'Open',to:'Open',transition_count:2,case_count:2,median_elapsed_gap_seconds:0},
+   {from:'Close',to:'Open',transition_count:null,case_count:null,median_elapsed_gap_seconds:null}]};
+ const before=JSON.stringify(input),drawing=fixture().drawObserved(input,()=>{});
+ const select=drawing.walk().find(node=>node.tag==='select');
+ const paths=drawing.walk().filter(node=>node.tag==='path');
+ const legend=drawing.walk().find(node=>node.className==='muted owg-graph-legend');
+ assert.equal(paths.length,6);assert(paths.every(node=>node.attrs['stroke-width']===2));
+ select.value='frequency';select.handlers.change();
+ assert(paths[0].attrs['stroke-width']>paths[2].attrs['stroke-width']);
+ assert.equal(paths[4].attrs.stroke,'#8a8a8a');
+ assert.match(legend.textContent,/supplied event logs/);
+ select.value='elapsed';select.handlers.change();
+ assert.equal(paths[0].attrs['stroke-width'],8);assert.equal(paths[2].attrs['stroke-width'],2);
+ assert.notEqual(paths[2].attrs.stroke,paths[4].attrs.stroke);
+ assert.equal(paths[4].attrs.stroke,'#8a8a8a');assert.match(legend.textContent,/not verified waiting times/);
+ assert(drawing.walk().some(node=>node.tag==='title'&&node.textContent.includes('gap unavailable')));
+ select.value='none';select.handlers.change();assert(paths.every(node=>node.attrs['stroke-width']===2));
+ assert.equal(drawing.walk().filter(node=>node.tag==='g').length,2);
+ assert.equal(JSON.stringify(input),before);
+});
+
+test('candidate projections offer frequency only and invalid numerical values stay unknown',()=>{
+ const input=model();input.activities.forEach(node=>{node.observed_count=1;node.observed_summary='1 projected occurrence';});
+ input.transitions.forEach((edge,index)=>{edge.observed_count=index?NaN:3;edge.observed_median_gap_seconds=index?undefined:Infinity;});
+ const drawing=fixture().draw(input,()=>{},{observed:true,projected:true});
+ const select=drawing.walk().find(node=>node.tag==='select');
+ assert.deepEqual(select.children.map(node=>node.value),['none','frequency']);
+ select.value='frequency';select.handlers.change();
+ assert.match(drawing.walk().find(node=>node.className==='muted owg-graph-legend').textContent,/normalized candidate projections/);
+ assert.equal(drawing.walk().filter(node=>node.tag==='path')[2].attrs.stroke,'#8a8a8a');
 });

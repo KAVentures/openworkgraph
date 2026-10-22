@@ -92,14 +92,27 @@
     };
     const wrap = document.createElement("div");
     wrap.className = "owg-process-graph";
+    const toolbar = document.createElement("div");
+    toolbar.className = "owg-graph-toolbar";
+    Object.assign(toolbar.style, {display:"flex", flexWrap:"wrap", gap:"8px", alignItems:"center", padding:"8px"});
+    toolbar.setAttribute("role", "group");
+    toolbar.setAttribute("aria-label", "Process map view controls");
+    const viewport = document.createElement("div");
+    viewport.className = "owg-graph-viewport";
+    Object.assign(viewport.style, {overflow:"auto", maxHeight:"520px", maxWidth:"100%"});
+    viewport.setAttribute("tabindex", "0");
+    viewport.setAttribute("role", "region");
+    viewport.setAttribute("aria-label", "Scrollable process map; use arrow keys to pan");
     const drawing = svg("svg", {
       width: geometry.width,
       height: geometry.height,
+      viewBox: "0 0 " + geometry.width + " " + geometry.height,
       role: "group",
       "aria-label": options.observed
         ? "Observed activity transitions across supplied cases. Arrows show recorded order, not causal dependencies or approved routes."
         : "Proposed process graph. Arrows represent designed transitions.",
     });
+    const edgePaint = [], nodePaint = [];
     geometry.edges.forEach((edge) => {
       const path = svg("path", {
         d: edge.points.map((p, i) => (i ? "L " : "M ") + p.join(" ")).join(" "),
@@ -127,14 +140,14 @@
         end[0] - 9 * Math.cos(angle + 0.45),
         end[1] - 9 * Math.sin(angle + 0.45),
       ];
-      drawing.appendChild(
-        svg("path", {
+      const arrow = svg("path", {
           d: "M " + p1.join(" ") + " L " + end.join(" ") + " L " + p2.join(" "),
           fill: "none",
           stroke: "#557e70",
           "stroke-width": 2,
-        }),
-      );
+        });
+      drawing.appendChild(arrow);
+      edgePaint.push({path, arrow, count:edge.observed_count, gap:edge.observed_median_gap_seconds});
     });
     model.activities.forEach((activity) => {
       const p = geometry.positions.get(activity.id),
@@ -197,8 +210,102 @@
       });
       group.append(rect, title, label, detail);
       drawing.appendChild(group);
+      nodePaint.push({rect, count:activity.observed_count});
     });
-    wrap.appendChild(drawing);
+    let scale = 1;
+    const zoomLabel = document.createElement("span");
+    zoomLabel.setAttribute("role", "status");
+    function setScale(value) {
+      scale = Math.max(.01, Math.min(3, value));
+      drawing.setAttribute("width", Math.max(1, geometry.width * scale));
+      drawing.setAttribute("height", Math.max(1, geometry.height * scale));
+      zoomLabel.textContent = "Zoom " + Math.round(scale * 100) + "%";
+      zoomOut.disabled = scale <= .01;
+      zoomIn.disabled = scale >= 3;
+    }
+    function control(label, handler) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = label;
+      button.addEventListener("click", handler);
+      toolbar.appendChild(button);
+      return button;
+    }
+    const zoomOut = control("Zoom out", () => setScale(scale / 1.25));
+    const zoomIn = control("Zoom in", () => setScale(scale * 1.25));
+    control("Actual size", () => setScale(1));
+    control("Fit graph", () => {
+      const width = Math.max(1, (viewport.clientWidth || wrap.clientWidth || 320) - 24);
+      setScale(Math.min(1, width / geometry.width, 480 / geometry.height));
+      viewport.scrollLeft = viewport.scrollTop = 0;
+    });
+    toolbar.appendChild(zoomLabel);
+    setScale(1);
+    let legendNode = null;
+    if (options.observed === true) {
+      const finiteCount = value => Number.isSafeInteger(value) && value >= 0;
+      const finiteGap = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
+      const hasCounts = edgePaint.some(row => finiteCount(row.count)) || nodePaint.some(row => finiteCount(row.count));
+      const hasGaps = edgePaint.some(row => finiteGap(row.gap));
+      if (hasCounts || hasGaps) {
+        const label = document.createElement("label");
+        label.textContent = "Map emphasis ";
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", "Observed map emphasis");
+        const modes = [["none", "Uniform"], ...(hasCounts ? [["frequency", "Recorded frequency"]] : []),
+          ...(hasGaps ? [["elapsed", "Median elapsed gap"]] : [])];
+        for (const [value, title] of modes) {
+          const option = document.createElement("option");
+          option.value = value; option.textContent = title; select.appendChild(option);
+        }
+        label.appendChild(select);toolbar.appendChild(label);
+        const legend = document.createElement("p");
+        legend.className = "muted owg-graph-legend";
+        Object.assign(legend.style, {margin:"8px", overflowWrap:"anywhere"});
+        const maxCount = Math.max(0, ...edgePaint.filter(row => finiteCount(row.count)).map(row => row.count));
+        const maxNodeCount = Math.max(0, ...nodePaint.filter(row => finiteCount(row.count)).map(row => row.count));
+        const maxGap = Math.max(0, ...edgePaint.filter(row => finiteGap(row.gap)).map(row => row.gap));
+        const shade = (ratio, elapsed) => elapsed
+          ? (ratio > .66 ? "#994b16" : ratio > .33 ? "#b9742e" : "#d7ad7d")
+          : (ratio > .66 ? "#426b5b" : ratio > .33 ? "#719582" : "#b4cdbf");
+        const repaint = () => {
+          const mode = select.value;
+          for (const row of edgePaint) {
+            const count = finiteCount(row.count), gap = finiteGap(row.gap);
+            let color = "#557e70", width = 2;
+            if (mode === "frequency" && count) {
+              const ratio = maxCount ? row.count / maxCount : 0;
+              color = shade(ratio, false); width = 2 + 6 * Math.sqrt(ratio);
+            } else if (mode === "elapsed" && gap) {
+              const ratio = maxGap ? row.gap / maxGap : 0;
+              color = shade(ratio, true); width = 2 + 6 * Math.sqrt(ratio);
+            } else if (mode !== "none") color = "#8a8a8a";
+            for (const element of [row.path, row.arrow]) {
+              element.setAttribute("stroke", color);element.setAttribute("stroke-width", width);
+            }
+          }
+          for (const row of nodePaint) {
+            row.rect.setAttribute("fill", mode === "frequency" && finiteCount(row.count)
+              ? (maxNodeCount && row.count / maxNodeCount > .66 ? "#c5dfce" : "#e3efe7") : "#f1f7f4");
+          }
+          legend.textContent = mode === "frequency"
+            ? "Wider, darker arrows show higher recorded transition counts (0 to " + maxCount + ") relative to this displayed map. Node shading uses occurrence counts. " +
+              (options.projected ? "Counts are normalized candidate projections, not canonical events or business cases. " : "Counts describe supplied event logs. ") + "Unknown values are gray; no transitions are hidden."
+            : mode === "elapsed"
+            ? "Wider, darker amber arrows show larger median elapsed gaps (0 to " + maxGap + " seconds) relative to this displayed map. Zero is measured; unknown values are gray. These are not verified waiting times, active labor, bottlenecks or causal dependencies. No transitions are hidden."
+            : "Uniform display. Select a frequency or elapsed-gap emphasis; no map data or process model changes.";
+        };
+        select.value = "none";
+        select.addEventListener("change", repaint);repaint();
+        legendNode = legend;
+      }
+    }
+    viewport.appendChild(drawing);
+    // Controls and legend stay outside the scrollable diagram viewport.
+    wrap.appendChild(toolbar);
+    if (legendNode) wrap.appendChild(legendNode);
+    wrap.appendChild(viewport);
     return wrap;
   }
   function drawObserved(report, onSelect) {
@@ -220,6 +327,7 @@
         id,
         label: row.activity,
         kind: "activity",
+        observed_count: row.event_count,
         observed_summary:
           row.event_count + " events · " + row.case_count + " cases",
       };
@@ -230,6 +338,8 @@
       return {
         source: labels.get(row.from),
         target: labels.get(row.to),
+        observed_count: row.transition_count,
+        observed_median_gap_seconds: row.median_elapsed_gap_seconds,
         observed_summary:
           row.from +
           " → " +
@@ -239,8 +349,9 @@
           " recorded transitions across " +
           row.case_count +
           " cases · median elapsed gap " +
-          row.median_elapsed_gap_seconds +
-          " s; not verified waiting",
+          (typeof row.median_elapsed_gap_seconds === "number" && Number.isFinite(row.median_elapsed_gap_seconds) && row.median_elapsed_gap_seconds >= 0
+            ? row.median_elapsed_gap_seconds + " s" : "unavailable") +
+          "; not verified waiting",
       };
     });
     const first = report.cases?.[0]?.path?.[0];
