@@ -22,6 +22,11 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
   await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
   const source='Case;Step;Time;Person;Group;Notes\nPRIVATE_ONE;Open;2026-10-20T00:00:00Z;ALICE_SECRET;SALES_SECRET;UNSELECTED_SECRET\nPRIVATE_ONE;Review;2026-10-20T00:01:00Z;BOB_SECRET;OPS_SECRET;UNSELECTED_SECRET\nPRIVATE_ONE;Close;2026-10-20T00:02:00Z;ALICE_SECRET;SALES_SECRET;UNSELECTED_SECRET\nPRIVATE_TWO;Open;2026-10-20T00:03:00Z;BOB_SECRET;SALES_SECRET;UNSELECTED_SECRET\nPRIVATE_TWO;Close;2026-10-20T00:04:00Z;BOB_SECRET;SALES_SECRET;UNSELECTED_SECRET\n';
+  const unreviewed='case_id,activity,timestamp,participant,team\nPRIVATE_RAW,Open,2026-10-20T00:00:00Z,ALICE_SECRET,SALES_SECRET\n';
+  await page.getByLabel('Choose business event log CSV').setInputFiles({name:'unreviewed.csv',mimeType:'text/csv',buffer:Buffer.from(unreviewed)});
+  await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
+  await page.locator('#owgProcessStatus').filter({hasText:'Use column mapping before uploading this export'}).waitFor();
+  assert.equal(previews,0);assert.equal(saves,0);
   await page.getByLabel('Choose business event log CSV').setInputFiles({name:'owned.csv',mimeType:'text/csv',buffer:Buffer.from(source)});
   await page.getByText('Map columns from another event-log export',{exact:true}).click();
   await page.getByLabel('Event-log delimiter',{exact:true}).selectOption(';');

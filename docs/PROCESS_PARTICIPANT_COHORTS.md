@@ -10,7 +10,8 @@ In the local dashboard's event-log importer:
 1. Choose an authorized file and inspect its columns on this device.
 2. Map the case, activity and timestamp columns. Optionally select participant
    and/or team columns; these are excluded by default, including when a header
-   already uses those names.
+   already uses those names. Direct raw analysis checks its schema in the browser
+   first; extra columns cannot be uploaded through that shortcut.
 3. Confirm the selected columns and local analysis authorization. Applying the
    mapping replaces identifiers in participant/team columns with
    `participant_1`, `participant_2`, `team_1`, etc. before any upload.

@@ -115,6 +115,18 @@
     if(!file)return;
     if(mappingRequired&&!mappedFile){setStatus('Review and apply the selected columns before analyzing this file.');return;}
     if(file.size>MAX_UPLOAD){setStatus('File exceeds the 1 MiB upload limit.');return;}
+    if(!mappedFile){
+      const checkedGeneration=generation;
+      try{
+        if(!window.owgProcessCSVMapping?.inspectFile)throw new Error('Column inspection unavailable. Reopen the local dashboard.');
+        const inspected=await window.owgProcessCSVMapping.inspectFile(file,',');
+        if(checkedGeneration!==generation)return;
+        const names=inspected.headers.map(value=>value.trim().toLowerCase()),allowed=['case_id','activity','timestamp','source'];
+        if(new Set(names).size!==names.length||!['case_id','activity','timestamp'].every(key=>names.includes(key))||names.some(key=>!allowed.includes(key))){
+          setStatus('Use column mapping before uploading this export. Only the standard structural columns can be analyzed directly; participant/team and other extra columns require reviewed mapping.');return;
+        }
+      }catch(error){if(checkedGeneration===generation)setStatus('Unable to inspect selected CSV: '+error.message);return;}
+    }
     const participantLabelsAuthorized=!!(mappedFile&&mappedParticipantLabels);
     const attempt=++generation;analyzedFile=null;analyzedParticipantLabels=false;retainedDataset=null;retentionState(true);
     report=null;clearReport();control.disabled=true;
