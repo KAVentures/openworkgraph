@@ -86,6 +86,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_shadow_review.cjs
       - name: Verify explicitly selected GitHub source histories and shared process exploration
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/github_process.cjs
+      - name: Verify explicitly selected Zendesk status audits and minimized source exploration
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/zendesk_process.cjs
       - name: Verify BPMN external-modeler round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
       - name: Verify explicit BPMN design import and reviewed draft lifecycle

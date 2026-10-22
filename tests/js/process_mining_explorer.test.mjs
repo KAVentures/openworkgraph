@@ -208,3 +208,23 @@ test('late column inspection cannot restore headers or enable analysis for a new
  assert.equal(document.getElementById('owgProcessAnalyze').disabled,true);
  assert.equal(calls.length,0);
 });
+
+test('Zendesk audit reads require explicit selection and consent; changed selections discard pending results',async()=>{
+ let finish;const pending=new Promise(resolve=>finish=resolve);
+ const {document,calls,find}=setup(()=>pending);
+ const input=document.getElementById('owgZendeskTicketIDs'),consent=document.getElementById('owgZendeskConsent'),
+   run=document.getElementById('owgZendeskRead');
+ assert.equal(calls.length,0);assert.equal(run.disabled,true);
+ input.value='17, 19';input.handlers.input();assert.equal(run.disabled,true);
+ consent.checked=true;consent.handlers.change();assert.equal(run.disabled,false);assert.equal(calls.length,0);
+ const reading=run.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(calls.length,1);
+ assert.equal(calls[0][0],'/v1/process-mining/zendesk-selected-cases');
+ assert.deepEqual(JSON.parse(calls[0][1].body),{ticket_ids:['17','19'],confirm_source_reads:true});
+ input.value='17';input.handlers.input();assert.equal(consent.checked,false);
+ finish({format:'openworkgraph.zendesk-selected-cases-process.v1',process:{case_count:999},projected_ticket_count:999});
+ await reading;
+ assert.equal(document.getElementById('owgZendeskResults').children.length,0);
+ assert.equal(find('button','Explore selected Zendesk status history'),undefined);
+ assert.equal(run.disabled,true);assert.equal(calls.length,1);
+});

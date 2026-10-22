@@ -10,6 +10,7 @@
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
   let driftGeneration=0,cohortGeneration=0;
   let mappingGeneration=0,mappingInspection=null,mappedFile=null,mappingRequired=false;
+  let zendeskGeneration=0;
   let observedExpanded=false, observedSelection=null;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
@@ -59,6 +60,7 @@
     });
     wrap.append(file,run);card.appendChild(wrap);
     installMapping(card);
+    installZendesk(card);
     const referenceLabel=make('p','No saved reference selected.','muted');referenceLabel.id='owgProcessReference';card.appendChild(referenceLabel);
     card.appendChild(button('Clear reference model',()=>setReference(null)));
     const status=make('p','No CSV selected. This feature is opt-in and does not change desktop recording.','muted');
@@ -149,6 +151,49 @@
     const fields=make('div');fields.id='owgCSVMappingFields';
     const status=make('p','No column mapping applied.','muted');status.id='owgCSVMappingStatus';status.setAttribute('role','status');
     section.append(delimiter,inspect,status,fields);parent.appendChild(section);
+  }
+  function installZendesk(parent){
+    const section=make('details');section.id='owgZendeskProcess';section.appendChild(make('summary','Read selected Zendesk ticket status audits'));
+    section.appendChild(make('p','Requires an administrator-configured, opted-in Zendesk OAuth connector. Only the ticket IDs you choose are read. OWG requests Create/Change audit event types, verifies each audit belongs to its selected ticket, and analyzes standard status history. Provider responses may include other metadata; comments, actors, custom fields and credentials are discarded and never included in the process report. No ticket inventory scan, writes or retained import.','muted'));
+    const label=make('label','Selected Zendesk ticket IDs (comma separated)'),input=make('input');input.id='owgZendeskTicketIDs';input.type='text';input.maxLength=160;input.setAttribute('aria-label','Selected Zendesk ticket IDs (comma separated)');label.appendChild(input);
+    const consentLabel=make('label'),consent=make('input');consent.id='owgZendeskConsent';consent.type='checkbox';
+    consentLabel.append(consent,make('span',' I authorize reading the selected ticket audits from the configured Zendesk account.'));
+    const run=button('Read selected Zendesk audits',readZendesk);run.id='owgZendeskRead';run.disabled=true;
+    const status=make('p','No Zendesk source reads requested.','muted');status.id='owgZendeskStatus';status.setAttribute('role','status');
+    const output=make('div');output.id='owgZendeskResults';
+    const changed=()=>{zendeskGeneration++;consent.checked=false;run.disabled=true;output.replaceChildren();status.textContent='Selection changed. Review and confirm these source reads.';};
+    input.addEventListener('input',changed);
+    consent.addEventListener('change',()=>{zendeskGeneration++;output.replaceChildren();run.disabled=!consent.checked||!input.value.trim();});
+    section.append(label,consentLabel,run,status,output);parent.appendChild(section);
+  }
+  async function readZendesk(){
+    const input=document.getElementById('owgZendeskTicketIDs'),consent=document.getElementById('owgZendeskConsent');
+    if(!consent.checked)return;
+    const ids=input.value.split(',').map(value=>value.trim()),status=document.getElementById('owgZendeskStatus');
+    if(!ids.length||ids.length>8||new Set(ids).size!==ids.length||ids.some(value=>! /^[1-9][0-9]{0,17}$/.test(value))){status.textContent='Choose 1 to 8 distinct numeric ticket IDs.';return;}
+    const attempt=++zendeskGeneration,control=document.getElementById('owgZendeskRead'),host=document.getElementById('owgZendeskResults');control.disabled=true;
+    host.replaceChildren();status.textContent='Reading bounded status audits for only the selected tickets…';
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/process-mining/zendesk-selected-cases',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ticket_ids:ids,confirm_source_reads:true}),cache:'no-store'});
+      const value=await response.json().catch(()=>({}));if(attempt!==zendeskGeneration)return;
+      if(!response.ok)throw new Error(String(value.detail||'Selected Zendesk request failed'));
+      if(value.format!=='openworkgraph.zendesk-selected-cases-process.v1')throw new Error('Unexpected Zendesk projection response');
+      for(const item of safe(value.selections))host.appendChild(make('p','Selection '+item.selection_number+' → '+(item.case_label||'no projected case')+
+        ' · '+item.projected_event_count+' status events · '+String(item.availability).replaceAll('_',' ')+
+        (item.provider_pagination_complete?' · source audit pages exhausted':' · source audit coverage incomplete or unknown')));
+      const quality=value.projection_diagnostics||{};
+      if(value.projection_diagnostics)host.appendChild(make('p','Projection diagnostics: '+Number(quality.invalid_audit_count||0)+' invalid/unsupported status audits, '+
+        Number(quality.ambiguous_status_audit_count||0)+' ambiguous status audits, '+Number(quality.conflicting_audit_count||0)+' conflicting audit IDs omitted; '+
+        Number(quality.duplicate_audit_count||0)+' repeated audit IDs encountered. Distinct audits with equal timestamps remain separate.','muted'));
+      if(!value.process){status.textContent='Zendesk process projection unavailable: '+String(value.availability).replaceAll('_',' ')+'. No process was saved.';return;}
+      status.textContent='Projected '+value.projected_ticket_count+' of '+value.requested_ticket_count+' selected tickets. Status history is partial workflow evidence; no outcomes or business rules were verified.';
+      host.appendChild(button('Explore selected Zendesk status history',()=>{
+        if(attempt!==zendeskGeneration)return;showSourcePreview(value.process);
+      }));
+    }catch(error){if(attempt===zendeskGeneration)status.textContent='Unable to read selected Zendesk audits: '+error.message;}
+    finally{if(attempt===zendeskGeneration)control.disabled=!consent.checked;}
   }
   function resetMapping(){
     mappingGeneration++;mappingInspection=null;mappedFile=null;mappingRequired=false;
