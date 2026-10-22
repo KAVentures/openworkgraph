@@ -650,13 +650,13 @@ def _invalid_process_constant(_value):
     raise ValueError('nonstandard JSON constant')
 
 
-async def _process_json(request: Request) -> dict[str, Any]:
+async def _process_json(request: Request, *, maximum: int = 128 * 1024) -> dict[str, Any]:
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
         raise HTTPException(status_code=415, detail='application/json required')
     data = bytearray()
     async for chunk in request.stream():
-        if len(data) + len(chunk) > 128 * 1024:
-            raise HTTPException(status_code=413, detail='process request exceeds 128 KiB')
+        if len(data) + len(chunk) > maximum:
+            raise HTTPException(status_code=413, detail='process request exceeds '+str(maximum // 1024)+' KiB')
         data.extend(chunk)
     try:
         value = json.loads(data, object_pairs_hook=_process_object, parse_constant=_invalid_process_constant)
@@ -793,6 +793,28 @@ async def check_declared_process_rules(request: Request,
     latest=_catalog_record(workflow_id)
     result['latest_revision_at_check']=latest['revision']
     result['references_latest_revision_at_check']=latest['revision']==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@app.post('/v1/process-catalog/check-current-source-rules')
+async def check_current_source_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .process_source_rule_checks import SourceRuleCheck,check_current_source_rules
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if request.headers.get('x-owg-source-rule-read-authorized')!='true':
+        raise HTTPException(403,'explicit selected source-record refresh authorization required')
+    try:selection=SourceRuleCheck.model_validate(await _process_json(request,maximum=4096))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded source-rule selection') from None
+    record=_catalog_record(workflow_id,revision)
+    result=await run_in_threadpool(check_current_source_rules,record,selection)
+    try:latest=_catalog_record(workflow_id)['revision']
+    except HTTPException as exc:
+        if exc.status_code!=404:raise
+        latest=None
+    result['latest_revision_at_check']=latest
+    result['references_latest_revision_at_check']=latest==revision
     return JSONResponse(result,headers={'Cache-Control':'no-store'})
 
 

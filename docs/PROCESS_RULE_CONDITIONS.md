@@ -106,3 +106,8 @@ report. The response sets `minimal_inspection_audit_persisted: true`. All fact
 and comparison-retention flags remain false. An explicit minimized-report
 download creates an external copy. Shared checks do not read personal local
 snapshots or implicitly share employee observations.
+
+[Current-source rule checks](CURRENT_SOURCE_RULE_CHECKS.md) can separately
+refresh a selected observed record through existing opted-in adapters and
+compare three current provider fields. Historical facts, case association,
+manual review and execution authority remain separate.

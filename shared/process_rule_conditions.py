@@ -97,6 +97,12 @@ def _equal(actual,expected):
     return type(actual) is type(expected) and actual==expected
 
 
+def combine_condition_statuses(states,match):
+    """Kleene all/any aggregation, shared by declared and source-backed facts."""
+    if match=='all':return 'not_matched' if 'not_matched' in states else 'unknown' if 'unknown' in states else 'matched'
+    return 'matched' if 'matched' in states else 'unknown' if 'unknown' in states else 'not_matched'
+
+
 def evaluate_predicate(predicate,facts):
     """Return only three-valued results/reason codes, never fact or rule values."""
     validate_facts(facts)
@@ -126,7 +132,6 @@ def evaluate_predicate(predicate,facts):
             if operator=='ne':matched=not matched
         results.append({'status':'matched' if matched else 'not_matched','reason':'declared_scalar_comparison'})
     states=[item['status'] for item in results]
-    if predicate.match=='all':status='not_matched' if 'not_matched' in states else 'unknown' if 'unknown' in states else 'matched'
-    else:status='matched' if 'matched' in states else 'unknown' if 'unknown' in states else 'not_matched'
+    status=combine_condition_statuses(states,predicate.match)
     return {'status':status,'conditions':results,'facts_authoritativeness_verified':False,
             'business_policy_compliance_verified':False,'execution_authorized':False}

@@ -90,6 +90,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/zendesk_process.cjs
       - name: Verify selected Stripe invoice lifecycle without broadening normal source status
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/stripe_process.cjs
+      - name: Verify consented current-source rule comparisons and no retained source values
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_source_rules.cjs
       - name: Verify BPMN external-modeler round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
       - name: Verify explicit BPMN design import and reviewed draft lifecycle

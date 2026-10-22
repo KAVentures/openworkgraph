@@ -4,14 +4,15 @@
   let record=null, model=null, reviewed=false, busy=false, after='';
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
-  let ruleCheckGeneration=0;
+  let ruleCheckGeneration=0,sourceRuleGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
-  function changed(){reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
+  function changed(){clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -166,6 +167,7 @@
     wrap.appendChild(drawing);return wrap;
   }
   function renderEditor(){
+    clearSourceRuleChecks();
     clearRuleChecks();
     clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
@@ -318,7 +320,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderShadowReview(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderRuleChecks(host){
@@ -365,6 +367,61 @@
     file.addEventListener('change',()=>{clearRuleChecks();consent.checked=false;run.disabled=true;});
     consent.addEventListener('change',()=>{clearRuleChecks();run.disabled=!consent.checked||!file.files?.length;});
     section.append(label,consentLabel,run,output);host.appendChild(section);
+  }
+  function renderSourceRuleChecks(host){
+    const section=el('section');section.append(el('h4','Check rules against a current source record'),
+      el('p','Explicitly refresh one already observed record through its existing opted-in read-only adapter. Available fact paths are /source/provider, /source/record_kind and /source/state. Only confirmed structured conditions in the saved revision are evaluated; unsaved edits are excluded. Other paths or unavailable status remain unknown. Current status does not establish historical case facts, policy approval, business outcomes or permission to execute.'));
+    const types=[['stripe_invoice','Stripe invoice'],['stripe_refund','Stripe refund'],['jira_issue','Jira issue'],['github_pull_request','GitHub pull request']];
+    const typeLabel=el('label','Source record type '),type=el('select');type.setAttribute('aria-label','Source rule record type');type.style.maxWidth='100%';
+    types.forEach(([value,text])=>{const option=el('option',text);option.value=value;type.appendChild(option);});type.value='stripe_invoice';typeLabel.appendChild(type);
+    const refLabel=el('label','Observed record reference '),ref=el('input');ref.type='text';ref.maxLength=38;ref.placeholder='owg:r:…';ref.setAttribute('aria-label','Source rule observed record reference');refLabel.appendChild(ref);
+    const choicesLabel=el('label','Observed source record choices '),choices=el('select');choices.setAttribute('aria-label','Observed source record choices');choices.style.maxWidth='100%';
+    const placeholder=()=>{const option=el('option','Choose a loaded observed record');option.value='';choices.replaceChildren(option);};placeholder();choicesLabel.appendChild(choices);
+    let observed=[];
+    const notice=el('p','Record choices are a bounded local navigation sample; canonical identity and source permissions are checked again during refresh. Other already observed references may be entered manually.');
+    const consentLabel=el('label',' I authorize refreshing this selected source record to check saved rules. '),consent=el('input');consent.type='checkbox';consentLabel.appendChild(consent);
+    const output=el('div');output.id='owgCatalogSourceRuleResult';output.setAttribute('role','status');
+    const invalidate=()=>{clearSourceRuleChecks();consent.checked=false;run.disabled=true;};
+    const run=button('Refresh selected record and check rules',()=>locked(async()=>{
+      if(!consent.checked||!/^owg:r:[0-9a-f]{32}$/.test(ref.value))throw new Error('Select and authorize one normalized observed record reference.');
+      clearSourceRuleChecks();const generation=sourceRuleGeneration,selected=record;
+      const body={resource_ref:ref.value,source_type:type.value};
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/process-catalog/check-current-source-rules?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision}),{
+        method:'POST',headers:{'Content-Type':'application/json','X-OWG-Source-Rule-Read-Authorized':'true'},body:JSON.stringify(body),cache:'no-store'});
+      const report=await response.json().catch(()=>({}));if(generation!==sourceRuleGeneration||record!==selected)return;
+      if(!response.ok)throw new Error(String(report.detail||'Selected source rule check unavailable.'));
+      if(report.format!=='openworkgraph.current-source-rule-check.v1')throw new Error('Unexpected source rule-check response.');
+      const counts=report.rule_result_counts||{};
+      output.append(el('h4','Current-source conditions · saved revision '+report.process_reference.revision),
+        el('p',report.facts_source_authoritativeness_verified?'Provider current-state facts checked at '+report.source_state_verified_at+'.':'No fresh authenticated source state was available for this selection: '+report.source_status_reason.replaceAll('_',' ')+'.'),
+        el('p',Number(counts.matched||0)+' matched · '+Number(counts.not_matched||0)+' not matched · '+Number(counts.unknown||0)+' unknown. '+
+          Number(counts.not_evaluated_unconfirmed||0)+' unconfirmed and '+Number(counts.not_evaluated_unstructured||0)+' text-only rules were not evaluated.'),
+        el('p',report.references_latest_revision_at_check?'This was the latest saved revision at check time.':report.latest_revision_at_check?'A newer revision '+report.latest_revision_at_check+' exists.':'The saved process is no longer available.'),
+        el('p','The selected record-to-case association is your declaration. This check does not establish historical conformance, remove manual review conditions or resolve the generated agent source-fact implementation guard. No report, source values or model changes were retained.'));
+      const list=el('ul');for(const rule of report.cases[0].rules){
+        const row=el('li'),detail=el('details');detail.appendChild(el('summary',rule.rule_id+' · '+rule.status.replaceAll('_',' ')));
+        const clauses=el('ol');for(const condition of rule.conditions)clauses.appendChild(el('li',condition.status.replaceAll('_',' ')+' · '+condition.reason.replaceAll('_',' ')));
+        detail.appendChild(clauses);row.appendChild(detail);list.appendChild(row);
+      }output.appendChild(list);
+      output.appendChild(button('Download minimized current-source rule report',()=>{
+        const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+        const anchor=el('a');anchor.href=url;anchor.download='owg-current-source-rules-r'+selected.revision+'.json';document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+      }));status('Current-source rule check complete. Results grant no execution permission.');
+    }));run.disabled=true;
+    const load=button('Load observed source record choices',async()=>{
+      invalidate();const generation=sourceRuleGeneration,selected=record;
+      const value=await request('/v1/workflow-evidence/families?min_runs=2&limit=20');
+      if(generation!==sourceRuleGeneration||record!==selected)return;
+      observed=(value.record_case_lanes?.lanes||[]).filter(item=>/^owg:r:[0-9a-f]{32}$/.test(item.resource_ref||'')&&types.some(([key])=>key===item.provider+'_'+item.resource_kind));
+      placeholder();observed.forEach((item,index)=>{const option=el('option',item.provider+' '+item.resource_kind+' · '+item.resource_ref);option.value=String(index);choices.appendChild(option);});
+      notice.textContent=observed.length+' supported records in this bounded local navigation sample. Choosing one does not read its source. Canonical proof and source permissions are checked again during refresh.';
+    });
+    choices.addEventListener('change',()=>{invalidate();const item=choices.value===''?null:observed[Number(choices.value)];if(item){ref.value=item.resource_ref;type.value=item.provider+'_'+item.resource_kind;}});
+    ref.addEventListener('input',()=>{choices.value='';invalidate();});type.addEventListener('change',invalidate);
+    consent.addEventListener('change',()=>{clearSourceRuleChecks();run.disabled=!consent.checked||!/^owg:r:[0-9a-f]{32}$/.test(ref.value);});
+    section.append(typeLabel,refLabel,load,choicesLabel,notice,consentLabel,run,
+      button('Clear current-source rule check',()=>{invalidate();ref.value='';choices.value='';}),output);host.appendChild(section);
   }
   function renderShadowReview(host){
     const section=el('section');section.appendChild(el('h4','Review a shadow evaluation'));
