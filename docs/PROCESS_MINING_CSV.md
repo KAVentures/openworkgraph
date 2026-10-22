@@ -18,6 +18,8 @@ a file, and click **Analyze selected CSV**. The workspace is headed **Process
 mining · event logs** and also supports [selected GitHub/Jira source projections](GITHUB_SELECTED_CASES_PROCESS.md#shared-analysis-and-design).
 An administrator-configured, separately opted-in [Zendesk ticket-audit connector](ZENDESK_SELECTED_CASES_PROCESS.md)
 adds explicitly selected source status histories to that same workspace.
+Observed Stripe invoice lanes can also open a [separately authorized lifecycle
+projection](STRIPE_INVOICE_PROCESS_HISTORIES.md) through the existing account-checked source adapter.
 No file is uploaded on page open,
 on selection, or to any cloud service. The preview uses the authenticated
 local OWG API and runs entirely in memory.
