@@ -340,8 +340,9 @@ def install_identity(
     # ---------------- roster --------------------------------------------------------------------------
 
     @app.get("/v1/admin/people/{organization_id}")
-    def people(organization_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def people(organization_id: str, response: Response, authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
+        response.headers["Cache-Control"] = "no-store"
         try:
             return {**roster.people_and_devices(db, organization_id), "sso_enabled": sso_settings.enabled}
         except roster.EmployeeError as exc:
