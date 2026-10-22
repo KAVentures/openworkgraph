@@ -1,0 +1,192 @@
+"""Source-aware planning with actual SDK/in-memory models; no external provider."""
+import asyncio
+from copy import deepcopy
+from datetime import datetime,timedelta,timezone
+import json
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from execute import ImplementationError,digest
+from plan_sources import propose_with_sources
+try:
+    from test_agent_sdk import OfflineModel,SDK_AVAILABLE
+except ImportError:
+    SDK_AVAILABLE=False
+
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for source-aware SDK planning')
+class SourcePlanningCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from test_execution import fixture,ImplementationCases
+        helper=ImplementationCases();helper.data=fixture()
+        self.spec,self.plan,self.case,self.bindings,_=helper.invariant_fixture()
+        self.case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION'
+        self.plan['missing_business_inputs']=[]
+        self.helper=helper;self.reads=[];self.now=[datetime.now(timezone.utc)];self.receipt_mutation={}
+        self.env=patch.dict(os.environ,{'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE_SECRET'})
+        self.env.start();self.addCleanup(self.env.stop)
+        self.model_calls=[]
+    async def source(self,base,token,request):
+        self.assertEqual(token,'SYNTHETIC_SOURCE_SECRET');self.reads.append(deepcopy(request))
+        value=self.helper.invariant_receipt(request);value.update(self.receipt_mutation)
+        return value
+    def model(self,plan=None,advance=False):
+        owner=self
+        class CapturingModel(OfflineModel):
+            async def get_response(self,*args,**kwargs):
+                raw=kwargs.get('input') if 'input' in kwargs else args[1]
+                payload=json.loads(raw if isinstance(raw,str) else raw[0]['content'])
+                owner.model_calls.append(payload)
+                self_checks=payload['current_source_rule_checks']
+                assert all(set(row)=={'rule_id','status'} for row in self_checks)
+                assert 'SYNTHETIC_SOURCE_SECRET' not in json.dumps(payload)
+                assert 'provider_reported_state' not in json.dumps(payload)
+                if advance:owner.now[0]+=timedelta(seconds=121)
+                return await super().get_response(*args,**kwargs)
+        return CapturingModel(plan or self.plan)
+    async def run_plan(self,**kwargs):
+        return await propose_with_sources(self.case,self.bindings,model=kwargs.pop('model',self.model()),spec=self.spec,
+            source_state_reader=self.source,source_reads_confirmed=True,
+            share_rule_checks_with_model_confirmed=True,clock=lambda:self.now[0],**kwargs)
+    async def test_matching_source_supports_only_a_nonexecuting_proposal(self):
+        self.bindings['enabled']=False  # Planning must not silently enable execution.
+        result=await self.run_plan()
+        self.assertEqual(result['plan']['status'],'proposal')
+        self.assertEqual(result['shadow_check']['current_source_rule_checks'],[{'rule_id':'current_source','status':'matched'}])
+        self.assertEqual(len(self.reads),1)
+        self.assertEqual(self.model_calls[0]['current_source_rule_checks'],[{'rule_id':'current_source','status':'matched'}])
+        self.assertFalse(self.bindings['enabled'])
+        for flag in ('execution_permitted','source_outcome_verified'):self.assertFalse(result[flag])
+        report=result['source_planning']
+        self.assertFalse(report['business_actions_attempted'])
+        self.assertFalse(report['source_values_sent_to_model'])
+        self.assertNotIn(self.case['approved_record'],json.dumps(result))
+        self.assertNotIn('merged',json.dumps(result))
+    async def test_model_cannot_override_false_unknown_stale_or_wrong_record_checks(self):
+        variants=[{'provider_reported_state':'open'},{'source_state_verified':False},
+            {'verified_at':(self.now[0]-timedelta(seconds=121)).isoformat()},
+            {'resource_ref':'owg:r:'+'d'*32}]
+        for changes in variants:
+            self.receipt_mutation=changes
+            result=await self.run_plan()
+            self.assertEqual(result['plan']['status'],'needs_clarification')
+            self.assertFalse(result['execution_permitted'])
+        self.receipt_mutation={}
+        result=await self.run_plan(model=self.model(advance=True))
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertEqual(result['shadow_check']['current_source_rule_checks'][0]['status'],'unknown')
+    async def test_actual_sdk_chooses_supported_alternative_from_statuses_with_one_read_per_record(self):
+        raw=self.spec['process_model']
+        raw['activities'].append({'id':'hold','label':'Hold','kind':'end','implementation':'unmapped'})
+        raw['terminal_activity_ids'].append('hold')
+        raw['transitions'].append({'source':'resolve','target':'hold','rule_id':'open_source'})
+        raw['business_rules'].append({'id':'open_source','text':'Review open source','user_confirmed':True,
+            'predicate':{'match':'all','conditions':[{'path':'/source/state','operator':'eq','expected':'open'}]}})
+        self.spec['process_model_sha256']=digest(raw)
+        binding=deepcopy(self.bindings['source_rule_checks'][0]);binding['rule_id']='open_source'
+        self.bindings['source_rule_checks'].append(binding)
+        owner=self
+        class BranchModel(OfflineModel):
+            async def get_response(self,*args,**kwargs):
+                raw=kwargs.get('input') if 'input' in kwargs else args[1]
+                payload=json.loads(raw if isinstance(raw,str) else raw[0]['content'])
+                checks={row['rule_id']:row['status'] for row in payload['current_source_rule_checks']}
+                self.plan=deepcopy(owner.plan)
+                self.plan['activity_ids']=(['resolve','hold'] if checks['open_source']=='matched' else ['resolve','readback','done'])
+                return await super().get_response(*args,**kwargs)
+        for state,path in [('merged',['resolve','readback','done']),('open',['resolve','hold'])]:
+            self.receipt_mutation={'provider_reported_state':state};previous=len(self.reads)
+            result=await self.run_plan(model=BranchModel(self.plan))
+            self.assertEqual(result['plan']['status'],'proposal')
+            self.assertEqual(result['plan']['activity_ids'],path)
+            self.assertEqual(len(self.reads),previous+1)
+            self.assertEqual(result['source_planning']['source_receipt_request_count'],1)
+            self.assertFalse(result['execution_permitted'])
+    async def test_missing_consents_credentials_and_invalid_bindings_stop_before_io(self):
+        for change in ({'source_reads_confirmed':False},{'share_rule_checks_with_model_confirmed':False}):
+            values=dict(source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True);values.update(change)
+            with self.assertRaises(ImplementationError):
+                await propose_with_sources(self.case,self.bindings,model=self.model(),spec=self.spec,
+                    source_state_reader=self.source,**values)
+        for mutation in ('credentials','reference','unsupported','unreviewed'):
+            bindings=deepcopy(self.bindings);spec=deepcopy(self.spec)
+            if mutation=='reference':bindings['process_reference']['revision']=99
+            if mutation=='unsupported':
+                spec['process_model']['business_rules'][0]['predicate']['conditions'][0]['path']='/case/credit'
+                spec['process_model_sha256']=digest(spec['process_model'])
+            if mutation=='unreviewed':bindings['source_rule_checks'][0]['record_semantics_reviewed']=False
+            with patch.dict(os.environ,{'OWG_EXECUTION_SOURCE_READ_TOKEN':'' if mutation=='credentials' else 'SYNTHETIC_SOURCE_SECRET'}):
+                with self.assertRaises(ImplementationError):
+                    await propose_with_sources(self.case,bindings,model=self.model(),spec=spec,
+                        source_state_reader=self.source,source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True)
+        self.assertEqual(self.reads,[]);self.assertEqual(self.model_calls,[])
+    async def test_source_failure_and_unbound_rule_stay_unknown(self):
+        async def failure(*args):raise RuntimeError('PRIVATE_PROVIDER_ERROR')
+        result=await propose_with_sources(self.case,self.bindings,model=self.model(),spec=self.spec,
+            source_state_reader=failure,source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True)
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertNotIn('PRIVATE_PROVIDER_ERROR',json.dumps(result))
+        self.spec['process_model']['business_rules'].append({'id':'unbound','text':'Another source rule',
+            'user_confirmed':True,'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':'merged'}]}})
+        self.spec['process_model']['transitions'][1]['rule_id']='unbound'
+        self.spec['process_model_sha256']=digest(self.spec['process_model'])
+        result=await self.run_plan()
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertEqual(result['shadow_check']['structured_rules_unresolved_for_planning'],['unbound'])
+    async def test_source_checks_do_not_resolve_manual_guards_or_unconfirmed_rules(self):
+        self.spec['process_model']['manual_review_conditions']=[{'activity_id':'resolve','kind':'exception_condition',
+            'condition_label':'Human review','response':'pause_for_review','source':'user_declared_unverified',
+            'evaluated_by_owg':False,'automatic_branch_authorized':False,'executable':False}]
+        self.spec['process_model_sha256']=digest(self.spec['process_model'])
+        result=await self.run_plan()
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.spec['process_model']['business_rules'][0]['user_confirmed']=False
+        self.spec['process_model_sha256']=digest(self.spec['process_model'])
+        previous=len(self.reads)
+        with self.assertRaises(ImplementationError):await self.run_plan()
+        self.assertEqual(len(self.reads),previous)
+    async def test_receipts_expiring_during_final_catalog_read_invalidate_proposal(self):
+        self.spec['organization_catalog_reference']={'organization_id':'synthetic-org'}
+        self.bindings['process_catalog_url']='https://catalog.example.test'
+        count=0
+        async def catalog(*args):
+            nonlocal count
+            count+=1
+            if count==2:self.now[0]+=timedelta(seconds=121)
+            return {'format':'openworkgraph.process-implementation-state.v1','organization_id':'synthetic-org',
+                'process_reference':{key:self.spec[key] for key in ('workflow_id','revision','content_sha256')},
+                'process_model_sha256':self.spec['process_model_sha256'],'latest_revision':1,'archived':False,
+                'review_status':'reviewed_design','current_independent_design_review':True,'execution_authorization':False}
+        with patch.dict(os.environ,{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            result=await self.run_plan(catalog_reader=catalog)
+        self.assertEqual(count,2)
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertEqual(result['source_planning']['rule_checks'][0]['status'],'unknown')
+
+    async def test_shared_review_is_checked_before_sources_and_after_model(self):
+        self.spec['organization_catalog_reference']={'organization_id':'synthetic-org'}
+        self.bindings['process_catalog_url']='https://catalog.example.test'
+        def state():return {'format':'openworkgraph.process-implementation-state.v1','organization_id':'synthetic-org',
+            'process_reference':{key:self.spec[key] for key in ('workflow_id','revision','content_sha256')},
+            'process_model_sha256':self.spec['process_model_sha256'],'latest_revision':1,'archived':False,
+            'review_status':'reviewed_design','current_independent_design_review':True,'execution_authorization':False}
+        calls=[]
+        async def catalog(*args):
+            calls.append(len(self.model_calls));value=state()
+            if len(calls)==2:value['current_independent_design_review']=False
+            return value
+        with patch.dict(os.environ,{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            result=await self.run_plan(catalog_reader=catalog)
+        self.assertEqual(calls,[0,1]);self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertFalse(result['execution_permitted'])
+        reads=len(self.reads);models=len(self.model_calls)
+        async def denied(*args):return {}
+        with patch.dict(os.environ,{'OWG_EXECUTION_CATALOG_READ_TOKEN':'SYNTHETIC_CATALOG_SECRET'}):
+            with self.assertRaises(ImplementationError):await self.run_plan(catalog_reader=denied)
+        self.assertEqual(len(self.reads),reads);self.assertEqual(len(self.model_calls),models)
+
+
+if __name__=='__main__':unittest.main()

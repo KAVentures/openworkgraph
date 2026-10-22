@@ -1,0 +1,122 @@
+"""Explicit read-only planning with customer-reviewed current-source invariants.
+
+No business tool transport, execution intent, credentials or raw receipts are
+sent to the model. Target services still independently authorize all execution.
+"""
+import argparse
+import asyncio
+from copy import deepcopy
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+
+from execute import (ImplementationError, digest, endpoint, load_object, reference,
+                     source_rule_bindings, _source_state_receipt, _catalog_state, catalog_is_current)
+from process_source_state import facts_from_receipt
+from runtime import load_spec, validate_spec
+
+
+class SourcePlanningContext:
+    """In-memory snapshots, pinned to the chosen model and case; never a grant."""
+    def __init__(self,spec,case,requests,receipts,clock):
+        self.spec_digest=digest(spec);self.case_digest=digest(case)
+        self.requests={row['rule_id']:deepcopy(row) for row in requests}
+        self.receipts=deepcopy(receipts);self.clock=clock
+
+    def check_rules(self,rule_ids,spec,case):
+        from process_rule_conditions import evaluate_predicate
+        if digest(spec)!=self.spec_digest or digest(case)!=self.case_digest:
+            raise ImplementationError('Planning inputs changed after source reads')
+        results=[]
+        for rule_id in sorted(rule_ids):
+            request=self.requests.get(rule_id);status='unknown'
+            if request:
+                facts=facts_from_receipt(self.receipts.get(rule_id),request['resource_ref'],request['source_type'],now=self.clock())
+                if facts:status=evaluate_predicate(request['predicate'],facts)['status']
+            results.append({'rule_id':rule_id,'status':status})
+        return results
+
+    def for_model(self,spec,case):
+        # Only rule IDs and bounded statuses cross the model boundary. No raw
+        # provider fields, selected refs, receipt timestamps or error messages.
+        return self.check_rules(self.requests,spec,case)
+
+
+async def propose_with_sources(case,bindings,*,model,spec=None,source_reads_confirmed=False,
+                               share_rule_checks_with_model_confirmed=False,
+                               source_state_reader=_source_state_receipt,catalog_reader=_catalog_state,clock=None):
+    if source_reads_confirmed is not True or share_rule_checks_with_model_confirmed is not True:
+        raise ImplementationError('Separately confirm source reads and sending rule-check results to the selected model')
+    spec=deepcopy(spec if spec is not None else load_spec());case=deepcopy(case);bindings=deepcopy(bindings)
+    validate_spec(spec)
+    for value,limit in ((spec,262144),(case,65536),(bindings,65536)):
+        if not isinstance(value,dict) or len(json.dumps(value,allow_nan=False).encode())>limit:
+            raise ImplementationError('Use bounded JSON specification, case and bindings objects')
+    if (bindings.get('format')!='openworkgraph.customer-mcp-bindings.v1'
+        or digest(bindings.get('process_reference'))!=digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    rules=spec['process_model'].get('business_rules',[])
+    if not isinstance(rules,list) or len(rules)>40:raise ImplementationError('Use at most 40 saved process rules')
+    structured=[rule['id'] for rule in rules if rule.get('predicate') is not None]
+    requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured},case,bindings)
+    if not requests:raise ImplementationError('Bind at least one confirmed supported current-source rule')
+    source_base=endpoint(bindings.get('source_api_url'),source=True)
+    token=os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN','')
+    if not token:raise ImplementationError('Configure a separate local OWG source-read credential')
+    async def check_catalog():
+        if not spec.get('organization_catalog_reference'):return True
+        catalog_token=os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN','')
+        if not catalog_token:raise ImplementationError('Configure a separate organization catalog read credential')
+        base=endpoint(bindings.get('process_catalog_url'))
+        try:return catalog_is_current(await catalog_reader(base,catalog_token,spec),spec)
+        except Exception:return False
+    if not await check_catalog():
+        raise ImplementationError('Shared process changed, lost independent review, was archived or is unavailable')
+    receipts={};selected_records={}
+    for request in requests:
+        key=(request['resource_ref'],request['source_type'])
+        if key not in selected_records:
+            try:selected_records[key]=await source_state_reader(source_base,token,request)
+            except Exception:selected_records[key]=None
+        receipts[request['rule_id']]=selected_records[key]
+    context=SourcePlanningContext(spec,case,requests,receipts,clock or (lambda:datetime.now(timezone.utc)))
+    # Importing the SDK/model path happens only after consent and input checks.
+    from agent import propose
+    report=await propose(case,model=model,spec=spec,source_rule_context=context)
+    if not await check_catalog():
+        report['plan'].update(status='needs_clarification',missing_business_inputs=['Current independent process review is unavailable'])
+    used=report.get('shadow_check',{}).get('unevaluated_structured_rule_ids',[])
+    final_checks=context.check_rules(used,spec,case)
+    if any(row['status']!='matched' for row in final_checks):
+        report['plan'].update(status='needs_clarification',missing_business_inputs=['Fresh source invariants are false, unknown or no longer fresh'])
+    report.update(execution_permitted=False,source_outcome_verified=False,
+        source_planning={'format':'openworkgraph.current-source-planning.v1',
+            'source_receipt_request_count':len(selected_records),'rule_checks':context.check_rules(structured,spec,case),
+            'process_reference':reference(spec),'bindings_sha256':digest(bindings),
+            'source_values_sent_to_model':False,'source_receipts_included':False,
+            'model_received_rule_check_results':True,'business_tools_registered':False,
+            'business_actions_attempted':False,'case_association_verified':False,
+            'historical_case_facts_verified':False,'business_outcomes_verified':False,
+            'source_rule_reads_are_atomic_with_actions':False,'execution_authorized':False})
+    return report
+
+
+def main():
+    parser=argparse.ArgumentParser(description='Read selected source invariants and propose a route; no business actions')
+    parser.add_argument('--case',required=True,help='Authorized case JSON; sent to the selected model as in agent.py')
+    parser.add_argument('--bindings',required=True,help='Exact reviewed source-rule bindings')
+    parser.add_argument('--model',required=True)
+    parser.add_argument('--confirm-source-reads',action='store_true')
+    parser.add_argument('--confirm-model-rule-check-sharing',action='store_true',
+        help='Send selected rule IDs and match statuses to the chosen model provider')
+    args=parser.parse_args()
+    return asyncio.run(propose_with_sources(load_object(args.case),load_object(args.bindings),model=args.model,
+        source_reads_confirmed=args.confirm_source_reads,
+        share_rule_checks_with_model_confirmed=args.confirm_model_rule_check_sharing))
+
+
+if __name__=='__main__':
+    try:print(json.dumps(main(),indent=2))
+    except ImplementationError as exc:raise SystemExit(str(exc)) from None
+    except Exception:raise SystemExit('Source-aware planning stopped. Review consent, inputs, source and catalog access before retrying.') from None

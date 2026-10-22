@@ -89,7 +89,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py')}
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
@@ -130,6 +130,8 @@ def build_runtime_project(packet: dict) -> bytes:
         'connectors, authorization, exception rules and independent source checks.\n'
         'Keep SDK tracing disabled unless separately authorized for case content.\n'
         'Run python -m unittest discover -v before changing runtime mappings.\n'
+        'Never manufacture source-read or model-sharing confirmation. Source\n'
+        'opt-ins do not automatically grant permission to share comparison results.\n'
         'Never approve your own customer execution intent or infer a grant from\n'
         'a process review, observed action, model answer or tool response. An\n'
         'authorized customer operator must review the exact spec, plan, case and\n'
@@ -241,8 +243,16 @@ def build_runtime_project(packet: dict) -> bytes:
         'not atomic, do not establish business-case association or policy authority,\n'
         'and cannot undo completed or in-flight effects. Service-side policy and\n'
         'conditional writes remain necessary. The model planner stays conservative\n'
-        'and requests clarification for structured rules; an approved explicit\n'
+        'and requests clarification for structured rules in its default mode; an approved explicit\n'
         'route can use this separately authorized executor.\n\n'
+        'For read-only source-aware route proposals, use plan_sources.py with\n'
+        '--case case.json --bindings bindings.json --model MODEL\n'
+        '--confirm-source-reads --confirm-model-rule-check-sharing. This sends\n'
+        'the chosen case/model plus bounded rule IDs and match statuses to the\n'
+        'model provider; source credentials and raw receipts are never included.\n'
+        'The normal agent.py mode still pauses on structured rules. Planning\n'
+        'does not enable bindings or create execution intent. Review a proposal\n'
+        'separately before execute.py; that executor reads fresh source state.\n\n'
         'Shared-catalog projects also require process_catalog_url and a separate\n'
         'OWG_EXECUTION_CATALOG_READ_TOKEN with organization process read scope.\n'
         'Before each tool action, including after a write precondition, the runner\n'

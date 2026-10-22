@@ -178,7 +178,7 @@ for name,data in [('plan.json',plan),('case.json',case),('bindings.json',binding
             catalog=json.loads((project/'tool-catalog.json').read_text())
             assert {tool['name'] for tool in catalog['tools']}=={'read_case','resolve_case'}
             assert stats()['tool_calls']==[] and stats()['source_reads']==0 and stats()['catalog_reads']==0
-            configuration_tests=run('-m','unittest','-v','test_configuration','test_evaluation','test_agent_sdk')
+            configuration_tests=run('-m','unittest','-v','test_configuration','test_evaluation','test_agent_sdk','test_source_planning')
             assert configuration_tests.returncode==0,configuration_tests.stdout+configuration_tests.stderr
             pinned=run('-c',r'''
 import json
@@ -189,12 +189,33 @@ for row in bindings['bindings']:row['tool_schema_sha256']=schemas[row['tool_name
 json.dump(bindings,open('bindings.json','w'))
 ''')
             assert pinned.returncode==0,pinned.stderr
+            if source_invariant:
+                planning=run('-c',r'''
+import asyncio,json
+from plan_sources import propose_with_sources
+from runtime import load_spec
+from test_agent_sdk import OfflineModel
+case=json.load(open('case.json'));case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION'
+plan=json.load(open('plan.json'));plan['missing_business_inputs']=[]
+report=asyncio.run(propose_with_sources(case,json.load(open('bindings.json')),model=OfflineModel(plan),spec=load_spec(),
+    source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True))
+print(json.dumps(report))
+''')
+                assert planning.returncode==0,planning.stdout+planning.stderr
+                proposal=json.loads(planning.stdout)
+                assert proposal['plan']['status']=='proposal' and not proposal['execution_permitted']
+                assert proposal['source_planning']['source_receipt_request_count']==1
+                assert proposal['source_planning']['rule_checks']==[{'rule_id':'approved_source','status':'matched'}]
+                assert 'SYNTHETIC_SOURCE_SECRET' not in planning.stdout and 'merged' not in planning.stdout
+                before_execution=stats()
+                assert before_execution['source_rule_reads']==1 and not before_execution['tool_calls']
+                assert before_execution['source_reads']==0 and before_execution['catalog_reads']==2
             args=['execute.py','--plan','plan.json','--case','case.json','--bindings','bindings.json']
             offline=run(*args,'--write-review-template','intent.json')
             assert offline.returncode==0,offline.stderr
             review=json.loads(offline.stdout)
             assert review['network_contacted'] is False and review['requirements']==[]
-            assert stats()['tool_calls']==[] and stats()['source_reads']==0 and stats()['catalog_reads']==0
+            assert stats()['tool_calls']==[] and stats()['source_reads']==0 and stats()['catalog_reads']==(2 if source_invariant else 0)
             intent=json.loads((project/'intent.json').read_text())
             assert intent['customer_authorization_confirmed'] is False
             assert intent['source_reads_confirmed'] is False
@@ -215,12 +236,12 @@ json.dump(bindings,open('bindings.json','w'))
             assert observed['tool_calls']==['read_case','resolve_case','read_case']
             assert observed['resolved'] is True and observed['version']==4
             assert observed['source_reads']==2
-            assert observed['source_rule_reads']==(4 if source_invariant else 0)
+            assert observed['source_rule_reads']==(5 if source_invariant else 0)
             assert report['source_rules_matched_at_completion'] is True
             repeated=run(*args,'--intent','intent.json','--execute-approved')
             assert repeated.returncode!=0
             assert stats()==observed
-            assert observed['catalog_reads']==(5 if shared_catalog else 0)
+            assert observed['catalog_reads']==((7 if source_invariant else 5) if shared_catalog else 0)
             if shared_catalog:
                 with urlopen(Request(base+'/test-revoke',method='POST',headers={'Authorization':'Bearer SYNTHETIC_SOURCE_SECRET'}),timeout=2):pass
                 # A newly authorized synthetic intent must still check current design.
@@ -232,7 +253,7 @@ json.dump(bindings,open('bindings.json','w'))
                 assert rejected['stopped_before_tools'] and not rejected['catalog_current_at_last_check']
                 after=stats()
                 assert after['tool_calls']==observed['tool_calls'] and after['source_reads']==2
-                assert after['catalog_reads']==6
+                assert after['catalog_reads']==(8 if source_invariant else 6)
                 assert after['source_rule_reads']==observed['source_rule_reads']
             for private in ('SYNTHETIC_TOOL_SECRET','SYNTHETIC_SOURCE_SECRET','SYNTHETIC_CATALOG_SECRET','SYNTHETIC_PRIVATE_RECORD'):
                 assert private not in execute.stdout+execute.stderr

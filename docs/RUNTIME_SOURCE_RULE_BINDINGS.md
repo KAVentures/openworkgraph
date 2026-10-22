@@ -4,8 +4,10 @@ Generated SDK projects keep structured rules blocked by default. A customer can
 supply a reviewed implementation for rules that must remain true before **every
 mapped action** and at route completion. This is a deliberately limited current
 state invariant, not a general temporal branch interpreter or policy engine.
-The planner still requests clarification for structured rules; the separate
-executor accepts an explicitly approved route.
+The default planner still requests clarification for structured rules.
+[Source-aware planning](SOURCE_AWARE_PROCESS_PLANNING.md) optionally uses separately
+authorized rule-check results to propose a route; the executor still needs an
+explicitly approved exact-artifact intent and fresh source checks.
 
 For example, a customer can require a selected observed pull request to remain
 merged before processing downstream tasks. Add the following to the separately

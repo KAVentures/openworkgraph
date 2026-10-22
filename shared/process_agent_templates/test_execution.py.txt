@@ -8,6 +8,12 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+try:
+    import pydantic
+    SOURCE_RULE_DEPENDENCIES=True
+except ImportError:
+    SOURCE_RULE_DEPENDENCIES=False
+
 from execute import (ImplementationError, digest, prepare, review_template,
                      execute_approved, source_summary, endpoint, pointer, _structured)
 
@@ -118,6 +124,7 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         return state_receipt(request['resource_ref'],request['source_type'],
             {'source':{'provider':'github','record_kind':'pull_request','state':'merged'}},
             datetime.now(timezone.utc).isoformat(),'source_state_reported',True)
+    @unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured source checks')
     async def test_reviewed_source_invariants_are_refreshed_before_actions_and_not_retained(self):
         data=self.invariant_fixture();checks=[]
         async def reader(base,token,request):
@@ -133,6 +140,7 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         for private in ('merged','SYNTHETIC_SOURCE_SECRET',data[2]['approved_record']):
             self.assertNotIn(private,journal)
         self.assertFalse(report['source_rule_reads_are_atomic_with_actions'])
+    @unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured source checks')
     async def test_changed_source_after_fresh_tool_precondition_stops_the_write(self):
         data=self.invariant_fixture();checks=[]
         async def reader(base,token,request):
@@ -145,6 +153,7 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report['all_tool_results_matched'])
         self.assertFalse(report['source_rules_matched_at_completion'])
         self.assertEqual(report['source_rule_checks'][1]['status'],'not_matched')
+    @unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured source checks')
     async def test_unknown_or_false_source_stops_before_mcp_inventory(self):
         from datetime import timedelta
         for mutation in ('false','missing','stale','wrong_ref','wrong_kind','authority','exception','absence'):
@@ -169,6 +178,7 @@ class ImplementationCases(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(report['stopped_before_tools'])
             self.assertFalse(self.tools.calls)
             self.assertFalse(self.source_requests)
+    @unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured source checks')
     async def test_source_invariant_bindings_require_supported_paths_and_separate_confirmation(self):
         for mutation in ('unreviewed','non_atomic','unsupported','extra','duplicate','no_consent','no_token'):
             data=self.invariant_fixture();binding=data[3]['source_rule_checks'][0]
