@@ -295,6 +295,7 @@
       <div id="historyList"></div>
     </section>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
+    <script nonce="__NONCE__" src="/process-rule-editor.js"></script>
     <script nonce="__NONCE__">
       (() => {
         "use strict";
@@ -910,7 +911,8 @@
                   ": " +
                   r.text +
                   " · " +
-                  (r.user_confirmed ? "user confirmed" : "unconfirmed"),
+                  (r.user_confirmed ? "user confirmed" : "unconfirmed")+
+                  (r.predicate ? " · Declared predicate: "+JSON.stringify(r.predicate) : ""),
               ),
             ),
           );
@@ -1238,6 +1240,7 @@
             });
             label.appendChild(check);
             row.appendChild(label);
+            window.owgProcessRuleEditor?.render(rule,row,()=>{check.checked=false;draftChanged();});
             row.appendChild(
               button("Remove draft rule " + rule.id, () =>
                 mutate(() => {

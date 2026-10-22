@@ -59,15 +59,44 @@ const path=require('node:path');
   const savedXML=await fs.readFile(exportPath,'utf8');
   assert(savedXML.includes('exclusiveGateway'));assert(savedXML.includes('isExecutable="false"'));
   assert(!savedXML.includes('PRIVATE_XML_GATEWAY')&&!savedXML.includes('PRIVATE_SOURCE_DOC'));
+  // Declare a typed condition, confirm the changed rule, then separately save
+  // a new immutable version before sending any authorized case facts.
+  const predicate=editor.locator('.owg-rule-predicate').filter({hasText:'Structured conditions · import_rule_2'});
+  await predicate.locator('summary').click();
+  await predicate.getByLabel('Predicate field import_rule_2',{exact:true}).fill('/approval/status');
+  await predicate.getByLabel('Predicate expected value import_rule_2',{exact:true}).fill('"approved"');
+  await predicate.getByRole('button',{name:'Add declared condition for import_rule_2',exact:true}).click();
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  await predicate.locator('..').getByLabel('User-confirmed rule',{exact:true}).check();
+  await page.locator('#owgCatalogReviewed').check();await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 2.'}).waitFor();assert.equal(saves,2);
+  const route=['import_step_1','import_step_2','import_step_3','import_step_5','import_step_6'];
+  const facts={cases:[{case_id:'case_1',facts:{approval:{status:'approved'},unused:'PRIVATE_RAW_CASE_VALUE'},activity_ids:route},
+    {case_id:'case_2',facts:{approval:{status:'rejected'}},activity_ids:route},{case_id:'case_3',facts:{},activity_ids:route}]};
+  let factRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/v1/process-catalog/check-rules')factRequests++;});
+  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles({name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))});
+  assert.equal(factRequests,0);assert(await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).isDisabled());
+  await page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true}).check();assert.equal(factRequests,0);
+  const checked=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules');
+  await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click();const report=await (await checked).json();
+  assert.equal(report.process_reference.revision,2);assert.equal(report.rule_result_counts.matched,1);
+  assert.equal(report.rule_result_counts.not_matched,1);assert.equal(report.rule_result_counts.unknown,1);
+  assert.equal(report.business_policy_compliance_verified,false);assert.equal(report.execution_permissions_granted,false);
+  assert.equal(report.cases[0].manual_review_condition_count_on_proposed_route,1);
+  assert(!JSON.stringify(report).includes('PRIVATE_')&&!JSON.stringify(report).includes('approved'));
+  await page.locator('#owgCatalogRuleCheckResult').getByText('3 supplied case-fact reports',{exact:true}).waitFor();
+  const minimized=page.waitForEvent('download');await page.getByRole('button',{name:'Download minimized rule-check report',exact:true}).click();
+  const reportDownload=await minimized,reportPath=path.join(scratch,'rule-check.json');await reportDownload.saveAs(reportPath);
+  assert(!(await fs.readFile(reportPath,'utf8')).includes('PRIVATE_RAW_CASE_VALUE'));
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
   await page.getByLabel('Choose BPMN process design',{exact:true}).setInputFiles({name:'unsupported.bpmn',mimeType:'application/bpmn+xml',buffer:Buffer.from(xml.replace('<exclusiveGateway id="j"','<parallelGateway id="j"'))});
   assert.equal(await page.getByRole('button',{name:'Open imported draft in editor',exact:true}).count(),0);
   await page.getByRole('button',{name:'Preview selected BPMN',exact:true}).click();
-  await page.locator('#owgCatalogStatus').filter({hasText:'other process semantics cannot be flattened'}).waitFor();assert.equal(saves,1);
+  await page.locator('#owgCatalogStatus').filter({hasText:'other process semantics cannot be flattened'}).waitFor();assert.equal(saves,2);
   const disk=spawnSync(python,['-c',`import sqlite3,sys
 c=sqlite3.connect(sys.argv[1]);rows=c.execute('SELECT payload FROM workflow_knowledge').fetchall()
-assert len(rows)==1
-assert 'PRIVATE_XML_GATEWAY' not in rows[0][0] and 'PRIVATE_SOURCE_DOC' not in rows[0][0]
+assert len(rows)==2
+assert all('PRIVATE_XML_GATEWAY' not in row[0] and 'PRIVATE_SOURCE_DOC' not in row[0] and 'PRIVATE_RAW_CASE_VALUE' not in row[0] for row in rows)
 assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(disk.status,0,disk.stderr);assert.deepEqual(errors,[]);

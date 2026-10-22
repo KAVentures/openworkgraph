@@ -1,5 +1,6 @@
 """Process catalog on the existing owner-scoped, append-only knowledge store."""
 from __future__ import annotations
+import json
 
 from typing import Annotated, Any
 from uuid import uuid4
@@ -140,6 +141,9 @@ def process_bpmn(packet: dict[str, Any]) -> str:
             ET.SubElement(flow, f'{{{ns}}}documentation').text = (
                 f'User-confirmed={rule.user_confirmed}: {rule.text}'
             )
+            if rule.predicate is not None:
+                ET.SubElement(flow,f'{{{ns}}}documentation').text='OWG declared predicate v1: '+json.dumps(
+                    rule.predicate.model_dump(),sort_keys=True,ensure_ascii=True,allow_nan=False)
     add_process_diagram(root, process, entry_id='Activity_' + model.entry_activity_id)
     return ET.tostring(root, encoding='unicode') + '\n'
 
@@ -162,6 +166,10 @@ def process_document(packet: dict[str, Any]) -> str:
         lines.append('Responsibility labels are user declarations, not verified identity or permission grants.')
     lines += ['', 'Proposed transitions:'] + [f'{e.source} → {e.target}; rule: {e.rule_id or "none"}' for e in model.transitions]
     lines += ['', 'Declared rules (not independently validated):'] + [f'{r.id}: {r.text} (user-confirmed={r.user_confirmed})' for r in model.business_rules]
+    if any(rule.predicate is not None for rule in model.business_rules):
+        lines+=['','Structured declared predicates (not policy or automatic branching):']+[
+            rule.id+': '+json.dumps(rule.predicate.model_dump(),sort_keys=True,ensure_ascii=True,allow_nan=False)
+            for rule in model.business_rules if rule.predicate is not None]
     lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [
         f'{c.activity_id}: {c.kind} · {c.condition_label}; response: {c.response}' for c in model.manual_review_conditions]
     lines += ['', 'Declared source-state expectations:'] + [f'{e.terminal_activity_id}: {e.operation} (user-confirmed={e.user_confirmed})' for e in model.outcome_expectations]

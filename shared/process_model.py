@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator, model_serializer
 
 from .process_opportunities import OpportunityScenario
+from .process_rule_conditions import RulePredicate
 
 Identifier = Annotated[str, Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')]
 ActivityLabel = Annotated[str, Field(pattern=r'^[A-Za-z][A-Za-z0-9 _-]{0,63}$')]
@@ -46,6 +47,13 @@ class BusinessRule(StructuralModel):
     id: Identifier
     text: str = Field(min_length=1, max_length=2000)
     user_confirmed: StrictBool = False
+    predicate:RulePredicate | None = None
+
+    @model_serializer(mode='wrap')
+    def preserve_unstructured_rule_hashes(self,handler):
+        result=handler(self)
+        if self.predicate is None:result.pop('predicate',None)
+        return result
 
     @field_validator('text')
     @classmethod

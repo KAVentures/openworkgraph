@@ -37,6 +37,22 @@ if SDK_AVAILABLE:
 
 @unittest.skipUnless(SDK_AVAILABLE, 'Install requirements.txt for the actual SDK test')
 class AgentSDKCases(unittest.TestCase):
+    def test_structured_condition_is_not_an_automatic_case_fact_or_execution_grant(self):
+        spec = load_spec()
+        spec['process_model'].update(activities=[{'id':'guarded','label':'Review','kind':'activity','implementation':'unmapped'},
+            {'id':'done','label':'Done','kind':'end','implementation':'unmapped'}],
+            transitions=[{'source':'guarded','target':'done','rule_id':'source_condition'}],
+            business_rules=[{'id':'source_condition','text':'Declared source condition','user_confirmed':True,
+                'predicate':{'match':'all','conditions':[{'path':'/allowed','operator':'eq','expected':True}]}}],
+            entry_activity_id='guarded',terminal_activity_ids=['done'],manual_review_conditions=[],outcome_expectations=[])
+        spec['process_model_sha256'] = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
+        plan={'revision':spec['revision'],'content_sha256':spec['content_sha256'],'status':'proposal',
+              'activity_ids':['guarded','done'],'missing_business_inputs':[]}
+        result=asyncio.run(propose({'allowed':True,'text':'SYNTHETIC_UNTRUSTED_INSTRUCTION'},model=OfflineModel(plan),spec=spec))
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertEqual(result['shadow_check']['unevaluated_structured_rule_ids'],['source_condition'])
+        self.assertFalse(result['execution_permitted'])
+
     def test_model_cannot_skip_unevaluated_manual_review(self):
         spec = load_spec()
         cases = json.loads((Path(__file__).parent / 'synthetic-cases.json').read_text(encoding='utf-8'))

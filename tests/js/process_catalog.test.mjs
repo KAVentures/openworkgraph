@@ -15,7 +15,7 @@ class Element {
   scrollIntoView(){}
   walk(){return [this,...this.children.flatMap(n=>n.walk())];}
 }
-function fixture({shadowResponse,bpmnResponse}={}){
+function fixture({shadowResponse,bpmnResponse,ruleResponse}={}){
   const document={readyState:'complete'};
   const root=new Element('main',document);root.id='panel-evidence';
   document.querySelector=()=>null;
@@ -28,6 +28,7 @@ function fixture({shadowResponse,bpmnResponse}={}){
   const fetch=async(path,options)=>{
     requests.push({path,options});
     if(path==='/v1/process-catalog/import-bpmn')return {ok:true,json:async()=>bpmnResponse()};
+    if(path.startsWith('/v1/process-catalog/check-rules?'))return {ok:true,json:async()=>ruleResponse(options.body)};
     const body=JSON.parse(options.body);
     if(path==='/v1/process-catalog/shadow-review')return {ok:true,json:async()=>shadowResponse(body)};
     if(body.expected_revision!==(saved?.revision||0))return {ok:false,json:async()=>({detail:'Revision changed'})};
@@ -171,4 +172,29 @@ test('designer transfer retains manual conditions by stable IDs when activity la
   assert.equal(condition.automatic_branch_authorized,false);
   assert.equal(condition.executable,false);
   assert.equal(m.business_rules.length,0);
+});
+
+test('case facts require an explicit action, preserve raw input and discard responses after draft changes',async()=>{
+  let release;const gate=new Promise(resolve=>release=resolve);
+  const {window,root,document,requests,button}=fixture({ruleResponse:async()=>{
+    await gate;return {format:'openworkgraph.declared-rule-case-check.v1',process_reference:{revision:1,content_sha256:'a'.repeat(64)},
+      references_latest_revision_at_check:true,case_count:1,cases:[],rule_result_counts:{matched:1}};
+  }});
+  await window.owgProcessCatalog.saveDesigner();
+  const file=root.walk().find(node=>node.attrs['aria-label']==='Choose authorized case-facts JSON');
+  const raw={size:20,text:()=>assert.fail('Raw facts must reach the strict server parser unchanged')};
+  file.files=[raw];file.handlers.change();
+  const section=root.walk().filter(node=>node.tag==='section'&&node.walk().includes(file)).at(-1);
+  const consent=section.walk().find(node=>node.type==='checkbox');
+  const run=button('Check facts against saved rules');
+  assert.equal(run.disabled,true);assert.equal(requests.length,1);
+  consent.checked=true;consent.handlers.change();assert.equal(run.disabled,false);assert.equal(requests.length,1);
+  const pending=run.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests.length,2);assert.equal(requests[1].options.body,raw);
+  assert.equal(requests[1].options.headers['X-OWG-Case-Facts-Authorized'],'true');
+  assert(requests[1].path.includes('revision=1'));
+  const goal=root.walk().find(node=>node.attrs['aria-label']==='Business goal');goal.value='Changed';goal.handlers.input();
+  release();await pending;
+  assert.equal(document.getElementById('owgCatalogRuleCheckResult').children.length,0);
+  file.handlers.change();assert.equal(consent.checked,false);assert.equal(run.disabled,true);
 });

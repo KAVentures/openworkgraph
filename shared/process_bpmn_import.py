@@ -9,11 +9,13 @@ from __future__ import annotations
 from collections import Counter
 from hashlib import sha256
 import re
+import json
 from xml.etree import ElementTree as ET
 
 from pydantic import ValidationError
 
 from .process_model import ProcessModel
+from .process_rule_conditions import RulePredicate
 
 MAX_BYTES = 128 * 1024
 BPMN = 'http://www.omg.org/spec/BPMN/20100524/MODEL'
@@ -166,18 +168,35 @@ def import_bpmn(raw: bytes):
     for index,flow in enumerate(flows,1):
         source,target=flow.get('sourceRef'),flow.get('targetRef')
         expressions=[(child.text or '').strip() for child in flow if _name(child)=='conditionExpression']
-        docs=[(child.text or '').strip() for child in flow if _name(child)=='documentation']
+        docs=[];predicate=None
+        for child in flow:
+            if _name(child)!='documentation':continue
+            text=(child.text or '').strip()
+            if text.startswith('OWG declared predicate v1:'):
+                if predicate is not None:raise BPMNImportError('A flow may declare at most one structured predicate')
+                def pairs(items):
+                    values={}
+                    for key,value in items:
+                        if key in values:raise ValueError('duplicate field')
+                        values[key]=value
+                    return values
+                def invalid(_value):raise ValueError('nonstandard JSON')
+                try:predicate=RulePredicate.model_validate(json.loads(text.partition(':')[2],object_pairs_hook=pairs,parse_constant=invalid))
+                except (ValueError,TypeError,RecursionError):raise BPMNImportError('Structured predicate documentation must use the complete bounded supported format') from None
+            else:docs.append(text)
         if len(expressions)>1:
             raise BPMNImportError('A sequence flow may contain at most one condition expression')
         branch=outgoing[source]>1
         condition=next((value for value in expressions+docs+[flow.get('name','').strip()] if value),'')
         edge={'source':mapping[source],'target':mapping[target]}
-        if branch or condition:
+        if branch or condition or predicate is not None:
             rule_text=condition or 'Clarify the business condition for imported branch '+str(index)
             if len(rule_text)>2000:
                 raise BPMNImportError('Imported branch descriptions must be at most 2,000 characters')
             rule_id='import_rule_'+str(index)
-            rules.append({'id':rule_id,'text':rule_text,'user_confirmed':False});edge['rule_id']=rule_id
+            rule={'id':rule_id,'text':rule_text,'user_confirmed':False}
+            if predicate is not None:rule['predicate']=predicate.model_dump()
+            rules.append(rule);edge['rule_id']=rule_id
         transitions.append(edge)
     manual_conditions=[{**{key:value for key,value in item.items() if key!='source_id'},
                         'activity_id':mapping[item['source_id']]} for item in manual_by_source]

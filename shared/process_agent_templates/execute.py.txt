@@ -176,6 +176,8 @@ def prepare(spec, plan_document, case, bindings):
         requirements.append('customer_bindings_disabled')
     if checks['unconfirmed_rule_ids']:
         requirements.append('unconfirmed_branch_rules')
+    if checks.get('unevaluated_structured_rule_ids'):
+        requirements.append('structured_rule_source_fact_implementation_missing')
     actions, humans, written = [], [], set()
     for activity_id in plan['activity_ids']:
         activity = activities[activity_id]
