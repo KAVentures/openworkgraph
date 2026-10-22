@@ -202,6 +202,22 @@ def retained_process_cases(request: Request, dataset_id: str = Query(pattern=_LO
     return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id)
 
 
+@app.get('/v1/process-mining/datasets/compare')
+def compare_retained_process_logs(request: Request,
+        baseline_id: str = Query(pattern=_LOG_ID), current_id: str = Query(pattern=_LOG_ID),
+        comparability_confirmed: bool = Query(default=False),
+        workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
+        revision: int | None = Query(default=None, ge=1)):
+    _require_process_log_dashboard(request)
+    if (workflow_id is None) != (revision is None):
+        raise HTTPException(422, 'Comparison requires a process ID and exact revision together')
+    reference = _catalog_record(workflow_id, revision) if workflow_id else None
+    return _log_response(_process_logs.compare, baseline_id, current_id,
+        comparability_confirmed=comparability_confirmed,
+        reference_model=ProcessModel.model_validate(reference['process_model']) if reference else None,
+        reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
+
+
 @app.get('/v1/process-mining/datasets/events')
 def retained_process_events(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
                             case_number: int = Query(ge=1), after: int = Query(default=0, ge=0),

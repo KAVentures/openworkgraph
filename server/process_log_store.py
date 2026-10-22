@@ -9,11 +9,13 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 import csv
 from io import StringIO
+from hashlib import sha256
 import json
 from uuid import uuid4
 
 from . import db
 from .process_mining_csv import mine_csv_events, parse_csv_events
+from shared.process_drift import compare_snapshots
 
 MAX_DATASETS = 20
 
@@ -167,6 +169,45 @@ class ProcessLogStore:
             return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap,
                     'next_after':items[-1]['case_number'] if len(rows)>cap else None,
                     'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False}
+
+    def compare(self, baseline_id, current_id, *, comparability_confirmed,
+                reference_model=None, reference=None):
+        if comparability_confirmed is not True:
+            raise ProcessLogError('Confirm that both logs describe the same process with compatible activity labels')
+        if baseline_id == current_id:
+            raise ProcessLogError('Choose two different retained event-log snapshots')
+        snapshots = []
+        with self.connect() as conn:
+            self._open(conn)
+            # Pin existence, metadata and all event rows to one SQLite read
+            # snapshot. Concurrent deletion cannot create a partial comparison.
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            for identifier in (baseline_id, current_id):
+                dataset = self._dataset(conn, identifier)
+                rows = conn.execute('''SELECT case_number, position, activity, observed_at,
+                    elapsed_since_previous_seconds FROM process_log_events
+                    WHERE dataset_id = ? ORDER BY case_number, position''', (identifier,)).fetchall()
+                original = json.loads(conn.execute('''SELECT report_json FROM process_log_datasets
+                    WHERE dataset_id = ?''', (identifier,)).fetchone()[0])
+                groups = defaultdict(list)
+                for number, position, activity, stamp, gap in rows:
+                    groups[number].append((activity, stamp, gap))
+                cases = [{
+                    'path': tuple(event[0] for event in events),
+                    'duration_seconds': round((datetime.fromisoformat(events[-1][1]) -
+                                               datetime.fromisoformat(events[0][1])).total_seconds(), 3),
+                    'gaps': [event[2] for event in events[1:]],
+                } for events in groups.values()]
+                snapshot_hash = sha256(json.dumps([tuple(row) for row in rows], ensure_ascii=False,
+                    separators=(',', ':')).encode('utf-8')).hexdigest()
+                snapshots.append({
+                    'reference': dataset | {'events_sha256': snapshot_hash},
+                    'cases': cases, 'data_quality': original['data_quality'],
+                    'event_window': {'first_event_at': min(row[3] for row in rows),
+                                     'last_event_at': max(row[3] for row in rows)},
+                })
+        return compare_snapshots(*snapshots, reference_model=reference_model, reference=reference)
 
     def events(self, dataset_id, case_number, *, after=0, limit=100):
         with self.connect() as conn:
