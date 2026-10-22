@@ -100,6 +100,13 @@ decision-rule editing and confirmation, entry/terminal IDs, and unevaluated
 manual review conditions. Local export/upload is only needed for initial
 publication or importing a separately designed model.
 
+Activities also support descriptive **Draft responsibility** labels. These
+appear on maps, the shared activity table and exports, without changing any
+actor's permissions. A label matching an actor ID does not grant that actor
+editing or reviewing rights. Label changes create a new revision and reset
+independent design review; existing unmodified model/specification hashes stay
+unchanged when the optional label is unspecified.
+
 The shared catalog and local editor use the same accessible graph renderer.
 It shows the actual proposed transitions, branches and loops; selecting a node
 in an editor focuses that activity's field. These are design maps, not new

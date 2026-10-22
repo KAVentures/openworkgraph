@@ -119,6 +119,10 @@ def process_bpmn(packet: dict[str, Any]) -> str:
     tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent'}
     for activity in model.activities:
         node = ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})
+        if activity.responsibility_label:
+            ET.SubElement(node,f'{{{ns}}}documentation').text=(
+                'User-declared responsibility: '+activity.responsibility_label+
+                '. Descriptive only; not verified identity or review/execution authority.')
         for condition in model.manual_review_conditions:
             if condition.activity_id == activity.id:
                 ET.SubElement(node, f'{{{ns}}}documentation').text = (
@@ -151,7 +155,10 @@ def process_document(packet: dict[str, Any]) -> str:
              ' → '.join(model.baseline_path), 'Coverage: ' + model.baseline_coverage,
              f'Support: {model.supporting_case_count} {model.baseline_support_unit} (not verified case identity)',
              '', 'TO-BE proposed activities:']
-    lines += [f'{a.id}: {a.label} ({a.kind}; suggested implementation: {a.implementation})' for a in model.activities]
+    lines += [f'{a.id}: {a.label} ({a.kind}; suggested implementation: {a.implementation})'+
+              (f' · Declared responsibility: {a.responsibility_label}' if a.responsibility_label else '') for a in model.activities]
+    if any(a.responsibility_label for a in model.activities):
+        lines.append('Responsibility labels are user declarations, not verified identity or permission grants.')
     lines += ['', 'Proposed transitions:'] + [f'{e.source} → {e.target}; rule: {e.rule_id or "none"}' for e in model.transitions]
     lines += ['', 'Declared rules (not independently validated):'] + [f'{r.id}: {r.text} (user-confirmed={r.user_confirmed})' for r in model.business_rules]
     lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [

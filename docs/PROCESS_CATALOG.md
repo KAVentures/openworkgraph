@@ -52,6 +52,20 @@ are allowed. A graph revision request is bounded to 128 KiB.
 
 ## Meaning and limits
 
+Each activity can include an optional **Responsibility** label, such as Case
+reviewer or Finance manager. Local and shared editors, graph tooltips, shared
+activity tables, BPMN task documentation, PDDs and SDK specifications preserve
+the declared label. It describes who should handle a step; it does not verify
+an employee identity, establish an observed handoff, grant organization access
+or authorize review/execution. Those controls remain separate.
+
+Labels are bounded to 120 characters and a single line. Saving a change creates
+a new immutable revision, changes its model hash and requires a fresh shared
+design review. An unspecified label is omitted from serialization, preserving
+the exact previous model/specification hashes for existing unmodified designs
+and exported agent projects. No database migration, automatic role assignment
+or source-data capture is introduced.
+
 The baseline is a user-selected structural observation. The target is a
 user-reviewed proposal, and rule confirmation is a client declaration. These
 are not organization policy attestations, actual employee ownership checks,

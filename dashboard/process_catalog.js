@@ -153,10 +153,12 @@
       const p=positions.get(activity.id),group=svg('g',{role:'button',tabindex:0,'aria-label':'Edit activity '+activity.id});
       const rect=svg('rect',{x:p.x,y:p.y,width:175,height:50,rx:activity.kind==='decision'?22:5,fill:'#f1f7f4',stroke:'#557e70'});
       const text=svg('text',{x:p.x+8,y:p.y+20,'font-size':12});text.textContent=activity.label.slice(0,22);
-      const sub=svg('text',{x:p.x+8,y:p.y+38,'font-size':10});sub.textContent=activity.id+' · '+activity.kind;
+      const sub=svg('text',{x:p.x+8,y:p.y+38,'font-size':10});sub.textContent=activity.responsibility_label?
+        ('Responsibility: '+activity.responsibility_label).slice(0,27):activity.id+' · '+activity.kind;
+      const title=svg('title');title.textContent=activity.label+(activity.responsibility_label?' · Declared responsibility: '+activity.responsibility_label:'');
       const focus=()=>document.getElementById('owgCatalogActivity'+i)?.focus();
       group.addEventListener('click',focus);group.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();focus();}});
-      group.append(rect,text,sub);drawing.appendChild(group);
+      group.append(rect,text,sub,title);drawing.appendChild(group);
     });
     wrap.appendChild(drawing);return wrap;
   }
@@ -175,6 +177,7 @@
     host.appendChild(el('p','Baseline: '+sourceName+' · '+coverageName+' · '+model.supporting_case_count+' '+
       (model.baseline_support_unit==='candidate_executions'?'candidate executions':'supplied cases')+'. Task boundaries and business case identity are unverified.'));
     host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
+    host.appendChild(el('p','Responsibility labels describe who should handle a step. They are user declarations and grant no access, review or execution permissions.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
@@ -182,6 +185,8 @@
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
       field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','start','end']);
       field(row,'Implementation '+activity.id,activity.implementation,value=>activity.implementation=value,['unmapped','api','deterministic','ai_agent','computer_use','human']);
+      const responsibility=field(row,'Responsibility '+activity.id,activity.responsibility_label||'',value=>activity.responsibility_label=value);
+      responsibility.maxLength=120;
       row.appendChild(button('Remove '+activity.id,()=>mutate(()=>{
         model.activities.splice(index,1);model.transitions=model.transitions.filter(e=>e.source!==activity.id&&e.target!==activity.id);
         model.terminal_activity_ids=model.terminal_activity_ids.filter(id=>id!==activity.id);

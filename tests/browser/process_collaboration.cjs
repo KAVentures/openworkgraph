@@ -355,6 +355,9 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       .getByLabel("Draft activity open", { exact: true })
       .fill("Inspect case");
     await alice
+      .getByLabel("Draft responsibility open", { exact: true })
+      .fill("Case reviewer");
+    await alice
       .getByRole("button", { name: "Add draft activity", exact: true })
       .click();
     await alice
@@ -489,6 +492,8 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       .locator("#selectedTitle")
       .filter({ hasText: "revision 2" })
       .waitFor();
+    assert.match(await alice.locator("#design").textContent(),/Case reviewer/);
+    assert((await alice.locator("#design svg title").allTextContents()).some(text=>text.includes("Declared responsibility: Case reviewer")));
     assert.match(
       await alice.locator("#reviewState").textContent(),
       /needs review/,
