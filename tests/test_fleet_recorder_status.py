@@ -98,3 +98,52 @@ def test_admin_api_keeps_device_and_ordinary_integration_tokens_out_and_uses_rep
         assert item()['recorder_status']['status']=='unknown'
         assert client.delete('/v1/admin/devices/acme/owned-computer',headers=admin).status_code==200
         assert not client.get('/v1/admin/people/acme',headers=admin).json()['employees'][0]['devices']
+
+
+def test_hosted_status_requires_active_current_identity_and_does_not_bury_another_report(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    for name,org,actor in [('alice','acme','alice'),('other','other','alice'),('bob','acme','bob')]:
+        db.put_token(token_id=name,token=name,token_type='device',organization_id=org,
+            actor_id=actor,device_id='same',scopes={'evidence:write'})
+        db.report_recorder_heartbeat(db.authenticate(name),collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    def state():return _reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert state()['desktop_collector_heartbeat_verified']
+    assert db.revoke_token('alice')
+    assert state()['local_recorder_state']=='unknown_to_hosted_connector'
+    assert not state()['fresh_authenticated_device_report']
+    db.put_token(token_id='replacement',token='replacement',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='same',scopes={'evidence:write'})
+    assert state()['local_recorder_state']=='unknown_to_hosted_connector'
+    # A valid second device is still eligible when the newest prior-device
+    # report cannot establish status for its replacement credential.
+    db.put_token(token_id='second',token='second',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='second',scopes={'evidence:write'})
+    db.report_recorder_heartbeat(db.authenticate('second'),collector_state='paused',capture_policy='paused',collector_age_seconds=None)
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE access_tokens SET created_at = ? WHERE token_id = 'second'",
+                    ((datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat(),))
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ? WHERE organization_id = 'acme' AND device_id = 'second'",
+                    ((datetime.now(timezone.utc)-timedelta(seconds=10)).isoformat(),))
+    assert state()['local_recorder_state']=='paused'
+    db.report_recorder_heartbeat(db.authenticate('replacement'),collector_state='recording',capture_policy='recording',collector_age_seconds=0)
+    assert state()['desktop_collector_heartbeat_verified']
+
+
+def test_hosted_status_counts_elapsed_collector_age_and_rejects_future_reports(store):
+    from gateway.public_plugin_mcp import _reported_recorder_state
+    db=store.db
+    db.put_token(token_id='device',token='device',token_type='device',organization_id='acme',
+        actor_id='alice',device_id='owned',scopes={'evidence:write'})
+    db.report_recorder_heartbeat(db.authenticate('device'),collector_state='recording',capture_policy='recording',collector_age_seconds=40)
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE access_tokens SET created_at = ?",((datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat(),))
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ?",((datetime.now(timezone.utc)-timedelta(seconds=10)).isoformat(),))
+    value=_reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert value['fresh_authenticated_device_report'] and value['local_recorder_state']=='recording'
+    assert not value['desktop_collector_heartbeat_verified']
+    with db.connect() as conn:
+        db._execute(conn,"UPDATE recorder_heartbeats SET received_at = ?",((datetime.now(timezone.utc)+timedelta(minutes=2)).isoformat(),))
+    value=_reported_recorder_state(db,organization_id='acme',actor_id='alice')
+    assert value['local_recorder_state']=='unknown_to_hosted_connector'
+    assert not value['fresh_authenticated_device_report'] and not value['desktop_collector_heartbeat_verified']

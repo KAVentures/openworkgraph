@@ -40,3 +40,11 @@ admin boundaries, no-store responses and the actual browser flow from device
 reports through the production roster query. SQLite and disposable PostgreSQL
 exercise the same join; synthetic browser fixtures enroll through the real API
 and generate no work evidence.
+
+The hosted MCP recorder summary uses the same timing checks and preserves its
+existing response fields. It selects only reports from active device credentials
+for the authenticated organization/actor/device, excluding reports older than
+those credentials. A revoked or replaced credential cannot establish current
+recorder status. An ineligible newer report does not bury another eligible
+computer's report. Future timestamps are unknown, and the hosted collector
+signal flag includes elapsed time since receipt in its 45-second window.
