@@ -204,6 +204,42 @@ async def local_selected_github_process_preview(request: Request, response: Resp
     return result
 
 
+@router.post('/v1/process-mining/zendesk-selected-cases')
+async def local_selected_zendesk_process_preview(request: Request,response: Response):
+    """Separately opted-in fixed-tenant audit reads; no recorded-case inference."""
+    import json
+    from .zendesk_process_source import read_selected_zendesk_process
+    _require_dashboard(request)
+    if request.headers.get('content-type','').split(';',1)[0].strip().lower()!='application/json':
+        raise HTTPException(415,'JSON selected-ticket request required')
+    raw=bytearray()
+    def pairs(values):
+        result={}
+        for key,value in values:
+            if key in result:raise ValueError('duplicate field')
+            result[key]=value
+        return result
+    def invalid(_value):raise ValueError('nonstandard JSON')
+    try:
+        async for chunk in request.stream():
+            if len(raw)+len(chunk)>2048:raise HTTPException(413,'selected-ticket request too large')
+            raw.extend(chunk)
+        try:data=json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
+        except (ValueError,UnicodeError,RecursionError):raise HTTPException(422,'invalid selected-ticket JSON') from None
+    finally:raw.clear()
+    if (not isinstance(data,dict) or set(data)!={'ticket_ids','confirm_source_reads'}
+            or data.get('confirm_source_reads') is not True):
+        raise HTTPException(403,'explicit selected-ticket source reads must be confirmed')
+    ids=data['ticket_ids']
+    if (not isinstance(ids,list) or not 1<=len(ids)<=8
+            or any(not isinstance(value,str) or not re.fullmatch(r'[1-9][0-9]{0,17}',value) for value in ids)
+            or len(set(ids))!=len(ids)):
+        raise HTTPException(422,'select 1-8 distinct numeric Zendesk ticket IDs')
+    result=await read_selected_zendesk_process(ids,confirmed=True)
+    response.headers['Cache-Control']='no-store'
+    return result
+
+
 @router.get("/v1/open-work/stripe-preview")
 async def stripe_open_work_candidates(request: Request, confirm_scan: bool = False,
                                       max_pages: int = 1,

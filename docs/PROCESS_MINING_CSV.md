@@ -16,6 +16,8 @@ and separate data/employee consent.
 Open the **Evidence** tab, find **Process mining · CSV event logs**, select
 a file, and click **Analyze selected CSV**. The workspace is headed **Process
 mining · event logs** and also supports [selected GitHub/Jira source projections](GITHUB_SELECTED_CASES_PROCESS.md#shared-analysis-and-design).
+An administrator-configured, separately opted-in [Zendesk ticket-audit connector](ZENDESK_SELECTED_CASES_PROCESS.md)
+adds explicitly selected source status histories to that same workspace.
 No file is uploaded on page open,
 on selection, or to any cloud service. The preview uses the authenticated
 local OWG API and runs entirely in memory.
