@@ -163,7 +163,7 @@
         y: p.y,
         width: 190,
         height: 64,
-        rx: activity.kind === "decision" ? 25 : 6,
+        rx: ["decision", "routing"].includes(activity.kind) ? 25 : 6,
         fill: "#f1f7f4",
         stroke: "#557e70",
         "stroke-width": 2,

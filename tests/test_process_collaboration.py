@@ -75,6 +75,30 @@ def grant(store,wid,*,members=None,actor=None,expected=1,new_owner=None):
         expected_access_revision=expected,members=members or [],new_owner_actor_id=new_owner,user_confirmed=True))
 
 
+def test_imported_exclusive_merge_remains_declared_scoped_and_reviewed_by_exact_revision(store):
+    from shared.process_bpmn_import import import_bpmn
+    from test_process_bpmn_import import branched
+    imported=import_bpmn(branched())['process_model']
+    saved=store.save(person(),SharedProcessWrite(title='Imported exclusive design',process_model=imported,
+        user_confirmed=True,organization_sharing_confirmed=True))
+    process=saved['process'];wid=process['workflow_id']
+    assert process['process_model']['baseline_coverage']=='user_declared_design'
+    assert process['process_model']['supporting_case_count']==0
+    assert next(node for node in process['process_model']['activities'] if node['label']=='Merge')['kind']=='routing'
+    assert saved['review']['status']=='needs_review'
+    assert not process['process_model']['execution_authorized']
+    # Source gateway IDs carry neither collaboration roles nor design approval.
+    assert store.detail(person('bob'),wid)['your_role']=='reader'
+    grant(store,wid,members=[{'actor_id':'bob','role':'reviewer'}])
+    store.review(person('bob'),wid,review(process))
+    assert store.implementation_state(person(),wid,revision=1)['current_independent_design_review'] is True
+    changed=json.loads(json.dumps(imported));changed['goal']='Review an updated imported design'
+    updated=store.save(person(),SharedProcessWrite(title='Imported exclusive design',process_model=changed,
+        expected_revision=1,user_confirmed=True,organization_sharing_confirmed=True),wid)
+    assert updated['process']['revision']==2 and updated['review']['status']=='needs_review'
+    assert store.implementation_state(person(),wid,revision=1)['current_independent_design_review'] is False
+
+
 def review(record,decision='reviewed_design',expected=0,**changes):
     return ProcessReviewWrite(revision=record['revision'],content_sha256=record['content_sha256'],
         decision=decision,expected_review_number=expected,user_confirmed=True,**changes)

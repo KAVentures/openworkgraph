@@ -15,7 +15,7 @@ class Element {
   scrollIntoView(){}
   walk(){return [this,...this.children.flatMap(n=>n.walk())];}
 }
-function fixture({shadowResponse}={}){
+function fixture({shadowResponse,bpmnResponse}={}){
   const document={readyState:'complete'};
   const root=new Element('main',document);root.id='panel-evidence';
   document.querySelector=()=>null;
@@ -27,6 +27,7 @@ function fixture({shadowResponse}={}){
   const window={__owgAuthReady:Promise.resolve(true),confirm:()=>true,owgProcessDesigner:{reviewedDraft:()=>draft}};
   const fetch=async(path,options)=>{
     requests.push({path,options});
+    if(path==='/v1/process-catalog/import-bpmn')return {ok:true,json:async()=>bpmnResponse()};
     const body=JSON.parse(options.body);
     if(path==='/v1/process-catalog/shadow-review')return {ok:true,json:async()=>shadowResponse(body)};
     if(body.expected_revision!==(saved?.revision||0))return {ok:false,json:async()=>({detail:'Revision changed'})};
@@ -95,6 +96,44 @@ test('no catalog requests until explicit action; edits invalidate review and sav
   assert.equal(second.process_model.owner_label,'Operations');
   assert(root.walk().some(n=>n.textContent==='Review process · revision 2'));
   assert.equal(document.getElementById('owgCatalogReviewed').checked,false);
+});
+
+test('BPMN preview is explicit and an imported draft still requires separate exact review and save',async()=>{
+ let value;
+ const {window,root,document,requests,button}=fixture({bpmnResponse:()=>value});
+ const model=window.__owgProcessCatalogModel.linearModel({as_is:{path:['Imported design'],supporting_case_count:0},
+   to_be:{proposed_path:['Review']},business_goal_declared_by_user:'Review imported design'});
+ model.baseline_source='user_declared';model.baseline_coverage='user_declared_design';
+ value={format:'openworkgraph.bpmn-draft-import.v1',process_model:model,source_sha256:'a'.repeat(64),
+   warnings:['rules_require_human_confirmation'],label_corrections:[],documentation_notes:[{source_node_id:'PRIVATE_XML',text:'<script>data_only()</script>'}]};
+ const file=root.walk().find(node=>node.attrs['aria-label']==='Choose BPMN process design');
+ file.files=[{size:100}];file.handlers.change();assert.equal(requests.length,0);
+ await button('Preview selected BPMN').handlers.click();assert.equal(requests.length,1);
+ assert.equal(requests[0].options.body,file.files[0]);assert.equal(requests[0].options.headers['Content-Type'],'application/bpmn+xml');
+ assert(root.walk().some(node=>node.textContent.includes('<script>data_only()</script>')));
+ await button('Open imported draft in editor').handlers.click();assert.equal(requests.length,1);
+ assert(root.walk().some(node=>node.textContent==='Imported declared design · no observed baseline'));
+ assert.equal(document.getElementById('owgCatalogReviewed').checked,false);
+ await button('Save new revision').handlers.click();assert.equal(requests.length,1);
+ document.getElementById('owgCatalogReviewed').checked=true;document.getElementById('owgCatalogReviewed').handlers.change();
+ await button('Save new revision').handlers.click();assert.equal(requests.length,2);
+ const body=JSON.parse(requests[1].options.body);
+ assert.equal(body.process_model.baseline_coverage,'user_declared_design');assert.equal(body.user_confirmed,true);
+ assert.equal(body.process_model.execution_authorized,false);
+ assert(!JSON.stringify(body).includes('PRIVATE_XML')&&!JSON.stringify(body).includes('<script>data_only()'));
+});
+
+test('BPMN preview arriving after file replacement cannot restore or open the earlier draft',async()=>{
+ let release;const gate=new Promise(resolve=>release=resolve);
+ const {root,document,requests,button}=fixture({bpmnResponse:()=>gate});
+ const file=root.walk().find(node=>node.attrs['aria-label']==='Choose BPMN process design');
+ file.files=[{size:100}];file.handlers.change();
+ const preview=button('Preview selected BPMN').handlers.click();await new Promise(resolve=>setImmediate(resolve));
+ file.files=[];file.handlers.change();release({format:'openworkgraph.bpmn-draft-import.v1',PRIVATE_OLD:'must not render'});
+ await preview;
+ assert.equal(document.getElementById('owgBPMNImportResult').children.length,0);
+ assert.equal(button('Open imported draft in editor'),undefined);assert.equal(requests.length,1);
+ assert.equal(button('Preview selected BPMN').disabled,true);
 });
 
 

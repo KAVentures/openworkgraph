@@ -3,6 +3,7 @@
   'use strict';
   let record=null, model=null, reviewed=false, busy=false, after='';
   let shadowGeneration=0;
+  let importGeneration=0,importDraft=null;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
@@ -170,10 +171,10 @@
     field(host,'Process title',record.title,value=>record.title=value);
     field(host,'Business goal',model.goal,value=>model.goal=value);
     field(host,'Process owner',model.owner_label,value=>model.owner_label=value);
-    host.appendChild(el('h4','AS-IS observed baseline'));
+    host.appendChild(el('h4',model.baseline_coverage==='user_declared_design'?'Imported declared design · no observed baseline':'AS-IS observed baseline'));
     host.appendChild(el('p',model.baseline_path.join(' → ')));
     const sourceName={selected_csv_variant:'Selected CSV variant',selected_observed_variant:'Selected desktop candidate',selected_source_audit:'Selected source audit',user_declared:'User-declared baseline'}[model.baseline_source];
-    const coverageName={complete_supplied_path:'Complete supplied path',bounded_candidate_sequence:'Bounded observed sequence',partial_source_audit:'Partial source audit'}[model.baseline_coverage||'complete_supplied_path'];
+    const coverageName={complete_supplied_path:'Complete supplied path',bounded_candidate_sequence:'Bounded observed sequence',partial_source_audit:'Partial source audit',user_declared_design:'User-declared design without observed executions'}[model.baseline_coverage||'complete_supplied_path'];
     host.appendChild(el('p','Baseline: '+sourceName+' · '+coverageName+' · '+model.supporting_case_count+' '+
       (model.baseline_support_unit==='candidate_executions'?'candidate executions':'supplied cases')+'. Task boundaries and business case identity are unverified.'));
     host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
@@ -183,7 +184,7 @@
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
-      field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','start','end']);
+      field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','routing','start','end']);
       field(row,'Implementation '+activity.id,activity.implementation,value=>activity.implementation=value,['unmapped','api','deterministic','ai_agent','computer_use','human']);
       const responsibility=field(row,'Responsibility '+activity.id,activity.responsibility_label||'',value=>activity.responsibility_label=value);
       responsibility.maxLength=120;
@@ -366,11 +367,63 @@
     host.appendChild(el('p',result.processes_without_scenarios_in_scanned_records+' processes have no scenario. '+
       (result.catalog_scan_truncated||result.ranked_results_truncated?'This ranked view is bounded; additional records are omitted.':'All local reviewed-knowledge pages were considered.')));
   }
+  function installBPMNImport(parent){
+    const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
+    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events and exclusive choices/merges. Parallel/inclusive gateways, subprocesses, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
+    file.setAttribute('aria-label','Choose BPMN process design');
+    const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;
+    file.addEventListener('change',()=>{importGeneration++;importDraft=null;preview.disabled=!file.files?.length;
+      document.getElementById('owgBPMNImportResult').replaceChildren();});
+    const output=el('div');output.id='owgBPMNImportResult';section.append(file,preview,output);parent.appendChild(section);
+  }
+  async function previewBPMN(input){
+    const file=input.files?.[0];if(!file)return;
+    if(file.size>128*1024)throw new Error('BPMN exceeds the 128 KiB limit.');
+    const attempt=++importGeneration,control=document.getElementById('owgBPMNPreview');control.disabled=true;
+    importDraft=null;const host=document.getElementById('owgBPMNImportResult');host.replaceChildren(el('p','Inspecting BPMN as data; nothing is saved…'));
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/process-catalog/import-bpmn',{
+        method:'POST',headers:{'Content-Type':'application/bpmn+xml'},body:file,cache:'no-store'});
+      const value=await response.json().catch(()=>({}));
+      if(attempt!==importGeneration)return;
+      if(!response.ok)throw new Error(String(value.detail||'BPMN import failed'));
+      if(value.format!=='openworkgraph.bpmn-draft-import.v1')throw new Error('Unexpected BPMN preview response');
+      importDraft=value;
+      host.replaceChildren(el('h4','Unreviewed BPMN draft'),el('p',value.process_model.activities.length+' nodes · '+value.process_model.transitions.length+
+        ' transitions · '+value.process_model.business_rules.length+' unconfirmed rules. Source SHA256 '+value.source_sha256));
+      host.appendChild(el('p','This is declared design structure, with no observed executions, source outcomes, approved policy or execution rights. Typed tasks have no imported tool mappings. All rule text is untrusted and unevaluated.'));
+      const warnings=el('ul');value.warnings.forEach(text=>warnings.appendChild(el('li',text.replaceAll('_',' '))));host.appendChild(warnings);
+      if(value.label_corrections.length){
+        host.appendChild(el('h4','Labels requiring correction'));
+        value.label_corrections.forEach(item=>host.appendChild(el('p',item.activity_id+': '+(item.source_label||'(missing label)')+
+          (item.source_label_truncated?' [truncated]':'')+' → placeholder label. Review and rename in the editor.')));
+      }
+      if(value.documentation_notes.length){
+        const notes=el('details');notes.appendChild(el('summary','Source documentation · not saved automatically'));
+        value.documentation_notes.forEach(item=>notes.appendChild(el('p',(item.source_node_id||'Process')+': '+item.text+(item.text_truncated?' [truncated]':''))));host.appendChild(notes);
+      }
+      if(window.owgProcessGraph)host.appendChild(window.owgProcessGraph.draw(value.process_model));
+      host.appendChild(button('Open imported draft in editor',()=>openImportedDraft(value)));
+    }catch(error){if(attempt===importGeneration){host.replaceChildren();status(error.message);}}
+    finally{if(attempt===importGeneration)control.disabled=!input.files?.length;}
+  }
+  function openImportedDraft(value){
+    if(busy)throw new Error('Wait for the current process request.');
+    if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
+    if(!replaceDraft())return;
+    record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
+    model=copy(value.process_model);record.process_model=copy(model);reviewed=false;renderEditor();
+    status('Opened an unsaved declared BPMN design. Review its goal, labels, branch rules and source documentation before saving. No observations, permissions or executable implementations were imported.');
+    document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
+  }
   function install(){
     const panel=document.getElementById('panel-evidence');if(!panel||document.getElementById('owgProcessCatalog'))return;
     const host=el('section');host.id='owgProcessCatalog';host.className='card';
     host.append(el('h2','Process catalog · reviewed designs'),el('p','Save a reviewed process from the designer, or reopen a saved revision. Source event logs remain separate.'));
     host.appendChild(button('Load saved designs',()=>inventory()));
+    installBPMNImport(host);
     const list=el('div');list.id='owgCatalogList';host.appendChild(list);
     let currency='USD';field(host,'Backlog currency',currency,value=>currency=value,['USD','EUR','GBP','SEK']);
     host.appendChild(button('Review improvement backlog',()=>backlog(currency)));
