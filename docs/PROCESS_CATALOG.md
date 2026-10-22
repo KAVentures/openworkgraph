@@ -148,6 +148,10 @@ fresh preconditions, conditional writes, idempotency and outcome association.
 Input-schema fingerprints from inspection are checked against current metadata
 before execution; changed schemas stop calls pending review. These fingerprints
 are content identifiers, not signed approval or proof of provider semantics.
+Inspected catalogs are capped by their serialized 256 KiB loader limit, including
+Unicode escaping and formatting; omitted tools are counted. Proposed binding
+files must fit the executor's 64 KiB limit. Oversized outputs stop before file
+creation, and exclusive writes preserve existing configuration on all platforms.
 
 The project also includes a [reviewed-case shadow evaluator](PROCESS_SHADOW_EVALUATION.md).
 It compares captured plans offline or explicitly runs the no-tools planner for
