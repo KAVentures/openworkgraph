@@ -14,13 +14,13 @@ from server.local_auth import create_dashboard_session
 
 @app.middleware('http')
 async def inspect_owned_synthetic_preview(request, call_next):
-    if request.url.path == '/v1/process-mining/preview' and request.method == 'POST':
+    if request.url.path in {'/v1/process-mining/preview','/v1/process-mining/datasets'} and request.method == 'POST':
         body=await request.body()
         # Test-only receipt of the actual incoming bytes. Retain only the header
         # and marker presence, never event/case payloads or credentials.
-        (scratch/'last-preview-shape.json').write_text(json.dumps({
+        (scratch/('last-preview-shape.json' if request.url.path.endswith('/preview') else 'last-retention-shape.json')).write_text(json.dumps({
             'header':body.partition(b'\n')[0].decode('utf-8',errors='replace').rstrip('\r'),
-            'unselected_test_markers_seen':b'UNSELECTED_SECRET' in body or '雪'.encode() in body,
+            'unselected_test_markers_seen':any(marker in body for marker in (b'UNSELECTED_SECRET',b'ALICE_SECRET',b'BOB_SECRET',b'SALES_SECRET',b'OPS_SECRET','雪'.encode())),
         }),encoding='utf-8')
     return await call_next(request)
 

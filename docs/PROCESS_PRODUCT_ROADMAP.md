@@ -12,8 +12,8 @@ or full competitor parity.
 
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
-| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared organization/employee cohort filtering and larger-scale interactive analysis across evidence sources |
-| Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
+| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
+| Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories, supplied-label change signals inside declared CSV cases | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266) with offline column mapping/minimization for comma/semicolon/tab exports, single/selected Jira audits (#270/#272), selected GitHub review/lifecycle, opted-in Zendesk status audits and separately selected Stripe invoice lifecycle fields in the same explorer, full-log structural conformance, explicitly consented current-source predicate comparisons, explicitly retained local snapshots with complete case/event queries | Additional source adapters, continuous/large-volume coverage and historical-case business attributes and source-authoritative business-policy conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules with bounded structured predicates and per-activity responsibilities, supported BPMN draft import with exclusive merge routing and retained manual guards, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Parallel/interprocess semantics, real-time collaboration, richer rule clarification and business-policy approval lifecycle |
@@ -96,3 +96,9 @@ outcomes and automatic process-model changes remain open.
 recorder heartbeats with identity/freshness checks. Evidence age remains a
 separate signal; missing reports do not establish stopped recorders or unhealthy
 connectors. The admin view provides no remote recording controls.
+
+[Participant/team cohorts](PROCESS_PARTICIPANT_COHORTS.md) connect explicitly
+selected log labels to whole-case maps and timelines. Native identifiers in
+those columns are replaced before upload; a browser-only lookup helps users
+identify aliases while their selected file is loaded. Labels are not verified
+people, handoffs or membership, and are never joined across imports.
