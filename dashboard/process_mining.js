@@ -35,8 +35,8 @@
     const panel=document.getElementById('panel-evidence');
     if(!panel||document.getElementById('owgProcessCSV'))return;
     const card=make('section',null,'card');card.id='owgProcessCSV';
-    card.appendChild(make('h2','Process mining · CSV event logs'));
-    card.appendChild(make('p','Import a small event log to inspect complete case paths, transitions, elapsed durations and repeated activities. This is a one-time local preview; nothing is saved or sent to an AI.','muted'));
+    card.appendChild(make('h2','Process mining · event logs'));
+    card.appendChild(make('p','Import a small CSV log or open an explicitly selected source projection to inspect supplied paths, transitions, elapsed durations and repeated activities. Preview stays local; nothing is saved or sent to an AI.','muted'));
     const p=make('p','CSV header: case_id,activity,timestamp (optional source). Timestamps must include a UTC offset, e.g. 2026-10-20T10:00:00Z. Only use files you are authorized to analyze. Case IDs are replaced with temporary labels; activity names are displayed as supplied.','muted');
     card.appendChild(p);
     const wrap=make('div',null,'owg-process-controls');
@@ -249,7 +249,8 @@
   function render(){
     const host=document.getElementById('owgProcessResults');if(!host||!report)return;
     host.replaceChildren();
-    host.appendChild(make('h3','Full imported log'));
+    host.appendChild(make('h3',report.source_preview?'Full supplied source projection':'Full imported log'));
+    if(report.source_preview)host.appendChild(make('p','Bounded provider projection: supported source events may omit earlier work, other activities or later state changes. Cases label selected references, not inferred cross-record business cases. This source preview cannot be retained as an imported CSV.','muted'));
     const stats=make('div',null,'owg-pmetrics');
     stats.append(metric('Cases',report.case_count),metric('Events',report.input_rows),
       metric('Activities',report.activity_count),metric('Observed variants',report.variant_count),
@@ -286,6 +287,14 @@
     if(variants.length){
       const selected=variants[Math.min(activeVariant,variants.length-1)];
       const edit=button('Design improved TO-BE workflow',()=>{
+        if(report.source_preview){
+          try{
+            if(!window.owgProcessCatalog?.draftObserved)throw new Error('Process catalog unavailable. Reopen the local dashboard.');
+            window.owgProcessCatalog.draftObserved({path:selected.observed_path,count:selected.case_count,
+              basis:'selected_source_audit',partial:true,evidenceRefs:[]});
+          }catch(error){setStatus(error.message);}
+          return;
+        }
         if(!window.owgProcessDesigner?.open) {
           setStatus('Process designer unavailable. Reopen the local dashboard.');
           return;
@@ -374,8 +383,8 @@
     });
     table.append(head,body);wrapper.appendChild(table);host.appendChild(wrapper);
     if(edges.length>64)host.appendChild(make('p','Only the first 64 transition types are shown.','muted'));
-    host.appendChild(make('p','Transition gaps use all matching events in this variant. Native case IDs and source values are never returned. '+(report.import_retained?'This snapshot was explicitly retained locally.':'This CSV preview is not saved.'),'muted'));
-    window.owgOpportunityReview?.render?.(report);
+    host.appendChild(make('p','Transition gaps use all matching events in this variant. Native case IDs and source values are never returned. '+(report.import_retained?'This snapshot was explicitly retained locally.':report.source_preview?'This partial source projection is not saved.':'This CSV preview is not saved.'),'muted'));
+    if(!report.source_preview)window.owgOpportunityReview?.render?.(report);
   }
   function renderObservedMap(host){
     if(!window.owgProcessGraph?.drawObserved)return;
@@ -422,6 +431,19 @@
     const label=document.getElementById('owgProcessReference');
     if(label)label.textContent=reference?'Next analysis compares with saved process '+reference.workflow_id+' revision '+reference.revision+'. Existing results are unchanged until Analyze.':'No saved reference selected.';
   }
-  window.owgProcessMining={setReference};
+  function showSourcePreview(value){
+    if(!value||value.format!=='openworkgraph.process-mining-csv-preview.v1'||!Array.isArray(value.variants))
+      throw new Error('A bounded analyzed source projection is required.');
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before opening this source projection?'))return false;
+    generation++;analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
+    const file=document.getElementById('owgProcessFile');if(file)file.value='';
+    const control=document.getElementById('owgProcessAnalyze');if(control)control.disabled=true;
+    report={...value,source_preview:true};activeVariant=0;activeActivity=null;render();retentionState(true);
+    setStatus('Opened a bounded source projection. Coverage is partial; no CSV, source records or report were retained.');
+    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+    document.getElementById('owgProcessCSV')?.scrollIntoView({block:'start'});
+    return true;
+  }
+  window.owgProcessMining={setReference,showSourcePreview};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();

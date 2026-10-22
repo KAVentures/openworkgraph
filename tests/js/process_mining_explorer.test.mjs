@@ -14,6 +14,7 @@ class Element {
   addEventListener(name,handler) {this.handlers[name]=handler;}
   querySelector() {return null;}
   focus() {this.document.activeElement=this;}
+  scrollIntoView() {}
   get text() {return this.textContent+this.children.map(child=>child.text).join(' ');}
   walk() {return [this,...this.children.flatMap(child=>child.walk())];}
 }
@@ -21,15 +22,16 @@ function setup(report) {
   const document={readyState:'complete',activeElement:null};
   const root=new Element('main',document);root.id='panel-evidence';
   document.getElementById=id=>root.walk().find(element=>element.id===id);
+  document.querySelector=()=>null;
   document.createElement=tag=>new Element(tag,document);
   document.createElementNS=(_,tag)=>new Element(tag,document);
   const calls=[];
   const window={__owgAuthReady:Promise.resolve()};
   vm.runInNewContext(fs.readFileSync(new URL('../../dashboard/process_mining.js',import.meta.url),'utf8'),{
-    document,window,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>report};},
+    document,window,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>typeof report==='function'?report():report};},
   });
   const find=(tag,text)=>root.walk().find(element=>element.tag===tag&&element.textContent===text);
-  return {document,root,calls,find};
+  return {document,root,calls,find,window};
 }
 const edge=(from,to,count,gap)=>({from,to,transition_count:count,case_count:1,median_elapsed_gap_seconds:gap,max_elapsed_gap_seconds:gap});
 const example=(label,steps)=>({case:label,event_count:steps.length,duration_seconds:60,
@@ -71,5 +73,34 @@ test('variant selection scopes transitions and case examples; repeated SVG nodes
   assert(!root.text.includes('Case 1'));assert(root.text.includes('Case 2'));
   assert(root.text.includes('5.0 min'));
   assert.equal(root.walk().filter(e=>e.tag==='tbody')[0].children.length,1);
+  assert.equal(calls.length,1);
+});
+
+test('source projections reuse analysis without I/O or retention and draft with partial source provenance',async()=>{
+  const projection={format:'openworkgraph.process-mining-csv-preview.v1',case_count:1,input_rows:2,activity_count:2,variant_count:1,
+    metrics:{},transitions:[edge('Review','Merged',1,60)],variants:[{case_count:1,observed_path:['Review','Merged'],
+    activities:[{activity:'Review',event_count:1,case_count:1}],transitions:[edge('Review','Merged',1,60)],
+    case_examples:[example('Case 1',['Review','Merged'])]}]};
+  let resolveCSV;const pendingCSV=new Promise(resolve=>resolveCSV=resolve);
+  const {window,document,root,calls,find}=setup(()=>pendingCSV);
+  document.getElementById('owgProcessFile').files=[{size:100}];
+  document.getElementById('owgProcessFile').handlers.change();
+  const pending=find('button','Analyze selected CSV').handlers.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.length,1);
+  let drafted;
+  window.owgProcessCatalog={draftObserved:value=>drafted=value};
+  window.owgProcessDesigner={open:()=>assert.fail('Source histories must not acquire CSV provenance')};
+  assert.equal(window.owgProcessMining.showSourcePreview(projection),true);
+  assert(root.text.includes('Full supplied source projection'));
+  assert(document.getElementById('owgLogSave').disabled);
+  document.getElementById('owgLogConsent').checked=true;document.getElementById('owgLogConsent').handlers.change();
+  assert(document.getElementById('owgLogSave').disabled);
+  find('button','Design improved TO-BE workflow').handlers.click();
+  assert.equal(drafted.basis,'selected_source_audit');assert.equal(drafted.partial,true);
+  assert.equal(drafted.path.join(','),'Review,Merged');
+  resolveCSV({...projection,case_count:999});await pending;
+  assert(root.text.includes('Full supplied source projection'));
+  assert(!root.text.includes('999'));
   assert.equal(calls.length,1);
 });

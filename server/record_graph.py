@@ -12,6 +12,9 @@ import json
 import re
 import shutil
 import subprocess
+import hashlib
+import hmac
+import secrets
 from typing import Any, Callable
 
 from .local_reference_lookup import resolve_resource_reference
@@ -29,6 +32,21 @@ _ALLOWED_PR_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
 _MAX_SOURCE_ROWS = 25_000
 _MAX_TIMELINE = 150
 _MAX_REVIEWS = 40
+_AUDIT_SECRET = secrets.token_bytes(32)
+
+
+def _audit_ref(resource: str, identity: str) -> str:
+    return 'source_event:' + hmac.new(_AUDIT_SECRET, (resource+'|'+identity).encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _source_timestamp(value: Any) -> str:
+    if not isinstance(value, str) or len(value)>64:
+        return ''
+    try:
+        at=datetime.fromisoformat(value.replace('Z','+00:00'))
+        return at.astimezone(timezone.utc).isoformat() if at.tzinfo else ''
+    except (ValueError,OverflowError):
+        return ''
 
 
 def _checked_at() -> str:
@@ -92,6 +110,8 @@ def _gh_pr_snapshot(
     state = str(report.get("state") or "").upper()
     if state not in _ALLOWED_PR_STATES:
         return _source_unknown("unknown_github_pr_state")
+    if report.get('mergedAt') not in (None,'') and not _source_timestamp(report.get('mergedAt')):
+        return _source_unknown('invalid_github_merge_timestamp')
     merged = bool(report.get("mergedAt")) or state == "MERGED"
     if merged and state not in {"CLOSED", "MERGED"}:
         return _source_unknown("conflicting_github_pr_state")
@@ -121,6 +141,35 @@ def _gh_pr_snapshot(
             "review_text_withheld": True,
         })
     safe_reviews.sort(key=lambda x: x["observed_at"])
+    review_projection, conflicting_reviews = {}, set()
+    for item in reviews[:_MAX_REVIEWS]:
+        if not isinstance(item,dict):
+            continue
+        identifier=item.get('id'); stamp=_source_timestamp(item.get('submittedAt'))
+        decision=item.get('state')
+        # Dismissal changes a review's current state without providing the
+        # dismissal timestamp here; pending reviews have no submission event.
+        # Never invent either action at the original submission timestamp.
+        if (not isinstance(identifier,str) or not re.fullmatch(r'[A-Za-z0-9_+=/-]{1,160}',identifier)
+                or identifier in conflicting_reviews):
+            continue
+        if not stamp or not isinstance(decision,str) or decision not in {'APPROVED','CHANGES_REQUESTED','COMMENTED'}:
+            review_projection.pop(identifier,None);conflicting_reviews.add(identifier)
+            continue
+        projected={'action':{'APPROVED':'review_approved','CHANGES_REQUESTED':'review_changes_requested',
+            'COMMENTED':'review_commented'}[decision], 'observed_at':stamp,
+            'source_event_ref':_audit_ref(ref,'review:'+identifier)}
+        if identifier in review_projection and review_projection[identifier]!=projected:
+            review_projection.pop(identifier);conflicting_reviews.add(identifier)
+        else:
+            review_projection[identifier]=projected
+    process_events=list(review_projection.values())
+    terminal_stamp=_source_timestamp(report.get('mergedAt') if merged else report.get('closedAt') if state=='CLOSED' else None)
+    if terminal_stamp:
+        action='pull_request_merged' if merged else 'pull_request_closed_unmerged'
+        process_events.append({'action':action,'observed_at':terminal_stamp,
+                               'source_event_ref':_audit_ref(ref,action+':'+terminal_stamp)})
+    process_events.sort(key=lambda row:row['observed_at'])
     return {
         "availability": "source_reported",
         "provider": "github",
@@ -130,6 +179,11 @@ def _gh_pr_snapshot(
         "verified_at": _checked_at(),
         "review_audit_events": safe_reviews,
         "review_audit_events_truncated": len(reviews) > _MAX_REVIEWS,
+        'process_audit_events':process_events,
+        'process_audit_complete':False,
+        'process_audit_scope':'bounded_review_submissions_and_current_lifecycle_timestamps',
+        'process_audit_event_refs_ephemeral':True,
+        'process_audit_is_complete_case_history':False,
         "review_authors_included": False,
         "comments_and_values_included": False,
         "verified_business_outcome": False,
@@ -183,6 +237,7 @@ def record_graph(
     include_source_status: bool = False, source_event_limit: int = _MAX_SOURCE_ROWS,
     _raw_events: list[dict[str, Any]] | None = None,
     source_reader: Callable[[str], dict[str, Any]] | None = None,
+    required_source_type: tuple[str, str, str] | None = None,
 ) -> dict[str, Any]:
     """Read the per-record OWG evidence timeline; optionally join live source data.
 
@@ -239,7 +294,9 @@ def record_graph(
     } for row in matched[:_MAX_TIMELINE]]
     source = _source_unknown("source_refresh_not_requested")
     if include_source_status:
-        if truncated:
+        if required_source_type is not None and identity != required_source_type:
+            source = _source_unknown('selected_source_type_not_observed')
+        elif truncated:
             # A hidden older observation could contradict the apparent record
             # identity. Refuse to authorize a provider read from partial proof.
             source = _source_unknown("record_evidence_window_truncated")

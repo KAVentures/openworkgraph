@@ -90,6 +90,17 @@
     });
   }
 
+  function sourceExplorerButton(host,process,label){
+    const open=document.createElement('button');open.type='button';open.className='secondary';
+    open.textContent='Explore '+label+' source process';
+    open.addEventListener('click',()=>{
+      try{
+        if(!window.owgProcessMining?.showSourcePreview)throw new Error('Process explorer unavailable. Reopen the local dashboard.');
+        window.owgProcessMining.showSourcePreview(process);
+      }catch(error){host.appendChild(document.createTextNode(String(error.message||'Source projection unavailable.')));}
+    });host.appendChild(open);
+  }
+
   function renderRecordLanes(){
     const host=ensureCard()?.querySelector('#workflowRecordCaseLanes');
     if(!host) return;
@@ -108,6 +119,8 @@
       const jiraOption=item.provider==='jira'
         ? '<button class="secondary" type="button" data-jira-process="'+index+'">Read opted-in Jira audit</button><div role="status" data-jira-process-result="'+index+'" class="muted" style="margin-top:7px"></div>'
         : '';
+      const githubOption=item.provider==='github'&&item.resource_kind==='pull_request'
+        ? '<button class="secondary" type="button" data-github-process="'+index+'">Read opted-in GitHub review history</button><div role="status" data-github-process-result="'+index+'" class="muted" style="margin-top:7px"></div>' : '';
       const compareOption=item.provider==='jira'
         ? '<label style="display:block;margin:8px 0"><input type="checkbox" data-jira-batch-select="'+index+'"> Include this observed Jira record in manual source comparison</label>'
         : '';
@@ -117,7 +130,7 @@
         Number(item.observed_actor_count||0)+' actors, '+Number(item.observed_session_count||0)+' sessions</span></summary>'+
         '<p class="muted">Exact opaque reference: <code>'+esc(item.resource_ref||'')+
         '</code>. No cross-record join, verified handoff or successful business outcome is implied.</p>'+
-        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+compareOption+
+        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+githubOption+compareOption+
         '</details>';
     }).join('');
     if(rows.filter(item=>item.provider==='jira').length>=2){
@@ -162,6 +175,7 @@
           output.appendChild(info);
           const process=data.process;
           if(process){
+            sourceExplorerButton(output,process,'Jira');
             const metrics=document.createElement('p');
             metrics.textContent=String(process.variant_count||0)+' observed variants across '+
               String(process.case_count||0)+' distinct source issues. This is not a joined cross-issue business case.';
@@ -221,6 +235,7 @@
           }
           const process=data.process;
           result.replaceChildren();
+          sourceExplorerButton(result,process,'Jira');
           result.appendChild(document.createTextNode(
             Number(process.input_rows||0)+' Jira-audited status/assignee events. '+
             (data.source_audit_complete?'Source audit page complete.':'Source audit is partial; earlier changes may be missing.')
@@ -238,6 +253,27 @@
         }catch(error){
           result.textContent=String(error?.message||'The source audit was unavailable.');
         }finally{button.disabled=false;}
+      };
+    });
+    host.querySelectorAll('[data-github-process]').forEach(button=>{
+      button.onclick=async()=>{
+        const item=rows[Number(button.dataset.githubProcess||0)];
+        const result=host.querySelector('[data-github-process-result="'+button.dataset.githubProcess+'"]');
+        if(!item||!result||item.provider!=='github'||item.resource_kind!=='pull_request')return;
+        if(!confirm('Read a bounded review/lifecycle projection for this exact observed pull request? This requires your separate existing GitHub source-status opt-in and local GitHub CLI login.'))return;
+        button.disabled=true;result.textContent='Reading selected GitHub source history…';
+        try{
+          await window.__owgAuthReady;
+          const response=await fetch('/v1/process-mining/github-selected-cases',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({resource_refs:[item.resource_ref],confirm_source_reads:true}),cache:'no-store'});
+          if(!response.ok)throw new Error('GitHub source history unavailable ('+response.status+').');
+          const data=await response.json();result.replaceChildren();
+          result.appendChild(document.createTextNode(data.process?
+            data.process.input_rows+' supported review/lifecycle events. This is a partial source projection, not a complete business-case history.':
+            'No eligible source history is available. Missing data does not prove missing work.'));
+          if(data.process)sourceExplorerButton(result,data.process,'GitHub');
+        }catch(error){result.textContent=String(error.message||'GitHub source projection unavailable.');}
+        finally{button.disabled=false;}
       };
     });
   }
