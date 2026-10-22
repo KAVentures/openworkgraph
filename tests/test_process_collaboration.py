@@ -408,3 +408,56 @@ def test_structured_predicate_versions_preserve_definition_and_require_new_peer_
     assert second['process']['process_model']['business_rules'][0]['predicate']['conditions'][0]['expected'] is False
     store.review(person('bob'),wid,review(second['process']))
     assert store.implementation_state(person(),wid,revision=2)['current_independent_design_review']
+
+
+def test_shared_case_rule_checks_are_ephemeral_exact_scoped_and_minimally_audited(store):
+    from shared.process_rule_checks import RuleCaseBatch
+    declared=model().model_dump()
+    declared['business_rules']=[{'id':'approval','text':'PRIVATE_RULE_TEXT','user_confirmed':True,
+        'predicate':{'match':'all','conditions':[{'path':'/status','operator':'eq','expected':'PRIVATE_APPROVED'}]}}]
+    declared['transitions'][0]['rule_id']='approval'
+    first=store.save(person(),SharedProcessWrite(title='Approval',process_model=declared,
+        user_confirmed=True,organization_sharing_confirmed=True));wid=first['process']['workflow_id']
+    batch=RuleCaseBatch.model_validate({'cases':[{'case_id':'case_1','facts':{'status':'PRIVATE_APPROVED','unused':'PRIVATE_FACT'}}]})
+    before=store.detail(person(),wid)
+    report=store.check_declared_rules(person('bob'),wid,1,batch)
+    assert report['rule_result_counts']=={'matched':1} and 'PRIVATE_' not in json.dumps(report)
+    assert report['organization_id']=='acme' and report['minimal_inspection_audit_persisted'] is True
+    assert report['facts_retained'] is False and report['comparison_report_retained'] is False
+    assert report['active_independently_reviewed_revision_at_check'] is False
+    assert store.detail(person(),wid)==before
+    audit=[row for row in store.db.audit_rows('acme') if row['action']=='process.declared_rules.checked']
+    assert len(audit)==1 and audit[0]['details']=={'workflow_id':wid,'revision':1,'case_count':1}
+    assert 'PRIVATE_' not in json.dumps(audit)
+    changed=json.loads(json.dumps(declared));changed['business_rules'][0]['predicate']['conditions'][0]['expected']='other'
+    store.save(person(),SharedProcessWrite(title='Approval',process_model=changed,expected_revision=1,
+        user_confirmed=True,organization_sharing_confirmed=True),wid)
+    old=store.check_declared_rules(person(),wid,1,batch)
+    assert old['rule_result_counts']=={'matched':1} and old['latest_revision_at_check']==2
+    assert old['references_latest_revision_at_check'] is False
+    assert store.check_declared_rules(person(),wid,2,batch)['rule_result_counts']=={'not_matched':1}
+    for principal in [person('bob',org='elsewhere'),person(scopes=frozenset())]:
+        with pytest.raises(ProcessCollaborationError):store.check_declared_rules(principal,wid,1,batch)
+
+
+def test_shared_case_rule_api_requires_delegated_row_access_and_explicit_raw_fact_transfer(tmp_path):
+    with TestClient(app(tmp_path)) as client:
+        headers={'Authorization':'Bearer alice'}
+        saved=client.post('/v1/human/processes',headers=headers,json=write().model_dump()).json()
+        wid=saved['process']['workflow_id'];path=f'/v1/human/processes/{wid}/check-rules?revision=1'
+        body={'cases':[{'case_id':'case_1','facts':{'unused':'PRIVATE_FACT'}}]}
+        auth={**headers,'X-OWG-Case-Facts-Authorized':'true'}
+        assert client.post(path,json=body).status_code==401
+        assert client.post(path,json=body,headers=headers).status_code==403
+        for token,code in [('admin',401),('no-process',403),('foreign',404)]:
+            assert client.post(path,json=body,headers={**auth,'Authorization':'Bearer '+token}).status_code==code
+        response=client.post(path,json=body,headers={**auth,'Authorization':'Bearer reader'})
+        assert response.status_code==200,response.text
+        assert response.headers['cache-control']=='no-store' and 'PRIVATE_' not in response.text
+        assert client.post(path,content=b'x'*(128*1024+1),headers={**auth,'Content-Type':'application/json'}).status_code==413
+        assert client.post(path,content=b'{"cases":[],"cases":[]}',headers={**auth,'Content-Type':'application/json'}).status_code==422
+        assert client.post(path,json={'cases':[{'case_id':'case_1','facts':{'value':1e100}}]},headers=auth).status_code==422
+        assert client.post(path.replace('revision=1','revision=9'),json=body,headers=auth).status_code==404
+    import sqlite3
+    with sqlite3.connect(tmp_path/'api.db') as conn:
+        assert 'PRIVATE_FACT' not in '\n'.join(conn.iterdump())

@@ -250,6 +250,15 @@
         <button id="clearShadow">Clear shadow review</button>
         <div id="shadowResult" role="status"></div>
       </fieldset>
+      <fieldset>
+        <legend>Check declared rule conditions</legend>
+        <p>Send an authorized case-facts JSON file to this organization's Gateway for an ephemeral check against the selected saved revision. Fact values are not retained or sent to a model provider. Results describe supplied facts, not verified policy compliance or permission to execute.</p>
+        <label>Authorized shared case-facts JSON<input id="ruleFactsFile" type="file" accept=".json,application/json" /></label>
+        <label><input id="ruleFactsConsent" type="checkbox" />I authorize sending this selected case-facts file to this organization's Gateway.</label>
+        <button id="checkRuleFacts" disabled>Send facts for declared rule checks</button>
+        <button id="clearRuleFacts">Clear case-fact results and selected file</button>
+        <div id="ruleFactsResult" role="status"></div>
+      </fieldset>
       <div class="grid">
         <fieldset>
           <legend>Revision review</legend>
@@ -301,7 +310,14 @@
         "use strict";
         let candidateEditing = false;
         let opportunityReport = null;
-        let shadowGeneration = 0;
+        let shadowGeneration = 0, ruleFactsGeneration = 0;
+        function clearRuleFacts() {
+          ruleFactsGeneration++;
+          $("ruleFactsFile").value="";
+          $("ruleFactsConsent").checked=false;
+          $("checkRuleFacts").disabled=true;
+          $("ruleFactsResult").replaceChildren();
+        }
         const shadowReasons = new Set([
           "matches_reviewed_expectation",
           "invalid_or_stale_plan",
@@ -460,7 +476,7 @@
             busy = false;
           }
         }
-        async function call(path, body) {
+        async function call(path, body, options={}) {
           if (!credential)
             throw new Error("Connect your delegated identity first.");
           const response = await fetch(path, {
@@ -468,8 +484,9 @@
             headers: {
               Authorization: credentialScheme + " " + credential,
               ...(body ? { "Content-Type": "application/json" } : {}),
+              ...(options.headers || {}),
             },
-            ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+            ...(body ? { method: "POST", body: options.raw ? body : JSON.stringify(body) } : {}),
           });
           if (!response.ok) {
             const data = await response.json().catch(() => ({}));
@@ -483,6 +500,7 @@
         }
         function clear() {
           clearShadowReview();
+          clearRuleFacts();
           candidateEditing = false;
           $("reviewed").disabled = false;
           $("sharing").disabled = false;
@@ -989,6 +1007,7 @@
         }
         function draftChanged() {
           clearShadowReview();
+          clearRuleFacts();
           $("reviewed").checked = false;
           $("sharing").checked = false;
         }
@@ -1435,6 +1454,7 @@
         $("revise").onclick = () =>
           run(() => {
             clearShadowReview();
+            clearRuleFacts();
             if (!selected?.permissions.edit)
               throw new Error("Open a current process you can edit.");
             candidate = {
@@ -1448,6 +1468,7 @@
           });
         $("file").addEventListener("change", async () => {
           clearShadowReview();
+          clearRuleFacts();
           candidateEditing = false;
           $("reviewed").disabled = false;
           $("sharing").disabled = false;
@@ -1547,6 +1568,7 @@
         }
         function render(data) {
           clearShadowReview();
+          clearRuleFacts();
           selected = data;
           members = data.members.map((m) => ({ ...m }));
           $("selected").hidden = false;
@@ -1635,6 +1657,44 @@
             );
           renderMembers();
         }
+        $("ruleFactsFile").addEventListener("change", () => {
+          ruleFactsGeneration++;$("ruleFactsResult").replaceChildren();
+          $("ruleFactsConsent").checked=false;$("checkRuleFacts").disabled=true;
+        });
+        $("ruleFactsConsent").addEventListener("change", () => {
+          ruleFactsGeneration++;$("ruleFactsResult").replaceChildren();
+          $("checkRuleFacts").disabled=!$("ruleFactsConsent").checked||!$("ruleFactsFile").files.length;
+        });
+        $("clearRuleFacts").onclick=clearRuleFacts;
+        $("checkRuleFacts").onclick=()=>run(async()=>{
+          const selection=selected,source=$("ruleFactsFile").files[0];
+          if(!selection||!source||source.size>128*1024||!$("ruleFactsConsent").checked)
+            throw new Error("Select and authorize a case-facts JSON file of at most 128 KiB.");
+          const generation=++ruleFactsGeneration;$("ruleFactsResult").replaceChildren();
+          const result=await call("/v1/human/processes/"+encodeURIComponent(selection.process.workflow_id)+
+            "/check-rules?"+new URLSearchParams({revision:selection.process.revision}),source,
+            {raw:true,headers:{"X-OWG-Case-Facts-Authorized":"true"}});
+          if(generation!==ruleFactsGeneration||selected!==selection)return;
+          if(result.format!=="openworkgraph.declared-rule-case-check.v1")throw new Error("Unexpected rule-check response.");
+          const host=$("ruleFactsResult"),counts=result.rule_result_counts||{};
+          host.appendChild(el("h3",result.case_count+" supplied case-fact reports"));
+          host.appendChild(el("p","Exact saved revision "+result.process_reference.revision+" · "+result.process_reference.content_sha256+
+            (result.references_latest_revision_at_check?" · latest at check time.":" · historical; latest is "+result.latest_revision_at_check+".")));
+          host.appendChild(el("p",Number(counts.matched||0)+" matched · "+Number(counts.not_matched||0)+" not matched · "+Number(counts.unknown||0)+" unknown. Unconfirmed/text-only definitions remain unevaluated."));
+          for(const row of result.cases){
+            const group=el("details");group.appendChild(el("summary",row.case_id+" · "+(row.proposed_route_supplied?
+              (row.proposed_route_structure_matches?"proposed route fits graph":"proposed route differs from graph"):"no route supplied")));
+            const list=el("ul");for(const rule of row.rules)list.appendChild(el("li",rule.rule_id+" · "+words(rule.status)));
+            group.appendChild(list);host.appendChild(group);
+          }
+          host.appendChild(el("p","Caller-declared facts remain unverified. Manual review conditions are unevaluated. Model and review status are unchanged; no execution authority is granted. Only the inspection action, revision and case count were audited."));
+          host.appendChild(button("Download minimized shared rule-check report",()=>{
+            const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+"\n"],{type:"application/json"}));
+            const anchor=el("a");anchor.href=url;anchor.download="owg-shared-rule-check-r"+result.process_reference.revision+".json";
+            document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+          }));
+          note("Shared declared rule check complete. Fact values and report were not retained.");
+        });
         $("shadowFile").addEventListener("change", () => {
           shadowGeneration++;
           $("shadowResult").replaceChildren();
