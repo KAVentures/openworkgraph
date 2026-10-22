@@ -8,7 +8,7 @@
   let activeVariant=0;
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
-  let driftGeneration=0;
+  let driftGeneration=0,cohortGeneration=0;
   let observedExpanded=false, observedSelection=null;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
@@ -71,6 +71,7 @@
     const save=button('Save analyzed log locally',saveLog);save.id='owgLogSave';save.disabled=true;
     retention.append(consentLabel,days,save,button('List saved local logs',listLogs));
     const inventory=make('div');inventory.id='owgLogInventory';retention.appendChild(inventory);
+    installCohort(retention);
     installDrift(retention);
     const cases=make('div');cases.id='owgLogCases';retention.appendChild(cases);card.appendChild(retention);
     const style=make('style');style.textContent=[
@@ -131,6 +132,7 @@
     const consent=document.getElementById('owgLogConsent'),save=document.getElementById('owgLogSave');
     if(reset&&consent)consent.checked=false;
     if(save)save.disabled=!(report&&analyzedFile&&!retainedDataset&&consent?.checked);
+    cohortControls(reset);
   }
   async function logRequest(path,options){
     await window.__owgAuthReady;
@@ -168,20 +170,21 @@
   }
   async function openLog(id){
     if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before opening this saved log?'))return;
-    const attempt=++generation;analyzedFile=null;report=null;clearReport();retentionState(true);
+    const attempt=++generation;analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
     document.getElementById('owgProcessFile').value='';document.getElementById('owgProcessAnalyze').disabled=true;
     try{
       const value=await logRequest('/report?'+new URLSearchParams({dataset_id:id,...(reference||{})}));if(attempt!==generation)return;
       if(value.format!=='openworkgraph.process-mining-csv-preview.v1')throw new Error('Unexpected saved-log response');
-      report=value;retainedDataset=id;activeVariant=0;activeActivity=null;render();
+      report=value;retainedDataset=id;activeVariant=0;activeActivity=null;render();cohortControls(true);
       setStatus('Opened retained local snapshot. Expires '+value.expires_at+'. Diagram examples remain sampled; browse all cases below.');
       await browseCases(id,0,attempt);
     }catch(error){if(attempt===generation)setStatus('Unable to open log: '+error.message);}
   }
   async function browseCases(id,after=0,attempt=generation,activity=null){
     try{
-      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25,...(activity?{activity}:{})}));if(attempt!==generation)return;
-      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',activity?'Retained cases containing '+activity:'All retained cases · dataset ordinals'));
+      const filters=report?.dataset_id===id?report.cohort?.filters||{}:{};
+      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25,...filters,...(activity?{activity}:{})}));if(attempt!==generation)return;
+      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',activity?'Retained cases containing '+activity:report?.cohort?'Selected retained cases · dataset ordinals':'All retained cases · dataset ordinals'));
       for(const entry of safe(value.cases)){
         const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id));
         const events=make('div');row.appendChild(events);let loaded=false;
@@ -210,6 +213,54 @@
       if(retainedDataset===id){generation++;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);document.getElementById('owgLogCases').replaceChildren();}
       await listLogs();setStatus('Deleted local event-log snapshot.');
     }catch(error){setStatus('Unable to delete log: '+error.message);}
+  }
+  const cohortInputs=[['owgCohortSince','Case first event from (inclusive, ISO timestamp)','started_since'],
+    ['owgCohortBefore','Case first event before (exclusive, ISO timestamp)','started_before'],
+    ['owgCohortActivity','Case contains exact activity','contains_activity'],
+    ['owgCohortVariant','Retained variant ID (optional)','variant_id']];
+  function installCohort(parent){
+    const section=make('section');section.id='owgLogCohort';section.append(make('h3','Filter complete retained cases'),
+      make('p','Open or save a retained log first. Date filters select cases by their first retained event; every event of a selected case is included. Use offset-aware timestamps such as 2026-10-20T00:00:00Z. These are log boundaries, not verified business start or completion. Filters apply only after Apply case filters.','muted'));
+    const controls=make('div',null,'owg-process-controls');
+    for(const [id,title] of cohortInputs){
+      const label=make('label',title),input=make('input');input.id=id;input.type='text';input.maxLength=64;input.disabled=true;
+      input.setAttribute('aria-label',title);
+      input.addEventListener('input',()=>{
+        cohortGeneration++;
+        document.getElementById('owgCohortStatus').textContent='Filter inputs changed. Apply to update the results.';
+        document.getElementById('owgCohortApply').disabled=!retainedDataset;
+      });label.appendChild(input);controls.appendChild(label);
+    }
+    const apply=button('Apply case filters',applyCohort);apply.id='owgCohortApply';apply.disabled=true;
+    const clear=button('Clear case filters',()=>{if(retainedDataset)openLog(retainedDataset);});clear.id='owgCohortClear';clear.disabled=true;
+    const status=make('p','Open a retained snapshot to filter complete cases.','muted');status.id='owgCohortStatus';status.setAttribute('role','status');
+    controls.append(apply,clear);section.append(controls,status);parent.appendChild(section);
+  }
+  function cohortControls(reset=false){
+    if(reset)cohortGeneration++;
+    for(const [id] of cohortInputs){const input=document.getElementById(id);if(input){input.disabled=!retainedDataset;if(reset)input.value='';}}
+    for(const id of ['owgCohortApply','owgCohortClear']){const control=document.getElementById(id);if(control)control.disabled=!retainedDataset;}
+    if(reset){const status=document.getElementById('owgCohortStatus');if(status)status.textContent=retainedDataset?'Full retained log selected. Case filters are optional.':'Open a retained snapshot to filter complete cases.';}
+  }
+  async function applyCohort(){
+    if(!retainedDataset)return;
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before filtering this retained log?'))return;
+    const id=retainedDataset,attempt=++generation,cohortAttempt=++cohortGeneration;
+    const query={dataset_id:id,...(reference||{})};
+    for(const [element,,key] of cohortInputs){const value=document.getElementById(element).value.trim();if(value)query[key]=value;}
+    report=null;analyzedFile=null;clearReport();
+    const control=document.getElementById('owgCohortApply'),status=document.getElementById('owgCohortStatus');control.disabled=true;
+    status.textContent='Analyzing all events of matching retained cases…';
+    try{
+      const value=await logRequest('/cohort?'+new URLSearchParams(query));
+      if(attempt!==generation||cohortAttempt!==cohortGeneration)return;
+      if(value.format!=='openworkgraph.process-log-cohort.v1')throw new Error('Unexpected retained-case selection response');
+      if(!value.report){status.textContent='No retained cases match these filters. No process model was changed.';return;}
+      report=value.report;activeVariant=0;activeActivity=null;render();
+      status.textContent='Selected '+value.selection.selected_case_count+' of '+value.selection.dataset_case_count+' retained cases, including all '+value.selection.selected_event_count+' events. No events were clipped to the date window.';
+      await browseCases(id,0,attempt);
+    }catch(error){if(attempt===generation&&cohortAttempt===cohortGeneration)status.textContent='Unable to filter retained cases: '+error.message;}
+    finally{if(attempt===generation&&cohortAttempt===cohortGeneration)control.disabled=!retainedDataset;}
   }
   function installDrift(parent){
     const section=make('section');section.id='owgLogDrift';
@@ -363,7 +414,9 @@
   function render(){
     const host=document.getElementById('owgProcessResults');if(!host||!report)return;
     host.replaceChildren();
-    host.appendChild(make('h3',report.source_preview?'Full supplied source projection':'Full imported log'));
+    host.appendChild(make('h3',report.source_preview?'Full supplied source projection':report.cohort?'Selected complete-case cohort':'Full imported log'));
+    if(report.cohort)host.appendChild(make('p',report.cohort.selected_case_count+' of '+report.cohort.dataset_case_count+
+      ' retained cases selected by '+JSON.stringify(report.cohort.filters)+'. Every event of these cases is included. Case ordinals and variant IDs remain those of the original snapshot.','muted'));
     if(report.source_preview)host.appendChild(make('p','Bounded provider projection: supported source events may omit earlier work, other activities or later state changes. Cases label selected references, not inferred cross-record business cases. This source preview cannot be retained as an imported CSV.','muted'));
     const stats=make('div',null,'owg-pmetrics');
     stats.append(metric('Cases',report.case_count),metric('Events',report.input_rows),
@@ -392,7 +445,8 @@
     const controls=make('div',null,'owg-variants');
     const visible=variants.slice(0,20);
     visible.forEach((item,index)=>{
-      const b=button('Variant '+(index+1)+' · '+item.case_count+' cases',()=>{
+      const variantNumber=/^variant_[0-9]+$/.test(item.variant_id||'')?item.variant_id.slice(8):index+1;
+      const b=button('Variant '+variantNumber+' · '+item.case_count+' cases',()=>{
         activeVariant=index;activeActivity=null;render();
       });
       b.setAttribute('aria-pressed',String(activeVariant===index));controls.appendChild(b);
@@ -508,7 +562,7 @@
     control.setAttribute('aria-expanded',String(observedExpanded));host.appendChild(control);
     if(!observedExpanded)return;
     host.appendChild(make('h3','All observed activity transitions'));
-    host.appendChild(make('p','Counts cover every case in this imported log. Arrows show observed adjacent pairs, not causal dependencies or approved routes. A route through this combined map may never occur in one case; inspect exact variants below for complete paths.','muted'));
+    host.appendChild(make('p','Counts cover every '+(report.cohort?'selected complete case in this cohort':'case in this imported log')+'. Arrows show observed adjacent pairs, not causal dependencies or approved routes. A route through this combined map may never occur in one case; inspect exact variants below for complete paths.','muted'));
     try{
       const drawing=window.owgProcessGraph.drawObserved(report,activity=>{
         observedSelection=activity.label;render();document.getElementById('owgObservedActivityDetails')?.focus();
@@ -521,7 +575,7 @@
     const selected=safe(report.activities).find(row=>row.activity===observedSelection);
     if(!selected)return;
     const details=make('section');details.id='owgObservedActivityDetails';details.tabIndex=-1;
-    details.append(make('h4',selected.activity+' · full imported log'),
+    details.append(make('h4',selected.activity+' · '+(report.cohort?'selected complete-case cohort':'full imported log')),
       make('p',selected.event_count+' recorded events across '+selected.case_count+' cases. Repeated occurrences remain separate.'));
     const variants=safe(report.variants).map((variant,index)=>({variant,index})).filter(({variant})=>safe(variant.activities).some(row=>row.activity===selected.activity));
     if(variants.length){
@@ -542,6 +596,7 @@
   }
   function setReference(value){
     invalidateDrift();
+    cohortGeneration++;cohortControls();
     reference=value?{workflow_id:value.workflow_id,revision:String(value.revision)}:null;
     const label=document.getElementById('owgProcessReference');
     if(label)label.textContent=reference?'Next analysis compares with saved process '+reference.workflow_id+' revision '+reference.revision+'. Existing results are unchanged until Analyze.':'No saved reference selected.';

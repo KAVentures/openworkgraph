@@ -197,9 +197,31 @@ def retained_process_report(request: Request, dataset_id: str = Query(pattern=_L
 def retained_process_cases(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
                            after: int = Query(default=0, ge=0), limit: int = Query(default=25, ge=1, le=100),
                            activity: str | None = Query(default=None, max_length=64),
-                           variant_id: str | None = Query(default=None, pattern=r'^variant_[0-9]{1,4}$')):
+                           variant_id: str | None = Query(default=None, pattern=r'^variant_[0-9]{1,4}$'),
+                           contains_activity: str | None = Query(default=None, min_length=1, max_length=64),
+                           started_since: str | None = Query(default=None, min_length=1, max_length=64),
+                           started_before: str | None = Query(default=None, min_length=1, max_length=64)):
     _require_process_log_dashboard(request)
-    return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id)
+    return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id,
+        started_since=started_since, started_before=started_before, contains_activity=contains_activity)
+
+
+@app.get('/v1/process-mining/datasets/cohort')
+def retained_process_cohort(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
+        contains_activity: str | None = Query(default=None, min_length=1, max_length=64),
+        variant_id: str | None = Query(default=None, pattern=r'^variant_[0-9]{1,4}$'),
+        started_since: str | None = Query(default=None, min_length=1, max_length=64),
+        started_before: str | None = Query(default=None, min_length=1, max_length=64),
+        workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
+        revision: int | None = Query(default=None, ge=1)):
+    _require_process_log_dashboard(request)
+    if (workflow_id is None) != (revision is None):
+        raise HTTPException(422, 'Comparison requires a process ID and exact revision together')
+    reference = _catalog_record(workflow_id, revision) if workflow_id else None
+    return _log_response(_process_logs.cohort, dataset_id, contains_activity=contains_activity,
+        variant_id=variant_id, started_since=started_since, started_before=started_before,
+        reference_model=ProcessModel.model_validate(reference['process_model']) if reference else None,
+        reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
 
 
 @app.get('/v1/process-mining/datasets/compare')

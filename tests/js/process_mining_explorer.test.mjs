@@ -137,3 +137,34 @@ test('drift review requires distinct snapshots and a declaration; reference chan
   assert.equal(compare.disabled,true);
   assert.equal(calls.length,2);
 });
+
+test('case cohort inputs are explicit; changing source discards pending cohort results and disables controls',async()=>{
+  let finish;
+  const pending=new Promise(resolve=>finish=resolve),id='log_'+'a'.repeat(32);
+  const report={format:'openworkgraph.process-mining-csv-preview.v1',dataset_id:id,import_retained:true,
+    case_count:35,input_rows:70,activity_count:2,variant_count:1,metrics:{},variants:[],activities:[],transitions:[]};
+  const {document,root,calls,find}=setup(url=>url.includes('/cohort?')?pending:url.includes('/report?')?report:
+    url.includes('/cases?')?{cases:[]}:{datasets:[{dataset_id:id,case_count:35,created_at:'2026-10-21T00:00:00Z'}]});
+  const apply=document.getElementById('owgCohortApply');
+  assert.equal(apply.disabled,true);assert.equal(calls.length,0);
+  await find('button','List saved local logs').handlers.click();
+  await find('button','Open '+id).handlers.click();
+  assert.equal(apply.disabled,false);
+  const start=document.getElementById('owgCohortSince'),activity=document.getElementById('owgCohortActivity');
+  start.value='2026-10-21T00:00:00Z';start.handlers.input();
+  activity.value='Review';activity.handlers.input();
+  assert.equal(calls.length,3); // inventory, whole-log report, case page
+  const filtering=apply.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.length,4);assert.equal(apply.disabled,true);
+  const params=new URL(calls[3][0],'http://localhost').searchParams;
+  assert.equal(params.get('dataset_id'),id);assert.equal(params.get('contains_activity'),'Review');
+  assert.equal(params.get('started_since'),'2026-10-21T00:00:00Z');
+  const file=document.getElementById('owgProcessFile');file.files=[{size:100}];file.handlers.change();
+  finish({format:'openworkgraph.process-log-cohort.v1',report:{...report,case_count:999},selection:{selected_case_count:999}});
+  await filtering;
+  assert.equal(document.getElementById('owgProcessResults').children.length,0);
+  assert.equal(document.getElementById('owgLogCases').children.length,0);
+  assert(!root.text.includes('999'));
+  assert.equal(apply.disabled,true);assert.equal(activity.disabled,true);assert.equal(activity.value,'');
+  assert.equal(calls.length,4);
+});
