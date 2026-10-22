@@ -133,6 +133,51 @@ const pathModule = require("node:path");
         .isDisabled(),
       true,
     );
+    let readinessRequests=0;alice.on('request',request=>{if(new URL(request.url()).pathname==='/v1/human/process-readiness')readinessRequests++;});
+    assert.equal(readinessRequests,0);
+    await alice.getByRole('button',{name:'Load design readiness',exact:true}).click();
+    await waitStatus(alice,'Loaded organization design readiness. Page counts are not organization totals.');
+    assert.equal(readinessRequests,1);
+    assert.match(await alice.locator('#readinessReport').textContent(),/1 saved design on this page/);
+    assert.match(await alice.locator('#readinessReport').textContent(),/Activities without declared responsibility: 1 design/);
+    const readinessDownload=alice.waitForEvent('download');
+    await alice.getByRole('button',{name:'Download current readiness page',exact:true}).click();
+    const readinessArtifact=await readinessDownload,readinessPath=pathModule.join(scratch,'readiness-page.json');
+    await readinessArtifact.saveAs(readinessPath);const readinessJSON=JSON.parse(await fs.readFile(readinessPath,'utf8'));
+    assert.equal(readinessJSON.page_process_count,1);assert.equal(readinessJSON.processes[0].revision,1);
+    assert.equal(readinessJSON.execution_authorized,false);assert.equal(readinessJSON.deployment_health_checked,false);
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('nobody');
+    assert.equal(await alice.locator('#readinessReport').textContent(),'');assert.equal(readinessRequests,1);
+    await alice.getByRole('button',{name:'Load design readiness',exact:true}).click();
+    await alice.locator('#readinessReport').getByText('No shared designs match these filters on this page.',{exact:true}).waitFor();
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('alice');
+    await alice.getByRole('button',{name:'Load design readiness',exact:true}).click();
+    await alice.locator('#readinessReport').getByText(/^1 saved design on this page/).waitFor();
+    await alice.locator('#readinessReport > details > summary').click();
+    await alice.setViewportSize({width:390,height:844});
+    assert.equal(await alice.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await alice.setViewportSize({width:1280,height:900});
+    await alice.getByRole('button',{name:'Open readiness design '+readinessJSON.processes[0].workflow_id,exact:true}).click();
+    await waitStatus(alice,'Opened exact saved revision 1.');
+    let releaseReadiness;const readinessGate=new Promise(resolve=>releaseReadiness=resolve);
+    await alice.route('**/v1/human/process-readiness?*',async route=>{await readinessGate;await route.continue();});
+    const pendingReadiness=alice.waitForRequest(request=>new URL(request.url()).pathname==='/v1/human/process-readiness');
+    await alice.locator('#loadReadiness').click();await pendingReadiness;
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('changed-while-pending');
+    const lateReadiness=alice.waitForResponse(response=>new URL(response.url()).pathname==='/v1/human/process-readiness');
+    releaseReadiness();await lateReadiness;await alice.unroute('**/v1/human/process-readiness?*');
+    await alice.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await alice.locator('#readinessReport').textContent(),'');assert(await alice.locator('#downloadReadiness').isDisabled());
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('𐀀'.repeat(512));
+    const unicodeReadiness=alice.waitForResponse(response=>new URL(response.url()).pathname==='/v1/human/process-readiness');
+    await alice.locator('#loadReadiness').click();assert.equal((await unicodeReadiness).status(),200);
+    await alice.locator('#readinessReport').getByText('No shared designs match these filters on this page.',{exact:true}).waitFor();
+    const beforeOverlong=readinessRequests;
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('a'.repeat(513));
+    await alice.locator('#loadReadiness').click();await waitStatus(alice,'Use an owner actor ID of at most 512 characters.');
+    assert.equal(readinessRequests,beforeOverlong);
+
+
     await alice
       .getByRole("button", { name: "Add collaborator", exact: true })
       .click();
@@ -690,6 +735,9 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     );
     assert.equal(await alice.locator("#comment").inputValue(), "");
     assert.equal(await alice.locator("#opportunityReport").textContent(), "");
+    assert.equal(await alice.locator('#readinessReport').textContent(),'');
+    assert(await alice.locator('#downloadReadiness').isDisabled());
+    assert.equal(await alice.locator('#readinessOwner').inputValue(),'');
     assert.equal(
       await alice
         .getByRole("button", { name: "Download scenarios report", exact: true })

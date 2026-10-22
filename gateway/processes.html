@@ -64,6 +64,7 @@
         padding: 18px;
         margin: 16px 0;
       }
+      #readinessReport { overflow-wrap: anywhere; }
       .muted {
         color: #526358;
       }
@@ -171,6 +172,16 @@
         processes</label
       ><button id="load">Load shared processes</button>
       <div id="inventory"></div>
+    </section>
+    <section>
+      <h2>Organization design readiness</h2>
+      <p>Inspect saved designs for missing declarations and outstanding review. Findings can be intentional; they do not establish deployment health, tool availability, policy compliance or permission to execute. Counts describe the returned page only.</p>
+      <label>Readiness owner actor ID (optional)<input id="readinessOwner" type="text" maxlength="1024" /></label>
+      <label><input id="readinessArchived" type="checkbox" />Include archived designs in readiness</label>
+      <button id="loadReadiness">Load design readiness</button>
+      <button id="downloadReadiness" disabled>Download current readiness page</button>
+      <button id="clearReadiness">Clear readiness report</button>
+      <div id="readinessReport"></div>
     </section>
     <section>
       <h2>Organization improvement backlog</h2>
@@ -310,7 +321,11 @@
         "use strict";
         let candidateEditing = false;
         let opportunityReport = null;
-        let shadowGeneration = 0, ruleFactsGeneration = 0;
+        let shadowGeneration = 0, ruleFactsGeneration = 0, readinessGeneration = 0, readinessReport = null;
+        function clearReadiness() {
+          readinessGeneration++;readinessReport=null;
+          $("readinessReport").replaceChildren();$("downloadReadiness").disabled=true;
+        }
         function clearRuleFacts() {
           ruleFactsGeneration++;
           $("ruleFactsFile").value="";
@@ -499,6 +514,7 @@
           return response.json();
         }
         function clear() {
+          clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
           clearShadowReview();
           clearRuleFacts();
           candidateEditing = false;
@@ -668,6 +684,48 @@
             );
           note("Loaded organization process inventory.");
         }
+        async function loadReadiness(after="") {
+          const owner=$("readinessOwner").value.trim();
+          if(Array.from(owner).length>512)throw new Error("Use an owner actor ID of at most 512 characters.");
+          clearReadiness();const generation=readinessGeneration;
+          const result=await call("/v1/human/process-readiness?"+new URLSearchParams({
+            after,owner_actor_id:owner,include_archived:$("readinessArchived").checked}));
+          if(generation!==readinessGeneration)return;
+          readinessReport=result;$("downloadReadiness").disabled=false;
+          const host=$("readinessReport"),counts=result.page_inventory_counts;
+          host.appendChild(el("p","Organization "+result.organization_id+" · generated "+result.generated_at+". Refresh to include later changes."));
+          host.appendChild(el("p",result.page_process_count+" saved design"+(result.page_process_count===1?"":"s")+" on this page · "+Number(counts.active||0)+" active · "+Number(counts.archived||0)+" archived · "+
+            Number(counts.needs_review||0)+" awaiting review · "+Number(counts.changes_requested||0)+" with changes requested."));
+          const labels={unconfirmed_rule_ids:"Unconfirmed business rules",text_only_rule_ids:"Rules without structured conditions",
+            structured_rule_ids_requiring_source_fact_implementation:"Structured rules awaiting implementation",
+            unmapped_activity_ids:"Activities without implementation suggestions",activity_ids_without_declared_responsibility:"Activities without declared responsibility",
+            manual_review_activity_ids:"Activities with declared manual review conditions",terminal_ids_without_confirmed_source_expectation:"End steps without confirmed system checks"};
+          const totals=el("ul");for(const [key,label] of Object.entries(labels))totals.appendChild(el("li",label+": "+Number(result.page_process_counts_with_findings[key]||0)+" design"+(result.page_process_counts_with_findings[key]===1?"":"s")+" on this page"));
+          host.appendChild(totals);
+          for(const item of result.processes){
+            const row=el("details");row.appendChild(el("summary",item.title+" · r"+item.revision+" · "+words(item.review_status)+(item.archived?" · archived":"")));
+            row.appendChild(el("p","Owner actor "+item.owner_actor_id+" · exact revision hash "+item.content_sha256));
+            row.appendChild(el("p",item.current_independent_design_review?"This exact active design has independent review. This grants no execution authority.":"This is not an active independently reviewed design."));
+            const list=el("ul");for(const [key,label] of Object.entries(labels)){
+              const ids=item.findings[key];if(ids.length)list.appendChild(el("li",label+": "+ids.join(", ")));
+            }
+            if(!list.children.length)list.appendChild(el("li","No listed declaration findings. Customer tool bindings and deployment health were not checked."));
+            row.appendChild(list);row.appendChild(button("Open readiness design "+item.workflow_id,()=>open(item.workflow_id,item.revision)));host.appendChild(row);
+          }
+          if(!result.processes.length)host.appendChild(el("p","No shared designs match these filters on this page."));
+          if(result.has_more)host.appendChild(button("Next readiness page",()=>loadReadiness(result.next_after)));
+          note("Loaded organization design readiness. Page counts are not organization totals.");
+        }
+        $("loadReadiness").onclick=()=>run(()=>loadReadiness());
+        $("clearReadiness").onclick=clearReadiness;
+        $("readinessOwner").addEventListener("input",clearReadiness);
+        $("readinessArchived").addEventListener("change",clearReadiness);
+        $("downloadReadiness").onclick=()=>{
+          if(!readinessReport)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(readinessReport,null,2)+"\n"],{type:"application/json"}));
+          const link=el("a");link.href=url;link.download="owg-design-readiness-page.json";document.body.appendChild(link);link.click();link.remove();
+          setTimeout(()=>URL.revokeObjectURL(url),3000);
+        };
         $("load").onclick = () => run(() => inventory());
         $("opportunityCurrency").onchange = () => {
           opportunityReport = null;
