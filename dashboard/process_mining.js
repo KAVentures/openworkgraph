@@ -9,6 +9,7 @@
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
   let driftGeneration=0,cohortGeneration=0;
+  let mappingGeneration=0,mappingInspection=null,mappedFile=null,mappingRequired=false;
   let observedExpanded=false, observedSelection=null;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
@@ -51,11 +52,13 @@
         return;
       }
       report=null;
+      resetMapping();
       generation++;analyzedFile=null;retainedDataset=null;retentionState(true);
       run.disabled=!file.files?.length;
       clearReport();
     });
     wrap.append(file,run);card.appendChild(wrap);
+    installMapping(card);
     const referenceLabel=make('p','No saved reference selected.','muted');referenceLabel.id='owgProcessReference';card.appendChild(referenceLabel);
     card.appendChild(button('Clear reference model',()=>setReference(null)));
     const status=make('p','No CSV selected. This feature is opt-in and does not change desktop recording.','muted');
@@ -76,6 +79,8 @@
     const cases=make('div');cases.id='owgLogCases';retention.appendChild(cases);card.appendChild(retention);
     const style=make('style');style.textContent=[
       '#owgProcessCSV .owg-process-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}',
+      '#owgCSVMapping .owg-process-controls label{display:grid;min-width:0;flex:1 1 180px}',
+      '#owgCSVMapping select{max-width:100%}',
       '#owgLogDrift select{max-width:100%;width:100%}',
       '#owgLogDrift .owg-drift-controls{display:grid;gap:10px;margin:12px 0}',
       '#owgProcessCSV .owg-pmetrics{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}',
@@ -103,9 +108,10 @@
     const s=document.getElementById('owgProcessStatus');if(s)s.textContent=String(message||'');
   }
   async function analyze(){
-    const file=document.getElementById('owgProcessFile')?.files?.[0];
+    const file=mappedFile||document.getElementById('owgProcessFile')?.files?.[0];
     const control=document.getElementById('owgProcessAnalyze');
     if(!file)return;
+    if(mappingRequired&&!mappedFile){setStatus('Review and apply the selected columns before analyzing this file.');return;}
     if(file.size>MAX_UPLOAD){setStatus('File exceeds the 1 MiB upload limit.');return;}
     const attempt=++generation;analyzedFile=null;retainedDataset=null;retentionState(true);
     report=null;clearReport();control.disabled=true;setStatus('Analyzing selected CSV on this local OWG service…');
@@ -126,7 +132,77 @@
       setStatus('Local analysis complete. Case labels are temporary; nothing was stored in OWG. Refresh or leave this page to discard this preview.');
     }catch(error){
       if(attempt===generation)setStatus('Unable to analyze: '+String(error?.message||'Unknown error'));
-    }finally{if(attempt===generation)control.disabled=false;}
+    }finally{if(attempt===generation)control.disabled=!!(mappingRequired&&!mappedFile);}
+  }
+  function installMapping(parent){
+    const section=make('details');section.id='owgCSVMapping';section.appendChild(make('summary','Map columns from another event-log export'));
+    section.appendChild(make('p','Inspect headers on this device, then choose the case, activity and timestamp columns. Applying the mapping creates a minimized CSV in browser memory. Only those three columns are sent to OWG for local analysis; other columns are excluded. Activity labels and timestamps must still meet the documented format. For a file already using the OWG schema, skip this step.','muted'));
+    const delimiter=make('select');delimiter.id='owgCSVDelimiter';delimiter.setAttribute('aria-label','Event-log delimiter');
+    for(const [value,label] of [[',','Comma'],[';','Semicolon'],['\t','Tab']]){const option=make('option',label);option.value=value;delimiter.appendChild(option);}
+    delimiter.value=',';delimiter.addEventListener('change',()=>{
+      resetMapping();mappingRequired=true;document.getElementById('owgProcessAnalyze').disabled=true;
+    });
+    const inspect=button('Inspect columns on this device',inspectColumns);inspect.id='owgCSVInspect';
+    const fields=make('div');fields.id='owgCSVMappingFields';
+    const status=make('p','No column mapping applied.','muted');status.id='owgCSVMappingStatus';status.setAttribute('role','status');
+    section.append(delimiter,inspect,status,fields);parent.appendChild(section);
+  }
+  function resetMapping(){
+    mappingGeneration++;mappingInspection=null;mappedFile=null;mappingRequired=false;
+    document.getElementById('owgCSVMappingFields')?.replaceChildren();
+    const status=document.getElementById('owgCSVMappingStatus');if(status)status.textContent='No column mapping applied.';
+    const inspect=document.getElementById('owgCSVInspect');if(inspect)inspect.disabled=false;
+  }
+  async function inspectColumns(){
+    const file=document.getElementById('owgProcessFile')?.files?.[0];
+    if(!file){document.getElementById('owgCSVMappingStatus').textContent='Choose a CSV event log first.';return;}
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before mapping this event log?'))return;
+    generation++;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);
+    resetMapping();mappingRequired=true;const attempt=mappingGeneration;
+    document.getElementById('owgProcessAnalyze').disabled=true;
+    const control=document.getElementById('owgCSVInspect'),status=document.getElementById('owgCSVMappingStatus');control.disabled=true;
+    status.textContent='Reading CSV headers and structure on this device…';
+    try{
+      if(!window.owgProcessCSVMapping?.inspectFile)throw new Error('Column mapper unavailable. Reopen the local dashboard.');
+      const value=await window.owgProcessCSVMapping.inspectFile(file,document.getElementById('owgCSVDelimiter').value);
+      if(attempt!==mappingGeneration)return;
+      mappingInspection=value;
+      const fields=document.getElementById('owgCSVMappingFields'),controls=make('div',null,'owg-process-controls');fields.replaceChildren();
+      for(const [key,title] of [['case_id','Case identifier column'],['activity','Activity label column'],['timestamp','Event timestamp column']]){
+        const label=make('label',title),select=make('select');select.id='owgCSVMap_'+key;select.setAttribute('aria-label',title);
+        const empty=make('option','Choose column');empty.value='';select.appendChild(empty);
+        value.headers.forEach((header,index)=>{const option=make('option',(index+1)+'. '+String(header).replace(/[\u0000-\u001f\u007f-\u009f]/g,' ').slice(0,80));option.value=String(index);select.appendChild(option);});
+        const matches=value.headers.map((header,index)=>({header,index})).filter(item=>item.header.trim().toLowerCase()===key);
+        select.value=matches.length===1?String(matches[0].index):'';
+        select.addEventListener('change',()=>{
+          generation++;mappedFile=null;mappingRequired=true;
+          document.getElementById('owgCSVMapConsent').checked=false;
+          document.getElementById('owgCSVMapUse').disabled=true;document.getElementById('owgProcessAnalyze').disabled=true;
+          status.textContent='Column choices changed. Confirm and apply them before the next analysis.';
+        });label.appendChild(select);controls.appendChild(label);
+      }
+      const consentLabel=make('label'),consent=make('input');consent.type='checkbox';consent.id='owgCSVMapConsent';
+      consentLabel.append(consent,make('span',' I reviewed these three columns; exclude every other column from local analysis.'));
+      const use=button('Use mapped columns for next analysis',useMappedColumns);use.id='owgCSVMapUse';use.disabled=true;
+      consent.addEventListener('change',()=>{use.disabled=!consent.checked;});
+      fields.append(controls,consentLabel,use);
+      status.textContent='Inspected '+value.row_count+' event rows and '+value.headers.length+' columns on this device. No file content or header was sent for inspection.';
+    }catch(error){if(attempt===mappingGeneration)status.textContent='Unable to inspect columns: '+error.message;}
+    finally{if(attempt===mappingGeneration)control.disabled=false;}
+  }
+  function useMappedColumns(){
+    if(!mappingInspection||!document.getElementById('owgCSVMapConsent')?.checked)return;
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before applying these columns?'))return;
+    try{
+      const mapping={};for(const key of ['case_id','activity','timestamp']){
+        const value=document.getElementById('owgCSVMap_'+key).value;
+        if(!/^[0-9]{1,3}$/.test(value))throw new Error('Choose each of the three columns.');mapping[key]=Number(value);
+      }
+      const file=mappingInspection.createMappedFile(mapping);
+      generation++;mappedFile=file;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);
+      document.getElementById('owgProcessAnalyze').disabled=false;
+      document.getElementById('owgCSVMappingStatus').textContent='Mapped '+mappingInspection.row_count+' event rows to case_id, activity and timestamp only. Select Analyze selected CSV to send this minimized log to local OWG. No other columns are included.';
+    }catch(error){document.getElementById('owgCSVMappingStatus').textContent='Unable to apply mapping: '+error.message;}
   }
   function retentionState(reset=false){
     const consent=document.getElementById('owgLogConsent'),save=document.getElementById('owgLogSave');
@@ -170,7 +246,7 @@
   }
   async function openLog(id){
     if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before opening this saved log?'))return;
-    const attempt=++generation;analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
+    const attempt=++generation;resetMapping();analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
     document.getElementById('owgProcessFile').value='';document.getElementById('owgProcessAnalyze').disabled=true;
     try{
       const value=await logRequest('/report?'+new URLSearchParams({dataset_id:id,...(reference||{})}));if(attempt!==generation)return;
@@ -605,7 +681,7 @@
     if(!value||value.format!=='openworkgraph.process-mining-csv-preview.v1'||!Array.isArray(value.variants))
       throw new Error('A bounded analyzed source projection is required.');
     if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before opening this source projection?'))return false;
-    generation++;analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
+    generation++;resetMapping();analyzedFile=null;retainedDataset=null;report=null;clearReport();retentionState(true);
     const file=document.getElementById('owgProcessFile');if(file)file.value='';
     const control=document.getElementById('owgProcessAnalyze');if(control)control.disabled=true;
     report={...value,source_preview:true};activeVariant=0;activeActivity=null;render();retentionState(true);

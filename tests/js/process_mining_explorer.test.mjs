@@ -168,3 +168,43 @@ test('case cohort inputs are explicit; changing source discards pending cohort r
   assert.equal(apply.disabled,true);assert.equal(activity.disabled,true);assert.equal(activity.value,'');
   assert.equal(calls.length,4);
 });
+
+test('column inspection makes no request; only an explicitly mapped file becomes the analysis payload',async()=>{
+ const report={format:'openworkgraph.process-mining-csv-preview.v1',case_count:1,input_rows:2,metrics:{},variants:[]};
+ const {window,document,calls,find}=setup(report);
+ const original={size:100},minimized={size:40};
+ document.getElementById('owgProcessFile').files=[original];document.getElementById('owgProcessFile').handlers.change();
+ let inspected=0;
+ window.owgProcessCSVMapping={inspectFile:async(file,delimiter)=>{
+   inspected++;assert.equal(file,original);assert.equal(delimiter,',');
+   return {headers:['Ticket','Stage','When','Private'],row_count:2,createMappedFile(mapping){
+     assert.equal(JSON.stringify(mapping),JSON.stringify({case_id:0,activity:1,timestamp:2}));return minimized;
+   }};
+ }};
+ await find('button','Inspect columns on this device').handlers.click();
+ assert.equal(inspected,1);assert.equal(calls.length,0);assert.equal(document.getElementById('owgProcessAnalyze').disabled,true);
+ for(const [key,index] of [['case_id',0],['activity',1],['timestamp',2]]){
+   const select=document.getElementById('owgCSVMap_'+key);select.value=String(index);select.handlers.change();
+ }
+ const consent=document.getElementById('owgCSVMapConsent');consent.checked=true;consent.handlers.change();
+ find('button','Use mapped columns for next analysis').handlers.click();
+ assert.equal(calls.length,0);assert.equal(document.getElementById('owgProcessAnalyze').disabled,false);
+ await find('button','Analyze selected CSV').handlers.click();
+ assert.equal(calls.length,1);assert.equal(calls[0][1].body,minimized);
+ document.getElementById('owgProcessFile').files=[original];document.getElementById('owgProcessFile').handlers.change();
+ await find('button','Analyze selected CSV').handlers.click();
+ assert.equal(calls[1][1].body,original); // New file selection discards the old mapping.
+});
+
+test('late column inspection cannot restore headers or enable analysis for a newly selected file',async()=>{
+ let finish;
+ const pending=new Promise(resolve=>finish=resolve),{window,document,calls,find}=setup({});
+ document.getElementById('owgProcessFile').files=[{size:100}];document.getElementById('owgProcessFile').handlers.change();
+ window.owgProcessCSVMapping={inspectFile:()=>pending};
+ const inspecting=find('button','Inspect columns on this device').handlers.click();
+ document.getElementById('owgProcessFile').files=[];document.getElementById('owgProcessFile').handlers.change();
+ finish({headers:['PRIVATE_OLD_HEADER'],row_count:1});await inspecting;
+ assert.equal(document.getElementById('owgCSVMappingFields').children.length,0);
+ assert.equal(document.getElementById('owgProcessAnalyze').disabled,true);
+ assert.equal(calls.length,0);
+});

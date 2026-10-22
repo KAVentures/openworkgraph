@@ -23,8 +23,9 @@ const path = require('node:path');
     }
     if(!ready)throw new Error('Synthetic local server not ready: '+logs);
     browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-    const page=await browser.newPage();const errors=[];let datasetRequests=0,saveRequests=0,compareRequests=0;
+    const page=await browser.newPage();const errors=[],csvRequests=[];let datasetRequests=0,saveRequests=0,compareRequests=0;
     page.on('pageerror',e=>errors.push(e.message));
+    page.on('request',request=>{if(new URL(request.url()).pathname==='/v1/process-mining/preview')csvRequests.push(request.url());});
     page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/v1/process-mining/datasets')){
       datasetRequests++;if(request.method()==='POST'&&!request.url().includes('/forget'))saveRequests++;
       if(new URL(request.url()).pathname.endsWith('/compare'))compareRequests++;
@@ -33,6 +34,34 @@ const path = require('node:path');
     await page.goto(base+'/#session='+session);
     await page.locator('[role=tab][data-tab=evidence]').click();
     await page.locator('#owgProcessCSV').waitFor();
+    assert.equal(datasetRequests,0);
+    const foreign='Ticket;Stage;When;Confidential'+'X'.repeat(100)+'\r\nPRIVATE_CASE;Open;2026-10-20T00:00:00Z;"UNSELECTED_SECRET\r\n雪"\r\nPRIVATE_CASE;Close;2026-10-20T00:01:00Z;UNSELECTED_SECRET\r\n';
+    await page.getByLabel('Choose business event log CSV').setInputFiles({name:'export.csv',mimeType:'text/csv',buffer:Buffer.from(foreign)});
+    await page.getByText('Map columns from another event-log export',{exact:true}).click();
+    await page.getByLabel('Event-log delimiter',{exact:true}).selectOption(';');
+    await page.getByRole('button',{name:'Inspect columns on this device',exact:true}).click();
+    await page.locator('#owgCSVMappingStatus').filter({hasText:'Inspected 2 event rows and 4 columns'}).waitFor();
+    assert.equal(csvRequests.length,0);assert.equal(datasetRequests,0);
+    await page.getByLabel('Case identifier column',{exact:true}).selectOption('0');
+    await page.getByLabel('Activity label column',{exact:true}).selectOption('1');
+    await page.getByLabel('Event timestamp column',{exact:true}).selectOption('2');
+    assert(await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).isDisabled());
+    await page.getByLabel('I reviewed these three columns; exclude every other column from local analysis.',{exact:true}).check();
+    await page.getByRole('button',{name:'Use mapped columns for next analysis',exact:true}).click();
+    assert.equal(csvRequests.length,0);
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+    if(process.env.OWG_MAPPING_SCREENSHOT){
+      await page.locator('#owgCSVMapping').evaluate(element=>element.scrollIntoView({block:'start',behavior:'instant'}));
+      await page.screenshot({path:process.env.OWG_MAPPING_SCREENSHOT});
+    }
+    await page.setViewportSize({width:1280,height:900});
+    await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
+    await page.locator('#owgProcessStatus').filter({hasText:'Local analysis complete.'}).waitFor();
+    assert.equal(csvRequests.length,1);
+    const received=JSON.parse(await fs.readFile(path.join(scratch,'last-preview-shape.json'),'utf8'));
+    assert.equal(received.header,'case_id,activity,timestamp');
+    assert.equal(received.unselected_test_markers_seen,false);
     assert.equal(datasetRequests,0);
     const rows=['case_id,activity,timestamp,source'];
     for(let c=0;c<35;c++)for(let p=0;p<130;p++)rows.push('PRIVATE_CASE_'+c+',Step '+(p%3)+','+new Date(Date.UTC(2026,9,20,0,0,p)).toISOString()+',PRIVATE_SOURCE');

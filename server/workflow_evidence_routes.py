@@ -71,6 +71,11 @@ def process_mining_script() -> Response:
     )
 
 
+@app.get('/process-csv-mapping.js')
+def process_csv_mapping_script() -> Response:
+    return FileResponse(ROOT / 'dashboard' / 'process_csv_mapping.js', media_type='application/javascript')
+
+
 @app.get('/workflow-groupings.js')
 def workflow_groupings_script():
     return FileResponse(ROOT/'dashboard'/'workflow_groupings.js',media_type='application/javascript')

@@ -32,6 +32,10 @@ CASE-001,Closed,2026-10-20T10:07:00Z,ticketing
 ```
 
 The `source` column is optional and is not returned in the preview.
+Exports with different headers or additional columns can use the optional
+[browser-only column mapper](PROCESS_CSV_COLUMN_MAPPING.md) to select just the
+case, activity and timestamp columns before analysis. It supports comma,
+semicolon and tab delimiters; unused values stay out of the local API request.
 The event log must already use a shared, authoritative `case_id` if
 multiple source systems' events are intended to represent the same case.
 OWG never infers this equivalence from names, timestamps or neighboring
