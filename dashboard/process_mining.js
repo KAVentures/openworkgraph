@@ -79,8 +79,8 @@
     const cases=make('div');cases.id='owgLogCases';retention.appendChild(cases);card.appendChild(retention);
     const style=make('style');style.textContent=[
       '#owgProcessCSV .owg-process-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}',
-      '#owgCSVMapping .owg-process-controls label{display:grid;min-width:0;flex:1 1 180px}',
-      '#owgCSVMapping select{max-width:100%}',
+      '#owgCSVMapping .owg-process-controls label{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;max-width:100%;flex:1 1 180px}',
+      '#owgCSVMapping select{width:100%;min-width:0;max-width:100%;box-sizing:border-box}',
       '#owgLogDrift select{max-width:100%;width:100%}',
       '#owgLogDrift .owg-drift-controls{display:grid;gap:10px;margin:12px 0}',
       '#owgProcessCSV .owg-pmetrics{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}',
@@ -114,7 +114,9 @@
     if(mappingRequired&&!mappedFile){setStatus('Review and apply the selected columns before analyzing this file.');return;}
     if(file.size>MAX_UPLOAD){setStatus('File exceeds the 1 MiB upload limit.');return;}
     const attempt=++generation;analyzedFile=null;retainedDataset=null;retentionState(true);
-    report=null;clearReport();control.disabled=true;setStatus('Analyzing selected CSV on this local OWG service…');
+    report=null;clearReport();control.disabled=true;
+    const mappedAnalyze=document.getElementById('owgCSVMapAnalyze');if(mappedAnalyze)mappedAnalyze.disabled=true;
+    setStatus('Analyzing selected CSV on this local OWG service…');
     try{
       await window.__owgAuthReady;
       const response=await fetch('/v1/process-mining/preview'+(reference?'?'+new URLSearchParams(reference):''),{
@@ -132,7 +134,8 @@
       setStatus('Local analysis complete. Case labels are temporary; nothing was stored in OWG. Refresh or leave this page to discard this preview.');
     }catch(error){
       if(attempt===generation)setStatus('Unable to analyze: '+String(error?.message||'Unknown error'));
-    }finally{if(attempt===generation)control.disabled=!!(mappingRequired&&!mappedFile);}
+    }finally{if(attempt===generation){control.disabled=!!(mappingRequired&&!mappedFile);
+      const mappedAnalyze=document.getElementById('owgCSVMapAnalyze');if(mappedAnalyze)mappedAnalyze.disabled=!mappedFile;}}
   }
   function installMapping(parent){
     const section=make('details');section.id='owgCSVMapping';section.appendChild(make('summary','Map columns from another event-log export'));
@@ -178,14 +181,16 @@
           generation++;mappedFile=null;mappingRequired=true;
           document.getElementById('owgCSVMapConsent').checked=false;
           document.getElementById('owgCSVMapUse').disabled=true;document.getElementById('owgProcessAnalyze').disabled=true;
+          document.getElementById('owgCSVMapAnalyze').disabled=true;
           status.textContent='Column choices changed. Confirm and apply them before the next analysis.';
         });label.appendChild(select);controls.appendChild(label);
       }
       const consentLabel=make('label'),consent=make('input');consent.type='checkbox';consent.id='owgCSVMapConsent';
       consentLabel.append(consent,make('span',' I reviewed these three columns; exclude every other column from local analysis.'));
       const use=button('Use mapped columns for next analysis',useMappedColumns);use.id='owgCSVMapUse';use.disabled=true;
+      const analyzeMapped=button('Analyze mapped log',analyze);analyzeMapped.id='owgCSVMapAnalyze';analyzeMapped.disabled=true;
       consent.addEventListener('change',()=>{use.disabled=!consent.checked;});
-      fields.append(controls,consentLabel,use);
+      fields.append(controls,consentLabel,use,analyzeMapped);
       status.textContent='Inspected '+value.row_count+' event rows and '+value.headers.length+' columns on this device. No file content or header was sent for inspection.';
     }catch(error){if(attempt===mappingGeneration)status.textContent='Unable to inspect columns: '+error.message;}
     finally{if(attempt===mappingGeneration)control.disabled=false;}
@@ -201,6 +206,8 @@
       const file=mappingInspection.createMappedFile(mapping);
       generation++;mappedFile=file;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);
       document.getElementById('owgProcessAnalyze').disabled=false;
+      document.getElementById('owgCSVMapAnalyze').disabled=false;
+      setStatus('Mapped log is ready. Select Analyze mapped log to analyze only the three reviewed columns.');
       document.getElementById('owgCSVMappingStatus').textContent='Mapped '+mappingInspection.row_count+' event rows to case_id, activity and timestamp only. Select Analyze selected CSV to send this minimized log to local OWG. No other columns are included.';
     }catch(error){document.getElementById('owgCSVMappingStatus').textContent='Unable to apply mapping: '+error.message;}
   }

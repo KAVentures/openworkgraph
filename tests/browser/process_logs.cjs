@@ -56,7 +56,7 @@ const path = require('node:path');
       await page.screenshot({path:process.env.OWG_MAPPING_SCREENSHOT});
     }
     await page.setViewportSize({width:1280,height:900});
-    await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
+    await page.getByRole('button',{name:'Analyze mapped log',exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Local analysis complete.'}).waitFor();
     assert.equal(csvRequests.length,1);
     const received=JSON.parse(await fs.readFile(path.join(scratch,'last-preview-shape.json'),'utf8'));
