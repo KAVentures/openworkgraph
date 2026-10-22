@@ -53,6 +53,15 @@ test('incomplete edits remain visible and graph labels stay data; keyboard selec
  assert.equal(input.activities[1].label,'</text><script>sideEffects()</script>');
 });
 
+test('declared responsibilities render as inert labels and preserve node identity',()=>{
+ const input=model();input.activities[0].responsibility_label='<img src=x onerror=sideEffects()>';
+ const chosen=[];const drawing=fixture().draw(input,activity=>chosen.push(activity.id));
+ assert(drawing.walk().some(node=>node.tag==='title'&&node.textContent.includes('Declared responsibility: <img')));
+ assert(drawing.walk().some(node=>node.tag==='text'&&node.textContent.startsWith('Responsibility: ')));
+ drawing.walk().find(node=>node.attrs['aria-label']==='Select activity receive').handlers.click();
+ assert.deepEqual(chosen,['receive']);
+});
+
 
 test('observed transition map preserves forks, joins, loops, counts and source labels without changing design semantics',()=>{
  const graph=fixture();

@@ -159,7 +159,14 @@
       title.textContent =
         (options.observed &&
           activity.label + " · " + activity.observed_summary) ||
-        activity.label + " · " + activity.id + " · " + activity.kind;
+        activity.label +
+          " · " +
+          activity.id +
+          " · " +
+          activity.kind +
+          (activity.responsibility_label
+            ? " · Declared responsibility: " + activity.responsibility_label
+            : "");
       const label = svg("text", {
         x: p.x + 10,
         y: p.y + 25,
@@ -175,9 +182,11 @@
       });
       detail.textContent =
         (options.observed && activity.observed_summary) ||
-        activity.id +
-          " · " +
-          String(activity.kind || "activity").replaceAll("_", " ");
+        (activity.responsibility_label
+          ? ("Responsibility: " + activity.responsibility_label).slice(0, 27)
+          : activity.id +
+            " · " +
+            String(activity.kind || "activity").replaceAll("_", " "));
       const select = () => onSelect?.(activity);
       group.addEventListener("click", select);
       group.addEventListener("keydown", (event) => {

@@ -40,6 +40,7 @@ const path=require('node:path');
   assert(await page.getByRole('button',{name:'Save analyzed log locally',exact:true}).isDisabled());
   await page.getByRole('button',{name:'Design improved TO-BE workflow',exact:true}).click();
   await page.getByLabel('Business goal',{exact:true}).fill('Review a selected pull request');
+  await page.getByLabel('Responsibility step_1',{exact:true}).fill('Case reviewer');
   await page.locator('#owgCatalogReviewed').check();await page.getByRole('button',{name:'Save new revision',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 1.'}).waitFor();
   assert.equal(JSON.parse(await fs.readFile(path.join(scratch,'source-calls.json'),'utf8')),1);
@@ -51,6 +52,7 @@ assert [list(row) for row in c.execute('SELECT * FROM events ORDER BY id')]==ori
 rows=c.execute('SELECT payload FROM workflow_knowledge').fetchall();assert len(rows)==1
 model=json.loads(rows[0][0])['process_model']
 assert model['baseline_source']=='selected_source_audit' and model['baseline_coverage']=='partial_source_audit'
+assert model['activities'][0]['responsibility_label']=='Case reviewer'
 assert 'PRIVATE_' not in '\\n'.join(c.iterdump())
 `,path.join(scratch,'data','workflow_observer.db'),path.join(scratch,'original-events.json')],{encoding:'utf8'});
   assert.equal(checked.status,0,checked.stderr);assert.deepEqual(errors,[]);

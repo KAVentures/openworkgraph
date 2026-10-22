@@ -847,27 +847,45 @@
                   activity.label +
                   " · " +
                   words(activity.implementation || "unmapped") +
+                  (activity.responsibility_label
+                    ? " · Declared responsibility: " +
+                      activity.responsibility_label
+                    : "") +
                   "; this is a proposed design activity.";
               }),
             );
           host.appendChild(selectedActivity);
           const table = el("table"),
             head = el("tr");
-          ["Activity", "Label", "Type", "Suggested implementation"].forEach(
-            (text) => head.appendChild(el("th", text)),
-          );
+          [
+            "Activity",
+            "Label",
+            "Type",
+            "Suggested implementation",
+            "Declared responsibility",
+          ].forEach((text) => head.appendChild(el("th", text)));
           table.appendChild(head);
           model.activities.forEach((a) => {
             const row = el("tr");
-            [a.id, a.label, words(a.kind), words(a.implementation)].forEach(
-              (value) => row.appendChild(el("td", value)),
-            );
+            [
+              a.id,
+              a.label,
+              words(a.kind),
+              words(a.implementation),
+              a.responsibility_label || "Unspecified",
+            ].forEach((value) => row.appendChild(el("td", value)));
             table.appendChild(row);
           });
           const wrap = el("div");
           wrap.className = "scroll";
           wrap.appendChild(table);
           host.appendChild(wrap);
+          host.appendChild(
+            el(
+              "p",
+              "Responsibility labels are descriptive user declarations. They do not verify identity or grant access, review or execution permissions.",
+            ),
+          );
           host.appendChild(el("h4", "Proposed transitions"));
           const edges = el("ul");
           model.transitions.forEach((e) =>
@@ -1080,6 +1098,14 @@
                 "computer_use",
                 "human",
               ],
+            );
+            draftField(
+              row,
+              "Draft responsibility " + activity.id,
+              activity.responsibility_label || "",
+              (value) => (activity.responsibility_label = value),
+              null,
+              120,
             );
             row.appendChild(
               button("Remove draft activity " + activity.id, () =>

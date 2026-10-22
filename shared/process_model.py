@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator, model_serializer
 
 from .process_opportunities import OpportunityScenario
 
@@ -21,6 +21,25 @@ class Activity(StructuralModel):
     label: ActivityLabel
     kind: Literal['activity', 'decision', 'start', 'end'] = 'activity'
     implementation: Literal['unmapped', 'api', 'deterministic', 'ai_agent', 'computer_use', 'human'] = 'unmapped'
+    responsibility_label: str = Field(default='', max_length=120)
+
+    @field_validator('responsibility_label')
+    @classmethod
+    def responsibility_is_single_line(cls, value):
+        value=value.strip()
+        if any(ord(char)<32 or 127<=ord(char)<=159 or 0xD800<=ord(char)<=0xDFFF
+               or ord(char) in {0xFFFE,0xFFFF,0x2028,0x2029} for char in value):
+            raise ValueError('Responsibility must be a short single-line label')
+        return value
+
+    @model_serializer(mode='wrap')
+    def preserve_unspecified_responsibility(self, handler):
+        result=handler(self)
+        # Optional descriptive metadata must not silently change the digest of
+        # existing reviewed models, exported specs or implementation gates.
+        if not self.responsibility_label:
+            result.pop('responsibility_label',None)
+        return result
 
 
 class BusinessRule(StructuralModel):
