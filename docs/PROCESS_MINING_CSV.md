@@ -154,6 +154,10 @@ Responses use no-store caching.
   Optional `workflow_id` and exact `revision` together compare every retained
   case/path with that saved model without changing the snapshot. Selecting a
   catalog reference before reopening a snapshot uses this comparison.
+- `GET /v1/process-mining/datasets/compare?baseline_id=log_...&current_id=log_...&comparability_confirmed=true`:
+  [review full-history changes between two retained logs](PROCESS_DRIFT_REVIEW.md),
+  with optional exact catalog reference, descriptive path mix, activity/transition
+  incidence and elapsed timing changes. No case joins or automatic process updates.
 - `GET /v1/process-mining/datasets/cases?dataset_id=...&after=0&limit=25`:
   up to 100 cases per page, with optional exact `activity` and `variant_id` filters.
 - `GET /v1/process-mining/datasets/events?dataset_id=...&case_number=1&after=0&limit=100`:

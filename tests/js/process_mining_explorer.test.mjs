@@ -28,7 +28,7 @@ function setup(report) {
   const calls=[];
   const window={__owgAuthReady:Promise.resolve()};
   vm.runInNewContext(fs.readFileSync(new URL('../../dashboard/process_mining.js',import.meta.url),'utf8'),{
-    document,window,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>typeof report==='function'?report():report};},
+    document,window,URLSearchParams,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>typeof report==='function'?report(...args):report};},
   });
   const find=(tag,text)=>root.walk().find(element=>element.tag===tag&&element.textContent===text);
   return {document,root,calls,find,window};
@@ -103,4 +103,37 @@ test('source projections reuse analysis without I/O or retention and draft with 
   assert(root.text.includes('Full supplied source projection'));
   assert(!root.text.includes('999'));
   assert.equal(calls.length,1);
+});
+
+test('drift review requires distinct snapshots and a declaration; reference changes discard pending results',async()=>{
+  let finish;
+  const pending=new Promise(resolve=>finish=resolve);
+  const a='log_'+'a'.repeat(32),b='log_'+'b'.repeat(32);
+  const {window,document,root,calls,find}=setup(url=>url.includes('/compare?')?pending:
+    {datasets:[{dataset_id:a,case_count:35,created_at:'2026-10-20T00:00:00Z'},
+      {dataset_id:b,case_count:36,created_at:'2026-10-21T00:00:00Z'}]});
+  assert.equal(calls.length,0);
+  await find('button','List saved local logs').handlers.click();
+  const baseline=document.getElementById('owgDriftBaseline'),current=document.getElementById('owgDriftCurrent'),
+    consent=document.getElementById('owgDriftConsent'),compare=document.getElementById('owgDriftCompare');
+  baseline.value=a;baseline.handlers.change();current.value=a;current.handlers.change();
+  consent.checked=true;consent.handlers.change();assert.equal(compare.disabled,true);
+  current.value=b;current.handlers.change();assert.equal(consent.checked,false);
+  assert.equal(compare.disabled,true);
+  window.owgProcessMining.setReference({workflow_id:'reviewed_process',revision:3});
+  consent.checked=true;consent.handlers.change();assert.equal(compare.disabled,false);
+  const comparing=compare.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(compare.disabled,true);assert.equal(calls.length,2);
+  const query=new URL(calls[1][0],'http://localhost').searchParams;
+  assert.equal(query.get('baseline_id'),a);assert.equal(query.get('current_id'),b);
+  assert.equal(query.get('comparability_confirmed'),'true');assert.equal(query.get('revision'),'3');
+  assert.equal(query.get('workflow_id'),'reviewed_process');
+  window.owgProcessMining.setReference({workflow_id:'reviewed_process',revision:4});
+  assert.equal(consent.checked,false);
+  finish({format:'openworkgraph.process-log-drift.v1',summary:{current_only_path_count:999}});
+  await comparing;
+  assert.equal(document.getElementById('owgDriftResults').children.length,0);
+  assert(!root.text.includes('999'));
+  assert.equal(compare.disabled,true);
+  assert.equal(calls.length,2);
 });

@@ -23,10 +23,11 @@ const path = require('node:path');
     }
     if(!ready)throw new Error('Synthetic local server not ready: '+logs);
     browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-    const page=await browser.newPage();const errors=[];let datasetRequests=0,saveRequests=0;
+    const page=await browser.newPage();const errors=[];let datasetRequests=0,saveRequests=0,compareRequests=0;
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/v1/process-mining/datasets')){
       datasetRequests++;if(request.method()==='POST'&&!request.url().includes('/forget'))saveRequests++;
+      if(new URL(request.url()).pathname.endsWith('/compare'))compareRequests++;
     }});
     const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
     await page.goto(base+'/#session='+session);
@@ -77,14 +78,62 @@ assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
     await page.getByRole('button',{name:'Inspect observed activity Step 0',exact:true}).click();
     await page.getByRole('button',{name:'Browse retained cases for Step 0',exact:true}).click();
     await page.locator('#owgLogCases h3').filter({hasText:'Retained cases containing Step 0'}).waitFor();
+    // A later snapshot differs after event 130, beyond all preview path caps.
+    const currentRows=rows.map(row=>row.replace(/2026-10-20/g,'2026-10-21'));
+    currentRows.push('PRIVATE_CASE_34,Step 3,2026-10-21T00:02:10.000Z,PRIVATE_SOURCE');
+    await page.getByLabel('Choose business event log CSV').setInputFiles({name:'current.csv',mimeType:'text/csv',buffer:Buffer.from(currentRows.join('\n'))});
+    await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
+    await page.locator('#owgProcessStatus').filter({hasText:'Local analysis complete.'}).waitFor();
+    await page.getByLabel('I authorize retaining this selected event log locally.').check();
+    await page.getByRole('button',{name:'Save analyzed log locally',exact:true}).click();
+    await page.locator('#owgProcessStatus').filter({hasText:'Saved a minimized local snapshot.'}).waitFor();
+    await page.locator('#owgDriftBaseline option').filter({hasText:/log_/}).nth(1).waitFor({state:'attached'});
+    const currentId=await page.locator('#owgDriftCurrent option').evaluateAll((options,baselineId)=>options.map(o=>o.value).find(value=>value&&value!==baselineId),id);
+    assert(currentId);
+    await page.getByLabel('Baseline event-log snapshot',{exact:true}).selectOption(id);
+    await page.getByLabel('Current event-log snapshot',{exact:true}).selectOption(currentId);
+    assert.equal(compareRequests,0);
+    assert(await page.getByRole('button',{name:'Compare retained logs',exact:true}).isDisabled());
+    await page.getByLabel('These logs describe the same process with compatible activity labels.',{exact:true}).check();
+    const compared=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/datasets/compare'));
+    await page.getByRole('button',{name:'Compare retained logs',exact:true}).click();
+    const response=await compared,comparison=await response.json();
+    assert.equal(response.headers()['cache-control'],'no-store');
+    await page.locator('#owgDriftStatus').filter({hasText:'Comparison complete.'}).waitFor();
+    assert.equal(compareRequests,1);assert.equal(saveRequests,2);
+    assert.equal(comparison.summary.path_mix_total_variation_distance,.028571);
+    assert.equal(comparison.summary.current_cases_on_current_only_paths,1);
+    assert.equal(comparison.current.event_count,4551);
+    assert.equal(comparison.coverage.all_retained_cases_and_events_used,true);
+    assert.equal(comparison.paths[0].path_truncated,true);
+    assert.equal(comparison.paths[0].observed_path.join(','),comparison.paths[1].observed_path.join(','));
+    assert.notEqual(comparison.paths[0].path_sha256,comparison.paths[1].path_sha256);
+    assert.equal(comparison.process_model_updated,false);
+    assert(!(await page.locator('#owgDriftResults').textContent()).includes('PRIVATE_'));
+    await page.getByRole('button',{name:'Inspect current snapshot',exact:true}).click();
+    await page.locator('#owgProcessStatus').filter({hasText:'Opened retained local snapshot.'}).waitFor();
+    await page.locator('#owgLogCases').getByText('Case 1 · 130 events · variant_1',{exact:true}).waitFor();
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+    if(process.env.OWG_DRIFT_SCREENSHOT){
+      await page.locator('#owgLogDrift').evaluate(element=>element.scrollIntoView({block:'start',behavior:'instant'}));
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await page.screenshot({path:process.env.OWG_DRIFT_SCREENSHOT});
+    }
+    // Changing the comparison invalidates the report and the comparability declaration.
+    await page.getByLabel('Current event-log snapshot',{exact:true}).selectOption(id);
+    assert.equal(await page.locator('#owgDriftResults').textContent(),'');
+    assert(!(await page.getByLabel('These logs describe the same process with compatible activity labels.',{exact:true}).isChecked()));
+    assert(await page.getByRole('button',{name:'Compare retained logs',exact:true}).isDisabled());
     page.once('dialog',dialog=>dialog.accept());
     await page.getByRole('button',{name:'Delete '+id,exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
     assert.equal(await page.getByRole('button',{name:'Open '+id,exact:true}).count(),0);
+    page.once('dialog',dialog=>dialog.accept());
+    await page.getByRole('button',{name:'Delete '+currentId,exact:true}).click();
+    await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
     assert.deepEqual(errors,[]);
-    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, all-case/event paging, minimized SQLite, deletion and mobile.');
+    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, full histories, drift review beyond path caps, no automatic updates, minimized SQLite, deletion and mobile.');
   }finally{
     if(browser)await browser.close();
     server.kill('SIGTERM');

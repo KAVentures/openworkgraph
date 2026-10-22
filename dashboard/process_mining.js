@@ -8,6 +8,7 @@
   let activeVariant=0;
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
+  let driftGeneration=0;
   let observedExpanded=false, observedSelection=null;
   const make=(tag,text,className)=>{
     const el=document.createElement(tag);
@@ -70,9 +71,12 @@
     const save=button('Save analyzed log locally',saveLog);save.id='owgLogSave';save.disabled=true;
     retention.append(consentLabel,days,save,button('List saved local logs',listLogs));
     const inventory=make('div');inventory.id='owgLogInventory';retention.appendChild(inventory);
+    installDrift(retention);
     const cases=make('div');cases.id='owgLogCases';retention.appendChild(cases);card.appendChild(retention);
     const style=make('style');style.textContent=[
       '#owgProcessCSV .owg-process-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}',
+      '#owgLogDrift select{max-width:100%;width:100%}',
+      '#owgLogDrift .owg-drift-controls{display:grid;gap:10px;margin:12px 0}',
       '#owgProcessCSV .owg-pmetrics{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}',
       '#owgProcessCSV .owg-pmetric{border:1px solid #d9dfd4;border-radius:8px;padding:10px;min-width:130px;flex:1}',
       '#owgProcessCSV .owg-pmetric strong{display:block;font-size:21px}',
@@ -149,8 +153,10 @@
   }
   async function listLogs(){
     const attempt=++inventoryGeneration,host=document.getElementById('owgLogInventory');
+    invalidateDrift();
     try{
       const value=await logRequest('');if(attempt!==inventoryGeneration)return;
+      driftChoices(safe(value.datasets));
       host.replaceChildren();
       if(!safe(value.datasets).length)host.appendChild(make('p','No retained local logs.'));
       for(const dataset of safe(value.datasets)){
@@ -198,11 +204,119 @@
   }
   async function deleteLog(id){
     if(!window.confirm('Delete this retained local log, including all of its case timelines? Saved process designs and independent downloads remain separate.'))return;
+    invalidateDrift();
     try{
       await logRequest('/forget?'+new URLSearchParams({dataset_id:id}),{method:'POST',headers:{'X-OWG-Deletion-Confirmed':'true'}});
       if(retainedDataset===id){generation++;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);document.getElementById('owgLogCases').replaceChildren();}
       await listLogs();setStatus('Deleted local event-log snapshot.');
     }catch(error){setStatus('Unable to delete log: '+error.message);}
+  }
+  function installDrift(parent){
+    const section=make('section');section.id='owgLogDrift';
+    section.append(make('h3','Review changes between retained logs'),make('p',
+      'Compare two complete local snapshots using literal activity labels and ordered paths. First list saved logs, then choose a baseline and a current log. No case identities are joined and no saved process is updated.','muted'));
+    const controls=make('div',null,'owg-drift-controls');
+    for(const [id,title] of [['owgDriftBaseline','Baseline event-log snapshot'],['owgDriftCurrent','Current event-log snapshot']]){
+      const label=make('label',title),select=make('select');select.id=id;select.setAttribute('aria-label',title);
+      const empty=make('option','List saved logs to choose a snapshot');empty.value='';select.appendChild(empty);
+      select.addEventListener('change',()=>invalidateDrift());label.appendChild(select);controls.appendChild(label);
+    }
+    const label=make('label'),consent=make('input');consent.type='checkbox';consent.id='owgDriftConsent';
+    label.append(consent,make('span',' These logs describe the same process with compatible activity labels.'));
+    consent.addEventListener('change',()=>invalidateDrift(false));
+    const compare=button('Compare retained logs',compareLogs);compare.id='owgDriftCompare';compare.disabled=true;
+    const status=make('p','No comparison requested.','muted');status.id='owgDriftStatus';status.setAttribute('role','status');
+    const output=make('div');output.id='owgDriftResults';
+    controls.append(label,compare);section.append(controls,status,output);parent.appendChild(section);
+  }
+  function driftEnabled(){
+    const a=document.getElementById('owgDriftBaseline')?.value,b=document.getElementById('owgDriftCurrent')?.value;
+    return !!(a&&b&&a!==b&&document.getElementById('owgDriftConsent')?.checked);
+  }
+  function invalidateDrift(resetConsent=true){
+    driftGeneration++;
+    if(resetConsent){const consent=document.getElementById('owgDriftConsent');if(consent)consent.checked=false;}
+    document.getElementById('owgDriftResults')?.replaceChildren();
+    const status=document.getElementById('owgDriftStatus');if(status)status.textContent='No comparison requested for these selections.';
+    const control=document.getElementById('owgDriftCompare');if(control)control.disabled=!driftEnabled();
+  }
+  function driftChoices(datasets){
+    for(const id of ['owgDriftBaseline','owgDriftCurrent']){
+      const select=document.getElementById(id),previous=select.value;select.replaceChildren();
+      const empty=make('option','Choose a retained snapshot');empty.value='';select.appendChild(empty);
+      for(const dataset of datasets){
+        const option=make('option',dataset.dataset_id+' · '+dataset.case_count+' cases · saved '+dataset.created_at);
+        option.value=dataset.dataset_id;select.appendChild(option);
+      }
+      select.value=datasets.some(dataset=>dataset.dataset_id===previous)?previous:'';
+    }
+    invalidateDrift();
+  }
+  async function compareLogs(){
+    if(!driftEnabled())return;
+    const attempt=++driftGeneration,control=document.getElementById('owgDriftCompare');control.disabled=true;
+    const status=document.getElementById('owgDriftStatus');
+    document.getElementById('owgDriftResults').replaceChildren();status.textContent='Comparing every retained case and full path…';
+    try{
+      const query={baseline_id:document.getElementById('owgDriftBaseline').value,
+        current_id:document.getElementById('owgDriftCurrent').value,comparability_confirmed:true,...(reference||{})};
+      const value=await logRequest('/compare?'+new URLSearchParams(query));if(attempt!==driftGeneration)return;
+      if(value.format!=='openworkgraph.process-log-drift.v1')throw new Error('Unexpected log comparison response');
+      renderDrift(value);status.textContent='Comparison complete. Observed changes require human review; no process model was updated.';
+    }catch(error){if(attempt===driftGeneration)status.textContent='Unable to compare retained logs: '+error.message;}
+    finally{if(attempt===driftGeneration)control.disabled=!driftEnabled();}
+  }
+  function renderDrift(value){
+    const host=document.getElementById('owgDriftResults');host.replaceChildren(make('h3','Observed log changes'));
+    host.appendChild(make('p','Baseline '+value.baseline.dataset_id+' ('+value.baseline.case_count+' cases) → current '+
+      value.current.dataset_id+' ('+value.current.case_count+' cases). All retained events and full paths contribute to the metrics.','muted'));
+    const metrics=make('div',null,'owg-pmetrics'),s=value.summary;
+    metrics.append(metric('Observed path-mix distance · 0 identical, 1 disjoint',s.path_mix_total_variation_distance),
+      metric('Paths seen only in current log',s.current_only_path_count),metric('Paths seen only in baseline',s.baseline_only_path_count),
+      metric('Baseline → current median case elapsed',seconds(s.baseline_median_elapsed_seconds)+' → '+seconds(s.current_median_elapsed_seconds)),
+      metric('Baseline → current p90 case elapsed',seconds(s.baseline_p90_case_elapsed_seconds)+' → '+seconds(s.current_p90_case_elapsed_seconds)));
+    host.appendChild(metrics);
+    host.appendChild(make('p','This is a descriptive comparison, not a significance test or a verified change in business behavior. Case counts and time windows can differ; mix changes may explain overall timing changes. Within-path medians below compare the same complete activity sequence. Elapsed time is not active labor or verified waiting.','muted'));
+    const warningText={observed_event_windows_overlap:'Event windows overlap. Duplicate or overlapping cases cannot be ruled out because native case IDs were discarded.',
+      fewer_than_twenty_cases_in_at_least_one_snapshot:'At least one snapshot has fewer than 20 cases; this advisory is not a significance threshold.',
+      timestamp_ties_have_unverified_order:'Some events share timestamps; their supplied row order is unverified.'};
+    for(const code of safe(value.warnings)){if(warningText[code])host.appendChild(make('p',warningText[code],'muted'));}
+    for(const [title,entry] of [['Baseline',value.baseline],['Current',value.current]]){
+      host.appendChild(make('p',title+' event window: '+entry.event_window.first_event_at+' to '+entry.event_window.last_event_at+
+        '. Snapshot expires '+entry.expires_at+'.','muted'));
+    }
+    if(value.conformance){
+      const c=value.conformance,r=c.reference;
+      host.append(make('h4','Same-revision structural comparison'),make('p','Process '+r.workflow_id+' revision '+r.revision+' · '+r.content_sha256),
+        make('p','Exact structural matches: baseline '+c.baseline_exact_structural_match_cases+' / '+value.baseline.case_count+
+        '; current '+c.current_exact_structural_match_cases+' / '+value.current.case_count+'. Match-share change '+
+        signed(c.exact_match_share_change_percentage_points)+' percentage points. Business rules and conditions were not evaluated.'));
+    }
+    driftTable(host,'Path mix and within-path timing',[
+      'Observed path · full-path fingerprint','Presence','Baseline cases','Current cases','Case-share change (pp)','Baseline median elapsed','Current median elapsed'],
+      safe(value.paths).map(row=>[row.observed_path.join(' → ')+(row.path_truncated?' … ('+row.path_event_count+' events)':'')+' · '+row.path_sha256,
+        row.presence,row.baseline_case_count,row.current_case_count,signed(row.case_share_change_percentage_points),
+        optionalSeconds(row.baseline_median_elapsed_seconds),optionalSeconds(row.current_median_elapsed_seconds)]));
+    if(value.coverage.path_rows_truncated)host.appendChild(make('p','Showing '+value.coverage.path_rows_returned+' of '+value.coverage.path_rows_total+' full paths, ranked by absolute case-share change. Summary metrics use every path.','muted'));
+    driftTable(host,'Activity incidence', ['Activity','Baseline events','Current events','Baseline cases','Current cases','Case-share change (pp)'],
+      safe(value.activities).map(row=>[row.activity,row.baseline_event_count,row.current_event_count,row.baseline_case_count,row.current_case_count,signed(row.case_share_change_percentage_points)]));
+    driftTable(host,'Observed transitions and elapsed gaps',['From → to','Baseline transitions','Current transitions','Case-share change (pp)','Baseline median gap','Current median gap'],
+      safe(value.transitions).map(row=>[row.from+' → '+row.to,row.baseline_transition_count,row.current_transition_count,
+        signed(row.case_share_change_percentage_points),optionalSeconds(row.baseline_median_elapsed_seconds),optionalSeconds(row.current_median_elapsed_seconds)]));
+    if(value.coverage.transition_rows_truncated)host.appendChild(make('p','Showing '+value.coverage.transition_rows_returned+' of '+value.coverage.transition_rows_total+' transition types.','muted'));
+    host.append(make('p','Inspect a snapshot to review its paths and supporting cases. Drafting and saving any improved process requires a separate explicit review. No business outcomes or execution authority are inferred.','muted'),
+      button('Inspect baseline snapshot',()=>openLog(value.baseline.dataset_id)),
+      button('Inspect current snapshot',()=>openLog(value.current.dataset_id)));
+  }
+  const signed=value=>(Number(value)>0?'+':'')+String(value);
+  const optionalSeconds=value=>value===null||value===undefined?'Not observed':seconds(value);
+  function driftTable(host,title,columns,rows){
+    host.appendChild(make('h4',title));
+    const wrap=make('div',null,'owg-process-table'),table=make('table'),head=make('thead'),header=make('tr'),body=make('tbody');
+    for(const title of columns){const cell=make('th',title);cell.setAttribute('scope','col');header.appendChild(cell);}
+    head.appendChild(header);
+    for(const values of rows){const row=make('tr');for(const value of values)row.appendChild(make('td',value));body.appendChild(row);}
+    table.append(head,body);wrap.appendChild(table);host.appendChild(wrap);
   }
   function metric(label,value){
     const host=make('div',null,'owg-pmetric');
@@ -427,6 +541,7 @@
     host.appendChild(details);
   }
   function setReference(value){
+    invalidateDrift();
     reference=value?{workflow_id:value.workflow_id,revision:String(value.revision)}:null;
     const label=document.getElementById('owgProcessReference');
     if(label)label.textContent=reference?'Next analysis compares with saved process '+reference.workflow_id+' revision '+reference.revision+'. Existing results are unchanged until Analyze.':'No saved reference selected.';
