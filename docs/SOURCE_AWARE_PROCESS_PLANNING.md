@@ -66,3 +66,9 @@ consent, privacy, review revocation and the complete proposal-to-authorized-MCP
 flow. No live model provider or customer account is contacted. Generated
 stdlib-only offline suites skip dependency-requiring SDK/source checks until
 requirements are installed; structural checks continue to run.
+
+For reviewed normal/exception/clarification batches, use
+[current-source shadow evaluation](CURRENT_SOURCE_SHADOW_EVALUATION.md). It
+compares each case immediately against its pinned current receipts, keeps
+expectations out of the model context and emits the existing minimized report
+for local/shared shadow review.
