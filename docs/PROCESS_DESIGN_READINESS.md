@@ -40,7 +40,9 @@ reflect later edits: there is no persistent multi-page snapshot token.
 
 Within a page, model, owner, archive and review reads share one database
 snapshot on SQLite and PostgreSQL. Later changes require refresh. The owner
-filter uses an organization/owner/workflow index; latest-version joins use the
+filter uses an owner/workflow index together with the existing organization
+primary key. Keeping both long Unicode identity fields out of the same index
+entry avoids PostgreSQL tuple-size failures. Latest-version joins use the
 existing knowledge primary key. The API performs no model-provider calls,
 source-system reads or business writes. Its minimal audit stores only returned
 count and whether another page exists; the report itself is not retained.

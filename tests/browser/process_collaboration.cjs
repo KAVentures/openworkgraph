@@ -168,6 +168,15 @@ const pathModule = require("node:path");
     releaseReadiness();await lateReadiness;await alice.unroute('**/v1/human/process-readiness?*');
     await alice.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await alice.locator('#readinessReport').textContent(),'');assert(await alice.locator('#downloadReadiness').isDisabled());
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('𐀀'.repeat(512));
+    const unicodeReadiness=alice.waitForResponse(response=>new URL(response.url()).pathname==='/v1/human/process-readiness');
+    await alice.locator('#loadReadiness').click();assert.equal((await unicodeReadiness).status(),200);
+    await alice.locator('#readinessReport').getByText('No shared designs match these filters on this page.',{exact:true}).waitFor();
+    const beforeOverlong=readinessRequests;
+    await alice.getByLabel('Readiness owner actor ID (optional)',{exact:true}).fill('a'.repeat(513));
+    await alice.locator('#loadReadiness').click();await waitStatus(alice,'Use an owner actor ID of at most 512 characters.');
+    assert.equal(readinessRequests,beforeOverlong);
+
 
     await alice
       .getByRole("button", { name: "Add collaborator", exact: true })

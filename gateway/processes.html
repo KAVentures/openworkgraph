@@ -176,7 +176,7 @@
     <section>
       <h2>Organization design readiness</h2>
       <p>Inspect saved designs for missing declarations and outstanding review. Findings can be intentional; they do not establish deployment health, tool availability, policy compliance or permission to execute. Counts describe the returned page only.</p>
-      <label>Readiness owner actor ID (optional)<input id="readinessOwner" type="text" maxlength="512" /></label>
+      <label>Readiness owner actor ID (optional)<input id="readinessOwner" type="text" maxlength="1024" /></label>
       <label><input id="readinessArchived" type="checkbox" />Include archived designs in readiness</label>
       <button id="loadReadiness">Load design readiness</button>
       <button id="downloadReadiness" disabled>Download current readiness page</button>
@@ -685,9 +685,11 @@
           note("Loaded organization process inventory.");
         }
         async function loadReadiness(after="") {
+          const owner=$("readinessOwner").value.trim();
+          if(Array.from(owner).length>512)throw new Error("Use an owner actor ID of at most 512 characters.");
           clearReadiness();const generation=readinessGeneration;
           const result=await call("/v1/human/process-readiness?"+new URLSearchParams({
-            after,owner_actor_id:$("readinessOwner").value.trim(),include_archived:$("readinessArchived").checked}));
+            after,owner_actor_id:owner,include_archived:$("readinessArchived").checked}));
           if(generation!==readinessGeneration)return;
           readinessReport=result;$("downloadReadiness").disabled=false;
           const host=$("readinessReport"),counts=result.page_inventory_counts;

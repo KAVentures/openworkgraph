@@ -101,3 +101,17 @@ def test_readiness_http_authorization_strict_filters_and_no_store(tmp_path):
         assert client.get(path,headers=auth('foreign')).json()['processes']==[]
         for query in ['limit=0','limit=101','after='+'x'*81,'owner_actor_id='+'x'*513]:
             assert client.get(path+'?'+query,headers=auth('alice')).status_code==422
+
+
+def test_maximum_unicode_identities_do_not_exceed_owner_index_entry_limits(store):
+    import random
+    rng=random.Random(9031)
+    # Organization claims in this range have a compact escaped namespace;
+    # random astral owner characters still occupy four bytes each in UTF-8.
+    org=''.join(chr(rng.randrange(0x400,0x800)) for _ in range(512))
+    actor=''.join(chr(rng.randrange(0x10000,0x10FF00)) for _ in range(512))
+    principal=person(actor,org=org)
+    saved=store.save(principal,write('Long declared identity'))
+    report=store.readiness_report(principal,owner_actor_id=actor)
+    assert [row['workflow_id'] for row in report['processes']]==[saved['process']['workflow_id']]
+    assert report['processes'][0]['owner_actor_id']==actor

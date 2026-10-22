@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS gateway_shared_processes (
  organization_id TEXT NOT NULL, workflow_id TEXT NOT NULL, owner_actor_id TEXT NOT NULL,
  access_revision INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, PRIMARY KEY(organization_id, workflow_id));
-CREATE INDEX IF NOT EXISTS idx_shared_process_owner ON gateway_shared_processes(organization_id, owner_actor_id, workflow_id);
+CREATE INDEX IF NOT EXISTS idx_shared_process_owner ON gateway_shared_processes(owner_actor_id, workflow_id);
 CREATE TABLE IF NOT EXISTS gateway_process_members (
  organization_id TEXT NOT NULL, workflow_id TEXT NOT NULL, actor_id TEXT NOT NULL,
  role TEXT NOT NULL, PRIMARY KEY(organization_id, workflow_id, actor_id));
