@@ -7,33 +7,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import re
-from contextvars import ContextVar
 from urllib.parse import urlsplit, parse_qs
 
 import httpx
 
 from .zendesk_process_preview import minimize_ticket_audits, project_ticket_audits, zendesk_selected_cases_process
+from .source_http_logging import private_source_http_logs
 
 MAX_RESPONSE_BYTES=512*1024
 MAX_PAGES=3
-_source_logs=ContextVar('owg_zendesk_source_logs',default=False)
-
-
-class _PrivateSourceLogs(logging.Filter):
-    def filter(self,record):
-        return not _source_logs.get()
-
-
-def _protect_source_logs():
-    # HTTPX's INFO URL and httpcore debug traces can otherwise disclose selected
-    # ticket IDs or provider metadata. Only this task's source request scope is
-    # muted; unrelated requests keep their existing logging behavior.
-    for name in ('httpx','httpcore.connection','httpcore.http11','httpcore.http2','httpcore.proxy','httpcore.socks'):
-        logger=logging.getLogger(name)
-        if not any(isinstance(item,_PrivateSourceLogs) for item in logger.filters):logger.addFilter(_PrivateSourceLogs())
 
 
 def _empty(reason):
@@ -118,15 +102,14 @@ async def read_selected_zendesk_process(ticket_ids,*,confirmed,environ=None,clie
     if error:return _empty(error)
     host,token=configuration
     receipts=[]
-    _protect_source_logs();log_scope=_source_logs.set(True)
     try:
-        async with asyncio.timeout(30):
-            async with (client_factory or httpx.AsyncClient)(timeout=10,follow_redirects=False) as client:
-                for identifier in ticket_ids:
-                    receipt=await _ticket(client,host,token,int(identifier))
-                    if receipt['availability'] in {'source_access_denied','source_rate_limited'}:
-                        return _empty(receipt['availability'])
-                    receipts.append(receipt)
+        with private_source_http_logs():
+            async with asyncio.timeout(30):
+                async with (client_factory or httpx.AsyncClient)(timeout=10,follow_redirects=False) as client:
+                    for identifier in ticket_ids:
+                        receipt=await _ticket(client,host,token,int(identifier))
+                        if receipt['availability'] in {'source_access_denied','source_rate_limited'}:
+                            return _empty(receipt['availability'])
+                        receipts.append(receipt)
     except (TimeoutError,httpx.HTTPError,OSError,ValueError):return _empty('source_request_failed')
-    finally:_source_logs.reset(log_scope)
     return zendesk_selected_cases_process(receipts)

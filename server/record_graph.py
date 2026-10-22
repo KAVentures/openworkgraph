@@ -235,6 +235,7 @@ def _record_rows(
 def record_graph(
     resource_ref: str, *, since: str | None = None, until: str | None = None,
     include_source_status: bool = False, source_event_limit: int = _MAX_SOURCE_ROWS,
+    include_source_lifecycle: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
     source_reader: Callable[[str], dict[str, Any]] | None = None,
     required_source_type: tuple[str, str, str] | None = None,
@@ -310,7 +311,8 @@ def record_graph(
             # client never broadens this permission via API parameters.
             source = (source_reader or jira_issue_receipt)(resource_ref)
         elif identity and identity[0] == "stripe" and identity[1] in {"invoice", "refund"} and identity[2] == "dashboard.stripe.com":
-            source = (source_reader or stripe_record_receipt)(resource_ref)
+            adapter=source_reader or stripe_record_receipt
+            source = adapter(resource_ref,include_lifecycle=True) if include_source_lifecycle is True and identity[1]=='invoice' else adapter(resource_ref)
         else:
             source = _source_unknown("no_approved_source_adapter_for_record_type")
     return {

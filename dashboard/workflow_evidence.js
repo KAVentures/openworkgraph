@@ -105,6 +105,18 @@
     const host=ensureCard()?.querySelector('#workflowRecordCaseLanes');
     if(!host) return;
     const rows=recordLanes.slice(0,8);
+    const signature=JSON.stringify({rows,limited:recordLaneCoverageLimited});
+    // Ordinary dashboard refreshes must not close source details, clear an
+    // explicit selection or discard an in-progress/read source result when
+    // the underlying permitted evidence has not changed.
+    if(host.__owgRecordLaneSignature===signature)return;
+    const opened=new Set(),checkedJira=new Set(),checkedStripe=new Set();
+    host.querySelectorAll('details[data-record-resource-ref]').forEach(node=>{
+      const ref=node.dataset.recordResourceRef;if(node.open)opened.add(ref);
+      if(node.querySelector('[data-jira-batch-select]')?.checked)checkedJira.add(ref);
+      if(node.querySelector('[data-stripe-batch-select]')?.checked)checkedStripe.add(ref);
+    });
+    host.__owgRecordLaneSignature=signature;
     if(!rows.length){
       host.innerHTML='<p class="muted">No repeated exact-record observations in this evidence window. This does not mean no business cases exist; exact source references require opt-in capture.</p>';
       return;
@@ -121,18 +133,58 @@
         : '';
       const githubOption=item.provider==='github'&&item.resource_kind==='pull_request'
         ? '<button class="secondary" type="button" data-github-process="'+index+'">Read opted-in GitHub review history</button><div role="status" data-github-process-result="'+index+'" class="muted" style="margin-top:7px"></div>' : '';
+      const stripeOption=item.provider==='stripe'&&item.resource_kind==='invoice'
+        ? '<button class="secondary" type="button" data-stripe-process="'+index+'">Read opted-in invoice lifecycle</button><div role="status" data-stripe-process-result="'+index+'" class="muted" style="margin-top:7px"></div>'+
+          '<label style="display:block;margin:8px 0"><input type="checkbox" data-stripe-batch-select="'+index+'"> Include this observed invoice in source comparison</label>' : '';
       const compareOption=item.provider==='jira'
         ? '<label style="display:block;margin:8px 0"><input type="checkbox" data-jira-batch-select="'+index+'"> Include this observed Jira record in manual source comparison</label>'
         : '';
-      return '<details style="padding:9px 0;border-bottom:1px solid #eceee8" data-record-lane="'+index+'">'+
+      return '<details style="padding:9px 0;border-bottom:1px solid #eceee8" data-record-lane="'+index+'" data-record-resource-ref="'+esc(item.resource_ref||'')+'">'+
         '<summary style="cursor:pointer"><strong>'+esc(item.provider||'Record')+' · '+esc(item.resource_kind||'object')+'</strong>'+
         ' <span class="muted">· '+Number(item.observed_event_count||0)+' observed events, '+
         Number(item.observed_actor_count||0)+' actors, '+Number(item.observed_session_count||0)+' sessions</span></summary>'+
         '<p class="muted">Exact opaque reference: <code>'+esc(item.resource_ref||'')+
         '</code>. No cross-record join, verified handoff or successful business outcome is implied.</p>'+
-        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+githubOption+compareOption+
+        '<ol style="margin-top:6px">'+lines+more+'</ol>'+jiraOption+githubOption+stripeOption+compareOption+
         '</details>';
     }).join('');
+    host.querySelectorAll('details[data-record-resource-ref]').forEach(node=>{
+      const ref=node.dataset.recordResourceRef;node.open=opened.has(ref);
+      const jira=node.querySelector('[data-jira-batch-select]'),stripe=node.querySelector('[data-stripe-batch-select]');
+      if(jira)jira.checked=checkedJira.has(ref);if(stripe)stripe.checked=checkedStripe.has(ref);
+    });
+    if(rows.filter(item=>item.provider==='stripe'&&item.resource_kind==='invoice').length>=2){
+      const bar=document.createElement('div'),compare=document.createElement('button'),output=document.createElement('div');
+      compare.type='button';compare.className='secondary';compare.textContent='Compare selected invoice lifecycles';compare.disabled=true;
+      output.setAttribute('role','status');output.className='muted';let batchGeneration=0;
+      const selected=()=>[...host.querySelectorAll('[data-stripe-batch-select]:checked')]
+        .map(input=>rows[Number(input.dataset.stripeBatchSelect||0)])
+        .filter(item=>item&&item.provider==='stripe'&&item.resource_kind==='invoice');
+      compare.disabled=selected().length<2||selected().length>8;
+      host.querySelectorAll('[data-stripe-batch-select]').forEach(input=>input.addEventListener('change',()=>{
+        batchGeneration++;output.replaceChildren();compare.disabled=selected().length<2||selected().length>8;
+      }));
+      compare.onclick=async()=>{
+        const refs=selected().map(item=>item.resource_ref);if(refs.length<2||refs.length>8)return;
+        if(!confirm('Read lifecycle timestamp fields for these '+refs.length+' exact observed invoices using your existing Stripe account/restricted read-key opt-in? Invoices remain separate cases; no bank settlement or execution authority is inferred.'))return;
+        const attempt=++batchGeneration;compare.disabled=true;output.textContent='Reading explicitly selected invoice lifecycles…';
+        try{
+          await window.__owgAuthReady;
+          const response=await fetch('/v1/process-mining/stripe-selected-invoices',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({resource_refs:refs,confirm_source_reads:true}),cache:'no-store'});
+          const value=await response.json();if(attempt!==batchGeneration)return;
+          if(!response.ok)throw new Error('Selected invoice lifecycle read unavailable ('+response.status+').');
+          output.replaceChildren();const summary=document.createElement('p');
+          summary.textContent=value.projected_record_count+' of '+value.requested_record_count+' selected invoices supplied lifecycle timestamps. '+
+            'These remain distinct source cases with partial history; missing data does not prove missing work.';output.appendChild(summary);
+          (value.selections||[]).forEach(item=>{const label=document.createElement('p');
+            label.textContent='Selected invoice '+item.selection_number+' → '+(item.case_label||'no projected case')+' · '+item.projected_event_count+' lifecycle events.';output.appendChild(label);});
+          if(value.process)sourceExplorerButton(output,value.process,'selected Stripe invoices');
+        }catch(error){if(attempt===batchGeneration)output.textContent=String(error.message||'Invoice lifecycle comparison unavailable.');}
+        finally{if(attempt===batchGeneration)compare.disabled=selected().length<2||selected().length>8;}
+      };
+      bar.append(compare,output);host.appendChild(bar);
+    }
     if(rows.filter(item=>item.provider==='jira').length>=2){
       const bar=document.createElement('div');
       bar.style.cssText='padding:10px 0;border-bottom:1px solid #eceee8';
@@ -148,6 +200,7 @@
       const selected=()=>[...host.querySelectorAll('[data-jira-batch-select]:checked')]
         .map(input=>rows[Number(input.dataset.jiraBatchSelect||0)])
         .filter(item=>item&&item.provider==='jira');
+      compare.disabled=selected().length<2;
       host.querySelectorAll('[data-jira-batch-select]').forEach(checkbox=>{
         checkbox.addEventListener('change',()=>{compare.disabled=selected().length<2;});
       });
@@ -273,6 +326,29 @@
             'No eligible source history is available. Missing data does not prove missing work.'));
           if(data.process)sourceExplorerButton(result,data.process,'GitHub');
         }catch(error){result.textContent=String(error.message||'GitHub source projection unavailable.');}
+        finally{button.disabled=false;}
+      };
+    });
+    host.querySelectorAll('[data-stripe-process]').forEach(button=>{
+      button.onclick=async()=>{
+        const item=rows[Number(button.dataset.stripeProcess||0)];
+        const result=host.querySelector('[data-stripe-process-result="'+button.dataset.stripeProcess+'"]');
+        if(!item||!result||item.provider!=='stripe'||item.resource_kind!=='invoice')return;
+        if(!confirm('Read lifecycle timestamp fields for this exact observed invoice? Your existing Stripe restricted read-key/account opt-in is required. This is partial lifecycle evidence, not a full audit, bank settlement or agent authority.'))return;
+        button.disabled=true;result.textContent='Reading selected invoice lifecycle…';
+        try{
+          await window.__owgAuthReady;
+          const response=await fetch('/v1/process-mining/stripe-selected-invoices',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({resource_refs:[item.resource_ref],confirm_source_reads:true}),cache:'no-store'});
+          if(!response.ok)throw new Error('Invoice lifecycle unavailable ('+response.status+').');
+          const value=await response.json();result.replaceChildren();
+          result.appendChild(document.createTextNode(value.process?value.process.input_rows+
+            ' provider-reported lifecycle timestamps. Partial source history; elapsed gaps are not employee labor or verified waiting.':
+            'No eligible lifecycle timestamps are available. Missing timestamps do not prove missing work.'));
+          if(value.invalid_timestamp_field_count||value.chronology_conflict_record_count)result.appendChild(document.createTextNode(' '+
+            value.invalid_timestamp_field_count+' invalid timestamp fields and '+value.chronology_conflict_record_count+' conflicting records were omitted.'));
+          if(value.process)sourceExplorerButton(result,value.process,'Stripe invoice');
+        }catch(error){result.textContent=String(error.message||'Invoice lifecycle projection unavailable.');}
         finally{button.disabled=false;}
       };
     });
