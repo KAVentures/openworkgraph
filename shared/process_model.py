@@ -19,7 +19,7 @@ class StructuralModel(BaseModel):
 class Activity(StructuralModel):
     id: Identifier
     label: ActivityLabel
-    kind: Literal['activity', 'decision', 'start', 'end'] = 'activity'
+    kind: Literal['activity', 'decision', 'routing', 'start', 'end'] = 'activity'
     implementation: Literal['unmapped', 'api', 'deterministic', 'ai_agent', 'computer_use', 'human'] = 'unmapped'
     responsibility_label: str = Field(default='', max_length=120)
 
@@ -84,7 +84,7 @@ class ProcessModel(StructuralModel):
     owner_label: str = Field(default='', max_length=120)
     baseline_path: list[Annotated[str, Field(min_length=1, max_length=240)]] = Field(min_length=1, max_length=40)
     baseline_source: Literal['selected_csv_variant', 'selected_observed_variant', 'selected_source_audit', 'user_declared']
-    baseline_coverage: Literal['complete_supplied_path', 'bounded_candidate_sequence', 'partial_source_audit'] = 'complete_supplied_path'
+    baseline_coverage: Literal['complete_supplied_path', 'bounded_candidate_sequence', 'partial_source_audit', 'user_declared_design'] = 'complete_supplied_path'
     baseline_support_unit: Literal['declared_cases', 'candidate_executions'] = 'declared_cases'
     supporting_case_count: int = Field(default=0, ge=0, le=1000000)
     activities: list[Activity] = Field(min_length=1, max_length=40)
@@ -154,6 +154,8 @@ class ProcessModel(StructuralModel):
                     raise ValueError('Decision branches require at least two explicitly referenced rules')
             elif len(outgoing[activity.id]) > 1:
                 raise ValueError('Branching activities must be marked as decisions')
+            if activity.kind == 'routing' and (activity.id in self.terminal_activity_ids or len(outgoing[activity.id]) != 1):
+                raise ValueError('Routing nodes must have exactly one outgoing transition and cannot be terminal')
             if activity.kind == 'end' and activity.id not in self.terminal_activity_ids:
                 raise ValueError('End events must be terminal activities')
             if activity.kind == 'start' and (activity.id != self.entry_activity_id or incoming[activity.id]):

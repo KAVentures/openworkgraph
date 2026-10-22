@@ -116,7 +116,7 @@ def process_bpmn(packet: dict[str, Any]) -> str:
         f"Reviewed design {packet['workflow_id']} revision {packet['revision']} "
         f"sha256 {packet['content_sha256']}; not policy or execution authority."
     )
-    tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent'}
+    tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'routing': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent'}
     for activity in model.activities:
         node = ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})
         if activity.responsibility_label:
@@ -151,7 +151,8 @@ def process_document(packet: dict[str, Any]) -> str:
              'SHA256: ' + packet['content_sha256'],
              'User-reviewed design. Not approved policy or authorization to execute.',
              '', 'Declared goal: ' + model.goal, 'Declared owner: ' + model.owner_label,
-             '', 'AS-IS observed baseline (' + model.baseline_source + '):',
+             '', ('Imported declared design - no observed baseline' if model.baseline_coverage=='user_declared_design'
+                   else 'AS-IS observed baseline (' + model.baseline_source + '):'),
              ' → '.join(model.baseline_path), 'Coverage: ' + model.baseline_coverage,
              f'Support: {model.supporting_case_count} {model.baseline_support_unit} (not verified case identity)',
              '', 'TO-BE proposed activities:']

@@ -752,6 +752,27 @@ def process_catalog_script() -> Response:
     return FileResponse(ROOT / 'dashboard' / 'process_catalog.js', media_type='application/javascript')
 
 
+@app.post('/v1/process-catalog/import-bpmn')
+async def import_process_bpmn_draft(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_bpmn_import import BPMNImportError, MAX_BYTES, import_bpmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
+    if content_type not in {'application/xml','text/xml','application/bpmn+xml'}:
+        raise HTTPException(415,'BPMN import requires XML content')
+    payload=bytearray()
+    async for chunk in request.stream():
+        if len(payload)+len(chunk)>MAX_BYTES:
+            raise HTTPException(413,'BPMN exceeds the 128 KiB limit')
+        payload.extend(chunk)
+    try:
+        result=await run_in_threadpool(import_bpmn,bytes(payload))
+    except BPMNImportError as exc:
+        raise HTTPException(422,str(exc)) from None
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
 @app.get('/v1/process-catalog')
 def list_process_catalog(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100)) -> Response:
     page = _knowledge.page('local', after=after, limit=limit)

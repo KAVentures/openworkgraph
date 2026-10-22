@@ -11,7 +11,7 @@ from .process_model import ProcessModel
 def compare_path(path: tuple[str, ...], model: ProcessModel) -> dict[str, Any]:
     """Minimum unit-cost insert/delete alignment against the graph's label language.
 
-    Start/end/decision nodes are routing nodes, not source-log activities. Rules
+    Start/end/decision/merge-routing nodes are not source-log activities. Rules
     annotate branches but are never evaluated against missing business payloads.
     Cycles are safe because each (log position, model node) state is visited at
     most once at its minimum distance. Input bounds come from the CSV/model schema.

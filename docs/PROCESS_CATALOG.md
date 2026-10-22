@@ -2,6 +2,9 @@
 
 BPMN exports include [portable diagram geometry](PROCESS_DIAGRAM_INTERCHANGE.md)
 so external modelers can render activities, branches and loops immediately.
+The catalog can also [preview supported BPMN diagrams as unreviewed declared
+designs](PROCESS_BPMN_IMPORT.md), including exclusive split/merge routing, with
+explicit correction/review before Save and no imported execution authority.
 
 The local Evidence page now connects the CSV designer to the existing
 `workflow_knowledge` store. No second model database or collector is introduced.

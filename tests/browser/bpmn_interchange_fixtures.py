@@ -8,6 +8,8 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 sys.path.insert(0,str(ROOT/'tests'))
 from test_process_catalog import model,branched_model
+from test_process_bpmn_import import branched as imported_branch_fixture
+from shared.process_bpmn_import import import_bpmn
 from shared.process_catalog import process_bpmn
 from server.process_agent_starter import _review_bpmn
 
@@ -27,6 +29,7 @@ fixtures={
  'branches-and-loop':process_bpmn(packet(graph)),
  'self-loop':process_bpmn(packet(self_loop)),
  'linear':process_bpmn(packet(model().model_dump())),
+ 'imported-exclusive-merge':process_bpmn(packet(import_bpmn(imported_branch_fixture())['process_model'])),
  'manual-starter':_review_bpmn(['Receive','Review','Close'],[{
      'at_step_id':'step_002','condition_label':'Missing approval','response':'pause_for_review'}]),
 }
