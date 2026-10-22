@@ -347,6 +347,41 @@ async def local_agent_plan_preflight(request: Request) -> Response:
     return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
 
+@app.get('/v1/record-graph/state-receipt')
+def get_record_state_receipt(resource_ref: str, source_type: str, confirm_source_read: bool = False):
+    """Minimized opt-in source read within the existing AI history boundary."""
+    from .process_source_rule_checks import SourceRuleCheck,current_source_state_receipt
+    if confirm_source_read is not True:
+        raise HTTPException(status_code=403,detail='Explicit current source read confirmation is required')
+    try:
+        selection=SourceRuleCheck(resource_ref=resource_ref,source_type=source_type)
+    except ValueError:
+        raise HTTPException(status_code=422,detail='Choose an observed reference and supported source type') from None
+    # This route is used directly by customer runtimes, without MCP's range
+    # wrapper. Enforce the user's existing disclosure lease on the server.
+    import os
+    from datetime import datetime,timezone
+    from .ai_access import ai_access_enabled
+    from shared.history_policy import active_ai_history_access
+    from shared.capture_control import read_state
+    if not ai_access_enabled():
+        raise HTTPException(status_code=403,detail='AI access is off')
+    lease=active_ai_history_access();mode=lease.get('mode');window={}
+    if mode!='all_saved':
+        if mode=='selected_range':
+            window={'since':lease.get('since'),'until':lease.get('until')}
+        else:
+            window={'since':read_state().get('run_started_at') or os.getenv('WORKFLOW_OBSERVER_RUN_STARTED_AT')}
+        try:
+            stamps=[datetime.fromisoformat(str(value or '').replace('Z','+00:00')) for value in window.values()]
+            if any(stamp.tzinfo is None for stamp in stamps):raise ValueError()
+            if len(stamps)==2 and stamps[0]>=stamps[1]:raise ValueError()
+            window={key:stamp.astimezone(timezone.utc).isoformat() for key,stamp in zip(window,stamps)}
+        except (ValueError,TypeError,OverflowError):
+            raise HTTPException(status_code=403,detail='No valid permitted evidence window is available') from None
+    return JSONResponse(current_source_state_receipt(selection,evidence_window=window),headers={'Cache-Control':'no-store'})
+
+
 @app.get("/v1/record-graph/operation-receipt")
 def get_record_operation_receipt(
     resource_ref: str, expected_operation: str,

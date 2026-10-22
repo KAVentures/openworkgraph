@@ -33,7 +33,7 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
     archive=build_runtime_project(value)
     assert archive==build_runtime_project(value)
     with ZipFile(BytesIO(archive)) as zipfile:
-        assert len(zipfile.namelist())==19
+        assert len(zipfile.namelist())==21
         for name in zipfile.namelist():
             assert not name.startswith('/') and '..' not in name
             if name.endswith('.py'):
@@ -53,6 +53,9 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
         assert cases['all_transitions_covered']
         assert cases['customer_cases_used'] is False
         zipfile.extractall(tmp_path)
+    minimal=subprocess.run([sys.executable,'-S','-c','from execute import digest; assert digest({})'],cwd=tmp_path,
+        capture_output=True,text=True,timeout=20)
+    assert minimal.returncode==0,minimal.stderr
     run=subprocess.run([sys.executable,'-m','unittest','-v','test_shadow'],cwd=tmp_path,
                        capture_output=True,text=True,timeout=20)
     assert run.returncode==0,run.stdout+run.stderr

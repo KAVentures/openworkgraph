@@ -117,7 +117,7 @@ class EvaluationCases(unittest.TestCase):
             for name, value in [('workflow.spec.json', self.spec), ('suite.json', self.suite), ('results.json', self.results)]:
                 (root / name).write_text(json.dumps(value), encoding='utf-8')
             # Copy only the stdlib runtime, proving offline comparison needs no SDK.
-            for name in ('evaluate.py', 'execute.py', 'runtime.py'):
+            for name in ('evaluate.py', 'execute.py', 'runtime.py','process_source_state.py','process_rule_conditions.py'):
                 (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
             command = [sys.executable, '-c',
                 'import evaluate,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("evaluate.py",run_name="__main__")',

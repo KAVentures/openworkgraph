@@ -76,3 +76,7 @@ as deployment or execution approval.
 conditions with fresh authenticated provider state while preserving unknown
 facts and the distinction between current records, historical cases and
 execution permissions.
+
+[Runtime source-rule bindings](RUNTIME_SOURCE_RULE_BINDINGS.md) support explicitly
+reviewed current-source invariants before mapped actions. General temporal branch
+execution, historical case attributes and live customer acceptance remain open.
