@@ -129,6 +129,31 @@ assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
     await page.getByRole('button',{name:'Inspect current snapshot',exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Opened retained local snapshot.'}).waitFor();
     await page.locator('#owgLogCases').getByText('Case 1 · 130 events · variant_1',{exact:true}).waitFor();
+    await page.getByLabel('Case first event from (inclusive, ISO timestamp)',{exact:true}).fill('2026-10-21T00:00:00Z');
+    await page.getByLabel('Case first event before (exclusive, ISO timestamp)',{exact:true}).fill('2026-10-21T00:01:00Z');
+    await page.getByLabel('Case contains exact activity',{exact:true}).fill('Step 3');
+    const cohortResponse=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/datasets/cohort'));
+    await page.getByRole('button',{name:'Apply case filters',exact:true}).click();
+    const filtered=await (await cohortResponse).json();
+    assert.equal(filtered.selection.selected_case_count,1);
+    assert.equal(filtered.selection.selected_event_count,131);
+    assert.equal(filtered.report.variants[0].variant_id,'variant_2');
+    await page.locator('#owgCohortStatus').filter({hasText:'Selected 1 of 35 retained cases'}).waitFor();
+    await page.getByRole('button',{name:'Variant 2 · 1 cases',exact:true}).waitFor();
+    assert.match(await page.locator('#owgProcessResults h3').first().textContent(),/Selected complete-case cohort/);
+    const chosenCase=filtered.report.cases[0].case;
+    const filteredCase=page.locator('#owgLogCases details').filter({hasText:chosenCase+' · 131 events · variant_2'});
+    await filteredCase.locator('summary').click();
+    await filteredCase.getByRole('button',{name:'Next events',exact:true}).click();
+    await filteredCase.getByText(/^131\. Step 3/).waitFor();
+    assert.match(await filteredCase.textContent(),/2026-10-21T00:02:10/);
+    await page.getByLabel('Case contains exact activity',{exact:true}).fill('Absent');
+    await page.getByRole('button',{name:'Apply case filters',exact:true}).click();
+    await page.locator('#owgCohortStatus').filter({hasText:'No retained cases match'}).waitFor();
+    assert.equal(await page.locator('#owgProcessResults').textContent(),'');
+    await page.getByRole('button',{name:'Clear case filters',exact:true}).click();
+    await page.locator('#owgCohortStatus').filter({hasText:'Full retained log selected'}).waitFor();
+    assert.equal(await page.getByLabel('Case contains exact activity',{exact:true}).inputValue(),'');
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
     if(process.env.OWG_DRIFT_SCREENSHOT){
@@ -149,7 +174,7 @@ assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
     await page.getByRole('button',{name:'Delete '+currentId,exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
     assert.deepEqual(errors,[]);
-    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, full histories, drift review beyond path caps, no automatic updates, minimized SQLite, deletion and mobile.');
+    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, full histories, map emphasis and zoom, drift beyond path caps, complete-case cohorts with stable IDs and no event clipping, minimized SQLite, deletion and mobile.');
   }finally{
     if(browser)await browser.close();
     server.kill('SIGTERM');

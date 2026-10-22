@@ -180,6 +180,10 @@ Responses use no-store caching.
   [review full-history changes between two retained logs](PROCESS_DRIFT_REVIEW.md),
   with optional exact catalog reference, descriptive path mix, activity/transition
   incidence and elapsed timing changes. No case joins or automatic process updates.
+- `GET /v1/process-mining/datasets/cohort?dataset_id=...`: [analyze complete
+  case cohorts](PROCESS_CASE_COHORTS.md) by first retained event dates, exact
+  activity presence and retained variant ID. Selected cases keep all their
+  events and original ordinals; case browsing preserves these filters.
 - `GET /v1/process-mining/datasets/cases?dataset_id=...&after=0&limit=25`:
   up to 100 cases per page, with optional exact `activity` and `variant_id` filters.
 - `GET /v1/process-mining/datasets/events?dataset_id=...&case_number=1&after=0&limit=100`:

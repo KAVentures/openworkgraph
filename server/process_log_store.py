@@ -24,6 +24,42 @@ class ProcessLogError(ValueError):
     pass
 
 
+def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None):
+    """Select whole cases. Never clip events or infer business start/completion."""
+    filters = {}
+    for key, value in (('started_since', started_since), ('started_before', started_before)):
+        if value is None:
+            continue
+        try:
+            if not isinstance(value, str) or not 1 <= len(value) <= 64:
+                raise ValueError()
+            stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if stamp.tzinfo is None or stamp.utcoffset() is None:
+                raise ValueError()
+            filters[key] = stamp.astimezone(timezone.utc).isoformat()
+        except (ValueError, OverflowError):
+            raise ProcessLogError('Cohort dates must be offset-aware ISO-8601 timestamps') from None
+    if ('started_since' in filters and 'started_before' in filters and
+        filters['started_since'] >= filters['started_before']):
+        raise ProcessLogError('Cohort start must be earlier than its exclusive end')
+    for key, value in (('contains_activity', contains_activity), ('variant_id', variant_id)):
+        if value is not None:
+            if not isinstance(value, str) or not 1 <= len(value) <= 64:
+                raise ProcessLogError('Cohort activity and variant filters must be short nonempty labels')
+            filters[key] = value
+    sql, params = [], []
+    for key, operator in (('started_since', '>='), ('started_before', '<')):
+        if key in filters:
+            sql.append('c.first_event_at ' + operator + ' ?');params.append(filters[key])
+    if 'contains_activity' in filters:
+        sql.append('EXISTS (SELECT 1 FROM process_log_events ce WHERE ce.dataset_id = c.dataset_id '
+                   'AND ce.case_number = c.case_number AND ce.activity = ?)')
+        params.append(filters['contains_activity'])
+    if 'variant_id' in filters:
+        sql.append('c.variant_id = ?');params.append(filters['variant_id'])
+    return filters, ''.join(' AND ' + condition for condition in sql), params
+
+
 class ProcessLogStore:
     def __init__(self, connect=None, *, now=None):
         self.connect = connect or db.connect
@@ -150,7 +186,10 @@ class ProcessLogStore:
         report['data_quality']=original['data_quality']
         return report
 
-    def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None):
+    def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None,
+              started_since=None, started_before=None, contains_activity=None):
+        filters, cohort_sql, cohort_params = _case_cohort(started_since=started_since,
+            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id)
         with self.connect() as conn:
             self._open(conn)
             dataset=self._dataset(conn,dataset_id)
@@ -159,16 +198,80 @@ class ProcessLogStore:
             if activity is not None:
                 sql+=' AND EXISTS (SELECT 1 FROM process_log_events e WHERE e.dataset_id = c.dataset_id AND e.case_number = c.case_number AND e.activity = ?)'
                 params.append(activity)
-            if variant_id is not None:
-                sql+=' AND c.variant_id = ?';params.append(variant_id)
+            sql+=cohort_sql;params+=cohort_params
             cap=max(1,min(int(limit),100))
             rows=conn.execute(sql+' ORDER BY c.case_number LIMIT ?',params+[cap+1]).fetchall()
             keys=('dataset_id','case_number','variant_id','event_count','first_event_at','last_event_at',
                   'duration_seconds','tied_timestamp_adjacent_pairs')
             items=[dict(zip(keys,row)) for row in rows[:cap]]
-            return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap,
+            return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap, 'cohort_filters':filters,
                     'next_after':items[-1]['case_number'] if len(rows)>cap else None,
                     'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False}
+
+    def cohort(self, dataset_id, *, started_since=None, started_before=None, contains_activity=None,
+               variant_id=None, reference_model=None, reference=None):
+        filters, predicate, params = _case_cohort(started_since=started_since,
+            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id)
+        with self.connect() as conn:
+            self._open(conn)
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            dataset = self._dataset(conn, dataset_id)
+            original = json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id = ?',
+                                               (dataset_id,)).fetchone()[0])
+            selected = conn.execute('''SELECT c.case_number, c.variant_id FROM process_log_cases c
+                WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number',
+                [dataset_id, *params]).fetchall()
+            rows = conn.execute('''SELECT e.case_number, e.activity, e.observed_at FROM process_log_events e
+                JOIN process_log_cases c ON c.dataset_id = e.dataset_id AND c.case_number = e.case_number
+                WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number, e.position',
+                [dataset_id, *params]).fetchall()
+        selection = {'filters':filters, 'dataset_case_count':dataset['case_count'],
+            'selected_case_count':len(selected), 'selected_event_count':len(rows),
+            'date_basis':'first_retained_event_in_case_inclusive_since_exclusive_before',
+            'all_events_of_selected_cases_included':True, 'events_clipped_to_time_window':False,
+            'case_ordinals_and_variant_ids_preserved':True, 'business_start_or_completion_verified':False}
+        envelope = {'format':'openworkgraph.process-log-cohort.v1', 'dataset':dataset,
+                    'selection':selection, 'report':None, 'selection_retained':False}
+        if not selected:
+            return envelope
+        stream=StringIO(newline='');writer=csv.writer(stream)
+        writer.writerow(('case_id','activity','timestamp'))
+        writer.writerows((f'{number:04d}',activity,stamp) for number,activity,stamp in rows)
+        result=mine_csv_events(stream.getvalue().encode('utf-8'),reference_model=reference_model)
+        # The mining engine returns per-analysis ordinals. Restore the immutable
+        # snapshot's original case/variant identities before returning examples,
+        # including variant examples outside the top-level 30-case display cap.
+        paths=defaultdict(list)
+        for number,activity,_ in rows:
+            paths[number].append(activity)
+        stored_variants=dict(selected)
+        variants=Counter(tuple(path) for path in paths.values())
+        path_ids={tuple(path):stored_variants[number] for number,path in paths.items()}
+        ordinal_variants={f'variant_{index}':path_ids[path]
+                          for index,(path,_) in enumerate(variants.most_common(),1)}
+        case_numbers=[row[0] for row in selected]
+        seen=set()
+        for item in result['cases']+[example for variant in result['variants'] for example in variant['case_examples']]:
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            position=int(item['case'].split(' ')[1])-1
+            item['case']='Case '+str(case_numbers[position])
+            item['variant_id']=ordinal_variants[item['variant_id']]
+        for variant in result['variants']:
+            variant['variant_id']=ordinal_variants[variant['variant_id']]
+        result.update(import_retained=True,dataset_id=dataset_id,expires_at=dataset['expires_at'],
+            retention_scope='local_explicit_snapshot',cohort=selection,
+            original_snapshot_data_quality=original['data_quality'])
+        # Original pre-sort order cannot be recovered per selected case. The
+        # whole-snapshot diagnostic is retained separately, never relabeled as
+        # the selected population's count.
+        result['data_quality']['cases_sorted_from_nonchronological_input']=None
+        if reference_model is not None:
+            result['conformance']['reference']=reference
+        envelope['report']=result
+        return envelope
 
     def compare(self, baseline_id, current_id, *, comparability_confirmed,
                 reference_model=None, reference=None):
