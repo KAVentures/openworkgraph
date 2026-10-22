@@ -93,6 +93,13 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
                   include_archived: bool = False, p=Depends(human)):
         return _response(store.inventory, p, after=after, limit=limit, include_archived=include_archived)
 
+    @router.get('/v1/human/process-readiness')
+    def readiness(after: str = Query(default='',max_length=80),limit: int = Query(default=20,ge=1,le=100),
+                  owner_actor_id: str = Query(default='',max_length=512),
+                  include_archived: bool = False,p=Depends(human)):
+        return _response(store.readiness_report,p,after=after,limit=limit,
+                         owner_actor_id=owner_actor_id,include_archived=include_archived)
+
     @router.get('/v1/human/process-opportunities')
     def opportunities(currency: str = Query(default='USD',pattern='^(USD|EUR|GBP|SEK)$'),p=Depends(human)):
         return _response(store.opportunity_report,p,currency=currency)

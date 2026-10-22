@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS gateway_shared_processes (
  organization_id TEXT NOT NULL, workflow_id TEXT NOT NULL, owner_actor_id TEXT NOT NULL,
  access_revision INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, PRIMARY KEY(organization_id, workflow_id));
+CREATE INDEX IF NOT EXISTS idx_shared_process_owner ON gateway_shared_processes(organization_id, owner_actor_id, workflow_id);
 CREATE TABLE IF NOT EXISTS gateway_process_members (
  organization_id TEXT NOT NULL, workflow_id TEXT NOT NULL, actor_id TEXT NOT NULL,
  role TEXT NOT NULL, PRIMARY KEY(organization_id, workflow_id, actor_id));
@@ -297,6 +298,54 @@ class OrganizationProcessStore:
         return {'processes': items, 'has_more': len(rows) > cap,
                 'next_after': items[-1]['workflow_id'] if len(rows) > cap else None,
                 'personal_knowledge_scanned': False, 'raw_evidence_scanned': False}
+
+    def readiness_report(self,p,*,after='',limit=20,owner_actor_id='',include_archived=False):
+        """Keyset-paginated saved-design diagnostics on a consistent snapshot."""
+        from collections import Counter
+        from shared.process_readiness import design_findings
+        self.require_scope(p,'org:process:read')
+        if (not isinstance(after,str) or len(after)>80 or not isinstance(owner_actor_id,str)
+                or len(owner_actor_id)>512 or type(limit) is not int or not 1<=limit<=100
+                or type(include_archived) is not bool):
+            raise ProcessCollaborationError('Invalid bounded readiness filters',422)
+        counts=Counter();finding_counts=Counter();items=[]
+        with self.db.connect() as conn:
+            self.db._execute(conn,'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY' if self.db.is_postgres else 'BEGIN')
+            sql='''SELECT p.workflow_id,p.owner_actor_id,p.archived,k.revision,k.payload
+                FROM gateway_shared_processes p JOIN workflow_knowledge k
+                ON k.owner = ? AND k.workflow_id = p.workflow_id AND k.revision =
+                  (SELECT MAX(v.revision) FROM workflow_knowledge v WHERE v.owner = k.owner AND v.workflow_id = k.workflow_id)
+                WHERE p.organization_id = ? AND p.workflow_id > ?'''
+            params=[namespace(p.organization_id),p.organization_id,after]
+            if owner_actor_id:
+                sql+=' AND p.owner_actor_id = ?';params.append(owner_actor_id)
+            if not include_archived:sql+=' AND p.archived = 0'
+            records=self.db._execute(conn,sql+' ORDER BY p.workflow_id LIMIT ?',tuple(params+[limit+1])).fetchall()
+            for workflow_id,owner,archived,revision,payload in records[:limit]:
+                record=json.loads(payload)
+                review=self._review_state(conn,p,workflow_id,int(revision))['status']
+                findings=design_findings(record['process_model'])
+                counts['archived' if archived else 'active']+=1;counts[review]+=1
+                finding_counts.update({key:1 for key,identifiers in findings.items() if identifiers})
+                items.append({key:record[key] for key in ('title','content_sha256','saved_at')} | {
+                    'workflow_id':workflow_id,'revision':int(revision),'owner_actor_id':owner,
+                    'archived':bool(archived),'review_status':review,'findings':findings,
+                    'current_independent_design_review':not archived and review=='reviewed_design'})
+        result={'format':'openworkgraph.organization-process-readiness.v1','organization_id':p.organization_id,
+            'generated_at':_now(),'processes':items,'has_more':len(records)>limit,
+            'next_after':items[-1]['workflow_id'] if len(records)>limit else None,
+            'filters':{'owner_actor_id':owner_actor_id,'include_archived':include_archived},
+            'page_process_count':len(items),'page_inventory_counts':dict(counts),
+            'page_process_counts_with_findings':dict(finding_counts),
+            'summary_scope':'returned_page_only_not_organization_totals',
+            'basis':'saved_design_declarations_and_exact_revision_reviews',
+            'findings_may_be_intentional_design_choices':True,
+            'deployment_health_checked':False,'customer_tool_bindings_checked':False,
+            'business_policy_compliance_verified':False,'business_outcomes_verified':False,
+            'execution_authorized':False,'personal_knowledge_scanned':False,'raw_evidence_scanned':False}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,action='process.readiness.read',
+            details={'returned':len(items),'has_more':result['has_more']})
+        return result
 
     def opportunity_report(self, p, *, currency):
         """Rank reviewed shared-design scenarios; never rank people or infer ROI."""
