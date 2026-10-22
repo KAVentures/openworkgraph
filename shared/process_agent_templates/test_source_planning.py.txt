@@ -1,11 +1,8 @@
 """Source-aware planning with actual SDK/in-memory models; no external provider."""
-import asyncio
 from copy import deepcopy
 from datetime import datetime,timedelta,timezone
 import json
 import os
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -105,6 +102,21 @@ class SourcePlanningCases(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.reads),previous+1)
             self.assertEqual(result['source_planning']['source_receipt_request_count'],1)
             self.assertFalse(result['execution_permitted'])
+    async def test_one_freshness_boundary_is_used_for_all_checks_in_a_snapshot(self):
+        from plan_sources import SourcePlanningContext
+        from execute import source_rule_bindings
+        checks={'unevaluated_structured_rule_ids':['current_source']}
+        requests,_missing=source_rule_bindings(self.spec,checks,self.case,self.bindings)
+        second=deepcopy(requests[0]);second['rule_id']='second';requests.append(second)
+        receipts={row['rule_id']:self.helper.invariant_receipt(row) for row in requests}
+        calls=[]
+        def clock():
+            calls.append(True)
+            return self.now[0]+timedelta(seconds=121*(len(calls)-1))
+        context=SourcePlanningContext(self.spec,self.case,requests,receipts,clock)
+        self.assertEqual([row['status'] for row in context.check_rules(['current_source','second'],self.spec,self.case)],['matched','matched'])
+        self.assertEqual(len(calls),1)
+
     async def test_missing_consents_credentials_and_invalid_bindings_stop_before_io(self):
         for change in ({'source_reads_confirmed':False},{'share_rule_checks_with_model_confirmed':False}):
             values=dict(source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True);values.update(change)

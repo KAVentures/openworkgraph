@@ -9,7 +9,6 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 
 from execute import (ImplementationError, digest, endpoint, load_object, reference,
                      source_rule_bindings, _source_state_receipt, _catalog_state, catalog_is_current)
@@ -28,11 +27,11 @@ class SourcePlanningContext:
         from process_rule_conditions import evaluate_predicate
         if digest(spec)!=self.spec_digest or digest(case)!=self.case_digest:
             raise ImplementationError('Planning inputs changed after source reads')
-        results=[]
+        results=[];checked_at=self.clock()
         for rule_id in sorted(rule_ids):
             request=self.requests.get(rule_id);status='unknown'
             if request:
-                facts=facts_from_receipt(self.receipts.get(rule_id),request['resource_ref'],request['source_type'],now=self.clock())
+                facts=facts_from_receipt(self.receipts.get(rule_id),request['resource_ref'],request['source_type'],now=checked_at)
                 if facts:status=evaluate_predicate(request['predicate'],facts)['status']
             results.append({'rule_id':rule_id,'status':status})
         return results
@@ -87,12 +86,12 @@ async def propose_with_sources(case,bindings,*,model,spec=None,source_reads_conf
     if not await check_catalog():
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Current independent process review is unavailable'])
     used=report.get('shadow_check',{}).get('unevaluated_structured_rule_ids',[])
-    final_checks=context.check_rules(used,spec,case)
-    if any(row['status']!='matched' for row in final_checks):
+    final_checks=context.check_rules(structured,spec,case)
+    if any(row['rule_id'] in used and row['status']!='matched' for row in final_checks):
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Fresh source invariants are false, unknown or no longer fresh'])
     report.update(execution_permitted=False,source_outcome_verified=False,
         source_planning={'format':'openworkgraph.current-source-planning.v1',
-            'source_receipt_request_count':len(selected_records),'rule_checks':context.check_rules(structured,spec,case),
+            'source_receipt_request_count':len(selected_records),'rule_checks':final_checks,
             'process_reference':reference(spec),'bindings_sha256':digest(bindings),
             'source_values_sent_to_model':False,'source_receipts_included':False,
             'model_received_rule_check_results':True,'business_tools_registered':False,
