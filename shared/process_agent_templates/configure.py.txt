@@ -40,7 +40,17 @@ async def inspect_tools(spec, url, *, client_factory=_tool_client):
         raise ImplementationError('Configure the customer MCP credential before inspecting its current tool catalog')
     async with client_factory(url, secret) as client:
         tools = await client.list_tools()  # No call_tool or model invocation.
+    if not isinstance(tools,list):
+        raise ImplementationError('The current tool listing is not a supported metadata list')
     descriptors, omitted, seen = [], 0, set()
+    catalog={'format': 'openworkgraph.customer-tool-catalog.v1', 'process_reference': reference(spec),
+        'spec_sha256': digest(spec), 'tool_server_url': url, 'inspected_at': datetime.now(timezone.utc).isoformat(),
+        'tools': descriptors, 'omitted_tool_count': 0, 'maximum_tools': 100,
+        'maximum_serialized_bytes':262144,
+        'business_tool_calls': False, 'execution_authorized': False,
+        'raw_schemas_defaults_examples_and_request_credentials_included': False}
+    if len(json.dumps(catalog,indent=2,allow_nan=False).encode('utf-8'))>262144:
+        raise ImplementationError('Re-export a bounded specification before inspecting current tools')
     for tool in tools:
         name = _field(tool, 'name')
         if not tool_name(name) or name in seen or secret in name or len(descriptors) >= 100:
@@ -61,16 +71,21 @@ async def inspect_tools(spec, url, *, client_factory=_tool_client):
                 kind = value.get('type') if isinstance(value, dict) else None
                 fields.append({'name': key, 'type': kind if isinstance(kind,str) and kind in {'string','number','integer','boolean','object','array','null'} else 'unknown',
                                'required': key in required})
-            descriptors.append({'name': name, 'description': _clean(_field(tool, 'description'), secret),
+            descriptor={'name': name, 'description': _clean(_field(tool, 'description'), secret),
                 'input_schema_sha256': digest(schema), 'input_fields': fields,
-                'schema_constraints_omitted': True, 'annotations_are_authorization': False})
+                'schema_constraints_omitted': True, 'annotations_are_authorization': False}
+            # Reserve the maximum possible omitted-count width. Serialize with
+            # the exact file encoding/format: Unicode escapes and whitespace
+            # count toward the next command's 256 KiB input limit.
+            candidate={**catalog,'tools':descriptors+[descriptor],'omitted_tool_count':len(tools)}
+            if len(json.dumps(candidate,indent=2,allow_nan=False).encode('utf-8'))>262144:
+                omitted+=1
+                continue
+            descriptors.append(descriptor)
         except (ValueError, TypeError, RecursionError):
             omitted += 1
-    return {'format': 'openworkgraph.customer-tool-catalog.v1', 'process_reference': reference(spec),
-        'spec_sha256': digest(spec), 'tool_server_url': url, 'inspected_at': datetime.now(timezone.utc).isoformat(),
-        'tools': descriptors, 'omitted_tool_count': omitted, 'maximum_tools': 100,
-        'business_tool_calls': False, 'execution_authorized': False,
-        'raw_schemas_defaults_examples_and_request_credentials_included': False}
+    catalog['omitted_tool_count']=omitted
+    return catalog
 
 
 def case_fields(case):
@@ -236,9 +251,14 @@ async def propose_bindings(spec, catalog, case, *, model):
             'case_values_sent_to_model':False,'business_tools_called':False,'execution_authorized':False}}
 
 
-def write_new(path, value):
-    with Path(path).open('x',encoding='utf-8') as stream:
-        json.dump(value,stream,indent=2,allow_nan=False)
+def write_new(path, value, *, limit=262144):
+    payload=json.dumps(value,indent=2,allow_nan=False).encode('utf-8')
+    if len(payload)>limit:
+        raise ImplementationError('Configuration exceeds its loader size limit; narrow the catalog or process before requesting another proposal')
+    # Binary mode keeps the measured bytes identical on Windows and POSIX.
+    # Validate before opening, so a rejected output leaves no partial file.
+    with Path(path).open('xb') as stream:
+        stream.write(payload)
 
 
 def main():
@@ -258,7 +278,7 @@ def main():
         if not all((args.catalog,args.case,args.model)):
             raise ImplementationError('Choose a reviewed catalog, selected case and explicit model for binding suggestions')
         result = asyncio.run(propose_bindings(spec,load_object(args.catalog,limit=262144),load_object(args.case),model=args.model))
-    write_new(args.output,result)
+    write_new(args.output,result,limit=262144 if args.inspect_tools else 65536)
     return {'mode':'tool_catalog_only' if args.inspect_tools else 'disabled_binding_proposals',
             'output_written':True,'business_tools_called':False,'execution_authorized':False}
 

@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime,timezone
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 try:
@@ -11,8 +13,8 @@ try:
     from agents.items import ModelResponse
     from agents.usage import Usage
     from openai.types.responses import ResponseOutputMessage,ResponseOutputText
-    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog
-    from execute import ImplementationError,digest
+    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog,write_new
+    from execute import ImplementationError,digest,load_object
     from test_execution import fixture
     SDK_AVAILABLE=True
 except ImportError:
@@ -108,6 +110,31 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         result=case_fields({'a/b':{'~secret':'PRIVATE_VALUE'},'items':[{'value':3}]})
         self.assertIn({'pointer':'/a~1b/~0secret','type':'string'},result)
         self.assertNotIn('PRIVATE_VALUE',json.dumps(result))
+
+    async def test_large_unicode_metadata_catalog_stays_loadable_by_the_next_command(self):
+        class WideMetadata(MetadataTools):
+            async def list_tools(self):
+                return [{'name':'enterprise_tool_'+str(index),'description':'界'*1500,
+                    'inputSchema':{'type':'object','properties':{
+                        '界'*116+str(field).zfill(4):{'type':'string'} for field in range(50)}}} for index in range(100)]
+        catalog=await inspect_tools(self.spec,'http://127.0.0.1:18790/mcp',client_factory=lambda *args:WideMetadata())
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/'catalog.json';write_new(path,catalog)
+            self.assertLessEqual(path.stat().st_size,262144)
+            self.assertEqual(load_object(path,limit=262144),catalog)
+        self.assertGreater(catalog['omitted_tool_count'],0)
+        self.assertFalse(catalog['business_tool_calls'])
+
+    async def test_oversized_binding_output_leaves_no_file_and_existing_files_are_unchanged(self):
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/'bindings.json'
+            with self.assertRaises(ImplementationError):
+                write_new(path,{'large':'界'*12000},limit=65536)
+            self.assertFalse(path.exists())
+            write_new(path,{'safe':'界'},limit=65536);original=path.read_bytes()
+            self.assertEqual(load_object(path),{'safe':'界'})
+            with self.assertRaises(FileExistsError):write_new(path,{'safe':'replacement'},limit=65536)
+            self.assertEqual(path.read_bytes(),original)
 
 
 if __name__=='__main__':unittest.main()
