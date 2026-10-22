@@ -15,7 +15,7 @@ class Element {
   scrollIntoView(){}
   walk(){return [this,...this.children.flatMap(n=>n.walk())];}
 }
-function fixture({shadowResponse,bpmnResponse,ruleResponse}={}){
+function fixture({shadowResponse,bpmnResponse,ruleResponse,sourceResponse,recordChoices}={}){
   const document={readyState:'complete'};
   const root=new Element('main',document);root.id='panel-evidence';
   document.querySelector=()=>null;
@@ -27,9 +27,11 @@ function fixture({shadowResponse,bpmnResponse,ruleResponse}={}){
   const window={__owgAuthReady:Promise.resolve(true),confirm:()=>true,owgProcessDesigner:{reviewedDraft:()=>draft}};
   const fetch=async(path,options)=>{
     requests.push({path,options});
+    if(path.startsWith('/v1/workflow-evidence/families?'))return {ok:true,json:async()=>recordChoices()};
     if(path==='/v1/process-catalog/import-bpmn')return {ok:true,json:async()=>bpmnResponse()};
     if(path.startsWith('/v1/process-catalog/check-rules?'))return {ok:true,json:async()=>ruleResponse(options.body)};
     const body=JSON.parse(options.body);
+    if(path.startsWith('/v1/process-catalog/check-current-source-rules?'))return {ok:true,json:async()=>sourceResponse(body)};
     if(path==='/v1/process-catalog/shadow-review')return {ok:true,json:async()=>shadowResponse(body)};
     if(body.expected_revision!==(saved?.revision||0))return {ok:false,json:async()=>({detail:'Revision changed'})};
     saved={...body,workflow_id:'process_test',revision:(saved?.revision||0)+1};
@@ -197,4 +199,41 @@ test('case facts require an explicit action, preserve raw input and discard resp
   release();await pending;
   assert.equal(document.getElementById('owgCatalogRuleCheckResult').children.length,0);
   file.handlers.change();assert.equal(consent.checked,false);assert.equal(run.disabled,true);
+});
+
+test('source refresh requires explicit selected-record consent and discards results after selection changes',async()=>{
+  let release;const gate=new Promise(resolve=>release=resolve);
+  const {window,root,document,requests,button}=fixture({sourceResponse:async()=>{
+    await gate;return {format:'openworkgraph.current-source-rule-check.v1',process_reference:{revision:1},
+      facts_source_authoritativeness_verified:true,source_state_verified_at:'2026-10-22T12:00:00Z',
+      references_latest_revision_at_check:true,rule_result_counts:{matched:1},cases:[{rules:[]}]};
+  }});
+  await window.owgProcessCatalog.saveDesigner();
+  const ref=root.walk().find(n=>n.attrs['aria-label']==='Source rule observed record reference');
+  const section=root.walk().filter(n=>n.tag==='section'&&n.walk().includes(ref)).at(-1);
+  const consent=section.walk().find(n=>n.type==='checkbox'),run=button('Refresh selected record and check rules');
+  ref.value='owg:r:'+'a'.repeat(32);ref.handlers.input();assert.equal(run.disabled,true);assert.equal(requests.length,1);
+  consent.checked=true;consent.handlers.change();assert.equal(run.disabled,false);assert.equal(requests.length,1);
+  const pending=run.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests.length,2);assert(requests[1].path.includes('revision=1'));
+  const body=JSON.parse(requests[1].options.body);assert.equal(body.resource_ref,ref.value);assert.equal(body.source_type,'stripe_invoice');
+  assert.equal(requests[1].options.headers['X-OWG-Source-Rule-Read-Authorized'],'true');
+  ref.value='owg:r:'+'b'.repeat(32);ref.handlers.input();assert.equal(consent.checked,false);assert.equal(run.disabled,true);
+  release();await pending;assert.equal(document.getElementById('owgCatalogSourceRuleResult').children.length,0);
+  consent.checked=true;consent.handlers.change();await run.handlers.click();
+  assert(document.getElementById('owgCatalogSourceRuleResult').walk().some(n=>n.textContent==='Current-source conditions · saved revision 1'));
+  const goal=root.walk().find(n=>n.attrs['aria-label']==='Business goal');goal.value='Changed goal';goal.handlers.input();
+  assert.equal(document.getElementById('owgCatalogSourceRuleResult').children.length,0);
+});
+
+test('bounded observed-record loading is local-only and selecting a choice never refreshes a provider',async()=>{
+  const {window,root,requests,button}=fixture({recordChoices:()=>({record_case_lanes:{lanes:[
+    {provider:'stripe',resource_kind:'invoice',resource_ref:'owg:r:'+'a'.repeat(32)},
+    {provider:'untrusted',resource_kind:'object',resource_ref:'PRIVATE_NATIVE_ID'}]}})});
+  await window.owgProcessCatalog.saveDesigner();
+  await button('Load observed source record choices').handlers.click();assert.equal(requests.length,2);
+  const choices=root.walk().find(n=>n.attrs['aria-label']==='Observed source record choices');
+  assert.equal(choices.children.length,2);choices.value='0';choices.handlers.change();
+  assert.equal(root.walk().find(n=>n.attrs['aria-label']==='Source rule observed record reference').value,'owg:r:'+'a'.repeat(32));
+  assert.equal(requests.length,2);assert.equal(button('Refresh selected record and check rules').disabled,true);
 });
