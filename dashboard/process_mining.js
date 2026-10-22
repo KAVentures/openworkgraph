@@ -513,7 +513,7 @@
       const drawing=window.owgProcessGraph.drawObserved(report,activity=>{
         observedSelection=activity.label;render();document.getElementById('owgObservedActivityDetails')?.focus();
       });
-      drawing.id='owgObservedTransitionMap';drawing.style.maxHeight='520px';drawing.style.overflow='auto';
+      drawing.id='owgObservedTransitionMap';
       host.appendChild(drawing);
     }catch{
       host.appendChild(make('p','Combined graph unavailable for this response. Variant paths and statistics remain available.','muted'));

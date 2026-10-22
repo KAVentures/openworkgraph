@@ -48,6 +48,28 @@ activity. Timestamps must be full offset-aware ISO-8601 values.
 
 ### Explore all observed transitions
 
+The combined map has **Zoom in**, **Zoom out**, **Actual size**, and **Fit
+graph** controls. Its bounded scroll region also supports keyboard panning.
+Zoom changes the rendered SVG size while retaining full geometry and activity
+identity; it does not change the model, counts, evidence selection or filters.
+
+**Map emphasis** offers Uniform, Recorded frequency, or Median elapsed gap.
+Frequency uses numerical occurrence counts: wider, darker arrows indicate more
+recorded transitions and node shading indicates more activity occurrences.
+Elapsed emphasis uses numerical median gaps in seconds with an amber scale.
+Both scales are relative to the displayed map, keep all transitions visible,
+and label their maximum. Measured zero and unknown are distinct; unknown values
+are gray. Gap emphasis is descriptive and does not establish a bottleneck,
+causal dependency, verified waiting time, labor or savings. Native tooltips and
+the activity inspector retain the underlying counts and gaps.
+
+The same view controls appear on local/shared process designs and combined
+desktop candidate maps. Designs have no invented observed metrics. Desktop
+candidates offer projected frequency only, with a projection-specific legend;
+their normalized steps are not canonical events or verified business cases and
+their step timing remains unavailable. Rendering, zoom and emphasis remain
+offline and create no source reads, persistence or execution authority.
+
 **Explore all observed transitions** draws the activity graph across every case
 in the imported log. It includes forks, joins and loops using observed adjacent
 pairs. Node badges show event and distinct-case counts; transition tooltips show
