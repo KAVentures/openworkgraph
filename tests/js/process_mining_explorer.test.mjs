@@ -26,7 +26,7 @@ function setup(report) {
   document.createElement=tag=>new Element(tag,document);
   document.createElementNS=(_,tag)=>new Element(tag,document);
   const calls=[];
-  const window={__owgAuthReady:Promise.resolve()};
+  const window={__owgAuthReady:Promise.resolve(),owgProcessCSVMapping:{inspectFile:async()=>({headers:['case_id','activity','timestamp'],row_count:1})}};
   vm.runInNewContext(fs.readFileSync(new URL('../../dashboard/process_mining.js',import.meta.url),'utf8'),{
     document,window,URLSearchParams,fetch:async(...args)=>{calls.push(args);return {ok:true,json:async()=>typeof report==='function'?report(...args):report};},
   });
@@ -169,7 +169,7 @@ test('case cohort inputs are explicit; changing source discards pending cohort r
   assert.equal(calls.length,4);
 });
 
-test('column inspection makes no request; only an explicitly mapped file becomes the analysis payload',async()=>{
+test('extra columns require reviewed mapping and selecting a canonical file discards the old mapping',async()=>{
  const report={format:'openworkgraph.process-mining-csv-preview.v1',case_count:1,input_rows:2,metrics:{},variants:[]};
  const {window,document,calls,find}=setup(report);
  const original={size:100},minimized={size:40};
@@ -193,7 +193,24 @@ test('column inspection makes no request; only an explicitly mapped file becomes
  assert.equal(calls.length,1);assert.equal(calls[0][1].body,minimized);
  document.getElementById('owgProcessFile').files=[original];document.getElementById('owgProcessFile').handlers.change();
  await find('button','Analyze selected CSV').handlers.click();
- assert.equal(calls[1][1].body,original); // New file selection discards the old mapping.
+ assert.equal(inspected,2);assert.equal(calls.length,1); // Extra columns cannot take the raw upload shortcut.
+ assert(document.getElementById('owgProcessStatus').textContent.includes('Use column mapping before uploading'));
+ const canonical={size:80};
+ window.owgProcessCSVMapping={inspectFile:async(file)=>{assert.equal(file,canonical);return {headers:['case_id','activity','timestamp'],row_count:1};}};
+ document.getElementById('owgProcessFile').files=[canonical];document.getElementById('owgProcessFile').handlers.change();
+ await find('button','Analyze selected CSV').handlers.click();
+ assert.equal(calls.length,2);assert.equal(calls[1][1].body,canonical); // No old minimized file is reused.
+});
+
+test('late raw schema inspection cannot upload a previously selected file',async()=>{
+ let finish;const pending=new Promise(resolve=>finish=resolve),{window,document,calls,find,root}=setup({});
+ document.getElementById('owgProcessFile').files=[{size:100}];document.getElementById('owgProcessFile').handlers.change();
+ window.owgProcessCSVMapping={inspectFile:()=>pending};
+ const analyzing=find('button','Analyze selected CSV').handlers.click();
+ document.getElementById('owgProcessFile').files=[];document.getElementById('owgProcessFile').handlers.change();
+ finish({headers:['case_id','activity','timestamp'],row_count:1});await analyzing;
+ assert.equal(calls.length,0);assert.equal(document.getElementById('owgProcessAnalyze').disabled,true);
+ assert.equal(document.getElementById('owgProcessResults').children.length,0);
 });
 
 test('late column inspection cannot restore headers or enable analysis for a newly selected file',async()=>{
