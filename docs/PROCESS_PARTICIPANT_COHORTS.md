@@ -79,3 +79,8 @@ Use [complete-cohort comparison](PROCESS_COHORT_COMPARISON.md) to review
 differences between label-selected populations from the same snapshot. A case
 can contain several labels and belong to both selections; exact overlap is
 reported before drawing conclusions from timing or path differences.
+
+[Activity label support](PROCESS_ACTIVITY_LABEL_SUPPORT.md) shows per-step
+event/distinct-case counts and missing labels in the combined and variant
+inspectors. Complete-case selections can include labels other than the filter,
+and per-label case supports can overlap. No people or ownership are inferred.

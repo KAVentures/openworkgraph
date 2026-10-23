@@ -129,3 +129,7 @@ delimited exports, reviews one shared and two unmatched cases, verifies actual
 received upload/retention bytes, reopens source-tagged histories, filters whole
 cases, tests mobile layout and deletes the snapshot without creating canonical
 observations.
+
+[Activity label support](PROCESS_ACTIVITY_LABEL_SUPPORT.md) also shows source
+alias event/case counts for a selected activity, using the whole selected
+population or exact variant without confusing sample examples with support.
