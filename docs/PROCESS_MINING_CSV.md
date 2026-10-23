@@ -91,6 +91,10 @@ observed-data labels and limits. It supports the CSV contract's 64 activities
 and 4,096 possible transition types; a bounded scroll area contains dense maps.
 The designer retains its separate 40-activity/100-transition model limits.
 
+Select an arrow to [inspect its measured support and complete matching
+cases](OBSERVED_TRANSITION_INSPECTION.md). Transition selection supports mouse
+and keyboard input and preserves whole-case cohort filters.
+
 Each arrow means recorded adjacency within a supplied case, not causality,
 automatic branch policy or a required business dependency. Paths composed across
 the combined graph can be absent from all real cases; exact variants remain the

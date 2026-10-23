@@ -157,3 +157,23 @@ test('candidate projections offer frequency only and invalid numerical values st
  assert.match(drawing.walk().find(node=>node.className==='muted owg-graph-legend').textContent,/normalized candidate projections/);
  assert.equal(drawing.walk().filter(node=>node.tag==='path')[2].attrs.stroke,'#8a8a8a');
 });
+
+test('observed transitions support mouse and keyboard inspection through inert wide hit targets',()=>{
+ const report={activities:[{activity:'Open',event_count:3},{activity:'Review',event_count:2}],transitions:[
+   {from:'Open',to:'Review',transition_count:2,case_count:1,median_elapsed_gap_seconds:60},
+   {from:'Review',to:'Review',transition_count:1,case_count:1,median_elapsed_gap_seconds:0}]};
+ const selected=[],before=JSON.stringify(report),drawing=fixture().drawObserved(report,()=>{},edge=>selected.push(edge));
+ const targets=drawing.walk().filter(node=>node.tag==='path'&&node.attrs.role==='button');
+ assert.equal(targets.length,2);assert.equal(targets[0].attrs['stroke-width'],'14');
+ targets[0].handlers.focus();assert.equal(targets[0].style.outline,'2px solid #35624b');
+ targets[0].handlers.blur();assert.equal(targets[0].style.outline,'');
+ assert.equal(targets[0].attrs['aria-label'],'Inspect observed transition Open → Review');
+ targets[0].handlers.click();let prevented=0;
+ targets[1].handlers.keydown({key:' ',preventDefault(){prevented++;}});
+ targets[1].handlers.keydown({key:'Enter',preventDefault(){prevented++;}});
+ targets[1].handlers.keydown({key:'Escape',preventDefault(){assert.fail('unhandled key');}});
+ assert.equal(prevented,2);assert.deepEqual(selected,[report.transitions[0],report.transitions[1],report.transitions[1]]);
+ assert.equal(JSON.stringify(report),before);
+ const passive=fixture().drawObserved(report,()=>{});
+ assert.equal(passive.walk().filter(node=>node.tag==='path'&&node.attrs.role==='button').length,0);
+});

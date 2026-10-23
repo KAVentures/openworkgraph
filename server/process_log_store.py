@@ -221,7 +221,13 @@ class ProcessLogStore:
         return report
 
     def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None,
-              started_since=None, started_before=None, contains_activity=None, contains_participant=None, contains_team=None):
+              started_since=None, started_before=None, contains_activity=None, contains_participant=None, contains_team=None,
+              transition_from=None, transition_to=None):
+        if (transition_from is None) != (transition_to is None):
+            raise ProcessLogError("Transition filtering requires both exact activity labels")
+        if transition_from is not None and any(not isinstance(value,str) or not 1 <= len(value) <= 64
+                                             for value in (transition_from,transition_to)):
+            raise ProcessLogError("Transition activity labels must be short and nonempty")
         filters, cohort_sql, cohort_params = _case_cohort(started_since=started_since,
             started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
             contains_participant=contains_participant,contains_team=contains_team)
@@ -233,6 +239,13 @@ class ProcessLogStore:
             if activity is not None:
                 sql+=' AND EXISTS (SELECT 1 FROM process_log_events e WHERE e.dataset_id = c.dataset_id AND e.case_number = c.case_number AND e.activity = ?)'
                 params.append(activity)
+            if transition_from is not None:
+                sql += (''' AND EXISTS (SELECT 1 FROM process_log_events te
+                    JOIN process_log_events tn ON tn.dataset_id = te.dataset_id
+                      AND tn.case_number = te.case_number AND tn.position = te.position + 1
+                    WHERE te.dataset_id = c.dataset_id AND te.case_number = c.case_number
+                      AND te.activity = ? AND tn.activity = ?)''')
+                params.extend((transition_from,transition_to))
             sql+=cohort_sql;params+=cohort_params
             cap=max(1,min(int(limit),100))
             rows=conn.execute(sql+' ORDER BY c.case_number LIMIT ?',params+[cap+1]).fetchall()
@@ -241,7 +254,10 @@ class ProcessLogStore:
             items=[dict(zip(keys,row)) for row in rows[:cap]]
             return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap, 'cohort_filters':filters,
                     'next_after':items[-1]['case_number'] if len(rows)>cap else None,
-                    'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False}
+                    'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False,
+                    **({'transition_filter':{'from':transition_from,'to':transition_to},
+                        'transition_basis':'adjacent_retained_positions_timestamp_then_supplied_row_order',
+                        'tied_timestamp_order_verified':False} if transition_from is not None else {})}
 
     def cohort(self, dataset_id, *, started_since=None, started_before=None, contains_activity=None,
                variant_id=None, reference_model=None, reference=None, contains_participant=None, contains_team=None):

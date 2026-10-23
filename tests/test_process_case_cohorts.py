@@ -192,6 +192,11 @@ with TestClient(app) as client:
     for endpoint in ('/cohort','/cases'):
         assert client.get(base+endpoint,params={**query,'started_since':'2026-10-21'},headers=headers).status_code==422
     assert client.get(base+'/cohort',params={**query,'workflow_id':'review'},headers=headers).status_code==422
+    for pair in ({'transition_from':'Open'},{'transition_to':'Close'}, {'transition_from':'Open','transition_to':''}):
+        assert client.get(base+'/cases',params={**query,**pair},headers=headers).status_code==422
+    edge=client.get(base+'/cases',params={**query,'transition_from':'Open','transition_to':'Close'},headers=headers)
+    assert edge.status_code==200 and edge.headers['cache-control']=='no-store',edge.text
+    assert edge.json()['transition_filter']=={'from':'Open','to':'Close'}
     empty=client.get(base+'/cohort',params={**query,'contains_activity':'Absent'},headers=headers)
     assert empty.status_code==200 and empty.json()['report'] is None
     assert client.get(base+'/cohort',params={**query,'dataset_id':'log_'+'a'*32},headers=headers).status_code==404
@@ -200,3 +205,57 @@ with TestClient(app) as client:
         WORKFLOW_OBSERVER_AUTH_DIR=str(tmp_path/'auth'),WORKFLOW_OBSERVER_CONFIG=str(tmp_path/'config.json'))
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_exact_adjacent_transition_filters_complete_cases_not_activity_cooccurrence(logs):
+    store,connect=logs;start=datetime(2026,10,20,tzinfo=timezone.utc)
+    identifier=retain(store,[
+        (start,('Open','Review','Close'),60),
+        (start,('Open','Other','Review','Close'),60),
+        (start,('Review','Open','Close'),60),
+        (start,('Open','Review','Open','Review','Close'),60),
+        (start,('Open',),60)])
+    with connect() as conn:before='\n'.join(conn.iterdump())
+    result=store.cases(identifier,transition_from='Open',transition_to='Review',limit=1)
+    assert [row['case_number'] for row in result['cases']]==[1]
+    assert result['has_more'] and result['next_after']==1
+    page=store.cases(identifier,transition_from='Open',transition_to='Review',after=1,limit=1)
+    assert [row['case_number'] for row in page['cases']]==[4] and not page['has_more']
+    assert page['cases'][0]['event_count']==5  # repeated transitions do not duplicate the case
+    assert result['transition_filter']=={'from':'Open','to':'Review'}
+    assert result['transition_basis']=='adjacent_retained_positions_timestamp_then_supplied_row_order'
+    assert not result['tied_timestamp_order_verified']
+    assert [event['activity'] for event in store.events(identifier,4)['events']]==['Open','Review','Open','Review','Close']
+    assert not store.cases(identifier,transition_from='Open',transition_to='Review',activity='Other')['cases']
+    assert not store.cases(identifier,transition_from='Close',transition_to='Open')['cases']
+    assert 'PRIVATE_' not in json.dumps(result)
+    with connect() as conn:assert '\n'.join(conn.iterdump())==before
+
+
+def test_transition_drilldown_composes_with_whole_case_dates_and_hidden_steps(logs):
+    store,_=logs;start=datetime(2026,10,20,tzinfo=timezone.utc)
+    identifier=retain(store,[(start,('Open',)*25+('Review','Close'),60)]*35+
+        [(start+timedelta(days=1),('Open','Close'),60)])
+    result=store.cases(identifier,transition_from='Open',transition_to='Review',after=30,
+        started_since='2026-10-20T00:00:00Z',started_before='2026-10-20T00:00:01Z',contains_activity='Close')
+    assert [row['case_number'] for row in result['cases']]==[31,32,33,34,35]
+    assert result['cases'][0]['event_count']==27
+    assert len(store.events(identifier,31)['events'])==27
+    assert not store.cases(identifier,transition_from='Open',transition_to='Review',
+        started_since='2026-10-21T00:00:00Z')['cases']
+    self_loop=store.cases(identifier,transition_from='Open',transition_to='Open')
+    assert len(self_loop['cases'])==25 and self_loop['has_more']
+
+
+def test_tied_time_transition_filter_retains_supplied_order_and_rejects_partial_labels(logs):
+    store,_=logs;start=datetime(2026,10,20,tzinfo=timezone.utc)
+    identifier=retain(store,[(start,('Open','Review','Close'),0)])
+    result=store.cases(identifier,transition_from='Open',transition_to='Review')
+    assert len(result['cases'])==1 and result['cases'][0]['tied_timestamp_adjacent_pairs']==2
+    assert not result['tied_timestamp_order_verified']
+    for values in ({'transition_from':'Open'},{'transition_to':'Close'},
+                   {'transition_from':'','transition_to':'Close'},
+                   {'transition_from':'Open','transition_to':'x'*65},
+                   {'transition_from':True,'transition_to':'Close'}):
+        with pytest.raises(ProcessLogError):store.cases(identifier,**values)
+    assert not store.cases(identifier,transition_from="' OR 1=1",transition_to='Close')['cases']

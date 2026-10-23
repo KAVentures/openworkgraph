@@ -297,3 +297,30 @@ test('withdrawing cohort comparison review while authentication is pending cance
   consent.checked=false;consent.handlers.change();release();await comparing;assert.equal(calls.length,3);
   assert.equal(document.getElementById('owgCohortCompare').disabled,true);
 });
+
+test('transition inspection finds full-variant support and late case pages cannot replace a newer drill-down',async()=>{
+ let finish,pickEdge;const id='log_'+'a'.repeat(32),slow=new Promise(resolve=>finish=resolve);
+ const report={format:'openworkgraph.process-mining-csv-preview.v1',dataset_id:id,case_count:2,metrics:{},
+   activities:[{activity:'Open'},{activity:'Review'},{activity:'Close'}],transitions:[edge('Open','Review',2,60),edge('Open','Close',1,30)],
+   variants:[{case_count:1,observed_path:Array(24).fill('Open'),path_truncated:true,path_event_count:27,
+     transitions:[edge('Open','Review',2,60)],activities:[],case_examples:[]},
+     {case_count:1,observed_path:['Open','Close'],transitions:[edge('Open','Close',1,30)],activities:[],case_examples:[]}],
+   cohort:{filters:{contains_team:'team_2'},selected_case_count:2,dataset_case_count:3}};
+ const {window,document,find,calls,root}=setup(url=>url.includes('transition_to=Review')?slow:
+   url.includes('/report?')?report:url.includes('/cases?')?{cases:[]}:
+   {datasets:[{dataset_id:id,case_count:2,created_at:'2026-10-21T00:00:00Z'}]});
+ window.owgProcessGraph={drawObserved:(value,onNode,onEdge)=>{pickEdge=onEdge;return document.createElement('div');}};
+ await find('button','List saved local logs').handlers.click();await find('button','Open '+id).handlers.click();
+ find('button','Explore all observed transitions').handlers.click();pickEdge(report.transitions[0]);
+ assert(document.getElementById('owgObservedEdgeDetails').text.includes('2 recorded adjacent transitions across 1 distinct cases'));
+ assert(find('button','Inspect supporting variant 1 · 1 cases')); // edge is past displayed event 24
+ const old=find('button','Browse retained cases for Open → Review').handlers.click();
+ await new Promise(resolve=>setImmediate(resolve));
+ const query=new URL(calls.at(-1)[0],'http://localhost').searchParams;
+ assert.equal(query.get('transition_from'),'Open');assert.equal(query.get('transition_to'),'Review');
+ assert.equal(query.get('contains_team'),'team_2');
+ pickEdge(report.transitions[1]);await find('button','Browse retained cases for Open → Close').handlers.click();
+ assert(document.getElementById('owgLogCases').text.includes('adjacent Open → Close'));
+ finish({cases:[{case_number:999,event_count:999,variant_id:'variant_999'}]});await old;
+ assert(!document.getElementById('owgLogCases').text.includes('999'));assert(!root.text.includes('variant_999'));
+});
