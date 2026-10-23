@@ -21,3 +21,7 @@ jobs:
         env:
           OWG_SCALE_ACCEPTANCE: "1"
         run: python -m pytest -q -s tests/test_large_history_acceptance.py
+      - name: Verify the event-log workspace on a 10M-event log
+        env:
+          OWG_SCALE_ACCEPTANCE: "1"
+        run: python -m pytest -q -s tests/test_event_log_scale_acceptance.py
