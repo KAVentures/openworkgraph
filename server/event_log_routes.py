@@ -15,10 +15,12 @@ from typing import Any, Callable
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
+from . import event_log_simulation as simulation
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
@@ -180,6 +182,27 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
     _require_dashboard(request)
     return _respond(analytics.root_cause, log_id, outcome, case_type, threshold_seconds=threshold_seconds,
                     activity=activity, limit=limit)
+
+
+@router.get("/v1/event-logs/{log_id}/simulation/calibration")
+def event_log_simulation_calibration(request: Request, log_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     max_paths: int = Query(default=10, ge=1, le=simulation.MAX_PATHS)):
+    _require_dashboard(request)
+    return _respond(simulation.calibrate, log_id, case_type, max_paths)
+
+
+@router.post("/v1/event-logs/{log_id}/simulate")
+async def event_log_simulate(request: Request, log_id: str,
+                             case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    scenario = await _json_body(request, "scenario")
+    # CPU-bound and bounded (at most MAX_CASES cases); run off the event loop.
+    try:
+        result = await run_in_threadpool(simulation.what_if, log_id, scenario, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/event-logs/{log_id}/export")
