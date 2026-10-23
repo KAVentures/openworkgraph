@@ -152,7 +152,7 @@
     remove.onclick=async()=>{
       const chosen=state.logs.find(l=>l.log_id===state.logId);if(!chosen)return;
       if(!window.confirm('Delete the event log "'+chosen.name+'" from this computer? This cannot be undone.'))return;
-      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});status('Event log deleted.');results.replaceChildren();await refreshLogs('');}
+      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});results.replaceChildren();await refreshLogs('');status('Event log deleted.');}
       catch(error){status(error.message);}
     };
     refreshImport();
@@ -197,6 +197,7 @@
     const names=(activities.activities||[]).map(a=>a.activity);
     results.appendChild(kpiSection(names));
     results.appendChild(benchmarkSection(names));
+    results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     status('');
@@ -306,6 +307,81 @@
     return box;
   }
 
+  // "0.6: A > B > C" per line; the weight is optional and defaults to 1.
+  function parseWeightedPaths(text){
+    const paths=[];
+    for(const line of String(text||'').split(/\r?\n/)){
+      if(!line.trim())continue;
+      const m=line.match(/^\s*([0-9]*\.?[0-9]+)\s*:\s*(.*)$/);
+      const weight=m?Number(m[1]):1,steps=(m?m[2]:line).split(/>|→/).map(x=>x.trim()).filter(Boolean);
+      if(!steps.length)throw new Error('Each path needs at least one activity.');
+      paths.push({activities:steps,weight});
+    }
+    if(!paths.length)throw new Error('Enter at least one path.');
+    if(paths.length>20)throw new Error('Use at most 20 paths.');
+    return paths;
+  }
+  const formatWeightedPaths=paths=>paths.map(p=>Number(p.weight).toFixed(3)+': '+p.activities.join(' > ')).join('\n');
+
+  function simulationSection(){
+    const box=section('What-if simulation');
+    box.appendChild(el('div','Simulate cases flowing through the process with the times and staffing you set. Start from values measured in this log, change them, and compare. Results are model outputs under the listed assumptions, not forecasts.','muted'));
+    const load=button('Load measured values','secondary');load.id='owgEventLogSimLoad';
+    const form=el('div');form.id='owgEventLogSimForm';
+    const out=el('div');box.append(load,form,out);
+    load.onclick=async()=>{
+      try{
+        const cal=await getJSON(logPath('simulation/calibration'));
+        const arrivals=input('owgEventLogSimArrivals','number');arrivals.min='0';arrivals.step='any';arrivals.value=cal.arrivals_per_hour===null?'':String(cal.arrivals_per_hour);
+        const cases=input('owgEventLogSimCases','number');cases.min='10';cases.max='20000';cases.value='2000';
+        const dist=select('owgEventLogSimDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+        const label=input('owgEventLogSimLabel','text','e.g. Two reviewers');label.maxLength=80;
+        const top=el('div',null,'row');top.style.alignItems='end';
+        top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Cases to simulate',cases));
+        const paths=document.createElement('textarea');paths.id='owgEventLogSimPaths';paths.rows=4;paths.style.width='100%';paths.value=formatWeightedPaths(cal.paths||[]);
+        const rows=[];
+        const body=el('tbody');
+        const addRow=(name,p)=>{
+          const i=rows.length;
+          const minutes=input('owgEventLogSimMinutes'+i,'number');minutes.min='0';minutes.step='any';minutes.value=String(p.minutes);minutes.setAttribute('aria-label','Minutes for '+name);
+          const people=input('owgEventLogSimResources'+i,'number');people.min='1';people.step='1';people.value=String(p.resources);people.setAttribute('aria-label','Resources for '+name);
+          rows.push({name,minutes,people});
+          const tr=el('tr');const a=el('td'),b=el('td');a.appendChild(minutes);b.appendChild(people);tr.append(el('td',name),a,b);body.appendChild(tr);
+        };
+        Object.entries(cal.activities||{}).forEach(([name,p])=>addRow(name,p));
+        const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
+        t.append(head,body);wrap.appendChild(t);
+        const newName=input('owgEventLogSimNewName','text','New activity');newName.maxLength=200;
+        const add=button('Add activity','secondary');add.id='owgEventLogSimAdd';
+        add.onclick=()=>{const name=newName.value.trim();if(!name||rows.some(r=>r.name===name))return;addRow(name,{minutes:0,resources:1});newName.value='';};
+        const addRowNode=el('div',null,'row');addRowNode.style.alignItems='end';addRowNode.append(field('Activity not in the log',newName),add);
+        const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
+        form.replaceChildren(top,field('Routing: weight: activity > activity (one path per line)',paths),wrap,addRowNode,
+          el('div','Measured times are median gaps before each activity and include waiting. '+(cal.paths_cover_cases_share<1?'Listed paths cover '+pct(cal.paths_cover_cases_share)+' of cases.':''),'muted'),run);
+        run.onclick=async()=>{
+          try{
+            const activities={};
+            for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
+            const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000)};
+            if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
+            run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
+            const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
+            const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
+            const change=r.median_cycle_time_change_seconds;
+            out.replaceChildren(
+              ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
+              table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Measured baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
+              el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+              table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity,a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+              (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
+          }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+          finally{run.disabled=false;}
+        };
+      }catch(error){form.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
   function conformanceSection(topVariant){
     const box=section('Compare with a reference process');
     const model=document.createElement('textarea');model.id='owgEventLogModel';model.rows=3;model.style.width='100%';
@@ -354,6 +430,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV};
+  window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
