@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
-  const state={logs:[],logId:'',caseType:''};
+  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0};
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -70,7 +70,7 @@
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
     headers.forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
-    const body=el('tbody');rows.forEach(r=>{const tr=el('tr');r.forEach(v=>tr.appendChild(el('td',v)));body.appendChild(tr);});
+    const body=el('tbody');rows.forEach(r=>{const tr=el('tr');r.forEach(v=>{const cell=el('td');cell.style.whiteSpace='pre-wrap';if(v instanceof window.Node)cell.appendChild(v);else cell.textContent=v===null||v===undefined?'':String(v);tr.appendChild(cell);});body.appendChild(tr);});
     t.append(head,body);wrap.appendChild(t);return wrap;
   }
   const status=text=>{const s=document.getElementById('owgEventLogStatus');if(s)s.textContent=String(text||'');};
@@ -139,7 +139,7 @@
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>selectLog(pick.value);
-    caseType.onchange=()=>{state.caseType=caseType.value;results.replaceChildren();};
+    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     exportButton.onclick=async()=>{
       try{
@@ -154,7 +154,7 @@
     remove.onclick=async()=>{
       const chosen=state.logs.find(l=>l.log_id===state.logId);if(!chosen)return;
       if(!window.confirm('Delete the event log "'+chosen.name+'" from this computer? This cannot be undone.'))return;
-      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});results.replaceChildren();await refreshLogs('');status('Event log deleted.');}
+      try{state.generation++;results.replaceChildren();await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});await refreshLogs('');status('Event log deleted.');}
       catch(error){status(error.message);}
     };
     refreshImport();
@@ -162,7 +162,9 @@
   }
 
   async function refreshLogs(selectId){
+    const refresh=++state.refresh;
     const data=await getJSON('/v1/event-logs');
+    if(refresh!==state.refresh)return;
     state.logs=Array.isArray(data.logs)?data.logs:[];
     const pick=document.getElementById('owgEventLogPick');
     setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
@@ -172,9 +174,10 @@
   }
 
   async function selectLog(logId){
-    state.logId=logId;state.caseType='';
+    const generation=++state.generation;state.logId=logId;state.caseType='';
     document.getElementById('owgEventLogResults').replaceChildren();
     const types=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/object-types');
+    if(generation!==state.generation)return;
     const options=(types.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']);
     const caseType=document.getElementById('owgEventLogCaseType');
     setOptions(caseType,options);
@@ -183,26 +186,98 @@
   }
 
   async function analyse(){
+    const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
     status('Analysing…');
     const [summary,variants,activities]=await Promise.all([getJSON(logPath('summary')),getJSON(logPath('variants',{limit:10})),getJSON(logPath('activities'))]);
+    if(generation!==state.generation)return;
+    const names=(activities.activities||[]).map(a=>a.activity);
+    const inspection=caseInspector(names);
     const overview=section('Overview');
     const d=summary.case_duration_seconds||{};
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
     results.appendChild(overview);
 
     const variantBox=section('Most common variants');
-    variantBox.appendChild(table(['Path','Cases','Share','Median time'],(variants.variants||[]).map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds)])));
+    variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
 
-    const names=(activities.activities||[]).map(a=>a.activity);
+    const activityBox=section('Activities');
+    activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
+    results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
     results.appendChild(benchmarkSection(names));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     status('');
+  }
+
+  function caseInspector(activityNames){
+    const box=section('Case evidence');box.id='owgEventLogCases';
+    const generation=state.generation;
+    const current=()=>box.isConnected&&generation===state.generation;
+    const filters=cohortFields('owgEventLogCasesFilter','Select complete cases',activityNames);
+    const browse=button('Browse cases','secondary');browse.id='owgEventLogCasesBrowse';
+    const first=button('First case page','secondary'),next=button('Next case page','secondary');
+    first.disabled=true;next.disabled=true;
+    const note=el('div','Case keys and labels are supplied by this log. They do not verify business identity, people or outcomes.','muted');
+    const chosen=el('div','All paths.','muted');chosen.id='owgEventLogCasesPath';
+    const reset=button('All paths','secondary');reset.onclick=()=>{path=null;chosen.textContent='All paths.';};
+    const message=el('div');message.id='owgEventLogCasesStatus';message.setAttribute('role','status');
+    const list=el('div');list.id='owgEventLogCasesList';
+    const detail=el('div');detail.id='owgEventLogCaseEvents';
+    const controls=el('div',null,'row');controls.append(browse,reset,first,next);
+    box.append(note,filters.node,chosen,controls,message,list,detail);
+    let path=null,spec=null,nextAfter=null,listing=0,opening=0;
+    async function load(after){
+      const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
+      message.textContent='Loading cases…';
+      try{
+        const payload={...spec};if(after!==null)payload.after=after;
+        const result=await (await api(logPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        if(!current()||ticket!==listing)return;
+        nextAfter=result.next_after;
+        message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.';
+        list.replaceChildren(table(['Supplied case key','Events','Elapsed time','Equal-timestamp events'],result.cases.map(c=>{
+          const open=button(c.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+          open.setAttribute('aria-label','Open case '+c.case_id);open.onclick=()=>openCase(c.case_id);
+          return [open,c.events,duration(c.elapsed_seconds),c.timestamp_ties];
+        })));
+        first.disabled=after===null;next.disabled=nextAfter===null;
+      }catch(error){if(current()&&ticket===listing){message.textContent=error.message;list.replaceChildren();}}
+      finally{if(current()&&ticket===listing)browse.disabled=false;}
+    }
+    function start(){
+      try{spec={cohort:filters.read(),limit:30};if(path)spec.path=path;detail.replaceChildren();opening++;load(null);}
+      catch(error){message.textContent=error.message;}
+    }
+    browse.onclick=start;first.onclick=()=>load(null);next.onclick=()=>load(nextAfter);
+    async function openCase(caseId){
+      const ticket=++opening;
+      const heading=el('h4','Case '+caseId);heading.tabIndex=-1;
+      const progress=el('div','Loading events…');progress.setAttribute('role','status');
+      const rows=el('div'),more=button('More case events','secondary');more.id='owgEventLogCaseEventsMore';more.disabled=true;
+      detail.replaceChildren(heading,progress,rows,more);
+      heading.focus();let offset=0,shown=0;
+      async function page(){
+        more.disabled=true;
+        try{
+          const result=await (await api(logPath('case-events/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
+          if(!current()||ticket!==opening)return;
+          shown+=result.events.length;offset=result.next_offset;
+          progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
+          rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],result.events.map(e=>[e.activity,e.timestamp,e.resource||'(missing)',e.event_id])));
+          more.disabled=offset===null;show(more,offset!==null);
+        }catch(error){if(current()&&ticket===opening)progress.textContent=error.message;}
+      }
+      more.onclick=page;await page();
+    }
+    return {node:box,path(value){
+      if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
+      path=value.slice();chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
+    },activity(value){path=null;chosen.textContent='All paths.';document.getElementById('owgEventLogCasesFilterActivity').value=value;start();box.scrollIntoView({block:'nearest'});}};
   }
 
   // Cohort fields; dates are whole UTC days on the case's first event.
