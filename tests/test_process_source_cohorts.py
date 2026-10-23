@@ -128,3 +128,44 @@ with TestClient(app) as client:
     env=os.environ.copy();env.update(WORKFLOW_OBSERVER_DATA=str(tmp_path/'data'),WORKFLOW_OBSERVER_AUTH_DIR=str(tmp_path/'auth'),WORKFLOW_OBSERVER_CONFIG=str(tmp_path/'config.json'))
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_maximum_log_with_only_last_event_matching_uses_bounded_membership_work(logs):
+    store,_,connect=logs
+    stream=StringIO(newline='');writer=csv.writer(stream)
+    writer.writerow(('case_id','activity','timestamp','participant','team','origin'))
+    start=datetime(2026,10,20,tzinfo=timezone.utc)
+    for position in range(5000):
+        last=position==4999
+        writer.writerow(('case_key_1','Review' if last else 'Open',
+            (start+timedelta(seconds=position)).isoformat(),
+            'participant_2' if last else 'participant_1','team_2' if last else 'team_1',
+            'source_2' if last else 'source_1'))
+    identifier=store.save(stream.getvalue().encode(),retention_days=7,confirmed=True,
+        participant_labels_authorized=True,case_links_authorized=True)['dataset_id']
+    # Bound SQLite work rather than wall-clock time. Re-evaluating case
+    # membership for every event makes this legal input quadratic (~300M VM
+    # instructions). Leave generous headroom for SQLite version differences.
+    instructions=0
+    def progress():
+        nonlocal instructions
+        instructions+=1000
+        return int(instructions>2_000_000)
+    @contextmanager
+    def counted():
+        with connect() as conn:
+            conn.set_progress_handler(progress,1000)
+            yield conn
+    store.connect=counted
+    result=store.cohort(identifier,contains_origin='source_2',contains_participant='participant_2',
+        contains_team='team_2',contains_activity='Review')
+    assert result['selection']['selected_event_count']==5000 and result['selection']['selected_case_count']==1
+    assert result['report']['case_correlation']['sources'][1]['event_count']==1
+    assert result['report']['variants'][0]['path_truncated']
+    assert instructions<2_000_000
+    store.connect=connect
+    # Other datasets reuse case ordinals but must not leak membership.
+    store.save(b'case_id,activity,timestamp,origin\ncase_key_1,Open,2026-10-20T00:00:00Z,source_4\n',
+        retention_days=7,confirmed=True,case_links_authorized=True)
+    assert store.cohort(identifier,contains_origin='source_4')['report'] is None
+    assert store.events(identifier,1,after=4900)['events'][-1]['origin']=='source_2'

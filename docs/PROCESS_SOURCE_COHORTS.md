@@ -51,3 +51,9 @@ read-only behavior, uncollected dimensions, bounded aliases, sanitized API
 errors and authentication. The real browser flow filters a mixed-source case,
 keeps its other-source events, compares reviewed source populations and checks
 mobile layout, deletion and unchanged canonical evidence.
+
+Case membership is computed as a dataset-bound set before full-history
+selection. A maximum-size 5,000-event case with matching source/participant/team
+metadata only on its final event is checked under a SQLite instruction budget,
+preventing repeated per-event scans from making this input quadratic. The same
+case ordinal in another snapshot cannot contribute membership.

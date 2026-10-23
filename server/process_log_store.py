@@ -25,7 +25,7 @@ class ProcessLogError(ValueError):
     pass
 
 
-def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None, contains_participant=None, contains_team=None, contains_origin=None):
+def _case_cohort(dataset_id, *, started_since=None, started_before=None, contains_activity=None, variant_id=None, contains_participant=None, contains_team=None, contains_origin=None):
     """Select whole cases. Never clip events or infer business start/completion."""
     filters = {}
     for key, value in (('started_since', started_since), ('started_before', started_before)):
@@ -63,16 +63,18 @@ def _case_cohort(*, started_since=None, started_before=None, contains_activity=N
         if key in filters:
             sql.append('c.first_event_at ' + operator + ' ?');params.append(filters[key])
     if 'contains_activity' in filters:
-        sql.append('EXISTS (SELECT 1 FROM process_log_events ce WHERE ce.dataset_id = c.dataset_id '
-                   'AND ce.case_number = c.case_number AND ce.activity = ?)')
-        params.append(filters['contains_activity'])
+        sql.append('c.case_number IN (SELECT ce.case_number FROM process_log_events ce WHERE ce.dataset_id = ? '
+                   'AND ce.activity = ?)')
+        params.extend((dataset_id,filters['contains_activity']))
     if 'variant_id' in filters:
         sql.append('c.variant_id = ?');params.append(filters['variant_id'])
     selected=[key for key in (*PARTICIPANT_DIMENSIONS,'origin') if 'contains_'+key in filters]
     if selected:
-        sql.append('EXISTS (SELECT 1 FROM process_log_events pe WHERE pe.dataset_id = c.dataset_id '
-            'AND pe.case_number = c.case_number'+''.join(' AND pe.'+key+' = ?' for key in selected)+')')
-        params.extend(filters['contains_'+key] for key in selected)
+        # An uncorrelated membership set is evaluated once, including when the
+        # outer query retrieves every event of a long matching case.
+        sql.append('c.case_number IN (SELECT pe.case_number FROM process_log_events pe WHERE pe.dataset_id = ?'
+            +''.join(' AND pe.'+key+' = ?' for key in selected)+')')
+        params.append(dataset_id);params.extend(filters['contains_'+key] for key in selected)
     return filters, ''.join(' AND ' + condition for condition in sql), params
 
 
@@ -259,7 +261,7 @@ class ProcessLogStore:
         if transition_from is not None and any(not isinstance(value,str) or not 1 <= len(value) <= 64
                                              for value in (transition_from,transition_to)):
             raise ProcessLogError("Transition activity labels must be short and nonempty")
-        filters, cohort_sql, cohort_params = _case_cohort(started_since=started_since,
+        filters, cohort_sql, cohort_params = _case_cohort(dataset_id, started_since=started_since,
             started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
             contains_participant=contains_participant,contains_team=contains_team,contains_origin=contains_origin)
         with self.connect() as conn:
@@ -313,7 +315,7 @@ class ProcessLogStore:
 
     def cohort(self, dataset_id, *, started_since=None, started_before=None, contains_activity=None,
                variant_id=None, reference_model=None, reference=None, contains_participant=None, contains_team=None, contains_origin=None):
-        filters, predicate, params = _case_cohort(started_since=started_since,
+        filters, predicate, params = _case_cohort(dataset_id, started_since=started_since,
             started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
             contains_participant=contains_participant,contains_team=contains_team,contains_origin=contains_origin)
         with self.connect() as conn:
@@ -428,7 +430,7 @@ class ProcessLogStore:
         for value in (baseline_filters, current_filters):
             if not isinstance(value, dict) or not set(value).issubset(allowed):
                 raise ProcessLogError('Use only supported complete-case filters')
-            selections.append(_case_cohort(**value))
+            selections.append(_case_cohort(dataset_id, **value))
         snapshots, selected_cases = [], []
         with self.connect() as conn:
             self._open(conn)
