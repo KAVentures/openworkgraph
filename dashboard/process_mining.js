@@ -352,20 +352,21 @@
       await browseCases(id,0,attempt);
     }catch(error){if(attempt===generation)setStatus('Unable to open log: '+error.message);}
   }
-  async function browseCases(id,after=0,attempt=generation,activity=null,transition=null){
+  async function browseCases(id,after=0,attempt=generation,activity=null,transition=null,labelContext=null){
     const caseAttempt=++caseBrowserGeneration;
     try{
       const filters=report?.dataset_id===id?report.cohort?.filters||{}:{};
-      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25,...filters,...(activity?{activity}:{}),...(transition?{transition_from:transition.from,transition_to:transition.to}:{})}),undefined,
+      const value=await logRequest('/cases?'+new URLSearchParams({dataset_id:id,after,limit:25,...filters,...(activity?{activity}:{}),...(transition?{transition_from:transition.from,transition_to:transition.to}:{}),
+        ...(labelContext?{label_dimension:labelContext.dimension,...(labelContext.missing?{label_missing:true}:{label_value:labelContext.value}),...(labelContext.variant_id?{variant_id:labelContext.variant_id}:{})}:{})}),undefined,
         ()=>attempt===generation&&caseAttempt===caseBrowserGeneration);if(attempt!==generation||caseAttempt!==caseBrowserGeneration)return;
-      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',transition?'Retained cases containing adjacent '+transition.from+' → '+transition.to:activity?'Retained cases containing '+activity:report?.cohort?'Selected retained cases · dataset ordinals':'All retained cases · dataset ordinals'));
+      const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',labelContext?'Retained cases with '+(labelContext.missing?'missing '+labelContext.dimension+' label':labelContext.text+' label')+' on '+activity+(labelContext.variant_id?' · '+labelContext.variant_id:''):transition?'Retained cases containing adjacent '+transition.from+' → '+transition.to:activity?'Retained cases containing '+activity:report?.cohort?'Selected retained cases · dataset ordinals':'All retained cases · dataset ordinals'));
       for(const entry of safe(value.cases)){
         const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id+(entry.case_key_alias?' · '+entry.case_key_alias:'')));
         const events=make('div');row.appendChild(events);let loaded=false;
         row.addEventListener('toggle',()=>{if(row.open&&!loaded){loaded=true;browseEvents(id,entry.case_number,events,0,attempt,caseAttempt);}});host.appendChild(row);
       }
-      if(after)host.appendChild(button('First cases',()=>browseCases(id,0,attempt,activity,transition)));
-      if(value.has_more)host.appendChild(button('Next cases',()=>browseCases(id,value.next_after,attempt,activity,transition)));
+      if(after)host.appendChild(button('First cases',()=>browseCases(id,0,attempt,activity,transition,labelContext)));
+      if(value.has_more)host.appendChild(button('Next cases',()=>browseCases(id,value.next_after,attempt,activity,transition,labelContext)));
     }catch(error){if(attempt===generation&&caseAttempt===caseBrowserGeneration)setStatus('Unable to browse cases: '+error.message);}
   }
   async function browseEvents(id,number,host,after,attempt,caseAttempt){
@@ -608,12 +609,13 @@
   }
   const signed=value=>(Number(value)>0?'+':'')+String(value);
   const optionalSeconds=value=>value===null||value===undefined?'Not observed':seconds(value);
-  function driftTable(host,title,columns,rows){
+  function driftTable(host,title,columns,rows,action=null){
     host.appendChild(make('h4',title));
     const wrap=make('div',null,'owg-process-table'),table=make('table'),head=make('thead'),header=make('tr'),body=make('tbody');
     for(const title of columns){const cell=make('th',title);cell.setAttribute('scope','col');header.appendChild(cell);}
     head.appendChild(header);
-    for(const values of rows){const row=make('tr');for(const value of values)row.appendChild(make('td',value));body.appendChild(row);}
+    rows.forEach((values,index)=>{const row=make('tr');for(const value of values)row.appendChild(make('td',value));
+      if(action){const cell=make('td');cell.appendChild(action(index));row.appendChild(cell);}body.appendChild(row);});
     table.append(head,body);wrap.appendChild(table);host.appendChild(wrap);
   }
   function aliasLabel(value){return String(value).replace(/^participant_/, 'Participant ').replace(/^team_/, 'Team ');}
@@ -625,16 +627,25 @@
     const list=make('ul');for(const source of safe(data.sources))list.appendChild(make('li',String(source.origin).replace(/^source_/,'Source ')+' · '+source.event_count+' events across '+source.case_count+' cases'));
     host.appendChild(list);
   }
-  function renderActivityLabelSupport(host,activity){
+  function renderActivityLabelSupport(host,activity,scope=null){
     const support=activity?.label_support;if(!support)return;
     const titles={participant:'Participant labels',team:'Team labels',origin:'Source aliases'};
+    const id=report?.dataset_id,attempt=generation,canBrowse=!!(id&&id===retainedDataset&&!report.source_preview&&(!scope||/^variant_[0-9]{1,4}$/.test(scope.variant_id||'')));
+    const inspect=(dimension,value,missing,text)=>{
+      if(attempt!==generation||id!==retainedDataset||report?.dataset_id!==id)return;
+      return browseCases(id,0,attempt,activity.activity,null,{dimension,value,missing,text,...(scope?{variant_id:scope.variant_id}:{})});
+    };
     host.append(make('h4','Labels on this activity'),make('p','Counts use every occurrence of this activity in the current population. A case can contain several labels, so case support across labels is not additive. Labels do not verify people, membership, source identity, effort or human handoffs.','muted'));
     for(const [dimension,data] of Object.entries(support)){
       if(!titles[dimension])continue;
-      driftTable(host,titles[dimension],['Supplied label','Activity events','Distinct cases'],
-        safe(data.labels).map(row=>[dimension==='origin'?String(row.label).replace(/^source_/,'Source '):aliasLabel(row.label),row.event_count,row.case_count]));
+      const labels=safe(data.labels),display=value=>dimension==='origin'?String(value).replace(/^source_/,'Source '):aliasLabel(value);
+      driftTable(host,titles[dimension],['Supplied label','Activity events','Distinct cases',...(canBrowse?['Inspect cases']:[])],
+        labels.map(row=>[display(row.label),row.event_count,row.case_count]),canBrowse?index=>{
+          const value=labels[index].label;return button('Browse cases · '+display(value)+' · '+activity.activity,()=>inspect(dimension,value,false,display(value)));
+        }:null);
       host.appendChild(make('p',data.missing_label_event_count+' activity events across '+data.missing_label_case_count+
         ' cases have no '+(dimension==='origin'?'source':dimension)+' label; those values remain unknown.','muted'));
+      if(canBrowse&&data.missing_label_case_count)host.appendChild(button('Browse cases with missing '+dimension+' label · '+activity.activity,()=>inspect(dimension,null,true,'')));
       if(data.rows_truncated)host.appendChild(make('p','Showing '+data.rows_returned+' of '+data.label_count+' labels, ranked by event support. Totals include all labels and all selected cases.','muted'));
     }
   }
@@ -802,7 +813,7 @@
         details.appendChild(make('h4',activeActivity));
         details.appendChild(make('p',activity.event_count+' recorded events across '+activity.case_count+
           ' cases in this variant. Repeated positions count as separate events.'));
-        renderActivityLabelSupport(details,activity);
+        renderActivityLabelSupport(details,activity,{variant_id:variant.variant_id});
         details.appendChild(make('p','Select an example below to inspect its recorded chronology. Times describe source events, not active labor or verified waiting.','muted'));
         host.appendChild(details);
       }

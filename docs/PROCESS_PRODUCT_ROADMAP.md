@@ -12,7 +12,7 @@ or full competitor parity.
 
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
-| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts and adjacent-pair inspection/drill-down, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with full-population per-activity participant/team/source support and explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
+| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts and adjacent-pair inspection/drill-down, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with full-population per-activity participant/team/source support with exact same-event case drill-down and explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
 | Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories, supplied-label change signals inside declared CSV cases and caller-reviewed exact shared-key joins across selected exports with per-event source aliases | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266) with offline column mapping/minimization for comma/semicolon/tab exports, single/selected Jira audits (#270/#272), selected GitHub review/lifecycle, opted-in Zendesk status audits and separately selected Stripe invoice lifecycle fields in the same explorer, full-log structural conformance, explicitly consented current-source predicate comparisons, explicitly retained local snapshots with complete case/event queries | Additional source adapters, continuous/large-volume coverage and historical-case business attributes and source-authoritative business-policy conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |
@@ -122,3 +122,8 @@ completeness remain unverified; no timestamp-based or cross-import join occurs.
 inspection to every selected event, with separate full-log and exact-variant
 populations, unknown labels and bounded support tables. Counts do not establish
 employee effort, real identity, source authority or automatic responsibilities.
+
+[Activity-label case inspection](PROCESS_ACTIVITY_LABEL_CASES.md) opens complete
+histories supported by the selected label on the selected activity, with
+explicit missing-data semantics and preserved cohort/variant scope. Labels
+elsewhere in a case are never promoted into step attribution.

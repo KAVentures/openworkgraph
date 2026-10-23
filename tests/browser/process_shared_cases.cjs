@@ -81,6 +81,19 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   await page.getByRole('button',{name:'List saved local logs',exact:true}).click();await page.getByRole('button',{name:'Open '+id,exact:true}).click();
   await page.locator('#owgProcessStatus').filter({hasText:'Opened retained local snapshot.'}).waitFor();
   assert.equal(await page.locator('#owgSharedCaseLookup').textContent(),'');
+  await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+  await page.getByRole('button',{name:'Inspect observed activity Open',exact:true}).click();
+  await page.locator('#owgObservedActivityDetails').getByRole('button',{name:'Browse cases · Source 1 · Open',exact:true}).click();
+  await page.locator('#owgLogCases h3').filter({hasText:'Source 1 label on Open'}).waitFor();
+  assert.equal(await page.locator('#owgLogCases details').count(),2);
+  await page.getByRole('button',{name:'Open · 1 events',exact:true}).click();
+  const narrowed=page.waitForResponse(r=>{const url=new URL(r.url());return url.pathname.endsWith('/datasets/cases')&&url.searchParams.get('label_dimension')==='origin'&&url.searchParams.has('variant_id');});
+  await page.locator('#owgProcessActivityDetails').getByRole('button',{name:'Browse cases · Source 1 · Open',exact:true}).click();
+  const selectedCases=await (await narrowed).json();assert.equal(selectedCases.cases.length,1);
+  assert.equal(selectedCases.cases[0].case_number,1);assert.equal(selectedCases.cases[0].event_count,3);
+  assert.equal(selectedCases.cohort_filters.variant_id,selectedCases.cases[0].variant_id);
+  assert.equal(selectedCases.activity_label_filter.dimension,'origin');assert(selectedCases.same_event_label_match_required);
+  await page.locator('#owgLogCases details').first().waitFor();assert.equal(await page.locator('#owgLogCases details').count(),1);
   const first=page.locator('#owgLogCases details').filter({hasText:'Case 1 · 3 events'});await first.locator('summary').click();
   await first.locator('li').filter({hasText:'Source 2'}).first().waitFor();assert.equal(await first.locator('li').count(),3);
   await page.getByLabel('Case contains exact activity',{exact:true}).fill('Waiting');
@@ -100,7 +113,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.setViewportSize({width:1280,height:900});page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();await page.getByText('No retained local logs.',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case/source history and full-versus-variant activity support, pending retention withdrawal, saved alias stability, whole-case filtering, deletion, mobile and no canonical evidence.');
+  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case/source history and full-versus-variant activity support and exact scoped case drill-down, pending retention withdrawal, saved alias stability, whole-case filtering, deletion, mobile and no canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

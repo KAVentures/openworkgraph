@@ -235,7 +235,21 @@ class ProcessLogStore:
 
     def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None,
               started_since=None, started_before=None, contains_activity=None, contains_participant=None, contains_team=None,
-              transition_from=None, transition_to=None):
+              transition_from=None, transition_to=None,
+              label_dimension=None, label_value=None, label_missing=False):
+        label_filter=None
+        if label_dimension is not None or label_value is not None or label_missing:
+            if label_dimension not in (*PARTICIPANT_DIMENSIONS,"origin") or not isinstance(activity,str) or not 1 <= len(activity) <= 64:
+                raise ProcessLogError("Activity label selection requires an exact activity and supported dimension")
+            if not isinstance(label_missing,bool) or (label_missing and label_value is not None) or (not label_missing and label_value is None):
+                raise ProcessLogError("Choose either one supplied label or missing-label events")
+            if not label_missing:
+                prefix="source" if label_dimension=="origin" else label_dimension
+                maximum=4 if label_dimension=="origin" else 1000
+                if (not isinstance(label_value,str) or len(label_value)>16 or not re.fullmatch(prefix+r"_[1-9][0-9]{0,3}",label_value)
+                    or int(label_value.rsplit("_",1)[1])>maximum):
+                    raise ProcessLogError("Activity label filters require bounded aliases from this snapshot")
+            label_filter={"activity":activity,"dimension":label_dimension,"label":label_value,"missing_label":label_missing}
         if (transition_from is None) != (transition_to is None):
             raise ProcessLogError("Transition filtering requires both exact activity labels")
         if transition_from is not None and any(not isinstance(value,str) or not 1 <= len(value) <= 64
@@ -246,7 +260,14 @@ class ProcessLogStore:
             contains_participant=contains_participant,contains_team=contains_team)
         with self.connect() as conn:
             self._open(conn)
+            if not conn.in_transaction:conn.execute('BEGIN')
             dataset=self._dataset(conn,dataset_id)
+            if label_filter:
+                original=json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id=?',(dataset_id,)).fetchone()[0])
+                available=set(_label_dimensions(original))
+                if original.get('case_correlation'):available.add('origin')
+                if label_dimension not in available:
+                    raise ProcessLogError('This label dimension was not retained in the selected snapshot')
             sql=('SELECT c.dataset_id,c.case_number,c.variant_id,c.event_count,c.first_event_at,c.last_event_at,'
                  'c.duration_seconds,c.tied_timestamp_adjacent_pairs,c.case_key_alias FROM process_log_cases c '
                  'WHERE c.dataset_id = ? AND c.case_number > ?')
@@ -254,6 +275,13 @@ class ProcessLogStore:
             if activity is not None:
                 sql+=' AND EXISTS (SELECT 1 FROM process_log_events e WHERE e.dataset_id = c.dataset_id AND e.case_number = c.case_number AND e.activity = ?)'
                 params.append(activity)
+            if label_filter:
+                # Column names are a fixed allowlist; activity/alias values are parameters.
+                sql += (' AND EXISTS (SELECT 1 FROM process_log_events al WHERE al.dataset_id=c.dataset_id '
+                        'AND al.case_number=c.case_number AND al.activity=? AND al.'+label_dimension+
+                        (' IS NULL)' if label_missing else ' = ?)' ))
+                params.append(activity)
+                if not label_missing:params.append(label_value)
             if transition_from is not None:
                 sql += (''' AND EXISTS (SELECT 1 FROM process_log_events te
                     JOIN process_log_events tn ON tn.dataset_id = te.dataset_id
@@ -270,6 +298,8 @@ class ProcessLogStore:
             return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap, 'cohort_filters':filters,
                     'next_after':items[-1]['case_number'] if len(rows)>cap else None,
                     'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False,
+                    **({'activity_label_filter':label_filter,'same_event_label_match_required':True,
+                        'label_is_verified_identity':False} if label_filter else {}),
                     **({'transition_filter':{'from':transition_from,'to':transition_to},
                         'transition_basis':'adjacent_retained_positions_timestamp_then_supplied_row_order',
                         'tied_timestamp_order_verified':False} if transition_from is not None else {})}
@@ -449,6 +479,7 @@ class ProcessLogStore:
     def events(self, dataset_id, case_number, *, after=0, limit=100):
         with self.connect() as conn:
             self._open(conn)
+            if not conn.in_transaction:conn.execute('BEGIN')
             self._dataset(conn,dataset_id)
             if not conn.execute('SELECT 1 FROM process_log_cases WHERE dataset_id = ? AND case_number = ?',
                                 (dataset_id,case_number)).fetchone():
