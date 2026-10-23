@@ -557,13 +557,13 @@
       value.current.dataset_id+' ('+value.current.case_count+' cases). '+(cohort?'All events and full paths of the selected cases':'All retained events and full paths')+' contribute to the metrics.','muted'));
     const metrics=make('div',null,'owg-pmetrics'),s=value.summary;
     metrics.append(metric('Observed path-mix distance · 0 identical, 1 disjoint',s.path_mix_total_variation_distance),
-      metric('Paths seen only in current log',s.current_only_path_count),metric('Paths seen only in baseline',s.baseline_only_path_count),
+      metric(cohort?'Paths seen only in current selection':'Paths seen only in current log',s.current_only_path_count),metric('Paths seen only in baseline',s.baseline_only_path_count),
       metric('Baseline → current median case elapsed',seconds(s.baseline_median_elapsed_seconds)+' → '+seconds(s.current_median_elapsed_seconds)),
       metric('Baseline → current p90 case elapsed',seconds(s.baseline_p90_case_elapsed_seconds)+' → '+seconds(s.current_p90_case_elapsed_seconds)));
     host.appendChild(metrics);
     host.appendChild(make('p','This is a descriptive comparison, not a significance test or a verified change in business behavior. Case counts and time windows can differ; mix changes may explain overall timing changes. Within-path medians below compare the same complete activity sequence. Elapsed time is not active labor or verified waiting.','muted'));
     const warningText={observed_event_windows_overlap:cohort?'Event windows overlap. Exact shared-case counts are shown above; event overlap does not establish employee effort or causal dependencies.':'Event windows overlap. Duplicate or overlapping cases cannot be ruled out because native case IDs were discarded.',
-      fewer_than_twenty_cases_in_at_least_one_snapshot:'At least one snapshot has fewer than 20 cases; this advisory is not a significance threshold.',
+      fewer_than_twenty_cases_in_at_least_one_snapshot:cohort?'At least one selection has fewer than 20 cases; this advisory is not a significance threshold.':'At least one snapshot has fewer than 20 cases; this advisory is not a significance threshold.',
       timestamp_ties_have_unverified_order:'Some events share timestamps; their supplied row order is unverified.'};
     for(const code of safe(value.warnings)){if(warningText[code])host.appendChild(make('p',warningText[code],'muted'));}
     for(const [title,entry] of [['Baseline',value.baseline],['Current',value.current]]){
