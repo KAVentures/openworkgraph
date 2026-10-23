@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from server import event_log_analytics as analytics
 from server import event_log_workspace as workspace
 
 EVENTS = int(os.environ.get("OWG_EVENT_LOG_SCALE_EVENTS", "10000000"))
@@ -50,6 +51,11 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
         ("variants", lambda: workspace.variants(log["log_id"])),
         ("directly_follows", lambda: workspace.directly_follows(log["log_id"])),
         ("activities", lambda: workspace.activities(log["log_id"])),
+        ("kpis", lambda: analytics.kpis(log["log_id"], sla_seconds=600, automation_resources=["user-1"])),
+        ("conformance", lambda: analytics.conformance(log["log_id"], {
+            "format": "openworkgraph.reference-model.v1",
+            "paths": [["Receive", "Validate", "Review", "Approve", "Fix", "Check", "Invoice", "Pay", "Archive", "Close"]]})),
+        ("root_cause", lambda: analytics.root_cause(log["log_id"], "rework")),
     ):
         began = time.perf_counter()
         result = call()
@@ -58,6 +64,10 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             assert result["cases"] == EVENTS // 10
         if name == "variants":
             assert result["distinct_variants"] == 4  # skip x rework combinations
+        if name == "conformance":
+            assert result["aligned_cases"] == EVENTS // 10
+        if name == "root_cause":
+            assert result["associations"][0]["feature"] == {"kind": "activity", "value": "Check"}
     print(f"\nimport {EVENTS:,} events: {import_seconds:.1f}s; queries: "
           + ", ".join(f"{k} {v:.1f}s" for k, v in timings.items()))
     assert max(timings.values()) < QUERY_BUDGET_SECONDS, timings

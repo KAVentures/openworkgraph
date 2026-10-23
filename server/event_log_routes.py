@@ -6,19 +6,23 @@ also requires an explicit local-storage confirmation header.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
+from . import event_log_analytics as analytics
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+_SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
 _TYPES = {"csv": "text/csv", "xes": "application/xml", "ocel": "application/json"}
 _SUFFIX = {"csv": "csv", "xes": "xes", "ocel": "jsonocel"}
 
@@ -34,6 +38,12 @@ def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> JSONRe
         return JSONResponse(operation(*args, **kwargs), headers={"Cache-Control": "no-store"})
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/event-log-workspace.js")
+def event_log_workspace_script() -> FileResponse:
+    """Static dashboard client; it only calls the authenticated routes below."""
+    return FileResponse(_SCRIPT, media_type="application/javascript")
 
 
 @router.get("/v1/event-logs")
@@ -108,6 +118,43 @@ def event_log_directly_follows(request: Request, log_id: str,
 def event_log_activities(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     return _respond(workspace.activities, log_id, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/kpis")
+def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                   sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
+                   automation_resources: str = Query(default="", max_length=10000)):
+    _require_dashboard(request)
+    resources = [item.strip() for item in automation_resources.split(",") if item.strip()]
+    return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources)
+
+
+@router.post("/v1/event-logs/{log_id}/conformance")
+async def event_log_conformance(request: Request, log_id: str,
+                                case_type: str | None = Query(default=None, max_length=200),
+                                max_variants: int = Query(default=500, ge=1, le=analytics.MAX_ALIGNED_VARIANTS)):
+    _require_dashboard(request)
+    if not str(request.headers.get("content-type") or "").startswith("application/json"):
+        raise HTTPException(415, "reference model must be JSON")
+    body = await request.body()
+    if len(body) > 65536:
+        raise HTTPException(413, "reference model is too large")
+    try:
+        model = json.loads(body)
+    except ValueError:
+        raise HTTPException(422, "reference model is not valid JSON") from None
+    return _respond(analytics.conformance, log_id, model, case_type, max_variants)
+
+
+@router.get("/v1/event-logs/{log_id}/root-cause")
+def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max_length=40),
+                         case_type: str | None = Query(default=None, max_length=200),
+                         threshold_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
+                         activity: str | None = Query(default=None, max_length=200),
+                         limit: int = Query(default=30, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(analytics.root_cause, log_id, outcome, case_type, threshold_seconds=threshold_seconds,
+                    activity=activity, limit=limit)
 
 
 @router.get("/v1/event-logs/{log_id}/export")
