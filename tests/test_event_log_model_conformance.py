@@ -164,3 +164,32 @@ def test_possible_incomplete_prefix_is_not_lost_from_structural_deviations():
     assert variants[('Open','Review')]['could_be_incomplete_log_prefix'] is True
     assert variants[('Open','Close')]['could_be_incomplete_log_prefix'] is False
     assert result['structural_deviation_cases']==2 and not result['policy_compliance_verified']
+
+
+def test_parallel_branch_entry_cannot_deadlock_a_saved_graph_comparison():
+    from pydantic import ValidationError
+    from shared.process_model import ProcessModel
+    value=parallel_model().model_dump()
+    for node in value['activities']:
+        if node['id']=='close':node['kind']='decision'
+    value['activities'].append({'id':'done','label':'Done','kind':'end'})
+    value['transitions'] += [{'source':'close','target':'fork','rule_id':'again'},
+                            {'source':'close','target':'done','rule_id':'finish'}]
+    value['business_rules']=[{'id':'again','text':'Repeat checks','user_confirmed':True},
+                             {'id':'finish','text':'Finish checks','user_confirmed':True}]
+    value['entry_activity_id']='A1';value['terminal_activity_ids']=['done']
+    with pytest.raises(ValidationError,match='cannot enter a branch'):
+        ProcessModel.model_validate(value)
+    old=packet();old['process_model']=value
+    with pytest.raises(workspace.EventLogWorkspaceError,match='cannot be compared'):
+        graph.compare('log_not_read',old,selection())
+    # An explicit entry before the fork preserves the valid exclusive outer loop.
+    value['activities'].append({'id':'start','label':'Start','kind':'start'})
+    value['transitions'] += [{'source':'start','target':'fork'}]
+    # Forks require one arrival source; route the initial arrival through the
+    # existing exclusive decision instead of adding a second split arrival.
+    value['transitions'][-1]={'source':'start','target':'close'}
+    value['entry_activity_id']='start'
+    valid=ProcessModel.model_validate(value)
+    from shared.process_conformance import compare_path
+    assert compare_path(('A1','A2','B1','B2'),valid)['exact_structural_match'] is True

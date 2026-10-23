@@ -21,7 +21,10 @@ select every case. Cohort and exact-path inspection retain complete histories.
 
 The existing graph alignment engine compares observed activity paths with the
 saved graph. Exclusive routes and explicit paired parallel regions retain their
-existing semantics. Parallel interleavings may match only when all required
+existing semantics. A process cannot start inside a parallel branch before
+its fork; such a draft needs an explicit process entry. Older saved drafts
+with invalid structures return a review error instead of an alignment failure.
+Parallel interleavings may match only when all required
 branches finish before the join. Conditions and business rules are not evaluated
 against missing business facts.
 

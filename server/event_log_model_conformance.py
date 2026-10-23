@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from shared.process_catalog import ProcessID
 from shared.process_conformance import compare_path
@@ -32,7 +32,10 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
     """The caller resolves and checks the exact local catalog reference."""
     if any(record.get(key) != getattr(spec, key) for key in ('workflow_id','revision','content_sha256')):
         raise workspace.EventLogWorkspaceError('saved process reference does not match the selected artifact')
-    model = ProcessModel.model_validate(record['process_model'])
+    try:
+        model = ProcessModel.model_validate(record['process_model'])
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('Saved process graph cannot be compared; review its structure') from None
     cohort = cohorts.parse_cohort(spec.cohort)
     parallel = any(node.kind == 'parallel_split' for node in model.activities)
 
