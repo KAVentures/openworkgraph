@@ -26,6 +26,19 @@ Timestamps must carry a timezone (`Z` or an offset). Rows without one, or with
 an unparseable time, are counted as rejected and never guessed. XML with a
 `DOCTYPE` or entity declaration is refused before parsing.
 
+## Object-centric maps
+
+For an OCEL log, **Object-centric map** draws one directly-follows map per
+object type: every object (an order, an item, a delivery) is one lifecycle,
+so an order's map never mixes in the steps of its items. Each type also
+shows how many objects and events it has, the median events per object, and
+how lifecycles start and end. Links between types count objects that share
+at least one event (for example, "each order is linked to 2 items on
+average, at most 3"), and the map lists activities that touch several object
+types, which is where lifecycles converge or diverge. Links come from shared
+events only; they are not verified relationships. Maps are capped at 64
+activities and 400 transitions per type, and 20 object types.
+
 ## Limits
 
 - 4 GB per import, 50 stored logs (delete one to import another).
@@ -50,6 +63,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
+| `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
@@ -225,3 +239,18 @@ CSV column selection also preserves literal header spelling.
 Variant and activity tables open complete, paginated case histories with
 whole-case cohort filtering and explicit timestamp-order uncertainty. See
 [case evidence](EVENT_LOG_CASE_EVIDENCE.md) for interaction and API details.
+
+
+## Saved process graph comparison
+
+Load an exact local catalog revision, inspect its map and compare selected
+retained cases using the shared structural engine. Full-population results keep
+bounded unknown cases separate from matches and deviations. See
+[saved process conformance](LARGE_LOG_SAVED_PROCESS_CONFORMANCE.md).
+
+Simulation routing accepts weighted text lines or JSON arrays of
+`{"activities":["literal label"],"weight":0.5}`. Calibration uses JSON when
+text formatting would change a label or routing probability. Small observed
+weights retain their precision; a zero-weight route may be disabled when
+another route has positive weight. Activity labels are data keys, including
+names that also occur on JavaScript object prototypes.

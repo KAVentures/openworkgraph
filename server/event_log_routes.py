@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
+from . import event_log_objects as objects
 from . import event_log_simulation as simulation
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
@@ -101,6 +102,12 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
 def event_log_object_types(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(workspace.object_types, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/object-map")
+def event_log_object_map(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(objects.object_graph, log_id)
 
 
 @router.get("/v1/event-logs/{log_id}/variants")

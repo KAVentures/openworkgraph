@@ -114,6 +114,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
       - name: Verify consented communications mining keeps only aggregates
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_mining.cjs
+      - name: Verify PDD packages burn screenshot masks into pixels and store nothing
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Install isolated generated-project SDK runtime
         run: |
           python -m venv "$RUNNER_TEMP/owg-agent-sdk"
@@ -153,6 +155,7 @@ jobs:
           node --check dashboard/event_log_workspace.js
           node --check dashboard/automation_monitoring.js
           node --check dashboard/communications_mining.js
+          node --check dashboard/process_pdd.js
           node --check integrations/plugins/openworkgraph/scripts/find-and-launch.mjs
           node --check integrations/plugins/openworkgraph/scripts/check-openworkgraph.mjs
       - name: Authenticated dashboard JavaScript syntax

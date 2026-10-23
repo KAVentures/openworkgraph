@@ -66,6 +66,62 @@ const path=require('node:path');
    await page.locator('#owgEventLogCasesPath').filter({hasText:'Exact path:'}).waitFor();
    await page.getByRole('button',{name:'Inspect cases containing Fix',exact:true}).click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'20 matching cases.'}).waitFor();
+   // Save a reviewed graph through the actual catalog and pin a historical revision.
+   const saved=await page.evaluate(async()=>{
+     const labels=['Receive','Check','Approve','Close'];
+     const process_model={goal:'Complete the declared claim review',baseline_source:'user_declared',baseline_path:labels,
+       activities:labels.map(label=>({id:label.toLowerCase(),label})),
+       transitions:labels.slice(1).map((label,i)=>({source:labels[i].toLowerCase(),target:label.toLowerCase()})),
+       entry_activity_id:'receive',terminal_activity_ids:['close']};
+     const body={workflow_id:'claims_review',title:'Reviewed claims',user_confirmed:true,expected_revision:0,process_model};
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+     if(!response.ok)throw new Error(await response.text());return {record:await response.json(),body};
+   });
+   await page.locator('#owgEventLogGraphLoad').click();
+   await page.locator('#owgEventLogGraphPick').selectOption('claims_review');
+   await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogSavedGraphMap svg').waitFor();
+   await page.locator('#owgEventLogSavedGraphMap').getByRole('button',{name:'Select activity check',exact:true}).focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgEventLogCasesStatus').filter({hasText:'60 matching cases'}).waitFor();
+   const resultCell=()=>page.locator('#owgEventLogGraphResults table').first().locator('tbody tr td');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='60');
+   assert.equal(await resultCell().nth(1).textContent(),'36');assert.equal(await resultCell().nth(3).textContent(),'0');
+   const [graphJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogGraphJson').click()]);
+   const comparison=JSON.parse(await fs.readFile(await graphJson.path(),'utf8'));
+   assert.equal(comparison.process_reference.content_sha256,saved.record.content_sha256);
+   assert.equal(comparison.policy_compliance_verified,false);
+   await page.evaluate(async body=>{
+     body.expected_revision=1;body.process_model.activities[2].label='Authorize';
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+     if(!response.ok)throw new Error(await response.text());
+   },saved.body);
+   let graphRelease,graphSeen;
+   const graphGate=new Promise(resolve=>graphRelease=resolve),graphFetched=new Promise(resolve=>graphSeen=resolve);
+   await page.route('**/process-conformance*',async route=>{const response=await route.fetch();graphSeen();await graphGate;await route.fulfill({response});});
+   await page.locator('#owgEventLogGraphRun').click();await graphFetched;
+   await page.locator('#owgEventLogGraphRevision').fill('2');
+   assert.equal(await page.locator('#owgEventLogGraphRun').isDisabled(),true);
+   await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'revision 2.'}).waitFor();
+   const oldGraph=page.waitForResponse(response=>response.url().includes('/process-conformance'));
+   graphRelease();await (await oldGraph).finished();await page.unroute('**/process-conformance*');
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.equal(await page.locator('#owgEventLogGraphResults').textContent(),'','old revision results cannot repaint a newly loaded graph');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='60');
+   assert.equal(await resultCell().nth(1).textContent(),'0');assert.equal(await resultCell().nth(2).textContent(),'60');
+   await page.locator('#owgEventLogSavedGraphMap').getByRole('button',{name:'Select activity approve',exact:true}).click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'No displayed log activity has the exact label'}).waitFor();
+   await page.locator('#owgEventLogGraphRevision').fill('1');await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'revision 1.'}).waitFor();
+   await page.locator('#owgEventLogGraphCohortResource').fill('ann');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='20');
+   assert.equal(await resultCell().nth(2).textContent(),'20');
+   await page.locator('#owgEventLogGraphCohortResource').fill('absent');await page.locator('#owgEventLogGraphRun').click();
+   await page.locator('#owgEventLogGraphResults').getByText('No cases match this selection; no verdict was established.').waitFor();
    await page.locator('#owgEventLogSla').fill('4');await page.locator('#owgEventLogBots').fill('bot');
    await page.locator('#owgEventLogKpiRun').click();
    await page.getByText('Rework rate').waitFor();
@@ -89,13 +145,19 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
-   assert.match(await page.locator('#owgEventLogSimPaths').inputValue(),/^0\.600: Receive > Check > Approve > Close/);
+   const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
+   assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
    await page.locator('#owgEventLogSimNewName').fill('Validate');await page.locator('#owgEventLogSimAdd').click();
    const validate=page.getByLabel('Minutes for Validate');await validate.fill('5');
+   await page.locator('#owgEventLogSimNewName').fill('__proto__');await page.locator('#owgEventLogSimAdd').click();
+   await page.getByLabel('Minutes for __proto__',{exact:true}).fill('7');
+   await page.getByLabel('Resources for __proto__',{exact:true}).fill('2');
    await page.getByLabel('Resources for Check').fill('3');
-   await page.locator('#owgEventLogSimPaths').fill('0.8: Receive > Validate > Check > Approve > Close\n0.2: Receive > Check > Fix > Check > Approve > Close');
+   await page.locator('#owgEventLogSimPaths').fill(JSON.stringify([{activities:['Receive','Validate','__proto__','Check','Approve','Close'],weight:0.8},{activities:['Receive','Check','Fix','Check','Approve','Close'],weight:0.2}]));
    await page.locator('#owgEventLogSimLabel').fill('Validate first');await page.locator('#owgEventLogSimCases').fill('500');
-   await page.locator('#owgEventLogSimRun').click();
+   const [simulationResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const special=(await simulationResponse.json()).result.activities.find(a=>a.activity==='__proto__');
+   assert.equal(special.minutes,7);assert.equal(special.resources,2);
    await page.getByText('Measured baseline').waitFor();
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
@@ -190,9 +252,37 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogCaseEvents').textContent(),/204 equal-timestamp events/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
+   // Object-centric log: separate maps per object type, linked by shared events.
+   const ocel={objectTypes:[],eventTypes:[],objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],events:[
+     {id:'p',type:'Place order',time:'2024-01-01T08:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]},
+     {id:'k1',type:'Pick item',time:'2024-01-01T09:00:00Z',relationships:[{objectId:'i1',qualifier:''}]},
+     {id:'k2',type:'Pick item',time:'2024-01-01T10:00:00Z',relationships:[{objectId:'i2',qualifier:''}]},
+     {id:'s',type:'Ship',time:'2024-01-01T12:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]}]};
+   await page.locator('#owgEventLogFile').setInputFiles({name:'orders.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
+   assert.equal(await page.locator('#owgEventLogFormat').inputValue(),'ocel');
+   assert.equal(await page.locator('#owgEventLogMapping').isHidden(),true);
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 4 events'}).waitFor();
+   await page.locator('#owgEventLogCaseType').selectOption('item');
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgEventLogObjectGraph').waitFor();
+   assert.equal(await page.locator('#owgEventLogObjectType').inputValue(),'item');
+   const itemMap=await page.locator('#owgEventLogObjectMap').textContent();
+   assert.match(itemMap,/Pick item/);assert.match(itemMap,/Linked to/);assert.match(itemMap,/order/);
+   assert.match(await page.locator('#owgEventLogResults').textContent(),/Activities shared by several object types/);
+   await page.locator('#owgEventLogObjectType').selectOption('order');
+   await page.waitForFunction(()=>!/Pick item/.test(document.querySelector('#owgEventLogObjectMap').textContent));
+   assert.match(await page.locator('#owgEventLogObjectMap').textContent(),/Place order.*Ship/s);
+   await page.addScriptTag({content:axeSource});
+   const mapAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(mapAudit.violations.map(v=>v.id+': '+v.nodes[0].target.join(' ')),[],'object map WCAG violations');
+   page.once('dialog',dialog=>dialog.accept());
+   await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
