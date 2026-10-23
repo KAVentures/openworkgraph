@@ -746,6 +746,8 @@ from .local_source_routes import router as _local_source_router  # noqa: E402
 app.include_router(_local_source_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
+from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
+app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402
 app.include_router(_communications_router)
 from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
