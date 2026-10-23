@@ -343,6 +343,45 @@ def _report_recorder_health(client: httpx.Client, url: str) -> bool:
     return result.status_code == 200
 
 
+_SYNC_HEALTH_STATES = {"connected", "syncing", "error", "not_started", "local_only", "stopped"}
+
+
+def _local_sync_health(state: SyncState, db_path: Path) -> dict[str, Any]:
+    """Counts only: never error text, event IDs, titles or other evidence content."""
+    newest = 0
+    if db_path.exists():
+        try:
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5) as conn:
+                row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
+                newest = int(row[0] if row else 0)
+        except sqlite3.Error:
+            newest = 0
+    success_age = None
+    try:
+        last = datetime.fromisoformat(str(state.get("last_success_at", "")).replace("Z", "+00:00"))
+        if last.tzinfo is not None:
+            success_age = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
+    except ValueError:
+        success_age = None
+    status = state.get("status", "not_started")
+    return {
+        "sync_state": status if status in _SYNC_HEALTH_STATES else "error",
+        "unprocessed_local_events": min(100_000_000, max(0, newest - state.get_int("last_local_event_id", 0))),
+        "quarantined_events": min(100_000_000, max(0, state.quarantine_count())),
+        "last_success_age_seconds": None if success_age is None else min(success_age, 10 * 365 * 86400),
+        "sync_error_present": bool(state.get("last_error", "")),
+    }
+
+
+def _report_sync_health(client: httpx.Client, url: str, state: SyncState, db_path: Path) -> bool:
+    """Best-effort content-free sync counts; an older Gateway without the route is ignored."""
+    result = client.post(f"{url}/v1/device/sync-health", json=_local_sync_health(state, db_path))
+    if result.status_code == 404:
+        return False
+    result.raise_for_status()
+    return result.status_code == 200
+
+
 def run(config_path: Path, *, once: bool = False) -> int:
     """Synchronize privacy-approved local evidence to an optional company Gateway.
 
@@ -441,6 +480,11 @@ def run(config_path: Path, *, once: bool = False) -> int:
                         state.set("last_recorder_health_report_error", "")
                     except Exception as exc:
                         state.set("last_recorder_health_report_error", type(exc).__name__)
+                    try:
+                        _report_sync_health(client, settings.url, state, db_path)
+                        state.set("last_sync_health_report_error", "")
+                    except Exception as exc:
+                        state.set("last_sync_health_report_error", type(exc).__name__)
 
                 # Apply local transcript opt-in immediately even between remote
                 # policy refreshes, using the last successfully fetched org policy.
