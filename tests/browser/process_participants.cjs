@@ -52,6 +52,12 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   await page.getByRole('heading',{name:'Participant and team labels',exact:true}).waitFor();
   await page.locator('#owgProcessResults details summary').filter({hasText:'Participant labels · 2 distinct · 2 adjacent changes'}).waitFor();
   assert(!(await page.locator('#owgProcessResults').textContent()).includes('ALICE_SECRET'));
+  await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+  await page.getByRole('button',{name:'Inspect observed activity Review',exact:true}).click();
+  const labels=page.locator('#owgObservedActivityDetails');
+  assert.deepEqual(await labels.locator('tbody tr').filter({hasText:'Participant 2'}).locator('td').allTextContents(),['Participant 2','1','1']);
+  assert.deepEqual(await labels.locator('tbody tr').filter({hasText:'Team 2'}).locator('td').allTextContents(),['Team 2','1','1']);
+  assert(!(await labels.textContent()).includes('BOB_SECRET'));assert(!(await labels.textContent()).includes('Source aliases'));
   // Revoking future metadata transfer clears the preview while keeping the operator's draft.
   await page.getByRole('button',{name:'Design improved TO-BE workflow',exact:true}).click();
   await page.locator('#owgDesignerGoal').fill('Owned structural draft');
@@ -124,7 +130,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();
   await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, full-case label intersection and reviewed cohort comparison with exact overlap and explorer drill-down, stable reload, mobile, deletion and unchanged canonical evidence.');
+  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, per-activity participant/team support, full-case label intersection and reviewed cohort comparison with exact overlap and explorer drill-down, stable reload, mobile, deletion and unchanged canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

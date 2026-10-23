@@ -53,6 +53,16 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   const receipt=JSON.parse(await fs.readFile(path.join(scratch,'last-preview-shape.json'),'utf8'));
   assert.equal(receipt.header,'case_id,activity,timestamp,origin');assert.equal(receipt.unselected_test_markers_seen,false);
   assert.equal(saves,0);
+  await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+  await page.getByRole('button',{name:'Inspect observed activity Open',exact:true}).click();
+  const globalSource=page.locator('#owgObservedActivityDetails tbody tr').filter({hasText:'Source 1'});
+  assert.deepEqual(await globalSource.locator('td').allTextContents(),['Source 1','2','2']);
+  assert(!(await page.locator('#owgObservedActivityDetails').textContent()).includes('Participant labels'));
+  await page.getByRole('button',{name:'Open · 1 events',exact:true}).click();
+  const variantSource=page.locator('#owgProcessActivityDetails tbody tr').filter({hasText:'Source 1'});
+  assert.deepEqual(await variantSource.locator('td').allTextContents(),['Source 1','1','1']);
+  assert.deepEqual(await page.locator('#owgObservedActivityDetails tbody tr').filter({hasText:'Source 1'}).locator('td').allTextContents(),['Source 1','2','2']);
+  assert.equal(previews,1);assert.equal(saves,0);
   // Withdrawing a retention grant cancels a still-unsent request even if review is checked again.
   await page.getByText('Retain or reopen a local event-log snapshot',{exact:true}).click();
   const retention=page.getByLabel('I authorize retaining this selected event log locally.',{exact:true});
@@ -90,7 +100,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.setViewportSize({width:1280,height:900});page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();await page.getByText('No retained local logs.',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case and source history, pending retention withdrawal, saved alias stability, whole-case filtering, deletion, mobile and no canonical evidence.');
+  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case/source history and full-versus-variant activity support, pending retention withdrawal, saved alias stability, whole-case filtering, deletion, mobile and no canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

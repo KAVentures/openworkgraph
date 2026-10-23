@@ -171,6 +171,42 @@ def participant_label_analysis(by_case,dimensions):
     return result
 
 
+MAX_ACTIVITY_LABEL_ROWS = 20
+
+
+def _activity_label_support(by_case, dimensions, correlation):
+    """All selected events/full paths; missing labels remain unknown, not people."""
+    columns=[(key,3 if key=='participant' else 4) for key in dimensions]
+    if correlation:columns.append(('origin',5))
+    if not columns:return {},{}
+    global_events=defaultdict(Counter);global_cases=defaultdict(lambda:defaultdict(set))
+    variant_events=defaultdict(Counter);variant_cases=defaultdict(lambda:defaultdict(set))
+    for case_id,rows in by_case.items():
+        path=tuple(row[0] for row in rows)
+        for row in rows:
+            for dimension,index in columns:
+                label=row[index]
+                global_key=(row[0],dimension);variant_key=(path,row[0],dimension)
+                global_events[global_key][label]+=1;global_cases[global_key][label].add(case_id)
+                variant_events[variant_key][label]+=1;variant_cases[variant_key][label].add(case_id)
+    def summarize(events,cases):
+        known=sorted((label for label in events if label is not None),key=lambda label:(-events[label],label))
+        returned=known[:MAX_ACTIVITY_LABEL_ROWS]
+        return {'basis':'supplied_labels_on_this_activity_events',
+            'labeled_event_count':sum(events[label] for label in known),
+            'missing_label_event_count':events[None], 'missing_label_case_count':len(cases.get(None,set())),
+            'label_count':len(known),'rows_returned':len(returned),'rows_truncated':len(known)>len(returned),
+            'labels':[{'label':label,'event_count':events[label],'case_count':len(cases[label])} for label in returned],
+            'case_support_counts_are_additive':False,'identity_and_membership_verified':False,
+            'effort_or_handoffs_verified':False}
+    overall=defaultdict(dict);variants=defaultdict(lambda:defaultdict(dict))
+    for (activity,dimension),events in global_events.items():
+        overall[activity][dimension]=summarize(events,global_cases[(activity,dimension)])
+    for (path,activity,dimension),events in variant_events.items():
+        variants[path][activity][dimension]=summarize(events,variant_cases[(path,activity,dimension)])
+    return overall,variants
+
+
 def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None, participant_labels_authorized=False, case_links_authorized=False) -> dict[str, Any]:
     """Preview only: no retention, provider calls or source identifiers in output."""
     event_rows,dimensions = parse_csv_event_records(raw_bytes,participant_labels_authorized=participant_labels_authorized,case_links_authorized=case_links_authorized)
@@ -260,9 +296,12 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         })
         variant_cases[path].append(cases[-1])
 
+    label_support,variant_label_support=_activity_label_support(by_case,dimensions,case_links_authorized is True)
+
     node_rows = [{
         "activity": activity, "event_count": n,
         "case_count": len(activity_cases[activity]),
+        **({"label_support":label_support[activity]} if activity in label_support else {}),
     } for activity, n in activity_events.items()]
     node_rows.sort(key=lambda row: (-row["event_count"], row["activity"]))
     edge_rows = [{
@@ -318,6 +357,7 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         "activities": [{
             "activity": activity, "event_count": occurrences * count,
             "case_count": count,
+            **({"label_support":variant_label_support[path][activity]} if path in variant_label_support else {}),
         } for activity, occurrences in Counter(path).items()],
         "transitions": [{
             "from": edge[0], "to": edge[1],

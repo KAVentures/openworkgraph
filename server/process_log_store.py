@@ -209,7 +209,9 @@ class ProcessLogStore:
             dataset=self._dataset(conn,dataset_id)
             original=json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id = ?',
                                              (dataset_id,)).fetchone()[0])
-            if reference_model is None:
+            has_labels=bool(_label_dimensions(original) or original.get('case_correlation'))
+            needs_label_projection=has_labels and any('label_support' not in row for row in original['activities'])
+            if reference_model is None and not needs_label_projection:
                 return original
             # Compare every full retained path using the same bounded engine as
             # a fresh CSV. Dataset ordinals never recover discarded source keys.
@@ -221,7 +223,7 @@ class ProcessLogStore:
             participant_labels_authorized=bool(dimensions),case_links_authorized=correlation)
         report.update(import_retained=True,dataset_id=dataset_id,
                       retention_scope='local_explicit_snapshot',expires_at=dataset['expires_at'])
-        report['conformance']['reference']=reference
+        if reference_model is not None:report['conformance']['reference']=reference
         # Re-analysis sees the already sorted snapshot; preserve original input
         # diagnostics, which cannot be reconstructed after source keys are gone.
         with self.connect() as conn:
