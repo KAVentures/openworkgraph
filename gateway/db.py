@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS recorder_heartbeats (
 );
 CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
   ON recorder_heartbeats(organization_id, actor_id, received_at);
+CREATE TABLE IF NOT EXISTS device_sync_health (
+  organization_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL,
+  device_token_id TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  sync_state TEXT NOT NULL,
+  unprocessed_local_events INTEGER NOT NULL,
+  quarantined_events INTEGER NOT NULL,
+  last_success_age_seconds INTEGER,
+  sync_error_present INTEGER NOT NULL,
+  PRIMARY KEY (organization_id, actor_id, device_id)
+);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -146,6 +159,19 @@ CREATE TABLE IF NOT EXISTS recorder_heartbeats (
 );
 CREATE INDEX IF NOT EXISTS idx_recorder_heartbeat_actor
   ON recorder_heartbeats(organization_id, actor_id, received_at);
+CREATE TABLE IF NOT EXISTS device_sync_health (
+  organization_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL,
+  device_token_id TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  sync_state TEXT NOT NULL,
+  unprocessed_local_events INTEGER NOT NULL,
+  quarantined_events INTEGER NOT NULL,
+  last_success_age_seconds INTEGER,
+  sync_error_present INTEGER NOT NULL,
+  PRIMARY KEY (organization_id, actor_id, device_id)
+);
 CREATE TABLE IF NOT EXISTS access_tokens (
   token_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -381,6 +407,55 @@ class GatewayDB:
                 at, collector_state, capture_policy, collector_age_seconds, principal.token_id,
                 principal.token_id, principal.organization_id, principal.actor_id, principal.device_id,
             ))
+
+    def report_sync_health(
+        self, principal: Principal, *, sync_state: str, unprocessed_local_events: int,
+        quarantined_events: int, last_success_age_seconds: int | None, sync_error_present: bool,
+    ) -> None:
+        """Content-free sync counts, bound to the submitting active device credential."""
+        at = _now()
+        with self.connect() as conn:
+            if not self.is_postgres:
+                conn.execute('BEGIN IMMEDIATE')
+            active = self._execute(conn, """SELECT token_id FROM access_tokens
+                WHERE token_id = ? AND organization_id = ? AND actor_id = ? AND device_id = ?
+                AND token_type = 'device' AND revoked_at IS NULL""" +
+                (' FOR UPDATE' if self.is_postgres else ''),
+                (principal.token_id,principal.organization_id,principal.actor_id,principal.device_id)).fetchone()
+            if not active:
+                return
+            self._execute(conn, """
+                INSERT INTO device_sync_health(
+                    organization_id, actor_id, device_id, device_token_id, received_at, sync_state,
+                    unprocessed_local_events, quarantined_events, last_success_age_seconds, sync_error_present
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(organization_id,actor_id,device_id)
+                DO UPDATE SET device_token_id=excluded.device_token_id, received_at=excluded.received_at,
+                  sync_state=excluded.sync_state, unprocessed_local_events=excluded.unprocessed_local_events,
+                  quarantined_events=excluded.quarantined_events,
+                  last_success_age_seconds=excluded.last_success_age_seconds,
+                  sync_error_present=excluded.sync_error_present
+            """, (
+                principal.organization_id, principal.actor_id, principal.device_id, principal.token_id,
+                at, sync_state, int(unprocessed_local_events), int(quarantined_events),
+                last_success_age_seconds, 1 if sync_error_present else 0,
+            ))
+
+    def current_sync_health(self, conn: Any, organization_id: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """Reports keyed by (actor, device, credential) for still-active device credentials."""
+        cur = self._execute(conn, """
+            SELECT s.actor_id, s.device_id, s.device_token_id, s.received_at, s.sync_state,
+                   s.unprocessed_local_events, s.quarantined_events, s.last_success_age_seconds,
+                   s.sync_error_present
+            FROM device_sync_health s JOIN access_tokens t
+              ON t.token_id = s.device_token_id AND t.organization_id = s.organization_id
+             AND t.actor_id = s.actor_id AND t.device_id = s.device_id
+             AND t.token_type = 'device' AND t.revoked_at IS NULL
+            WHERE s.organization_id = ?
+        """, (organization_id,))
+        columns = [d[0] for d in cur.description] if cur.description else None
+        rows = [self._row(row, columns) for row in cur.fetchall()]
+        return {(r["actor_id"], r["device_id"], r["device_token_id"]): r for r in rows}
 
     def last_recorder_heartbeat(
         self, *, organization_id: str, actor_id: str,

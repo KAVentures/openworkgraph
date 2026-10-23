@@ -63,6 +63,14 @@ class RecorderHeartbeatRequest(BaseModel):
     collector_heartbeat_age_seconds: int | None = Field(default=None, ge=0, le=3600)
 
 
+class SyncHealthRequest(BaseModel):
+    sync_state: str
+    unprocessed_local_events: int = Field(ge=0, le=100_000_000)
+    quarantined_events: int = Field(ge=0, le=100_000_000)
+    last_success_age_seconds: int | None = Field(default=None, ge=0, le=10 * 365 * 86400)
+    sync_error_present: bool
+
+
 class EvidenceBatch(BaseModel):
     events: list[dict[str, Any]]
 
@@ -504,6 +512,26 @@ def create_app(*, settings: GatewaySettings | None = None, db: GatewayDB | None 
             p, collector_state=request.collector_state,
             capture_policy=request.local_capture_policy,
             collector_age_seconds=request.collector_heartbeat_age_seconds,
+        )
+        return {"status": "accepted", "contents_received": False}
+
+    @app.post("/v1/device/sync-health")
+    def device_sync_health(
+        request: SyncHealthRequest,
+        p: Principal = Depends(principal),
+    ) -> dict[str, Any]:
+        require(p, "evidence:write")
+        if p.token_type != "device" or not p.device_id:
+            raise HTTPException(status_code=403, detail="an enrolled device is required")
+        from .fleet_health import SYNC_STATES
+        if request.sync_state not in SYNC_STATES:
+            raise HTTPException(status_code=400, detail="invalid content-free sync status")
+        db.report_sync_health(
+            p, sync_state=request.sync_state,
+            unprocessed_local_events=request.unprocessed_local_events,
+            quarantined_events=request.quarantined_events,
+            last_success_age_seconds=request.last_success_age_seconds,
+            sync_error_present=request.sync_error_present,
         )
         return {"status": "accepted", "contents_received": False}
 

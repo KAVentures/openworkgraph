@@ -65,3 +65,5 @@ revocation and writes, and repeat startup over a populated legacy schema.
 The short report transaction locks the active credential before writing, fencing
 it against concurrent revocation; no provider or other slow work runs under that
 lock. Database tests verify this fence directly on SQLite and PostgreSQL.
+
+Evidence synchronization health is reported separately; see [fleet sync health](FLEET_SYNC_HEALTH.md).
