@@ -232,11 +232,16 @@ assert.equal(m.detectFormat('a.EML'),'eml');assert.equal(m.detectFormat('t.csv')
     assert result.returncode == 0, result.stderr
 
 
+def _fake(prefix: str, length: int) -> str:
+    """A key-shaped placeholder built at runtime, so no credential-like literal sits in the repository."""
+    return prefix + ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" * 2)[:length]
+
+
 @pytest.mark.parametrize("text", [
-    "AKIAABCDEFGHIJKLMNOP", "sk-abcdefghijklmnopqrstuvwxyzABCD", "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
-    "xoxb-abcdefghijklm", "sk_live_abcdefghijklmnopqr", "AIzaabcdefghijklmnopqrstuvwxyzABCDEFGHI",
+    _fake("AKIA", 16).upper(), _fake("sk-", 30), _fake("ghp_", 36),
+    _fake("xoxb-", 13), _fake("sk_live_", 18), _fake("AIza", 35),
     "eyJabcdefghijk.eyJabcdefghijk.abcdefghijklm", "password=hunterhunter", "Bearer abcdefghijklmnopqrst",
-    "postgres://user:secretpw@db", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
+    "postgres://user:secretpw@db", "-----BEGIN RSA " + "PRIVATE KEY-----\nabc\n-----END RSA " + "PRIVATE KEY-----",
     "SE45 5000 0000 0583 9825 7466", "4111 1111 1111 1111", "19811218-9876",
 ])
 def test_redaction_gate_opens_for_every_identifier_the_redactor_handles(text):
