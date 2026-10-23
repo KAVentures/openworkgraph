@@ -47,6 +47,9 @@ def test_weighted_exact_graph_comparison_and_whole_case_cohorts():
     assert (result['cases'],result['analyzed_cases'],result['structural_match_cases'],result['structural_deviation_cases'],result['unknown_cases'])==(10,10,4,6,0)
     assert result['ordering_uncertain_cases']==1
     assert result['analysis_coverage']==1 and result['comparison_complete']
+    assert result['structural_fitness']['score']==1-10/58
+    assert result['visible_prefix_precision']['score']==1
+    assert result['visible_prefix_precision']['case_population_coverage']==0.4
     assert result['process_reference']['revision']==1
     assert not result['business_rules_evaluated'] and not result['policy_compliance_verified']
     assert not result['business_outcome_verified'] and not result['execution_authorized']
@@ -66,6 +69,9 @@ def test_limits_leave_cases_unknown_and_do_not_clip_them_into_matches(monkeypatc
     result=graph.compare(log,packet(),selection())
     assert result['analyzed_cases']==0 and result['unknown_cases']==9
     assert result['unknown_case_reasons']['alignment_work_budget']==6
+    assert result['structural_fitness']['score'] is None
+    assert result['structural_fitness']['lower_bound']==0 and result['structural_fitness']['upper_bound']==1
+    assert result['visible_prefix_precision']['score'] is None
     assert all(v['exact_structural_match'] is None and v['minimum_activity_edit_count'] is None for v in result['displayed_variants'])
 
 
@@ -193,3 +199,14 @@ def test_parallel_branch_entry_cannot_deadlock_a_saved_graph_comparison():
     valid=ProcessModel.model_validate(value)
     from shared.process_conformance import compare_path
     assert compare_path(('A1','A2','B1','B2'),valid)['exact_structural_match'] is True
+
+
+def test_precision_budget_does_not_change_completed_alignment_verdicts(monkeypatch):
+    from shared import process_metrics
+    monkeypatch.setattr(process_metrics,'MAX_PRECISION_WORK',0)
+    log=imported([['Open','Review','Close']])
+    result=graph.compare(log,packet(),selection())
+    assert result['comparison_complete'] and result['structural_match_cases']==1
+    assert result['structural_fitness']['score']==1
+    assert result['visible_prefix_precision']['score'] is None
+    assert result['visible_prefix_precision']['unknown_reason']=='precision_work_budget'

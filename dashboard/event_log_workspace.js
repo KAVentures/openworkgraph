@@ -391,6 +391,15 @@
     return box;
   }
 
+  function graphMetricSummary(result){
+    const fitness=result.structural_fitness,precision=result.visible_prefix_precision;
+    if(!fitness||!precision)return [];
+    const reasons={precision_work_budget:'Precision replay reached its work limit.',no_exact_matching_cases:'No exact matching cases are available for precision.',prefix_replay_mismatch:'Precision replay did not establish the complete prefixes.',no_enabled_visible_activities:'There are no visible enabled activities to measure.'};
+    const summary=table(['Structural fitness','Full-population fitness range','Analyzed cases fitness','Visible-label precision'],[[fitness.score===null?'Unknown':pct(fitness.score),fitness.lower_bound===null?'—':pct(fitness.lower_bound)+' – '+pct(fitness.upper_bound),pct(fitness.analyzed_score),precision.score===null?'Unknown':pct(precision.score)]]);
+    summary.id='owgEventLogGraphMetrics';
+    return [summary,el('div','Fitness normalizes activity-edit cost. Unknown cases give a range. Precision uses '+precision.matching_cases+' exact matching cases ('+pct(precision.case_population_coverage)+' of selected cases) and measures unused next activity labels, not individual node identity or business rules. '+(reasons[precision.unknown_reason]||''),'muted')];
+  }
+
   function savedGraphSection(activityNames,inspection){
     const box=section('Compare with a saved process');box.id='owgEventLogSavedGraph';
     const generation=state.generation,current=()=>box.isConnected&&generation===state.generation;
@@ -407,8 +416,8 @@
     const out=el('div');out.id='owgEventLogGraphResults';
     let page=[],after=null,pinned=null,last=null,loading=0,comparing=0;
     const exports=exportButtons('owgEventLogGraph',()=>last,r=>[
-      ['process','revision','cases','analyzed_cases','structural_matches','structural_deviations','unknown_cases'],
-      [r.process_reference.title,r.process_reference.revision,r.cases,r.analyzed_cases,r.structural_match_cases,r.structural_deviation_cases,r.unknown_cases]]);
+      ['process','revision','cases','analyzed_cases','structural_matches','structural_deviations','unknown_cases','fitness','fitness_lower_bound','fitness_upper_bound','analyzed_fitness','visible_label_precision','precision_matching_cases','precision_case_coverage'],
+      [r.process_reference.title,r.process_reference.revision,r.cases,r.analyzed_cases,r.structural_match_cases,r.structural_deviation_cases,r.unknown_cases,r.structural_fitness?.score??'',r.structural_fitness?.lower_bound??'',r.structural_fitness?.upper_bound??'',r.structural_fitness?.analyzed_score??'',r.visible_prefix_precision?.score??'',r.visible_prefix_precision?.matching_cases??'',r.visible_prefix_precision?.case_population_coverage??'']]);
     box.append(row,message,diagram,filters.node,run,out,exports.node);
     function invalidate(){loading++;comparing++;pinned=null;last=null;run.disabled=true;exports.enable(false);diagram.replaceChildren();out.replaceChildren();}
     function choose(){invalidate();const record=page.find(p=>p.workflow_id===pick.value);revision.value=record?String(record.revision):'';open.disabled=!record;message.textContent='Load the revision to inspect its graph before comparing.';}
@@ -457,6 +466,7 @@
         out.replaceChildren(
           el('h4',result.process_reference.title+' · revision '+result.process_reference.revision),
           table(['Cases','Structurally matched','Structural deviations','Unknown','Analysis coverage','Cases with timestamp ties'],[[result.cases,result.structural_match_cases,result.structural_deviation_cases,result.unknown_cases,pct(result.analysis_coverage),result.ordering_uncertain_cases]]),
+          ...graphMetricSummary(result),
           el('div','Applied cohort: '+JSON.stringify(result.cohort)+'. Timestamp ties can overlap any result. Order is timestamp then event ID for display; it is not verified business order.','muted'),
           table(['Unknown reason','Cases'],Object.entries(result.unknown_case_reasons).filter(([,n])=>n>0).map(([reason,n])=>[reasons[reason]||reason,n])),
           el('div','Showing '+result.displayed_variants.length+' variant results'+(result.variant_results_truncated?'; additional variants are not shown.':'.'),'muted'),

@@ -9,6 +9,7 @@ from shared.process_catalog import ProcessID
 from shared.process_conformance import compare_path
 from shared.process_model import ProcessModel
 from shared.process_parallel import compare_parallel_path
+from shared.process_metrics import minimum_route_activities, fitness_bounds, visible_prefix_precision
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 
@@ -38,13 +39,14 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         raise workspace.EventLogWorkspaceError('Saved process graph cannot be compared; review its structure') from None
     cohort = cohorts.parse_cohort(spec.cohort)
     parallel = any(node.kind == 'parallel_split' for node in model.activities)
+    shortest=minimum_route_activities(model)
 
     def run(conn):
         cohorts.restrict(conn, cohort, log_id)
         conn.execute('''CREATE TEMP TABLE graph_cases AS SELECT case_id, count(*) AS events,
             count(*) > count(DISTINCT ts) AS ordering_uncertain FROM ce GROUP BY case_id''')
-        total, oversized, tied = conn.execute('''SELECT count(*), count(*) FILTER (WHERE events > ?),
-            count(*) FILTER (WHERE ordering_uncertain) FROM graph_cases''', [MAX_TRACE_LENGTH]).fetchone()
+        total, oversized, tied, total_events = conn.execute('''SELECT count(*), count(*) FILTER (WHERE events > ?),
+            count(*) FILTER (WHERE ordering_uncertain), coalesce(sum(events),0) FROM graph_cases''', [MAX_TRACE_LENGTH]).fetchone()
         # Exclude long cases before allocating activity arrays, rather than
         # clipping them into a path that could falsely match the graph.
         rows = conn.execute('''SELECT path, count(*) AS cases, count(*) FILTER (WHERE ordering_uncertain) FROM (
@@ -58,6 +60,8 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         remaining = MAX_ALIGNMENT_WORK
         matched = deviated = analyzed = examined_variants = 0
         display = []
+        analyzed_events=edit_cost=0
+        matching_paths=[]
         for source_path, count, uncertain in rows:
             path = tuple(source_path)
             result = None
@@ -74,9 +78,12 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
             complete = result is not None and result.get('comparison_complete', True)
             if complete:
                 analyzed += count
+                analyzed_events += len(path)*count
+                edit_cost += result['minimum_activity_edit_count']*count
                 examined_variants += 1
                 if result['exact_structural_match']:
                     matched += count
+                    matching_paths.append((path,count))
                 else:
                     deviated += count
             else:
@@ -93,7 +100,12 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
                     'unknown_reason': None if complete else 'alignment_work_budget'})
         unknown = total - analyzed
         assert matched + deviated + unknown == total
+        fitness=fitness_bounds(cases=total,events=total_events,analyzed_cases=analyzed,
+            analyzed_events=analyzed_events,edit_cost=edit_cost,minimum_model_activities=shortest)
+        precision=visible_prefix_precision(model,matching_paths)
+        precision['case_population_coverage']=matched/total if total else None
         return {
+            'structural_fitness':fitness,'visible_prefix_precision':precision,
             'process_reference': {key: record[key] for key in ('workflow_id','revision','content_sha256','title','saved_at')},
             'cohort': cohorts.describe(cohort), 'cases': total, 'analyzed_cases': analyzed,
             'structural_match_cases': matched, 'structural_deviation_cases': deviated,

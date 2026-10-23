@@ -90,6 +90,10 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             expected=cases-len(range(0,cases,7))-len(range(0,cases,5))+len(range(0,cases,35))
             assert result["cases"]==result["analyzed_cases"]==cases and result["unknown_cases"]==0
             assert result["structural_match_cases"]==expected
+            edits=2*(len(range(0,cases,7))+len(range(0,cases,5)))
+            assert result["structural_fitness"]["score"]==pytest.approx(1-edits/(EVENTS+cases*10))
+            assert result["visible_prefix_precision"]["score"]==1
+            assert result["visible_prefix_precision"]["matching_cases"]==expected
         if name == "case_query":
             assert result["selected_cases"] == EVENTS // 10 and len(result["cases"]) == 30
         if name == "variant_cases":
