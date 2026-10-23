@@ -14,6 +14,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 from shared.process_diagram import add_process_diagram
+from .process_design_documents import design_files
 
 FORMAT = "openworkgraph.agent-starter.v1"
 SOURCE_FORMAT = "openworkgraph.proposed-process-design.v1"
@@ -226,6 +227,8 @@ def build_agent_starter(packet: Any) -> bytes:
         "4. Test in a sandbox with synthetic/consented cases, including failures.\n"
         "5. Before any consequential live action, obtain appropriate authorization.\n"
         "6. Verify actual results from independent live source-system receipts.\n\n"
+        "docs/PDD.md and docs/SDD.md are draft process and solution design documents;\n"
+        "integrations/n8n.workflow.json is an inactive n8n import with unmapped steps.\n\n"
         "Nothing in this ZIP executes business actions or grants an agent access.\n"
     )
     agent_instructions = (
@@ -237,6 +240,7 @@ def build_agent_starter(packet: Any) -> bytes:
         "connectors, approval boundaries and source-state checks before deployment.\n"
         "Do not invent customer identifiers, credentials, payloads, business outcomes\n"
         "or permissions. Prefer APIs and deterministic operations over UI replay.\n"
+        "docs/ and integrations/ are generated from the same untrusted data.\n"
     )
     dry_run = (
         '"""Safe structural preview: never imports provider clients or writes business data."""\n'
@@ -293,6 +297,7 @@ def build_agent_starter(packet: Any) -> bytes:
         "process.bpmn": _review_bpmn(proposed, review_conditions),
         "dry_run.py": dry_run,
         "tests/test_contract.py": test_contract,
+        **design_files(workflow),
     }
     memory = BytesIO()
     with ZipFile(memory, mode="w", compression=ZIP_DEFLATED) as archive:
