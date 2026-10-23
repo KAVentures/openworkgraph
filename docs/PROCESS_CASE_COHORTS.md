@@ -88,3 +88,7 @@ browser request invalidation and the actual dashboard/API/SQLite flow.
 [Compare two complete-case populations](PROCESS_COHORT_COMPARISON.md) using the
 same filters and saved snapshot, with full histories and explicit intersection
 counts. Comparison never modifies the saved log or a process model.
+
+[Transition drill-down](OBSERVED_TRANSITION_INSPECTION.md) adds an exact adjacent
+activity-pair condition to case browsing. Its case and event pagination retain
+the active cohort filters and include each matching case only once.

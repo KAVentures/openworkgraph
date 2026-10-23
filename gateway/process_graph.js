@@ -148,6 +148,24 @@
         });
       drawing.appendChild(arrow);
       edgePaint.push({path, arrow, count:edge.observed_count, gap:edge.observed_median_gap_seconds});
+      if (options.observed && typeof options.onTransitionSelect === "function") {
+        const hit = svg("path", {
+          d: edge.points.map((p, i) => (i ? "L " : "M ") + p.join(" ")).join(" "),
+          fill: "none", stroke: "transparent", "stroke-width": 14,
+          "pointer-events": "stroke", role: "button", tabindex: 0,
+          "aria-label": "Inspect observed transition " + edge.observed_transition.from + " → " + edge.observed_transition.to,
+        });
+        const help = svg("title");help.textContent = edge.observed_summary;hit.appendChild(help);
+        hit.addEventListener("focus", () => {hit.style.outline = "2px solid #35624b";hit.style.outlineOffset = "3px";});
+        hit.addEventListener("blur", () => {hit.style.outline = "";});
+        hit.addEventListener("click", () => options.onTransitionSelect(edge.observed_transition));
+        hit.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();options.onTransitionSelect(edge.observed_transition);
+          }
+        });
+        drawing.appendChild(hit);
+      }
     });
     model.activities.forEach((activity) => {
       const p = geometry.positions.get(activity.id),
@@ -308,7 +326,7 @@
     wrap.appendChild(viewport);
     return wrap;
   }
-  function drawObserved(report, onSelect) {
+  function drawObserved(report, onSelect, onTransitionSelect) {
     if (
       !Array.isArray(report.activities) ||
       report.activities.length > 64 ||
@@ -340,6 +358,7 @@
         target: labels.get(row.to),
         observed_count: row.transition_count,
         observed_median_gap_seconds: row.median_elapsed_gap_seconds,
+        observed_transition: row,
         observed_summary:
           row.from +
           " → " +
@@ -362,7 +381,7 @@
         entry_activity_id: labels.get(first) || activities[0]?.id,
       },
       onSelect,
-      { observed: true },
+      { observed: true, onTransitionSelect },
     );
   }
   window.owgProcessGraph = Object.freeze({ layout, draw, drawObserved });

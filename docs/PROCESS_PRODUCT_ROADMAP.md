@@ -12,7 +12,7 @@ or full competitor parity.
 
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
-| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
+| Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts and adjacent-pair inspection/drill-down, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
 | Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories, supplied-label change signals inside declared CSV cases | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266) with offline column mapping/minimization for comma/semicolon/tab exports, single/selected Jira audits (#270/#272), selected GitHub review/lifecycle, opted-in Zendesk status audits and separately selected Stripe invoice lifecycle fields in the same explorer, full-log structural conformance, explicitly consented current-source predicate comparisons, explicitly retained local snapshots with complete case/event queries | Additional source adapters, continuous/large-volume coverage and historical-case business attributes and source-authoritative business-policy conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |
@@ -107,3 +107,7 @@ people, handoffs or membership, and are never joined across imports.
 between explicitly reviewed populations from one saved log, reports exact case
 overlap and reopens each whole-case selection in the explorer. Employee effort,
 causal improvement, statistical independence and business outcomes remain unverified.
+
+[Observed transition inspection](OBSERVED_TRANSITION_INSPECTION.md) connects
+selectable arrows to full-path variant support and complete retained cases
+containing the exact adjacent pair, while preserving existing cohort filters.

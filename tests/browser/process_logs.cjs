@@ -120,6 +120,15 @@ assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
     assert.equal(disk.status,0,disk.stderr);
     await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+    const transition=page.getByRole('button',{name:'Inspect observed transition Step 0 → Step 1',exact:true});
+    await transition.focus();await transition.press('Enter');
+    await page.locator('#owgObservedEdgeDetails').getByText('1505 recorded adjacent transitions across 35 distinct cases. Repeated transitions remain separate.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Browse retained cases for Step 0 → Step 1',exact:true}).click();
+    await page.locator('#owgLogCases h3').filter({hasText:'Retained cases containing adjacent Step 0 → Step 1'}).waitFor();
+    await page.getByRole('button',{name:'Next cases',exact:true}).click();
+    const edgeCase=page.locator('#owgLogCases details').filter({hasText:'Case 35 · 130 events'});
+    await edgeCase.locator('summary').click();await edgeCase.getByRole('button',{name:'Next events',exact:true}).click();
+    await edgeCase.getByText(/^130\. Step 0/).waitFor();
     await page.getByRole('button',{name:'Inspect observed activity Step 0',exact:true}).click();
     await page.getByRole('button',{name:'Browse retained cases for Step 0',exact:true}).click();
     await page.locator('#owgLogCases h3').filter({hasText:'Retained cases containing Step 0'}).waitFor();
@@ -203,7 +212,7 @@ assert c.execute('SELECT COUNT(*) FROM process_log_events').fetchone()[0]==4550
     await page.getByRole('button',{name:'Delete '+currentId,exact:true}).click();
     await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
     assert.deepEqual(errors,[]);
-    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, full histories, map emphasis and zoom, drift beyond path caps, complete-case cohorts with stable IDs and no event clipping, minimized SQLite, deletion and mobile.');
+    console.log('Local log browser acceptance passed: ephemeral preview, explicit retention, reload, full histories, keyboard transition inspection and complete adjacent-pair case paging, map emphasis and zoom, drift beyond path caps, complete-case cohorts with stable IDs and no event clipping, minimized SQLite, deletion and mobile.');
   }finally{
     if(browser)await browser.close();
     server.kill('SIGTERM');
