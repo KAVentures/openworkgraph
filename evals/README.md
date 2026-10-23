@@ -81,6 +81,13 @@ goal vs raw (diagnosis). Better recall never outweighs higher wrong-resource
 rates, unsupported assumptions or consequential mistakes. Thresholds are
 engineering stop-losses, not statistical significance.
 
+Each comparison also gets `paired_statistics`: for paired task success and for
+consequential wrong actions, the discordant episode counts, an exact two-sided
+McNemar p-value and a deterministic paired-bootstrap 95% interval for the rate
+difference. `success_gain_statistically_supported` is true only when the
+interval excludes zero, p < 0.05 and the OWG arm adds no consequential wrong
+actions. It is reported beside, never instead of, `product_decision`.
+
 ## Keep these diagnostics, run only when relevant
 
 - `evals/reconstruction/`: capture/evidence sufficiency, grouping ambiguity.

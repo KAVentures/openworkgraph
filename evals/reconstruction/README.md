@@ -136,6 +136,21 @@ Interpret the comparison this way:
 Paid model calls do not belong in ordinary CI. The model run is an external
 evaluation step, like the existing automation-interpretation eval.
 
+## OWG-native grouping
+
+Score OWG's own shipped exact-record grouping (`record_case_lanes`) on the same
+answer key, with no model involved:
+
+    python -m evals.reconstruction.owg_native --split holdout
+
+Lanes publish no event IDs; for scoring only, each published lane is projected
+back to the events carrying its opaque reference. A lane means "same record",
+never "same task", so a record shared by several true workflows is reported as
+contamination rather than hidden. `tests/test_reconstruction_owg_native.py`
+holds regression floors on all and holdout cases and requires that lanes never
+merge different records, fail closed when references are missing, and never
+republish deleted evidence.
+
 ## Ablations
 
 After a baseline model run, remove one evidence signal at a time:
