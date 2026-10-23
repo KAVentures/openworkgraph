@@ -263,9 +263,37 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogCaseEvents').textContent(),/204 equal-timestamp events/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
+   // Object-centric log: separate maps per object type, linked by shared events.
+   const ocel={objectTypes:[],eventTypes:[],objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],events:[
+     {id:'p',type:'Place order',time:'2024-01-01T08:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]},
+     {id:'k1',type:'Pick item',time:'2024-01-01T09:00:00Z',relationships:[{objectId:'i1',qualifier:''}]},
+     {id:'k2',type:'Pick item',time:'2024-01-01T10:00:00Z',relationships:[{objectId:'i2',qualifier:''}]},
+     {id:'s',type:'Ship',time:'2024-01-01T12:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]}]};
+   await page.locator('#owgEventLogFile').setInputFiles({name:'orders.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
+   assert.equal(await page.locator('#owgEventLogFormat').inputValue(),'ocel');
+   assert.equal(await page.locator('#owgEventLogMapping').isHidden(),true);
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 4 events'}).waitFor();
+   await page.locator('#owgEventLogCaseType').selectOption('item');
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgEventLogObjectGraph').waitFor();
+   assert.equal(await page.locator('#owgEventLogObjectType').inputValue(),'item');
+   const itemMap=await page.locator('#owgEventLogObjectMap').textContent();
+   assert.match(itemMap,/Pick item/);assert.match(itemMap,/Linked to/);assert.match(itemMap,/order/);
+   assert.match(await page.locator('#owgEventLogResults').textContent(),/Activities shared by several object types/);
+   await page.locator('#owgEventLogObjectType').selectOption('order');
+   await page.waitForFunction(()=>!/Pick item/.test(document.querySelector('#owgEventLogObjectMap').textContent));
+   assert.match(await page.locator('#owgEventLogObjectMap').textContent(),/Place order.*Ship/s);
+   await page.addScriptTag({content:axeSource});
+   const mapAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(mapAudit.violations.map(v=>v.id+': '+v.nodes[0].target.join(' ')),[],'object map WCAG violations');
+   page.once('dialog',dialog=>dialog.accept());
+   await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
