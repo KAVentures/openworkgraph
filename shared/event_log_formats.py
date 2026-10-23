@@ -66,6 +66,17 @@ def _text(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+def _exact_key(value: Any, limit: int = MAX_ID) -> str:
+    """Keep literal identifiers: truncation/normalization must never join cases."""
+    if value is None:return ""
+    if not isinstance(value,str):
+        raise EventLogFormatError("event-log identifiers and activity labels must be strings")
+    if len(value)>limit or any(ord(char)<32 or 127<=ord(char)<=159 or 0xD800<=ord(char)<=0xDFFF
+                               or ord(char) in {0xFFFE,0xFFFF} for char in value):
+        raise EventLogFormatError("event-log identifiers and activity labels exceed their bounds or contain control characters")
+    return value if value.strip() else ""
+
+
 def parse_timestamp(value: Any) -> datetime | None:
     raw = _text(value, 64)
     if not raw:
@@ -97,6 +108,29 @@ def _iso(stamp: datetime) -> str:
 
 # ---------------------------------------------------------------- CSV
 
+MAX_HEADER_CHARS = 1024 * 1024
+
+
+def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
+    """Read one bounded logical record without accepting ambiguous columns."""
+    def lines():
+        remaining=MAX_HEADER_CHARS
+        while remaining:
+            line=stream.readline(remaining+1)
+            if not line:return
+            if len(line)>remaining:raise EventLogFormatError("CSV header exceeds its supported limit")
+            remaining-=len(line)
+            yield line
+    try:
+        header=next(csv.reader(lines(),delimiter=delimiter),[])
+    except (csv.Error,UnicodeError):
+        raise EventLogFormatError("CSV header could not be parsed") from None
+    if header:header[0]=header[0].removeprefix("\ufeff")
+    if not header or any(not name.strip() for name in header) or len({name.casefold() for name in header})!=len(header):
+        raise EventLogFormatError("CSV requires nonempty unambiguous column names without duplicate casing")
+    return header
+
+
 def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timestamp_column: str,
              resource_column: str = "", attribute_columns: Iterable[str] = (),
              delimiter: str = ",", stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
@@ -104,8 +138,9 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
     if delimiter not in {",", ";", "\t", "|"}:
         raise EventLogFormatError("unsupported delimiter")
     stats = stats if stats is not None else ReadStats()
-    reader = csv.DictReader(stream, delimiter=delimiter)
-    header = set(reader.fieldnames or [])
+    fieldnames=read_csv_header(stream,delimiter)
+    reader = csv.DictReader(stream, fieldnames=fieldnames, delimiter=delimiter)
+    header = set(fieldnames)
     wanted = [case_column, activity_column, timestamp_column] + ([resource_column] if resource_column else [])
     missing = [name for name in wanted if name not in header]
     if missing:
@@ -113,8 +148,8 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
     extra = [name for name in attribute_columns if name in header][:MAX_ATTRIBUTES]
     seen: set[str] = set()
     for index, row in enumerate(reader, 1):
-        case_id = _text(row.get(case_column), MAX_ID)
-        activity = _text(row.get(activity_column), MAX_ACTIVITY)
+        case_id = _exact_key(row.get(case_column))
+        activity = _exact_key(row.get(activity_column), MAX_ACTIVITY)
         stamp = parse_timestamp(row.get(timestamp_column))
         if not case_id or not activity or stamp is None:
             stats.rejected_events += 1
@@ -125,7 +160,7 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
             yield ObjectRecord(case_id, CASE_TYPE)
         stats.events += 1
         yield EventRecord(f"e{index}", activity, stamp,
-                          _text(row.get(resource_column), MAX_ID) if resource_column else "",
+                          _exact_key(row.get(resource_column)) if resource_column else "",
                           _attributes((name, row.get(name)) for name in extra), [(case_id, CASE_TYPE)])
 
 
@@ -172,7 +207,7 @@ def read_xes(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[E
                 continue
             trace_index += 1
             values = list(_xes_key_values(element))
-            case_id = next((_text(v, MAX_ID) for _, k, v in values if k == "concept:name"), "") or f"trace{trace_index}"
+            case_id = next((_exact_key(v) for _, k, v in values if k == "concept:name"), "") or f"trace{trace_index}"
             yield ObjectRecord(case_id, CASE_TYPE,
                                _attributes((k, v) for _, k, v in values if k != "concept:name"))
             stats.objects += 1
@@ -182,14 +217,15 @@ def read_xes(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[E
                 event_index += 1
                 fields = list(_xes_key_values(event))
                 lookup = {k: v for _, k, v in fields}
-                activity = _text(lookup.get("concept:name"), MAX_ACTIVITY)
+                activity = _exact_key(lookup.get("concept:name"), MAX_ACTIVITY)
                 stamp = parse_timestamp(lookup.get("time:timestamp"))
                 if not activity or stamp is None:
                     stats.rejected_events += 1
                     continue
+                identifier=_exact_key(lookup.get("identity:id")) or f"e{event_index}"
                 stats.events += 1
-                yield EventRecord(_text(lookup.get("identity:id"), MAX_ID) or f"e{event_index}", activity, stamp,
-                                  _text(lookup.get("org:resource"), MAX_ID),
+                yield EventRecord(identifier, activity, stamp,
+                                  _exact_key(lookup.get("org:resource")),
                                   _attributes((k, v) for _, k, v in fields if k not in {
                                       "concept:name", "time:timestamp", "org:resource", "identity:id"}),
                                   [(case_id, CASE_TYPE)])
@@ -234,8 +270,15 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
     if len(raw) > MAX_OCEL_BYTES:
         raise EventLogFormatError("OCEL file is larger than the supported limit")
     try:
-        document = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        def pairs(items):
+            result={}
+            for key,value in items:
+                if key in result:raise EventLogFormatError("OCEL JSON fields must not repeat")
+                result[key]=value
+            return result
+        def invalid(_value):raise EventLogFormatError("OCEL JSON must not contain nonstandard numeric constants")
+        document = json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         raise EventLogFormatError("OCEL JSON could not be parsed") from None
     if not isinstance(document, dict) or not isinstance(document.get("objects"), list) \
             or not isinstance(document.get("events"), list):
@@ -244,9 +287,10 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
     for item in document["objects"]:
         if not isinstance(item, dict):
             continue
-        object_id, object_type = _text(item.get("id"), MAX_ID), _text(item.get("type"), MAX_ID)
-        if not object_id or not object_type or object_id in types:
+        object_id, object_type = _exact_key(item.get("id")), _exact_key(item.get("type"))
+        if not object_id or not object_type:
             continue
+        if object_id in types:raise EventLogFormatError("OCEL object identifiers must be unique")
         types[object_id] = object_type
         stats.objects += 1
         yield ObjectRecord(object_id, object_type, _ocel_attributes(item.get("attributes")))
@@ -254,15 +298,15 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
         if not isinstance(item, dict):
             stats.rejected_events += 1
             continue
-        event_id, activity = _text(item.get("id"), MAX_ID), _text(item.get("type"), MAX_ACTIVITY)
+        event_id, activity = _exact_key(item.get("id")), _exact_key(item.get("type"), MAX_ACTIVITY)
         stamp = parse_timestamp(item.get("time"))
         if not event_id or not activity or stamp is None:
             stats.rejected_events += 1
             continue
         links = []
         for link in item.get("relationships") or []:
-            if isinstance(link, dict) and _text(link.get("objectId"), MAX_ID) in types:
-                links.append((_text(link.get("objectId"), MAX_ID), _text(link.get("qualifier"), 80)))
+            if isinstance(link, dict) and _exact_key(link.get("objectId")) in types:
+                links.append((_exact_key(link.get("objectId")), _exact_key(link.get("qualifier"), 80)))
         stats.events += 1
         yield EventRecord(event_id, activity, stamp, "", _ocel_attributes(item.get("attributes")), links)
 

@@ -1,8 +1,8 @@
 """Bounded descriptive BPMN import. XML is data, never an execution policy.
 
-Support a deliberately explicit serial/exclusive-choice subset. Parallel,
-inclusive, subprocess and event-driven semantics must not be flattened into an
-incorrect sequential model. No XML resolution, provider calls or persistence.
+Support serial/exclusive choice and explicit disjoint linear parallel regions.
+Nested parallel, inclusive, subprocess and event-driven semantics must not be
+flattened into an incorrect sequential model. No XML resolution, provider calls or persistence.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ DIAGRAM_NAMESPACES = {
     'http://www.omg.org/spec/DD/20100524/DI',
 }
 TASKS = {'task','userTask','manualTask','serviceTask','sendTask','receiveTask','businessRuleTask'}
-FLOW_NODES = TASKS | {'startEvent','endEvent','exclusiveGateway'}
+FLOW_NODES = TASKS | {'startEvent','endEvent','exclusiveGateway','parallelGateway'}
 _LABEL = re.compile(r'^[A-Za-z][A-Za-z0-9 _-]{0,63}$')
 _MANUAL = re.compile(r'^UNEVALUATED manual review \((decision_point|exception_condition)\): '
     r'([A-Za-z][A-Za-z0-9 _-]{0,63}); response: '
@@ -123,7 +123,7 @@ def import_bpmn(raw: bytes):
                 note=child.text.strip()
                 notes.append({'source_node_id':'','text':note[:2000],'text_truncated':len(note)>2000})
         else:
-            raise BPMNImportError('Only tasks, plain start/end events and exclusive gateways are supported; other process semantics cannot be flattened')
+            raise BPMNImportError('Only tasks, plain events and supported exclusive/parallel gateways are allowed; other process semantics cannot be flattened')
     if not 1<=len(nodes)<=40 or len(flows)>100:
         raise BPMNImportError('Imported designs support 1–40 activities and at most 100 transitions')
     if len(notes)>40:
@@ -157,13 +157,32 @@ def import_bpmn(raw: bytes):
             label='Imported step '+str(index)
         kind=('decision' if outgoing[identifier]>1 else 'routing') if tag=='exclusiveGateway' else {
             'startEvent':'start','endEvent':'end'}.get(tag,'activity')
-        if tag!='exclusiveGateway' and outgoing[identifier]>1:
+        if tag=='parallelGateway':
+            if incoming[identifier]<=1 and outgoing[identifier]>=2:kind='parallel_split';direction='Diverging'
+            elif incoming[identifier]>=2 and outgoing[identifier]==1:kind='parallel_join';direction='Converging'
+            else:raise BPMNImportError('Parallel gateways must be distinct explicit splits or joins')
+            if 'default' in node.attrib or node.get('gatewayDirection','Unspecified') not in {'Unspecified',direction}:
+                raise BPMNImportError('Parallel gateway direction/default contradicts its unconditional topology')
+        if tag not in {'exclusiveGateway','parallelGateway'} and outgoing[identifier]>1:
             raise BPMNImportError('Implicit task branching is unsupported; use an explicit exclusive gateway')
         if tag=='startEvent' and not outgoing[identifier]:
             raise BPMNImportError('Start events require an outgoing transition')
         activity={'id':mapping[identifier],'label':label,'kind':kind,'implementation':'unmapped'}
         if identifier in responsibility_by_source:activity['responsibility_label']=responsibility_by_source[identifier]
         activities.append(activity)
+    source_kinds={identifier:activity['kind'] for identifier,activity in zip(node_ids,activities)}
+    raw_out={identifier:[] for identifier in node_ids}
+    for flow in flows:raw_out[flow.get('sourceRef')].append(flow.get('targetRef'))
+    parallel_sources=set()
+    for identifier,kind in source_kinds.items():
+        if kind!='parallel_split':continue
+        pending=[identifier];seen=set()
+        while pending:
+            cursor=pending.pop()
+            if cursor in seen:continue
+            seen.add(cursor)
+            if source_kinds[cursor]=='parallel_join':continue
+            parallel_sources.add(cursor);pending.extend(raw_out[cursor])
     transitions,rules=[],[]
     for index,flow in enumerate(flows,1):
         source,target=flow.get('sourceRef'),flow.get('targetRef')
@@ -189,7 +208,11 @@ def import_bpmn(raw: bytes):
         branch=outgoing[source]>1
         condition=next((value for value in expressions+docs+[flow.get('name','').strip()] if value),'')
         edge={'source':mapping[source],'target':mapping[target]}
-        if branch or condition or predicate is not None:
+        if source in parallel_sources or source_kinds[source]=='parallel_join':
+            if expressions or predicate is not None:
+                raise BPMNImportError('Parallel gateway flows cannot have conditional expressions or predicates')
+            if condition:notes.append({'source_node_id':source,'text':condition[:2000],'text_truncated':len(condition)>2000})
+        elif branch or condition or predicate is not None:
             rule_text=condition or 'Clarify the business condition for imported branch '+str(index)
             if len(rule_text)>2000:
                 raise BPMNImportError('Imported branch descriptions must be at most 2,000 characters')
@@ -198,6 +221,7 @@ def import_bpmn(raw: bytes):
             if predicate is not None:rule['predicate']=predicate.model_dump()
             rules.append(rule);edge['rule_id']=rule_id
         transitions.append(edge)
+    if len(notes)>40:raise BPMNImportError('Imported designs support at most 40 documentation notes')
     manual_conditions=[{**{key:value for key,value in item.items() if key!='source_id'},
                         'activity_id':mapping[item['source_id']]} for item in manual_by_source]
     if notes or label_corrections:
@@ -213,9 +237,11 @@ def import_bpmn(raw: bytes):
             manual_review_conditions=manual_conditions,
             entry_activity_id=mapping[entries[0]],terminal_activity_ids=[mapping[t] for t in terminals])
     except ValidationError:
-        raise BPMNImportError('Imported graph must be connected, reachable, bounded and have valid terminal routes and exclusive branches') from None
+        raise BPMNImportError('Imported graph must be connected, reachable, bounded and have valid terminal routes and supported exclusive or paired parallel branches') from None
     warnings=['source_xml_is_untrusted_data','no_observed_execution_or_policy_imported',
               'rules_require_human_confirmation','task_implementations_and_permissions_not_imported']
+    if any(kind in {'parallel_split','parallel_join'} for kind in source_kinds.values()):
+        warnings.append('parallel_semantics_preserved_linear_agent_runtime_unavailable')
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')

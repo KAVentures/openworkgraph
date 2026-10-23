@@ -26,21 +26,23 @@
     return 'csv';
   }
   function csvHeader(text,delimiter){
-    const line=String(text||'').split(/\r?\n/,1)[0].replace(/^﻿/,'');
+    const line=String(text||'').replace(/^﻿/,'');
     const out=[];let cell='',quoted=false;
     for(let i=0;i<line.length;i++){
       const c=line[i];
       if(quoted){if(c==='"'&&line[i+1]==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;}
       else if(c==='"')quoted=true;
-      else if(c===delimiter){out.push(cell.trim());cell='';}
+      else if(c===delimiter){out.push(cell);cell='';}
+      else if(c==='\r'||c==='\n')break;
       else cell+=c;
     }
-    out.push(cell.trim());
-    return out.filter(Boolean).slice(0,200);
+    out.push(cell);
+    return out.slice(0,200);
   }
   function guess(columns,words){return columns.find(c=>words.some(w=>c.toLowerCase().includes(w)))||'';}
   // One accepted path per line, activities separated by ">" or "→".
   function parsePaths(text){
+    if(String(text||'').trimStart().startsWith('{'))return JSON.parse(text);
     const paths=String(text||'').split(/\r?\n/).map(line=>line.split(/>|→/).map(s=>s.trim()).filter(Boolean)).filter(p=>p.length);
     if(!paths.length)throw new Error('Enter at least one reference path, for example: Receive > Review > Close');
     if(paths.length>10)throw new Error('Use at most 10 reference paths.');
@@ -63,7 +65,7 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams(params||{});if(state.caseType)q.set('case_type',state.caseType);const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
@@ -211,7 +213,7 @@
     const from=day(values.from,'Started from'),before=day(values.before,'Started before');
     if(from)spec.started_from=from;if(before)spec.started_before=before;
     if(from&&before&&from>=before)throw new Error('The cohort period is empty.');
-    for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key].trim();
+    for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     return spec;
   }
@@ -251,7 +253,7 @@
     const sla=input('owgEventLogSla','number','e.g. 48');sla.min='0';sla.step='any';
     const bots=input('owgEventLogBots','text','bot, system');
     const run=button('Calculate KPIs','secondary');run.id='owgEventLogKpiRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('SLA (hours)',sla),field('Automation resources (comma-separated)',bots),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('SLA (hours)',sla),field('Automation resources (comma-separated or JSON array for exact labels)',bots),run);
     const filter=cohortFields('owgEventLogKpiCohort','Only cases matching (optional)',activityNames);
     let last=null;
     const exports=exportButtons('owgEventLogKpi',()=>last,k=>[
@@ -264,7 +266,13 @@
       try{
         const params={...filter.read()};delete params.label;const hours=Number(sla.value);
         if(sla.value&&hours>0)params.sla_seconds=String(Math.round(hours*3600));
-        if(bots.value.trim())params.automation_resources=bots.value;
+        if(bots.value.trim()){
+          if(bots.value.trimStart().startsWith('[')){
+            const resources=JSON.parse(bots.value);
+            if(!Array.isArray(resources)||!resources.every(r=>typeof r==='string'))throw new Error('Resource JSON must be an array of strings.');
+            params.automation_resource=resources;
+          }else params.automation_resources=bots.value;
+        }
         const k=await getJSON(logPath('kpis',params));const t=k.throughput_seconds||{};last=k;exports.enable(true);
         out.replaceChildren(table(['Cases','Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[Number(k.cases).toLocaleString(),duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
           el('div','Rework means a case repeats an activity. Automation rate counts events by the resources you listed.','muted'));
@@ -385,10 +393,10 @@
   function conformanceSection(topVariant){
     const box=section('Compare with a reference process');
     const model=document.createElement('textarea');model.id='owgEventLogModel';model.rows=3;model.style.width='100%';
-    model.placeholder='One accepted path per line, e.g. Receive > Review > Close';
-    if(topVariant&&topVariant.path.length<=100)model.value=topVariant.path.join(' > ');
+    model.placeholder='One accepted path per line, e.g. Receive > Review > Close, or reference-model JSON for exact labels';
+    if(topVariant&&topVariant.path.length<=100)model.value=JSON.stringify({format:MODEL_FORMAT,paths:[topVariant.path]});
     const run=button('Check conformance','secondary');run.id='owgEventLogConformanceRun';
-    const out=el('div');box.append(field('Reference paths',model),run,out);
+    const out=el('div');box.append(field('Reference paths or exact-label JSON',model),run,out);
     run.onclick=async()=>{
       try{
         const body=JSON.stringify(parsePaths(model.value));

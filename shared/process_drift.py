@@ -11,7 +11,7 @@ import json
 from math import ceil
 from statistics import median
 
-from .process_conformance import compare_path
+from .process_conformance import compare_paths
 
 FORMAT = 'openworkgraph.process-log-drift.v1'
 MAX_PATH_ROWS = 50
@@ -158,18 +158,23 @@ def compare_snapshots(baseline, current, *, reference_model=None, reference=None
     }
     if reference_model is not None:
         # Cache full paths across both logs. Hidden display rows still count.
-        comparisons = {path: compare_path(path, reference_model) for path in paths}
+        comparisons = compare_paths(paths,reference_model)
         matches = [sum(s['paths'][path] for path in s['paths']
                        if comparisons[path]['exact_structural_match']) for s in (a, b)]
+        unknown = [sum(s['paths'][path] for path in s['paths']
+                       if comparisons[path]['exact_structural_match'] is None) for s in (a,b)]
         report['conformance'] = {
             'reference': reference,
             'baseline_exact_structural_match_cases': matches[0],
             'current_exact_structural_match_cases': matches[1],
-            'baseline_structurally_deviating_cases': na - matches[0],
-            'current_structurally_deviating_cases': nb - matches[1],
+            'baseline_structurally_deviating_cases': na - matches[0] - unknown[0],
+            'current_structurally_deviating_cases': nb - matches[1] - unknown[1],
             'exact_match_share_change_percentage_points': round(100 * (
-                _share(matches[1], nb) - _share(matches[0], na)), 4),
-            'all_retained_cases_and_full_paths_compared': True,
+                _share(matches[1], nb) - _share(matches[0], na)), 4) if not any(unknown) else None,
+            'all_retained_cases_and_full_paths_compared': not any(unknown),
+            **({'baseline_structural_comparison_unknown_cases':unknown[0],
+                'current_structural_comparison_unknown_cases':unknown[1],'all_cases_attempted':True}
+               if any('comparison_complete' in value for value in comparisons.values()) else {}),
             'rules_and_conditions_evaluated': False, 'policy_compliance_verified': False,
         }
     return report

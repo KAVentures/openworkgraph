@@ -127,13 +127,15 @@ def event_log_activities(request: Request, log_id: str, case_type: str | None = 
 def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                    sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
                    automation_resources: str = Query(default="", max_length=10000),
+                   automation_resource: list[str] | None = Query(default=None, max_length=50),
                    started_from: str = Query(default="", max_length=64),
                    started_before: str = Query(default="", max_length=64),
                    resource: str = Query(default="", max_length=200),
                    activity: str = Query(default="", max_length=200),
                    attribute: str = Query(default="", max_length=200)):
     _require_dashboard(request)
-    resources = [item.strip() for item in automation_resources.split(",") if item.strip()]
+    resources = (automation_resource if automation_resource is not None else
+                 [item.strip() for item in automation_resources.split(",") if item.strip()])
     cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
               "activity": activity, "attribute": attribute}
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
