@@ -450,6 +450,9 @@ def upsert_detail(
 ) -> bool:
     if not facts or not ref.startswith("awd:") or not session.startswith("as:") or source not in _ALLOWED_SOURCES:
         return False
+    from shared.conversation_deletion import is_deleted
+    if is_deleted(observed_at):
+        return False  # the user deleted conversation records from this time
     encoded = json.dumps(facts, ensure_ascii=False, sort_keys=True)
     if len(encoded) > 32_000:
         return False

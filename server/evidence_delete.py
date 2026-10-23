@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -118,3 +119,34 @@ def remove_local_screenshots(paths: list[str]) -> int:
         except Exception:
             continue
     return removed
+
+
+def delete_agent_conversations_range(since: str, until: str) -> dict[str, int]:
+    """Delete agent conversation messages and working detail observed in [since, until)."""
+    normalized_since, normalized_until = normalize_range(since, until)
+    start, end = _parse_utc(normalized_since), _parse_utc(normalized_until)
+    counts = {"agent_session_messages": 0, "agent_working_detail": 0}
+    with connect() as conn:
+        tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for table, key in (("agent_session_messages", "id"), ("agent_working_detail", "detail_ref")):
+            if table not in tables:
+                continue
+            doomed = [row[0] for row in conn.execute(f"SELECT {key}, observed_at FROM {table}")
+                      if (stamp := _parse_utc(row[1])) is not None and start <= stamp < end]
+            for offset in range(0, len(doomed), 500):
+                chunk = doomed[offset:offset + 500]
+                conn.execute(f"DELETE FROM {table} WHERE {key} IN ({','.join('?' for _ in chunk)})", chunk)
+            counts[table] = len(doomed)
+        if counts["agent_session_messages"] and "agent_sessions" in tables:
+            conn.execute(
+                """UPDATE agent_sessions SET visible_message_count = (SELECT COUNT(*) FROM agent_session_messages m
+                   WHERE m.session_ref = agent_sessions.session_ref)""")
+    return counts
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
