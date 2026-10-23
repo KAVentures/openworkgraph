@@ -1,6 +1,7 @@
 /* Local-only process mining: no default upload, retention or external service. */
 (() => {
   'use strict';
+  const eventBrowserGenerations=new WeakMap();
   const SVG_NS='http://www.w3.org/2000/svg';
   const MAX_UPLOAD=1024*1024;
   let report=null;
@@ -365,16 +366,18 @@
     }catch(error){if(attempt===generation&&caseAttempt===caseBrowserGeneration)setStatus('Unable to browse cases: '+error.message);}
   }
   async function browseEvents(id,number,host,after,attempt,caseAttempt){
+    const eventAttempt=(eventBrowserGenerations.get(host)||0)+1;eventBrowserGenerations.set(host,eventAttempt);
+    const current=()=>attempt===generation&&caseAttempt===caseBrowserGeneration&&eventBrowserGenerations.get(host)===eventAttempt;
     try{
       const value=await logRequest('/events?'+new URLSearchParams({dataset_id:id,case_number:number,after,limit:100}),undefined,
-        ()=>attempt===generation&&caseAttempt===caseBrowserGeneration);if(attempt!==generation||caseAttempt!==caseBrowserGeneration)return;
+        current);if(!current())return;
       host.replaceChildren();
       const list=make('ol');for(const event of safe(value.events)){
         const row=make('li',event.position+'. '+event.activity+' · '+event.observed_at+' · preceding gap '+seconds(event.elapsed_since_previous_seconds)+(eventLabelSuffix(event)?' · '+eventLabelSuffix(event):''));list.appendChild(row);
       }host.appendChild(list);
       if(after)host.appendChild(button('First events',()=>browseEvents(id,number,host,0,attempt,caseAttempt)));
       if(value.has_more)host.appendChild(button('Next events',()=>browseEvents(id,number,host,value.next_after,attempt,caseAttempt)));
-    }catch(error){if(attempt===generation&&caseAttempt===caseBrowserGeneration)host.replaceChildren(make('p','Unable to read events: '+error.message));}
+    }catch(error){if(current())host.replaceChildren(make('p','Unable to read events: '+error.message));}
   }
   async function deleteLog(id){
     if(!window.confirm('Delete this retained local log, including all of its case timelines? Saved process designs and independent downloads remain separate.'))return;
