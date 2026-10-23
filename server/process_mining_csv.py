@@ -384,6 +384,7 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         source_cases=Counter(origin for rows in by_case.values() for origin in {row[5] for row in rows})
         result['case_correlation']={'scope':'this_selected_log_only',
             'join_basis':'caller_reviewed_literal_shared_case_key',
+            'alias_source':'client_declared_import_scoped_aliases','anonymization_verified':False,
             'authoritative_case_namespace_confirmed_by_caller':True,
             'case_identity_independently_verified':False,'source_origins_independently_verified':False,
             'native_case_keys_included':False,'native_source_identifiers_included':False,

@@ -52,6 +52,7 @@ def test_exact_supplied_keys_preserve_interleaved_histories_source_support_and_u
     assert c['multi_source_case_count']==1 and c['source_count']==2
     assert c['authoritative_case_namespace_confirmed_by_caller'] is True
     assert not c['case_identity_independently_verified'] and not c['source_origins_independently_verified']
+    assert not c['anonymization_verified'] and c['alias_source']=='client_declared_import_scoped_aliases'
     assert c['sources']==[{'origin':'source_1','event_count':3,'case_count':2},
                           {'origin':'source_2','event_count':2,'case_count':2}]
     first=result['cases'][0]
