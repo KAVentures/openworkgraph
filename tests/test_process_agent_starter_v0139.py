@@ -78,6 +78,8 @@ def test_zip_is_deterministic_minimal_and_not_an_executable_business_agent():
             "preflight.request.template.json", "process.bpmn",
             "dry_run.py", "tests/test_contract.py",
             "CLAUDE.md", "docs/PDD.md", "docs/SDD.md", "integrations/n8n.workflow.json",
+            "integrations/ai-sdk/agent.ts", "integrations/ai-sdk/package.json",
+            "integrations/ai-sdk/tsconfig.json",
         ]
         assert all(not name.startswith("/") and ".." not in name for name in names)
         spec = json.loads(archive.read("workflow.spec.json"))
