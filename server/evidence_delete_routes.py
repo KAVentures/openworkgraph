@@ -15,6 +15,8 @@ from shared.history_policy import bump_history_generation
 from . import analytics
 from .db import DATA_DIR
 from .evidence_delete import delete_database_range, remove_local_screenshots, rewrite_jsonl_range
+from .evidence_deletion_receipt import verify_range
+from .evidence_deletion_receipt import receipt as deletion_receipt
 from .main import CONFIG_PATH, ROOT
 from .work_text_capture import delete_range as delete_work_text_range
 from .secure_app import app
@@ -56,6 +58,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
         deleted_work_text = 0
         gateway_cursor = 0
         history_generation = 0
+        verification: dict[str, Any] = {}
         try:
             sync_state = SyncState(DATA_DIR / "gateway_sync_state.db")
             gateway_cursor = sync_state.get_int("last_local_event_id", 0)
@@ -79,6 +82,11 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
                 skipped_gateway_rows=skipped_gateway,
                 screenshots_removed=screenshots_removed,
             )
+            # Re-read every store before sync restarts; a verifier fault never undoes the deletion.
+            try:
+                verification = verify_range(since, until)
+            except Exception as exc:  # pragma: no cover - defensive
+                verification = {"verified_clean": False, "verification_error": type(exc).__name__}
         except Exception as exc:
             analytics.clear_summary_cache()
             raise HTTPException(
@@ -95,7 +103,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
 
         local_ids = [int(value) for value in (result or {}).get("local_ids") or []]
         at_or_before_cursor = sum(1 for value in local_ids if value <= gateway_cursor)
-        return {
+        response = {
             "status": "deleted",
             "since": since,
             "until": until,
@@ -117,6 +125,9 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
                 "automatically recalled."
             ),
         }
+        response["verification"] = verification
+        response["receipt"] = deletion_receipt(response, verification)
+        return response
 
 
 @app.get("/evidence-delete.js")
