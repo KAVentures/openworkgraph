@@ -150,10 +150,10 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     resource = mapping.get("resource_column") or ""
     if not all(columns):
         raise EventLogFormatError("case, activity and timestamp columns are required")
-    source = f"read_csv(?, header=true, delim='{delimiter}', all_varchar=true, sample_size=-1)"
+    source = f"read_csv(?, header=true, names=?, delim='{delimiter}', all_varchar=true, sample_size=-1)"
     with path.open("r",encoding="utf-8-sig",newline="") as handle:
         original_header=read_csv_header(handle,delimiter)
-    header = [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM {source}", [str(path)]).fetchall()]
+    header = [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM {source}", [str(path),original_header]).fetchall()]
     if header!=original_header:
         raise EventLogFormatError("CSV column names must be preserved literally without automatic renaming")
     missing = [name for name in columns + ([resource] if resource else []) if name not in header]
@@ -168,7 +168,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
                THEN try_cast(trim({stamp}) AS TIMESTAMPTZ) END AS ts,
           coalesce({res}, '') AS resource,
           row_number() OVER () AS n
-        FROM {source}""", [str(path)])
+        FROM {source}""", [str(path),original_header])
     if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
         OR length(resource)>200 OR regexp_matches(concat_ws('',case_id,activity,resource),?)""",
         [r'[\x00-\x1f\x7f-\x9f\x{fffe}\x{ffff}]']).fetchone()[0]:

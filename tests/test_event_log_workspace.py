@@ -351,3 +351,18 @@ def test_ocel_duplicate_fields_nonstandard_constants_and_oversized_csv_header_fa
         assert workspace.list_logs()['logs']==[]
     with pytest.raises(formats.EventLogFormatError):
         formats.read_csv_header(StringIO('H'*(formats.MAX_HEADER_CHARS+1)))
+
+
+def test_literal_csv_headers_are_shared_by_streaming_and_columnar_import():
+    import csv
+    from shared import event_log_formats as formats
+    raw=' case , activity , time , who \n Case, Review > ,2024-01-01T00:00:00Z," bot,system "\nCase ,ReviewArrow ,2024-01-01T00:00:00Z,bot \n'
+    mapping={'case_column':' case ','activity_column':' activity ','timestamp_column':' time ','resource_column':' who '}
+    records=list(formats.read_csv(StringIO(raw),**mapping))
+    assert len([r for r in records if isinstance(r,formats.EventRecord)])==2
+    log=_import(raw,'csv',mapping=mapping)
+    assert workspace.summary(log['log_id'])['cases']==2
+    assert {tuple(v['path']) for v in workspace.variants(log['log_id'])['variants']}=={(' Review > ',),('ReviewArrow ',)}
+    out=StringIO();workspace.export_log(log['log_id'],'csv',out)
+    rows=list(csv.DictReader(StringIO(out.getvalue())))
+    assert {(r['case_id'],r['activity'],r['resource']) for r in rows}=={(' Case',' Review > ',' bot,system '),('Case ','ReviewArrow ','bot ')}
