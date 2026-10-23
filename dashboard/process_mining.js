@@ -625,6 +625,19 @@
     const list=make('ul');for(const source of safe(data.sources))list.appendChild(make('li',String(source.origin).replace(/^source_/,'Source ')+' · '+source.event_count+' events across '+source.case_count+' cases'));
     host.appendChild(list);
   }
+  function renderActivityLabelSupport(host,activity){
+    const support=activity?.label_support;if(!support)return;
+    const titles={participant:'Participant labels',team:'Team labels',origin:'Source aliases'};
+    host.append(make('h4','Labels on this activity'),make('p','Counts use every occurrence of this activity in the current population. A case can contain several labels, so case support across labels is not additive. Labels do not verify people, membership, source identity, effort or human handoffs.','muted'));
+    for(const [dimension,data] of Object.entries(support)){
+      if(!titles[dimension])continue;
+      driftTable(host,titles[dimension],['Supplied label','Activity events','Distinct cases'],
+        safe(data.labels).map(row=>[dimension==='origin'?String(row.label).replace(/^source_/,'Source '):aliasLabel(row.label),row.event_count,row.case_count]));
+      host.appendChild(make('p',data.missing_label_event_count+' activity events across '+data.missing_label_case_count+
+        ' cases have no '+(dimension==='origin'?'source':dimension)+' label; those values remain unknown.','muted'));
+      if(data.rows_truncated)host.appendChild(make('p','Showing '+data.rows_returned+' of '+data.label_count+' labels, ranked by event support. Totals include all labels and all selected cases.','muted'));
+    }
+  }
   function renderParticipantLabels(host){
     const metadata=report?.participant_labels;if(!metadata)return;
     host.append(make('h3','Participant and team labels'),make('p','Labels describe this import only. Counts and adjacent label changes do not verify people, team membership or human handoffs. Selected participant/team identifiers were replaced before upload.','muted'));
@@ -789,6 +802,7 @@
         details.appendChild(make('h4',activeActivity));
         details.appendChild(make('p',activity.event_count+' recorded events across '+activity.case_count+
           ' cases in this variant. Repeated positions count as separate events.'));
+        renderActivityLabelSupport(details,activity);
         details.appendChild(make('p','Select an example below to inspect its recorded chronology. Times describe source events, not active labor or verified waiting.','muted'));
         host.appendChild(details);
       }
@@ -869,6 +883,7 @@
     const details=make('section');details.id='owgObservedActivityDetails';details.tabIndex=-1;
     details.append(make('h4',selected.activity+' · '+(report.cohort?'selected complete-case cohort':'full imported log')),
       make('p',selected.event_count+' recorded events across '+selected.case_count+' cases. Repeated occurrences remain separate.'));
+    renderActivityLabelSupport(details,selected);
     const variants=safe(report.variants).map((variant,index)=>({variant,index})).filter(({variant})=>safe(variant.activities).some(row=>row.activity===selected.activity));
     if(variants.length){
       details.appendChild(make('p','Inspect a displayed supporting variant:'));
