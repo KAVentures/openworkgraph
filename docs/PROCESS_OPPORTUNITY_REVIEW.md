@@ -54,3 +54,25 @@ source-status verification, baselined labor samples, and real-life A/B ROI
 trials remain required before confident automation recommendations.
 
 Integration note: this review panel coexists with the human-reviewed AS-IS/TO-BE designer and does not change its process policy or execution boundaries.
+
+## Implementation alternatives
+
+Below the single scenario, **Compare implementation alternatives** puts five
+ways of handling the work side by side: eliminate the step, deterministic
+automation (API or rules), an AI agent, an AI agent with human approval, and
+keeping it human-only as the zero baseline. Each alternative takes its own
+assumptions (minutes saved per eligible case, eligible share, recurring and
+one-time cost); the approval alternative also subtracts human review minutes
+per case, so review time larger than the saving shows a loss. Cases per month,
+labor cost and currency come from the scenario above.
+
+The result orders alternatives by modeled net value only. It records which
+alternatives act without per-case approval and which still need confirmed
+business rules, and it carries `recommendation: null`,
+`approved_alternative: null` and `authorized_agent_actions: false`. Missing or
+out-of-range assumptions are refused rather than defaulted, and changing any
+assumption clears a stale comparison. When computed, the comparison is included
+as `alternatives_comparison` in the exported scenario file.
+
+Tests: `tests/test_opportunity_alternatives.py` and
+`tests/browser/opportunity_alternatives.cjs`.
