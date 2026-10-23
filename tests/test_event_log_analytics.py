@@ -215,3 +215,19 @@ assert.equal(m.duration(90),'90 s');assert.equal(m.duration(3600),'60 min');asse
 """
     result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_literal_labels_remain_distinct_in_conformance_and_resource_kpis():
+    log_id = _log("case,activity,time,who\n"
+                  "Case,Review,2024-01-01T00:00:00Z,bot\n"
+                  " Case,Review ,2024-01-01T00:00:00Z, bot\n"
+                  "Case ,Review,2024-01-01T00:00:00Z,bot \n")
+    model = {"format": "openworkgraph.reference-model.v1", "paths": [["Review"]]}
+    result = analytics.conformance(log_id, model)
+    assert result["cases"] == 3 and result["fitting_cases"] == 2
+    assert [(v["activity"], v["cases"]) for v in result["extra_observed_activities"]] == [("Review ", 1)]
+    for resource in ["bot", " bot", "bot "]:
+        metrics = analytics.kpis(log_id, automation_resources=[resource])
+        assert metrics["cases"] == 3
+        assert metrics["automation"]["events"] == 3
+        assert metrics["automation"]["automated_events"] == 1
