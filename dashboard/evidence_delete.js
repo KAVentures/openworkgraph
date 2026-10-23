@@ -4,11 +4,11 @@
     const node=document.createElement('div'); node.textContent=String(value ?? ''); return node.innerHTML;
   };
 
-  async function apiDelete(since, until) {
+  async function apiDelete(since, until, includeAgentConversations) {
     await window.__owgAuthReady;
     const response=await fetch('/v1/evidence/delete',{
       method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({since,until}),
+      body:JSON.stringify({since,until,include_agent_conversations:includeAgentConversations===true}),
     });
     let payload={}; try { payload=await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(payload.detail||'Could not delete local evidence.');
@@ -34,20 +34,23 @@
     const status=verification.verified_clean===true
       ? '<strong>Verified:</strong> no evidence from this time range remains in the local stores this deletion covers.'
       : '<strong>Not verified:</strong> some evidence from this time range is still present locally. Retry the deletion.';
-    const kept=messages||details
-      ? `<div style="margin-top:5px">${esc(messages)} agent conversation message${messages===1?'':'s'} and ${esc(details)} agent working detail record${details===1?'':'s'} from this time are kept; delete them separately under agent sessions.</div>`
+    const removed=result.agent_conversations_included===true
+      ? `<div style="margin-top:5px">${esc(Number(result.agent_conversation_messages_deleted||0))} AI conversation message${Number(result.agent_conversation_messages_deleted||0)===1?'':'s'} and ${esc(Number(result.agent_working_detail_deleted||0))} agent working detail record${Number(result.agent_working_detail_deleted||0)===1?'':'s'} deleted.</div>`
       : '';
-    return `<div class="note" id="evidenceDeleteVerification" role="status" style="margin-top:10px">${status}${kept}${receipt?`<div class="muted" style="margin-top:5px">Receipt ${esc(receipt)}</div>`:''}</div>`;
+    const kept=messages||details
+      ? `<div style="margin-top:5px">${esc(messages)} agent conversation message${messages===1?'':'s'} and ${esc(details)} agent working detail record${details===1?'':'s'} from this time are kept; choose to include them next time, or delete them under agent sessions.</div>`
+      : '';
+    return `<div class="note" id="evidenceDeleteVerification" role="status" style="margin-top:10px">${status}${removed}${kept}${receipt?`<div class="muted" style="margin-top:5px">Receipt ${esc(receipt)}</div>`:''}</div>`;
   }
 
   function showConfirm(host, since, until) {
-    host.innerHTML=`<div class="note" style="margin-top:10px"><strong>Delete local evidence?</strong><div style="margin-top:5px">Delete everything overlapping <strong>${esc(readable(since))}</strong> through <strong>${esc(readable(until))}</strong>? This cannot be undone on this computer.</div><div class="muted" style="margin-top:5px">Unsent and late local copies are blocked from future organization sharing. Evidence already synchronized to an organization Gateway is not automatically recalled.</div><div class="modal-actions"><button id="confirmEvidenceDelete" style="background:var(--red);border-color:var(--red)">Delete evidence</button><button class="secondary" id="cancelEvidenceDelete">Cancel</button></div></div>`;
+    host.innerHTML=`<div class="note" style="margin-top:10px"><strong>Delete local evidence?</strong><div style="margin-top:5px">Delete everything overlapping <strong>${esc(readable(since))}</strong> through <strong>${esc(readable(until))}</strong>? This cannot be undone on this computer.</div><div class="muted" style="margin-top:5px">Unsent and late local copies are blocked from future organization sharing. Evidence already synchronized to an organization Gateway is not automatically recalled.</div><label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="deleteAgentConversations" checked> Also delete AI conversation messages and agent working detail from this time</label><div class="modal-actions"><button id="confirmEvidenceDelete" style="background:var(--red);border-color:var(--red)">Delete evidence</button><button class="secondary" id="cancelEvidenceDelete">Cancel</button></div></div>`;
     host.querySelector('#cancelEvidenceDelete').onclick=()=>{host.innerHTML='';};
     host.querySelector('#confirmEvidenceDelete').onclick=async()=>{
       const button=host.querySelector('#confirmEvidenceDelete');
       button.disabled=true; button.textContent='Deleting…';
       try {
-        const result=await apiDelete(since,until);
+        const result=await apiDelete(since,until,host.querySelector('#deleteAgentConversations').checked);
         host.innerHTML=deletionSummary(result);
         if (typeof window.toast==='function') window.toast(`${Number(result.deleted_events||0)} local evidence event${Number(result.deleted_events||0)===1?'':'s'} deleted.`);
         if (typeof window.load==='function') await window.load();

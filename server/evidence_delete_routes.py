@@ -14,7 +14,8 @@ from shared.evidence_deletion import add_tombstone, audit_deletion, normalize_ra
 from shared.history_policy import bump_history_generation
 from . import analytics
 from .db import DATA_DIR
-from .evidence_delete import delete_database_range, remove_local_screenshots, rewrite_jsonl_range
+from .evidence_delete import delete_agent_conversations_range, delete_database_range, remove_local_screenshots, rewrite_jsonl_range
+from shared.conversation_deletion import add_tombstone as add_conversation_tombstone
 from .evidence_deletion_receipt import verify_range
 from .evidence_deletion_receipt import receipt as deletion_receipt
 from .main import CONFIG_PATH, ROOT
@@ -27,6 +28,8 @@ _DELETE_LOCK = threading.RLock()
 class EvidenceDeleteRequest(BaseModel):
     since: str
     until: str
+    # Opt-in: also delete AI conversation messages and agent working detail.
+    include_agent_conversations: bool = False
 
 
 @app.post("/v1/evidence/delete")
@@ -49,6 +52,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             stop_sync_worker()
 
         add_tombstone(since, until)
+        if request.include_agent_conversations:
+            add_conversation_tombstone(since, until)
 
         result: dict[str, Any] | None = None
         pruned_outbox = 0
@@ -56,6 +61,7 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
         screenshots_removed = 0
         jsonl_removed = 0
         deleted_work_text = 0
+        conversations = {"agent_session_messages": 0, "agent_working_detail": 0}
         gateway_cursor = 0
         history_generation = 0
         verification: dict[str, Any] = {}
@@ -71,6 +77,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             skipped_gateway = sync_state.add_skip_ids(local_ids, "local_evidence_deleted")
             screenshots_removed = remove_local_screenshots(list(result.get("screenshot_paths") or []))
             deleted_work_text = delete_work_text_range(since, until)
+            if request.include_agent_conversations:
+                conversations = delete_agent_conversations_range(since, until)
             analytics.clear_summary_cache()
             history_generation = bump_history_generation(reason="manual_range_deletion")
 
@@ -84,7 +92,8 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             )
             # Re-read every store before sync restarts; a verifier fault never undoes the deletion.
             try:
-                verification = verify_range(since, until)
+                verification = verify_range(
+                    since, until, include_agent_conversations=request.include_agent_conversations)
             except Exception as exc:  # pragma: no cover - defensive
                 verification = {"verified_clean": False, "verification_error": type(exc).__name__}
         except Exception as exc:
@@ -113,6 +122,9 @@ def delete_local_evidence(request: EvidenceDeleteRequest) -> dict[str, Any]:
             "collector_outbox_events_removed": int(pruned_outbox),
             "gateway_local_rows_marked_never_share": int(skipped_gateway),
             "screenshots_removed": int(screenshots_removed),
+            "agent_conversations_included": bool(request.include_agent_conversations),
+            "agent_conversation_messages_deleted": int(conversations["agent_session_messages"]),
+            "agent_working_detail_deleted": int(conversations["agent_working_detail"]),
             "late_delivery_suppressed": True,
             "history_generation": int(history_generation),
             "context_pulse_cursors_invalidated": True,

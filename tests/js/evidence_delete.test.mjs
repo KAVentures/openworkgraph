@@ -50,3 +50,17 @@ test('a completed deletion shows the server verification and kept agent records'
   assert.equal(window.__summary({}),'');
   assert.ok(nodes.length===0);
 });
+
+test('the confirmation offers deleting AI conversations too and sends the explicit choice',()=>{
+  assert.match(source,/id="deleteAgentConversations" checked/);
+  assert.match(source,/Also delete AI conversation messages and agent working detail from this time/);
+  assert.match(source,/include_agent_conversations:includeAgentConversations===true/);
+  assert.match(source,/apiDelete\(since,until,host\.querySelector\('#deleteAgentConversations'\)\.checked\)/);
+  const document={readyState:'complete',querySelector:()=>null,createElement:()=>({set textContent(v){this.innerHTML=String(v);}})};
+  const window={};
+  new Function('window','document',source.replace(/\}\)\(\);\s*$/,'window.__summary=deletionSummary;})();'))(window,document);
+  const html=window.__summary({verification:{verified_clean:true,remaining_in_separately_deleted_stores:{}},
+    agent_conversations_included:true,agent_conversation_messages_deleted:3,agent_working_detail_deleted:1});
+  assert.match(html,/3 AI conversation messages and 1 agent working detail record deleted/);
+  assert.doesNotMatch(html,/are kept/);
+});
