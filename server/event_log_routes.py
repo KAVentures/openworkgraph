@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from . import event_log_analytics as analytics
+from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
@@ -123,10 +124,39 @@ def event_log_activities(request: Request, log_id: str, case_type: str | None = 
 @router.get("/v1/event-logs/{log_id}/kpis")
 def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                    sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
-                   automation_resources: str = Query(default="", max_length=10000)):
+                   automation_resources: str = Query(default="", max_length=10000),
+                   started_from: str = Query(default="", max_length=64),
+                   started_before: str = Query(default="", max_length=64),
+                   resource: str = Query(default="", max_length=200),
+                   activity: str = Query(default="", max_length=200),
+                   attribute: str = Query(default="", max_length=200)):
     _require_dashboard(request)
     resources = [item.strip() for item in automation_resources.split(",") if item.strip()]
-    return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
+
+
+async def _json_body(request: Request, what: str) -> Any:
+    if not str(request.headers.get("content-type") or "").startswith("application/json"):
+        raise HTTPException(415, f"{what} must be JSON")
+    body = await request.body()
+    if len(body) > 65536:
+        raise HTTPException(413, f"{what} is too large")
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise HTTPException(422, f"{what} is not valid JSON") from None
+
+
+@router.post("/v1/event-logs/{log_id}/benchmark")
+async def event_log_benchmark(request: Request, log_id: str,
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "benchmark")
+    if not isinstance(spec, dict):
+        raise HTTPException(422, "benchmark must be a JSON object")
+    return _respond(cohorts.benchmark, log_id, spec.get("cohorts"), case_type, spec.get("sla_seconds"))
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")
@@ -134,15 +164,7 @@ async def event_log_conformance(request: Request, log_id: str,
                                 case_type: str | None = Query(default=None, max_length=200),
                                 max_variants: int = Query(default=500, ge=1, le=analytics.MAX_ALIGNED_VARIANTS)):
     _require_dashboard(request)
-    if not str(request.headers.get("content-type") or "").startswith("application/json"):
-        raise HTTPException(415, "reference model must be JSON")
-    body = await request.body()
-    if len(body) > 65536:
-        raise HTTPException(413, "reference model is too large")
-    try:
-        model = json.loads(body)
-    except ValueError:
-        raise HTTPException(422, "reference model is not valid JSON") from None
+    model = await _json_body(request, "reference model")
     return _respond(analytics.conformance, log_id, model, case_type, max_variants)
 
 
