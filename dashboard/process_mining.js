@@ -397,10 +397,11 @@
     ['owgCohortActivity','Case contains exact activity','contains_activity'],
     ['owgCohortVariant','Retained variant ID (optional)','variant_id'],
     ['owgCohortParticipant','Cases with participant label','contains_participant','participant'],
-    ['owgCohortTeam','Cases with team label','contains_team','team']];
+    ['owgCohortTeam','Cases with team label','contains_team','team'],
+    ['owgCohortOrigin','Cases with source alias','contains_origin','origin']];
   function installCohort(parent){
     const section=make('section');section.id='owgLogCohort';section.append(make('h3','Filter complete retained cases'),
-      make('p','Open or save a retained log first. Date filters select cases by their first retained event; every event of a selected case is included. Use offset-aware timestamps such as 2026-10-20T00:00:00Z. These are log boundaries, not verified business start or completion. Filters apply only after Apply case filters. Participant/team filters match supplied event labels; when both are selected they must occur on the same event. Complete case timelines remain intact.','muted'));
+      make('p','Open or save a retained log first. Date filters select cases by their first retained event; every event of a selected case is included. Use offset-aware timestamps such as 2026-10-20T00:00:00Z. These are log boundaries, not verified business start or completion. Filters apply only after Apply case filters. Participant/team/source filters match supplied event labels; all selected labels must occur on the same event. Activity presence is a separate whole-case condition. Complete case timelines remain intact.','muted'));
     const controls=make('div',null,'owg-process-controls');
     for(const [id,title,,dimension] of cohortInputs){
       const label=make('label',title),input=make(dimension?'select':'input');input.id=id;if(!dimension){input.type='text';input.maxLength=64;}input.disabled=true;
@@ -437,11 +438,12 @@
       const text=document.getElementById('owgCohortBaseline');if(text)text.textContent='No baseline selected.';
     }
     if(!retainedDataset)retainedLabelChoices={};
-    else if(report&&!report.cohort)retainedLabelChoices=report.participant_labels?.dimensions_summary||{};
+    else if(report&&!report.cohort)retainedLabelChoices={...(report.participant_labels?.dimensions_summary||{}),
+      ...(report.case_correlation?{origin:{labels:safe(report.case_correlation.sources).map(row=>({label:row.origin}))}}:{})};
     for(const [id,,,dimension] of cohortInputs){const input=document.getElementById(id);if(input){
       if(dimension){const previous=reset?'':input.value,labels=safe(retainedLabelChoices[dimension]?.labels);
-        const empty=make('option','Any '+dimension+' label');empty.value='';input.replaceChildren(empty);
-        labels.forEach(row=>{const option=make('option',aliasLabel(row.label));option.value=row.label;input.appendChild(option);});
+        const empty=make('option',dimension==='origin'?'Any source alias':'Any '+dimension+' label');empty.value='';input.replaceChildren(empty);
+        labels.forEach(row=>{const option=make('option',dimension==='origin'?String(row.label).replace(/^source_/,'Source '):aliasLabel(row.label));option.value=row.label;input.appendChild(option);});
         input.value=labels.some(row=>row.label===previous)?previous:'';input.disabled=!retainedDataset||!labels.length;
       }else{input.disabled=!retainedDataset;if(reset)input.value='';}
     }}
