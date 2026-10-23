@@ -193,6 +193,7 @@
     variantBox.appendChild(table(['Path','Cases','Share','Median time'],(variants.variants||[]).map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds)])));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
+    results.appendChild(objectMapSection());
 
     const names=(activities.activities||[]).map(a=>a.activity);
     results.appendChild(kpiSection(names));
@@ -244,6 +245,44 @@
     csv.onclick=()=>{const r=getResult();if(r)download(prefix+'.csv',toCSV(csvRows(r)),'text/csv');};
     const row=el('div',null,'row');row.append(json,csv);
     return {node:row,enable:on=>{json.disabled=!on;csv.disabled=!on;}};
+  }
+
+  function objectMapSection(){
+    const box=section('Object-centric map');
+    box.appendChild(el('div','Each object type has its own map: every object (an order, an item, a ticket…) is one lifecycle. Links count objects that share events; they are not verified relationships.','muted'));
+    const pick=select('owgEventLogObjectType',[]);
+    const show=button('Show map','secondary');show.id='owgEventLogObjectShow';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Object type',pick),show);
+    const out=el('div');out.id='owgEventLogObjectMap';
+    const shared=el('div');
+    box.append(row,out,shared);
+    let graph=null;
+    const render=()=>{
+      const type=(graph.object_types||[]).find(t=>t.object_type===pick.value);if(!type)return;
+      const parts=[table(['Objects','Events','Median events per object','Starts with','Ends with'],[[Number(type.objects).toLocaleString(),Number(type.events).toLocaleString(),type.median_events_per_object,
+        Object.entries(type.start_activities).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', '),Object.entries(type.end_activities).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', ')]])];
+      const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
+      if(draw&&type.activities.length){
+        try{
+          const start=Object.keys(type.start_activities)[0];
+          const drawing=draw({activities:type.activities,transitions:type.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{});
+          drawing.id='owgEventLogObjectGraph';parts.push(drawing);
+        }catch(_){parts.push(el('div','Map unavailable for this object type; transitions are listed below.','muted'));}
+      }
+      parts.push(table(['From','To','Transitions','Objects','Median gap'],type.transitions.slice(0,25).map(t=>[t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds)])));
+      const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
+      if(links.length)parts.push(table(['Linked to','Share of '+type.object_type+' objects','Mean linked per object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
+      out.replaceChildren(...parts);
+    };
+    show.onclick=render;pick.onchange=render;
+    getJSON(logPath('object-map').replace(/\?.*$/,'')).then(g=>{
+      graph=g;setOptions(pick,(g.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']));
+      if(state.caseType)pick.value=state.caseType;
+      const touching=g.activities_touching_several_types||[];
+      shared.replaceChildren(...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]));
+      render();
+    }).catch(error=>out.replaceChildren(el('div',error.message,'muted')));
+    return box;
   }
 
   function kpiSection(activityNames){
