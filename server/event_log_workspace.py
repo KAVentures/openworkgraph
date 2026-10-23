@@ -27,7 +27,8 @@ if TYPE_CHECKING:
 
 from shared.event_log_formats import (
     CASE_TYPE, EventLogFormatError, EventRecord, ObjectRecord, ReadStats,
-    read_csv, read_csv_header, read_ocel_json, read_xes, write_csv, write_ocel_json, write_xes,
+    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
+    write_ocel_xml, write_xes,
 )
 
 from .db import DATA_DIR
@@ -191,8 +192,8 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
 
 def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None) -> dict[str, Any]:
     """Import an explicitly chosen local file. The source stream is read once."""
-    if source_format not in {"csv", "xes", "ocel"}:
-        raise EventLogWorkspaceError("format must be csv, xes or ocel")
+    if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
+        raise EventLogWorkspaceError("format must be csv, xes, ocel or ocelxml")
     if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
         raise EventLogWorkspaceError("a short log name is required")
     log_id = "log_" + secrets.token_hex(8)
@@ -218,7 +219,8 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                 else:
                     stats = ReadStats()
                     with upload.open("rb") as raw:
-                        reader = read_xes(raw, stats=stats) if source_format == "xes" else read_ocel_json(raw, stats=stats)
+                        reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](
+                            raw, stats=stats)
                         paths = _stage(reader, folder)
                     _load(conn, log_id, paths)
                 if stats.events == 0:
@@ -415,7 +417,7 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
         write_xes(case_events(log_id, case_type), out)
     elif export_format == "csv":
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out)
-    elif export_format == "ocel":
+    elif export_format in ("ocel", "ocelxml"):
         with _LOCK:
             conn = _connect()
             try:
@@ -435,9 +437,9 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
                               "ORDER BY ts, event_id", [log_id]).fetchall()]
             finally:
                 conn.close()
-        write_ocel_json(objects, events, out)
+        (write_ocel_json if export_format == "ocel" else write_ocel_xml)(objects, events, out)
     else:
-        raise EventLogWorkspaceError("export format must be csv, xes or ocel")
+        raise EventLogWorkspaceError("export format must be csv, xes, ocel or ocelxml")
 
 
 __all__ = [
