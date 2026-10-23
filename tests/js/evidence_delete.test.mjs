@@ -33,3 +33,20 @@ test('delete controls sit below the evidence and stay quiet until confirmed',()=
   assert.match(source,/class="danger-quiet small" id="delete15m"/);
   assert.match(source,/id="confirmEvidenceDelete" style="background:var\(--red\)/);
 });
+
+test('a completed deletion shows the server verification and kept agent records',()=>{
+  const nodes=[];
+  const document={readyState:'complete',querySelector:()=>null,createElement:()=>({set textContent(v){this.innerHTML=String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}})};
+  const window={};
+  const exported=source.replace(/\}\)\(\);\s*$/,'window.__summary=deletionSummary;})();');
+  new Function('window','document',exported)(window,document);
+  const clean=window.__summary({verification:{verified_clean:true,remaining_in_separately_deleted_stores:{agent_session_messages:2,agent_working_detail:0}},receipt:{sha256:'abcdef0123456789ffff'}});
+  assert.match(clean,/Verified:/);
+  assert.match(clean,/2 agent conversation messages and 0 agent working detail records/);
+  assert.match(clean,/Receipt abcdef0123456789</);
+  const dirty=window.__summary({verification:{verified_clean:false,remaining_in_separately_deleted_stores:{}}});
+  assert.match(dirty,/Not verified:/);
+  assert.doesNotMatch(dirty,/agent conversation/);
+  assert.equal(window.__summary({}),'');
+  assert.ok(nodes.length===0);
+});
