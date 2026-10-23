@@ -237,3 +237,5 @@ def test_literal_labels_remain_distinct_in_conformance_and_resource_kpis():
         assert metrics["cases"] == 3
         assert metrics["automation"]["events"] == 3
         assert metrics["automation"]["automated_events"] == 1
+        assert analytics.kpis(log_id, cohort={"resource": resource})["cases"] == 1
+    assert analytics.kpis(log_id, cohort={"activity": "Review "})["cases"] == 1
