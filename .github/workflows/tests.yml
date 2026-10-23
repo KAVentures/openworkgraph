@@ -106,6 +106,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_sync_health.cjs
       - name: Verify side-by-side implementation alternatives in opportunity review
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/opportunity_alternatives.cjs
+      - name: Verify the local event-log workspace import, analytics, export and deletion
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
       - name: Install isolated generated-project SDK runtime
         run: |
           python -m venv "$RUNNER_TEMP/owg-agent-sdk"
@@ -142,6 +144,7 @@ jobs:
           node --check dashboard/agent_starter.js
           node --check dashboard/agent_preflight.js
           node --check dashboard/opportunity_review.js
+          node --check dashboard/event_log_workspace.js
           node --check integrations/plugins/openworkgraph/scripts/find-and-launch.mjs
           node --check integrations/plugins/openworkgraph/scripts/check-openworkgraph.mjs
       - name: Authenticated dashboard JavaScript syntax
