@@ -45,7 +45,9 @@ The explorer shows per-source event/distinct-case support, cases containing
 multiple sources, the original input key alias beside each case ordinal, and
 an origin alias on each event. Case ordinals reflect the sorted log; the input
 key alias preserves the browser lookup identity even when order differs.
-Repeated records and overlapping exports are not deduplicated without an
+Activity nodes aggregate literal labels across exports; compatible labels must
+come from the customer’s source/export workflow. Equal text does not verify
+equivalent business intent. Repeated records and overlapping exports are not deduplicated without an
 authoritative event identity. Existing duplicate and tied-time diagnostics
 remain visible. A diagram arrow describes recorded adjacency, not causality,
 a human handoff, business policy or verified waiting.
