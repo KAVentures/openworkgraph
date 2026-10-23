@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
+from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_objects as objects
 from . import event_log_simulation as simulation
@@ -225,3 +226,19 @@ def export_event_log(request: Request, log_id: str, format: str = Query(pattern=
         raise HTTPException(422, str(exc)) from None
     return FileResponse(handle.name, media_type=_TYPES[format], filename=f"{log_id}.{_SUFFIX[format]}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, handle.name))
+
+
+@router.post("/v1/event-logs/{log_id}/cases/query")
+async def event_log_cases(request: Request, log_id: str,
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "case query")
+    return _respond(case_pages.cases, log_id, spec, case_type)
+
+
+@router.post("/v1/event-logs/{log_id}/case-events/query")
+async def event_log_case_events(request: Request, log_id: str,
+                                case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "case event query")
+    return _respond(case_pages.events, log_id, spec, case_type)

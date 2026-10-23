@@ -12,6 +12,7 @@ import time
 import pytest
 
 from server import event_log_analytics as analytics
+from server import event_log_cases as case_pages
 from server import event_log_cohorts as cohorts
 from server import event_log_objects as objects
 from server import event_log_simulation as simulation
@@ -53,6 +54,9 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
 
     timings = {}
     for name, call in (
+        ("case_query", lambda: case_pages.cases(log["log_id"], {})),
+        ("variant_cases", lambda: case_pages.cases(log["log_id"], {"path":["Receive", "Validate", "Skip", "Approve", "Fix", "Fix", "Invoice", "Pay", "Archive", "Close"]})),
+        ("case_events", lambda: case_pages.events(log["log_id"], {"case_id":"case-0","limit":3})),
         ("summary", lambda: workspace.summary(log["log_id"])),
         ("variants", lambda: workspace.variants(log["log_id"])),
         ("directly_follows", lambda: workspace.directly_follows(log["log_id"])),
@@ -71,6 +75,12 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
         began = time.perf_counter()
         result = call()
         timings[name] = time.perf_counter() - began
+        if name == "case_query":
+            assert result["selected_cases"] == EVENTS // 10 and len(result["cases"]) == 30
+        if name == "variant_cases":
+            assert result["selected_cases"] == len(range(0, EVENTS // 10, 35))
+        if name == "case_events":
+            assert result["total_events"] == 10 and result["next_offset"] == 3 and len(result["events"]) == 3
         if name == "summary":
             assert result["cases"] == EVENTS // 10
         if name == "variants":

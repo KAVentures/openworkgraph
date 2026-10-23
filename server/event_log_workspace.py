@@ -126,19 +126,22 @@ def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple
 
 def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path, Path]) -> None:
     opts = "header=false, quote='\"', escape='\"', delim=','"
-    conn.execute(f"""INSERT INTO events SELECT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, ''), coalesce(c4, '{{}}') FROM read_csv(?, {opts},
-        columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR','c3':'VARCHAR','c4':'VARCHAR'}})""",
-                 [log_id, str(paths[0])])
-    conn.execute(f"""INSERT INTO objects SELECT ?, c0, c1, coalesce(c2, '{{}}') FROM read_csv(?, {opts},
-        columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[1])])
+    if paths[0].stat().st_size:
+        conn.execute(f"""INSERT INTO events SELECT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, ''), coalesce(c4, '{{}}') FROM read_csv(?, {opts},
+            columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR','c3':'VARCHAR','c4':'VARCHAR'}})""",
+                     [log_id, str(paths[0])])
+    if paths[1].stat().st_size:
+        conn.execute(f"""INSERT INTO objects SELECT ?, c0, c1, coalesce(c2, '{{}}') FROM read_csv(?, {opts},
+            columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[1])])
     # Validate globally in the columnar engine, preserving streaming XES memory
     # instead of retaining every event ID in a Python set. The caller rolls the
     # whole import back before any ambiguous identifier can reach a case query.
     for table,column in (("events","event_id"),("objects","object_id")):
         if conn.execute(f"SELECT 1 FROM {table} WHERE log_id=? GROUP BY {column} HAVING count(*)>1 LIMIT 1",[log_id]).fetchone():
             raise EventLogFormatError("event and object identifiers must be unique within a log; generated and supplied identifiers cannot collide")
-    conn.execute(f"""INSERT INTO event_objects SELECT DISTINCT ?, c0, c1, coalesce(c2, '') FROM read_csv(?, {opts},
-        columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
+    if paths[2].stat().st_size:
+        conn.execute(f"""INSERT INTO event_objects SELECT DISTINCT ?, c0, c1, coalesce(c2, '') FROM read_csv(?, {opts},
+            columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
 
 
 def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, mapping: dict[str, Any]) -> ReadStats:
@@ -263,6 +266,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
 def _case_type(conn: duckdb.DuckDBPyConnection, log_id: str, case_type: str | None) -> str:
     types = [r[0] for r in conn.execute("SELECT object_type FROM objects WHERE log_id = ? GROUP BY 1 ORDER BY count(*) DESC, 1",
                                         [log_id]).fetchall()]
+    if not types:
+        raise EventLogWorkspaceError("log has no case objects to select")
     if case_type:
         if case_type not in types:
             raise EventLogWorkspaceError("unknown object type for this log")
