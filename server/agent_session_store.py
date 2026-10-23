@@ -220,6 +220,8 @@ def insert_visible_messages(session: str, messages: Iterable[dict[str, Any]]) ->
     policy = read_agent_session_policy()
     if not policy.get("capture_visible_messages") or not _SESSION_REF_RE.fullmatch(str(session or "")):
         return 0
+    from shared.conversation_deletion import is_deleted, read_state as deleted_conversations
+    deleted = deleted_conversations()
     inserted = 0
     with connect() as conn:
         current = conn.execute(
@@ -235,6 +237,8 @@ def insert_visible_messages(session: str, messages: Iterable[dict[str, Any]]) ->
             observed_at = str(item.get("observed_at") or "").strip()[:80]
             if not observed_at:
                 continue
+            if is_deleted(observed_at, state=deleted):
+                continue  # the user deleted conversations from this time; never re-import
             try:
                 ordinal = max(0, int(item.get("ordinal") or 0))
             except Exception:

@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 _CODE = r'''
@@ -105,6 +107,8 @@ def test_verifier_never_creates_missing_stores(tmp_path):
     code = r'''
 from pathlib import Path
 import os
+
+import pytest
 from server.db import init_db
 from server.evidence_deletion_receipt import verify_range
 init_db()
@@ -121,4 +125,76 @@ print('ok')
                 "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, text=True,
                             capture_output=True, timeout=60)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+_CONVERSATION_CODE = r'''
+import json, sys
+from datetime import datetime, timedelta, timezone
+from fastapi.testclient import TestClient
+from server.db import init_db
+from server.local_auth import ensure_api_token
+from server import agent_session_store as store
+from server import agent_working_detail as detail
+
+include = sys.argv[1] == 'yes'
+now = datetime.now(timezone.utc).replace(microsecond=0)
+iso = lambda delta: (now + timedelta(minutes=delta)).isoformat()
+since, until = iso(-120), iso(-60)
+init_db(); store.init_agent_session_store(); detail.init_store()
+store.write_agent_session_policy({**store.read_agent_session_policy(), 'native_session_observation_enabled': True,
+                                  'capture_visible_messages': True})
+ref = store.session_ref('codex', 'native-1')
+store.upsert_session(session_ref_value=ref, source='codex', client_id='c', started_at=iso(-150),
+                     updated_at=iso(-30), message_capture_enabled=True)
+messages = [{'role': 'user', 'content': 'SECRET ' + str(i), 'observed_at': iso(m), 'ordinal': i}
+            for i, m in enumerate((-150, -100, -90, -30))]
+assert store.insert_visible_messages(ref, messages) == 4
+assert detail.upsert_detail(ref='awd:' + 'a' * 24, session=ref, source='codex', workspace='', observed_at=iso(-95),
+                            kind='tool', facts={'tool': 'x'}, provenance={'p': 1})
+
+from server.enterprise_app import app
+import server.evidence_delete_routes
+headers = {'Authorization': f'Bearer {ensure_api_token()}'}
+body = {'since': since, 'until': until}
+if include:
+    body['include_agent_conversations'] = True
+with TestClient(app) as client:
+    response = client.post('/v1/evidence/delete', headers=headers, json=body)
+assert response.status_code == 200, response.text
+payload = response.json()
+remaining = [m['observed_at'] for m in store.session_messages(ref, limit=40)]
+verification = payload['verification']
+assert verification['verified_clean'] is True, verification
+assert payload['agent_conversations_included'] is include
+assert 'SECRET' not in json.dumps(payload)
+if include:
+    assert payload['agent_conversation_messages_deleted'] == 2 and payload['agent_working_detail_deleted'] == 1
+    assert len(remaining) == 2
+    assert verification['remaining_in_deleted_stores']['agent_session_messages'] == 0
+    assert verification['remaining_in_separately_deleted_stores'] == {}
+    # Re-importing the same native messages cannot recreate the deleted range.
+    assert store.insert_visible_messages(ref, messages) == 0
+    assert store.insert_visible_messages(ref, [{'role': 'user', 'content': 'new', 'observed_at': iso(-80), 'ordinal': 9}]) == 0
+    assert store.insert_visible_messages(ref, [{'role': 'user', 'content': 'new', 'observed_at': iso(-20), 'ordinal': 9}]) == 1
+    assert not detail.upsert_detail(ref='awd:' + 'b' * 24, session=ref, source='codex', workspace='',
+                                    observed_at=iso(-95), kind='tool', facts={'tool': 'y'}, provenance={})
+else:
+    assert payload['agent_conversation_messages_deleted'] == 0 and len(remaining) == 4
+    assert verification['remaining_in_separately_deleted_stores'] == {
+        'agent_session_messages': 2, 'agent_working_detail': 1}
+    # Without the option nothing blocks later conversation imports for that time.
+    assert store.insert_visible_messages(ref, [{'role': 'user', 'content': 'new', 'observed_at': iso(-80), 'ordinal': 9}]) == 1
+print('ok')
+'''
+
+
+@pytest.mark.parametrize("include", ["yes", "no"])
+def test_range_deletion_optionally_removes_agent_conversations_and_blocks_reimport(tmp_path, include):
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+                "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_MODE": "observe"})
+    result = subprocess.run([sys.executable, "-c", _CONVERSATION_CODE, include], cwd=ROOT, env=env,
+                            text=True, capture_output=True, timeout=60)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"

@@ -60,3 +60,16 @@ The BPMN file is only a descriptive linear model, not an executable RPA workflow
 Integration note: the downloadable starter is based on the current merged OWG process-mining and opportunity-review stack. The generated runner still has no live actions.
 
 The starter ZIP also includes `preflight.request.template.json`, a deliberately non-passing synthetic agent-preflight request compatible with the opt-in local Evidence → Agent plan preflight tool. All its actions are manual-only and synthetic outcomes unknown until explicitly edited and reviewed.
+
+## Design documents and runtime starters
+
+The ZIP also contains draft `docs/PDD.md` and `docs/SDD.md`, an inactive
+credential-free `integrations/n8n.workflow.json`, a `CLAUDE.md` pointing Claude
+Code at `AGENTS.md`, and `integrations/ai-sdk/`: a Vercel AI SDK TypeScript
+starter (`agent.ts`, exact-pinned `package.json`, strict `tsconfig.json`). It
+reads `workflow.spec.json` at runtime and exposes one placeholder tool per
+reviewed step; each requires approval and refuses to execute until a human maps
+it to an authorized operation. Activity labels are never placed in tool
+descriptions. The `starter-runtimes` CI workflow generates a real starter,
+typechecks and runs the AI SDK project against its pinned packages and loads
+the n8n workflow with n8n's own workflow library.

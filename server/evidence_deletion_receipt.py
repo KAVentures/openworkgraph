@@ -109,8 +109,12 @@ def _work_text(start: datetime, end: datetime) -> int:
         return _in_range(conn, "work_text", "observed_at", start, end)
 
 
-def verify_range(since: str, until: str) -> dict[str, Any]:
-    """Count rows that still overlap [since, until) in every local time-indexed store."""
+def verify_range(since: str, until: str, *, include_agent_conversations: bool = False) -> dict[str, Any]:
+    """Count rows that still overlap [since, until) in every local time-indexed store.
+
+    When the deletion also covered agent conversations, those stores must be
+    empty too; otherwise they are reported separately as intentionally kept.
+    """
     since, until = normalize_range(since, until)
     start, end = _parse(since), _parse(until)
     covered: dict[str, int] = {}
@@ -132,6 +136,9 @@ def verify_range(since: str, until: str) -> dict[str, Any]:
         separate["agent_working_detail"] = (
             _in_range(conn, "agent_working_detail", "observed_at", start, end)
             if "agent_working_detail" in tables else 0)
+    if include_agent_conversations:
+        covered.update(separate)
+        separate = {}
     covered["work_text"] = _work_text(start, end)
     covered["collector_outbox"] = _outbox(DATA_DIR / "collector_outbox.db", since, until)
     covered["jsonl"] = _jsonl([DATA_DIR / "events.jsonl", DATA_DIR / "events.jsonl.1"], since, until)
@@ -139,9 +146,12 @@ def verify_range(since: str, until: str) -> dict[str, Any]:
         "remaining_in_deleted_stores": covered,
         "verified_clean": not any(covered.values()),
         "remaining_in_separately_deleted_stores": separate,
+        "agent_conversations_included": include_agent_conversations,
         "separately_deleted_stores_note": (
-            "Agent conversation messages and working detail have their own delete controls "
-            "and are not removed by a time-range deletion."
+            "Agent conversation messages and working detail were included in this deletion."
+            if include_agent_conversations else
+            "Agent conversation messages and working detail were kept; choose the option to delete "
+            "them with the time range, or use their own delete controls."
         ),
     }
 

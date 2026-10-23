@@ -10,6 +10,7 @@ Nothing generated here executes, binds a tool or grants a permission.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -171,6 +172,7 @@ def build_sdd(spec: dict[str, Any]) -> str:
         "- `workflow.spec.json`: the validated process data (authoritative for tooling).",
         "- `process.bpmn`: non-executable BPMN 2.0 with diagram geometry.",
         "- `integrations/n8n.workflow.json`: inactive n8n import with placeholder steps.",
+        "- `integrations/ai-sdk/`: Vercel AI SDK TypeScript starter with approval-gated placeholder tools.",
         "- `AGENTS.md` / `CLAUDE.md`: implementation rules for coding agents.",
         "",
     ]
@@ -234,13 +236,24 @@ CLAUDE_INSTRUCTIONS = (
 )
 
 
+# Static Vercel AI SDK starter (no user data): it reads workflow.spec.json at runtime, keeps
+# activity labels out of tool descriptions, and every placeholder tool requires approval
+# and refuses to execute.
+_TEMPLATES = Path(__file__).parent / "process_design_templates"
+AI_SDK_FILES = {
+    "integrations/ai-sdk/agent.ts": "ai_sdk_agent.ts.txt",
+    "integrations/ai-sdk/package.json": "ai_sdk_package.json.txt",
+    "integrations/ai-sdk/tsconfig.json": "ai_sdk_tsconfig.json.txt",
+}
+
 def design_files(spec: dict[str, Any]) -> dict[str, str]:
     return {
         "CLAUDE.md": CLAUDE_INSTRUCTIONS,
         "docs/PDD.md": build_pdd(spec),
         "docs/SDD.md": build_sdd(spec),
         "integrations/n8n.workflow.json": build_n8n_workflow(spec),
+        **{name: (_TEMPLATES / template).read_text(encoding="utf-8") for name, template in AI_SDK_FILES.items()},
     }
 
 
-__all__ = ["build_pdd", "build_sdd", "build_n8n_workflow", "design_files", "CLAUDE_INSTRUCTIONS"]
+__all__ = ["build_pdd", "build_sdd", "build_n8n_workflow", "design_files", "CLAUDE_INSTRUCTIONS", "AI_SDK_FILES"]

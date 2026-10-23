@@ -228,7 +228,8 @@ def build_agent_starter(packet: Any) -> bytes:
         "5. Before any consequential live action, obtain appropriate authorization.\n"
         "6. Verify actual results from independent live source-system receipts.\n\n"
         "docs/PDD.md and docs/SDD.md are draft process and solution design documents;\n"
-        "integrations/n8n.workflow.json is an inactive n8n import with unmapped steps.\n\n"
+        "integrations/n8n.workflow.json is an inactive n8n import with unmapped steps;\n"
+        "integrations/ai-sdk/ is a Vercel AI SDK starter whose tools refuse to run until mapped.\n\n"
         "Nothing in this ZIP executes business actions or grants an agent access.\n"
     )
     agent_instructions = (
