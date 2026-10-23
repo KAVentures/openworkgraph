@@ -76,10 +76,14 @@ def _label_dimensions(report):
     return [key for key in PARTICIPANT_DIMENSIONS if key in report.get('participant_labels',{}).get('dimensions',[])]
 
 
-def _snapshot_csv(rows,dimensions):
+def _snapshot_csv(rows,dimensions,correlation=False):
     stream=StringIO(newline='');writer=csv.writer(stream)
-    writer.writerow(('case_id','activity','timestamp',*dimensions))
-    writer.writerows((f'{row[0]:04d}',row[1],row[2],*(row[3 if key=='participant' else 4] or '' for key in dimensions)) for row in rows)
+    writer.writerow(('case_id','activity','timestamp',*dimensions,*(['origin'] if correlation else [])))
+    for row in rows:
+        if correlation and not row[6]:raise ProcessLogError('Retained shared-key provenance is incomplete')
+        writer.writerow((row[6] if correlation else f'{row[0]:04d}',row[1],row[2],
+            *(row[3 if key=='participant' else 4] or '' for key in dimensions),
+            *([row[5]] if correlation else [])))
     return stream.getvalue().encode('utf-8')
 
 
@@ -95,21 +99,26 @@ class ProcessLogStore:
         conn.execute('''CREATE TABLE IF NOT EXISTS process_log_cases (
             dataset_id TEXT NOT NULL, case_number INTEGER NOT NULL, variant_id TEXT NOT NULL,
             event_count INTEGER NOT NULL, first_event_at TEXT NOT NULL, last_event_at TEXT NOT NULL,
-            duration_seconds REAL NOT NULL, tied_timestamp_adjacent_pairs INTEGER NOT NULL,
+            duration_seconds REAL NOT NULL, tied_timestamp_adjacent_pairs INTEGER NOT NULL, case_key_alias TEXT,
             PRIMARY KEY(dataset_id, case_number))''')
         conn.execute('''CREATE TABLE IF NOT EXISTS process_log_events (
             dataset_id TEXT NOT NULL, case_number INTEGER NOT NULL, position INTEGER NOT NULL,
             activity TEXT NOT NULL, observed_at TEXT NOT NULL, elapsed_since_previous_seconds REAL,
-            participant TEXT, team TEXT,
+            participant TEXT, team TEXT, origin TEXT,
             PRIMARY KEY(dataset_id, case_number, position))''')
         conn.execute('''CREATE INDEX IF NOT EXISTS idx_process_log_activity
             ON process_log_events(dataset_id, activity, case_number)''')
         columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_events)')}
-        if not set(PARTICIPANT_DIMENSIONS).issubset(columns):
+        if not set((*PARTICIPANT_DIMENSIONS,'origin')).issubset(columns):
             if not conn.in_transaction:conn.execute('BEGIN IMMEDIATE')
             columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_events)')}
-            for key in PARTICIPANT_DIMENSIONS:
+            for key in (*PARTICIPANT_DIMENSIONS,'origin'):
                 if key not in columns:conn.execute('ALTER TABLE process_log_events ADD COLUMN '+key+' TEXT')
+        case_columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_cases)')}
+        if 'case_key_alias' not in case_columns:
+            if not conn.in_transaction:conn.execute('BEGIN IMMEDIATE')
+            case_columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_cases)')}
+            if 'case_key_alias' not in case_columns:conn.execute('ALTER TABLE process_log_cases ADD COLUMN case_key_alias TEXT')
         for key in PARTICIPANT_DIMENSIONS:
             conn.execute('CREATE INDEX IF NOT EXISTS idx_process_log_'+key+' ON process_log_events(dataset_id,'+key+',case_number) WHERE '+key+' IS NOT NULL')
         expired = conn.execute('SELECT dataset_id FROM process_log_datasets WHERE expires_at <= ?',
@@ -132,18 +141,18 @@ class ProcessLogStore:
             raise LookupError('Retained process log not found or expired')
         return dict(zip(('dataset_id','created_at','expires_at','case_count','event_count'),row))
 
-    def save(self, raw, *, retention_days, confirmed, participant_labels_authorized=False):
+    def save(self, raw, *, retention_days, confirmed, participant_labels_authorized=False, case_links_authorized=False):
         if confirmed is not True:
             raise ProcessLogError('Explicit local event-log retention confirmation is required')
         if type(retention_days) is not int or not 1 <= retention_days <= 30:
             raise ProcessLogError('Choose a retention period from 1 to 30 days')
-        rows,dimensions = parse_csv_event_records(raw,participant_labels_authorized=participant_labels_authorized)
-        report = mine_csv_events(raw,participant_labels_authorized=participant_labels_authorized)
+        rows,dimensions = parse_csv_event_records(raw,participant_labels_authorized=participant_labels_authorized,case_links_authorized=case_links_authorized)
+        report = mine_csv_events(raw,participant_labels_authorized=participant_labels_authorized,case_links_authorized=case_links_authorized)
         groups = defaultdict(list)
-        for native_id, activity, stamp, supplied_order, participant, team in rows:
-            groups[native_id].append((activity,stamp,supplied_order,participant,team))
-        ordered = [values for _,values in sorted(groups.items(),
-            key=lambda item:(min(r[1] for r in item[1]),item[0]))]
+        for native_id, activity, stamp, supplied_order, participant, team, *origins in rows:
+            groups[native_id].append((activity,stamp,supplied_order,participant,team,origins[0] if origins else None))
+        ordered_items = sorted(groups.items(),key=lambda item:(min(r[1] for r in item[1]),item[0]))
+        ordered = [values for _,values in ordered_items]
         for values in ordered:
             values.sort(key=lambda row:(row[1],row[2]))
         paths = Counter(tuple(row[0] for row in values) for values in ordered)
@@ -166,16 +175,17 @@ class ProcessLogStore:
             for number, values in enumerate(ordered,1):
                 path = tuple(row[0] for row in values)
                 ties = sum(a[1]==b[1] for a,b in zip(values,values[1:]))
-                conn.execute('INSERT INTO process_log_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                conn.execute('INSERT INTO process_log_cases (dataset_id,case_number,variant_id,event_count,first_event_at,last_event_at,duration_seconds,tied_timestamp_adjacent_pairs,case_key_alias) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (identifier,number,variants[path],len(values),values[0][1].isoformat(),values[-1][1].isoformat(),
-                     round((values[-1][1]-values[0][1]).total_seconds(),3),ties))
-                conn.executemany('INSERT INTO process_log_events (dataset_id,case_number,position,activity,observed_at,elapsed_since_previous_seconds,participant,team) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+                     round((values[-1][1]-values[0][1]).total_seconds(),3),ties,ordered_items[number-1][0] if case_links_authorized is True else None))
+                conn.executemany('INSERT INTO process_log_events (dataset_id,case_number,position,activity,observed_at,elapsed_since_previous_seconds,participant,team,origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
                     (identifier,number,i+1,activity,stamp.isoformat(),
-                     round((stamp-values[i-1][1]).total_seconds(),3) if i else None,participant,team)
-                    for i,(activity,stamp,_,participant,team) in enumerate(values)])
+                     round((stamp-values[i-1][1]).total_seconds(),3) if i else None,participant,team,origin)
+                    for i,(activity,stamp,_,participant,team,origin) in enumerate(values)])
             return self._dataset(conn,identifier) | {'native_case_ids_retained':False,
                 'source_values_retained':False,'synchronized':False,'ai_access_enabled':False,
-                'native_participant_identifiers_retained':False,'participant_label_dimensions':list(dimensions)}
+                'native_participant_identifiers_retained':False,'participant_label_dimensions':list(dimensions),
+                **({'case_key_aliases_retained':True,'source_origin_aliases_retained':True} if case_links_authorized is True else {})}
 
     def prune(self):
         with self.connect() as conn:
@@ -203,11 +213,12 @@ class ProcessLogStore:
                 return original
             # Compare every full retained path using the same bounded engine as
             # a fresh CSV. Dataset ordinals never recover discarded source keys.
-            rows=conn.execute('''SELECT case_number, activity, observed_at, participant, team FROM process_log_events
-                WHERE dataset_id = ? ORDER BY case_number, position''',(dataset_id,)).fetchall()
-        dimensions=_label_dimensions(original)
-        report=mine_csv_events(_snapshot_csv(rows,dimensions),reference_model=reference_model,
-            participant_labels_authorized=bool(dimensions))
+            rows=conn.execute('''SELECT e.case_number, e.activity, e.observed_at, e.participant, e.team, e.origin, c.case_key_alias FROM process_log_events e
+                JOIN process_log_cases c ON c.dataset_id = e.dataset_id AND c.case_number = e.case_number
+                WHERE e.dataset_id = ? ORDER BY e.case_number, e.position''',(dataset_id,)).fetchall()
+        dimensions=_label_dimensions(original);correlation=bool(original.get('case_correlation'))
+        report=mine_csv_events(_snapshot_csv(rows,dimensions,correlation),reference_model=reference_model,
+            participant_labels_authorized=bool(dimensions),case_links_authorized=correlation)
         report.update(import_retained=True,dataset_id=dataset_id,
                       retention_scope='local_explicit_snapshot',expires_at=dataset['expires_at'])
         report['conformance']['reference']=reference
@@ -234,7 +245,9 @@ class ProcessLogStore:
         with self.connect() as conn:
             self._open(conn)
             dataset=self._dataset(conn,dataset_id)
-            sql='SELECT c.* FROM process_log_cases c WHERE c.dataset_id = ? AND c.case_number > ?'
+            sql=('SELECT c.dataset_id,c.case_number,c.variant_id,c.event_count,c.first_event_at,c.last_event_at,'
+                 'c.duration_seconds,c.tied_timestamp_adjacent_pairs,c.case_key_alias FROM process_log_cases c '
+                 'WHERE c.dataset_id = ? AND c.case_number > ?')
             params=[dataset_id,after]
             if activity is not None:
                 sql+=' AND EXISTS (SELECT 1 FROM process_log_events e WHERE e.dataset_id = c.dataset_id AND e.case_number = c.case_number AND e.activity = ?)'
@@ -251,7 +264,7 @@ class ProcessLogStore:
             rows=conn.execute(sql+' ORDER BY c.case_number LIMIT ?',params+[cap+1]).fetchall()
             keys=('dataset_id','case_number','variant_id','event_count','first_event_at','last_event_at',
                   'duration_seconds','tied_timestamp_adjacent_pairs')
-            items=[dict(zip(keys,row)) for row in rows[:cap]]
+            items=[dict(zip(keys,row)) | ({'case_key_alias':row[8]} if row[8] is not None else {}) for row in rows[:cap]]
             return {'dataset':dataset,'cases':items,'has_more':len(rows)>cap, 'cohort_filters':filters,
                     'next_after':items[-1]['case_number'] if len(rows)>cap else None,
                     'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False,
@@ -274,7 +287,7 @@ class ProcessLogStore:
             selected = conn.execute('''SELECT c.case_number, c.variant_id FROM process_log_cases c
                 WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number',
                 [dataset_id, *params]).fetchall()
-            rows = conn.execute('''SELECT e.case_number, e.activity, e.observed_at, e.participant, e.team FROM process_log_events e
+            rows = conn.execute('''SELECT e.case_number, e.activity, e.observed_at, e.participant, e.team, e.origin, c.case_key_alias FROM process_log_events e
                 JOIN process_log_cases c ON c.dataset_id = e.dataset_id AND c.case_number = e.case_number
                 WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number, e.position',
                 [dataset_id, *params]).fetchall()
@@ -287,9 +300,9 @@ class ProcessLogStore:
                     'selection':selection, 'report':None, 'selection_retained':False}
         if not selected:
             return envelope
-        dimensions=_label_dimensions(original)
-        result=mine_csv_events(_snapshot_csv(rows,dimensions),reference_model=reference_model,
-            participant_labels_authorized=bool(dimensions))
+        dimensions=_label_dimensions(original);correlation=bool(original.get('case_correlation'))
+        result=mine_csv_events(_snapshot_csv(rows,dimensions,correlation),reference_model=reference_model,
+            participant_labels_authorized=bool(dimensions),case_links_authorized=correlation)
         # The mining engine returns per-analysis ordinals. Restore the immutable
         # snapshot's original case/variant identities before returning examples,
         # including variant examples outside the top-level 30-case display cap.
@@ -439,11 +452,11 @@ class ProcessLogStore:
                                 (dataset_id,case_number)).fetchone():
                 raise LookupError('Retained case not found')
             cap=max(1,min(int(limit),100))
-            rows=conn.execute('''SELECT position, activity, observed_at, elapsed_since_previous_seconds, participant, team
+            rows=conn.execute('''SELECT position, activity, observed_at, elapsed_since_previous_seconds, participant, team, origin
                 FROM process_log_events WHERE dataset_id = ? AND case_number = ? AND position > ?
                 ORDER BY position LIMIT ?''',(dataset_id,case_number,after,cap+1)).fetchall()
             keys=('position','activity','observed_at','elapsed_since_previous_seconds')
-            items=[dict(zip(keys,row[:4])) | {key:row[4+index] for index,key in enumerate(PARTICIPANT_DIMENSIONS) if row[4+index] is not None} for row in rows[:cap]]
+            items=[dict(zip(keys,row[:4])) | {key:row[4+index] for index,key in enumerate(PARTICIPANT_DIMENSIONS) if row[4+index] is not None} | ({'origin':row[6]} if row[6] is not None else {}) for row in rows[:cap]]
             return {'dataset_id':dataset_id,'case_number':case_number,'events':items,
                     'has_more':len(rows)>cap,'next_after':items[-1]['position'] if len(rows)>cap else None,
                     'ordering_basis':'timestamp_then_supplied_row_order','tied_timestamp_order_verified':False,

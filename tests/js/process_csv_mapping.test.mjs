@@ -93,3 +93,49 @@ test('identity labels stay opaque data with bounded counts, separate columns and
  const tooMany=api.inspectText('c,a,t,p\n'+Array.from({length:1001},(_,i)=>'x,Open,2026-10-20T00:00:00Z,p'+i).join('\n'));
  assert.throws(()=>tooMany.createMappedFile({case_id:0,activity:1,timestamp:2,participant:3},true),/1,000/);
 });
+
+test('shared-case preparation uses only reviewed literal keys and minimizes all source identities before upload',async()=>{
+ const api=mapper(),mapping={case_id:0,activity:1,timestamp:2};
+ const a=api.inspectText('Order;Step;Time;Secret\nPRIVATE_ORDER;Open;2026-10-20T00:00:00Z;EXCLUDED_SECRET\nother;Open;2026-10-20T00:00:01Z;EXCLUDED_SECRET\n',';');
+ const b=api.inspectText('Reference,Action,When,Private\nPRIVATE_ORDER,Close,2026-10-20T00:02:00Z,EXCLUDED_SECRET\nOther,Close,2026-10-20T00:03:00Z,EXCLUDED_SECRET\n');
+ const prepared=api.prepareSharedCaseImport([{inspection:a,mapping},{inspection:b,mapping}]);
+ assert.equal(prepared.case_count,3);assert.equal(prepared.event_count,4);
+ assert.equal(prepared.source_count,2);assert.equal(prepared.multi_source_case_count,1);
+ for(const reviewed of [false,1,'true',null])assert.throws(()=>prepared.createMappedFile(reviewed),/Review/);
+ const file=prepared.createMappedFile(true),text=await file.text();
+ assert.equal(text,'case_id,activity,timestamp,origin\n"case_key_1","Open","2026-10-20T00:00:00Z","source_1"\n"case_key_2","Open","2026-10-20T00:00:01Z","source_1"\n"case_key_1","Close","2026-10-20T00:02:00Z","source_2"\n"case_key_3","Close","2026-10-20T00:03:00Z","source_2"\n');
+ assert(!text.includes('PRIVATE_ORDER')&&!text.includes('EXCLUDED_SECRET'));
+ assert.equal(file.localCaseKeyLookup[0].source,'PRIVATE_ORDER');
+ assert.equal(file.localCaseKeyLookup[0].origins.join(','),'source_1,source_2');
+ assert.equal(Object.keys(file).includes('localCaseKeyLookup'),false);assert(!JSON.stringify(file).includes('PRIVATE_ORDER'));
+ assert(!JSON.stringify(prepared).includes('PRIVATE_ORDER'));assert(Object.isFrozen(prepared));
+ assert.equal(Object.keys(a).length,3); // Existing inspector interface stays structural.
+});
+
+test('shared-case preparation rejects invented inspectors, ambiguous mappings and unbounded combinations',()=>{
+ const api=mapper(),mapping={case_id:0,activity:1,timestamp:2};
+ const make=(key='same',time='2026-10-20T00:00:00Z')=>api.inspectText('Case,Activity,Timestamp\n'+key+',Open,'+time+'\n');
+ const a=make();
+ for(const selections of [[],[{inspection:a,mapping}],Array(5).fill({inspection:a,mapping}),
+   [{inspection:{headers:a.headers,row_count:1},mapping},{inspection:a,mapping}],
+   [{inspection:a,mapping:{...mapping,team:3}},{inspection:a,mapping}],
+   [{inspection:a,mapping:{case_id:0,activity:0,timestamp:2}},{inspection:a,mapping}],
+   [{inspection:make(''),mapping},{inspection:a,mapping}],
+   [{inspection:make('same','2026-10-20'),mapping},{inspection:a,mapping}]])assert.throws(()=>api.prepareSharedCaseImport(selections));
+ const many=api.inspectText('Case,Activity,Timestamp\n'+Array.from({length:1000},(_,i)=>'c'+i+',Open,2026-10-20T00:00:00Z').join('\n'));
+ assert.throws(()=>api.prepareSharedCaseImport([{inspection:many,mapping},{inspection:make('new'),mapping}]),/1,000-case/);
+ const events=api.inspectText('Case,Activity,Timestamp\n'+Array(2501).fill('same,Open,2026-10-20T00:00:00Z').join('\n'));
+ assert.throws(()=>api.prepareSharedCaseImport([{inspection:events,mapping},{inspection:events,mapping}]),/5,000-event/);
+ // Similar times, different IDs and case differences never establish equivalence.
+ assert.equal(api.prepareSharedCaseImport([{inspection:make('a'),mapping},{inspection:make('A'),mapping}]).multi_source_case_count,0);
+});
+
+
+test('shared case keys preserve whitespace and Unicode identity instead of inventing normalization matches',()=>{
+ const api=mapper(),mapping={case_id:0,activity:1,timestamp:2};
+ const inspect=keys=>api.inspectText('Key,Step,Time\n'+keys.map(key=>key+',Open,2026-10-20T00:00:00Z').join('\n'));
+ const a=inspect(['A',' A ','é']),b=inspect(['A','e\u0301']);
+ const prepared=api.prepareSharedCaseImport([{inspection:a,mapping},{inspection:b,mapping}]);
+ assert.equal(prepared.case_count,4);assert.equal(prepared.multi_source_case_count,1);
+ assert.equal(prepared.inspectLocalCaseKeys()[1].source,' A ');
+});

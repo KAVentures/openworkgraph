@@ -3,6 +3,7 @@
   'use strict';
   const MAX_BYTES=1024*1024,MAX_ROWS=5000,MAX_COLUMNS=100;
   const fail=message=>{throw new Error(message);};
+  const inspectedRows=new WeakMap();
   function inspectText(text,delimiter=','){
     if(![',',';','\t'].includes(delimiter))fail('Choose comma, semicolon or tab as the delimiter.');
     if(typeof text!=='string'||!text||new TextEncoder().encode(text).byteLength>MAX_BYTES)
@@ -46,7 +47,7 @@
     if(headers.some(header=>header.length>120))fail('Column headers must be at most 120 characters.');
     if(records.slice(1).some(record=>record.length!==headers.length))fail('All event rows must have the same number of columns as the header.');
     const quote=value=>'"'+value.replaceAll('"','""')+'"';
-    return Object.freeze({headers:Object.freeze([...headers]),row_count:records.length-1,
+    const inspection=Object.freeze({headers:Object.freeze([...headers]),row_count:records.length-1,
       createMappedFile(mapping,participantLabelsAuthorized=false){
         const required=['case_id','activity','timestamp'],optional=['participant','team'];
         if(!mapping||required.some(key=>!Object.hasOwn(mapping,key))||Object.keys(mapping).some(key=>![...required,...optional].includes(key)))
@@ -74,6 +75,7 @@
           Object.fromEntries(dimensions.map(key=>[key,Object.freeze([...labels[key]].map(([source,label])=>Object.freeze({source,label})))])))});
         return file;
       }});
+    inspectedRows.set(inspection,records);return inspection;
   }
   async function inspectFile(file,delimiter=','){
     if(!file||!Number.isSafeInteger(file.size)||file.size<1||file.size>MAX_BYTES)
@@ -86,5 +88,50 @@
     }catch{fail('The selected file must be readable UTF-8 of at most 1 MiB.');}
     return inspectText(text,delimiter);
   }
-  window.owgProcessCSVMapping=Object.freeze({inspectText,inspectFile});
+  function prepareSharedCaseImport(selections){
+    if(!Array.isArray(selections)||selections.length<2||selections.length>4)
+      fail('Select two to four authorized event-log exports.');
+    const keys=['case_id','activity','timestamp'],cases=new Map(),caseSources=new Map(),activities=new Set(),rows=[],sources=[];
+    const quote=value=>'"'+value.replaceAll('"','""')+'"';
+    for(let n=0;n<selections.length;n++){
+      const {inspection,mapping}=selections[n]||{},records=inspectedRows.get(inspection);
+      if(!records||!mapping||Object.keys(mapping).length!==3||keys.some(key=>!Object.hasOwn(mapping,key)))
+        fail('Inspect each selected export and map its case, activity and timestamp columns.');
+      const indices=keys.map(key=>mapping[key]);
+      if(new Set(indices).size!==3||indices.some(index=>!Number.isInteger(index)||index<0||index>=records[0].length))
+        fail('Each export needs three different existing columns.');
+      const origin='source_'+(n+1),sourceCases=new Set();
+      for(const row of records.slice(1)){
+        const nativeKey=row[indices[0]],activity=row[indices[1]].trim(),timestamp=row[indices[2]].trim();
+        if(!nativeKey.trim()||nativeKey.length>120)fail('Shared case keys must be nonempty and at most 120 characters.');
+        if(!/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(activity))fail('Activities must use short structural labels.');
+        if(!timestamp||timestamp.length>64||!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp)||!Number.isFinite(Date.parse(timestamp)))
+          fail('Event timestamps must use offset-aware ISO-8601 values.');
+        if(!cases.has(nativeKey)){
+          if(cases.size>=1000)fail('The combined log exceeds the 1,000-case limit.');
+          cases.set(nativeKey,'case_key_'+(cases.size+1));caseSources.set(nativeKey,new Set());
+        }
+        activities.add(activity);if(activities.size>64)fail('The combined log exceeds the 64-activity limit.');
+        sourceCases.add(nativeKey);caseSources.get(nativeKey).add(origin);
+        rows.push([cases.get(nativeKey),activity,timestamp,origin]);
+        if(rows.length>MAX_ROWS)fail('The combined log exceeds the 5,000-event limit.');
+      }
+      sources.push(Object.freeze({origin,event_count:records.length-1,case_count:sourceCases.size}));
+    }
+    const body='case_id,activity,timestamp,origin\n'+rows.map(row=>row.map(quote).join(',')).join('\n')+'\n';
+    const bytes=new TextEncoder().encode(body);
+    if(bytes.byteLength>MAX_BYTES)fail('The combined minimized log exceeds the 1 MiB limit.');
+    const lookup=Object.freeze([...cases].map(([source,label])=>Object.freeze({source,label,
+      origins:Object.freeze([...caseSources.get(source)])})));
+    return Object.freeze({event_count:rows.length,case_count:cases.size,source_count:sources.length,
+      multi_source_case_count:[...caseSources.values()].filter(origins=>origins.size>1).length,
+      sources:Object.freeze(sources),case_identifier_basis:'literal_keys_requiring_caller_review',
+      inspectLocalCaseKeys(){return lookup;},
+      createMappedFile(reviewed=false){
+        if(reviewed!==true)fail('Review that the selected keys identify the same authoritative cases across these exports.');
+        const file=new Blob([bytes],{type:'text/csv'});
+        Object.defineProperty(file,'localCaseKeyLookup',{value:lookup});return file;
+      }});
+  }
+  window.owgProcessCSVMapping=Object.freeze({inspectText,inspectFile,prepareSharedCaseImport});
 })();

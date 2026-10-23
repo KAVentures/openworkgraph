@@ -348,3 +348,31 @@ test('a late first event page cannot replace a more recently selected next page 
  assert(document.getElementById('owgLogCases').text.includes('201. Step 201'));
  assert(!document.getElementById('owgLogCases').text.includes('1. Step 1 ·'));
 });
+
+test('old shared-key grants cannot clear a subsequently reopened independent snapshot',async()=>{
+ const id='log_'+'a'.repeat(32),base={format:'openworkgraph.process-mining-csv-preview.v1',case_count:1,
+   metrics:{},variants:[],activities:[],transitions:[]};
+ const {window,document,find,calls}=setup(url=>url.includes('/preview')?base:url.includes('/report?')?{...base,dataset_id:id,case_count:9}:
+   url.includes('/cases?')?{cases:[]}:{datasets:[{dataset_id:id,case_count:9,created_at:'2026-10-21T00:00:00Z'}]});
+ const file={size:100,arrayBuffer:async()=>new ArrayBuffer(100)};
+ assert.equal(window.owgProcessMining.useSharedCaseImport(file),true);
+ await window.owgProcessMining.analyzeSharedCaseImport();
+ assert.equal(calls[0][1].headers['X-OWG-Shared-Case-Keys-Reviewed'],'true');
+ await find('button','List saved local logs').handlers.click();await find('button','Open '+id).handlers.click();
+ const host=document.getElementById('owgProcessResults'),count=host.children.length;assert(count>0);
+ window.owgProcessMining.withdrawSharedCaseImport();assert.equal(host.children.length,count);
+ assert.equal(calls.length,4);
+});
+
+test('withdrawing retention while authentication is pending cancels an old save even after review is rechecked',async()=>{
+ const report={format:'openworkgraph.process-mining-csv-preview.v1',case_count:1,metrics:{},variants:[]};
+ const {window,document,find,calls}=setup(report);
+ const input=document.getElementById('owgProcessFile');input.files=[{size:100}];input.handlers.change();
+ await find('button','Analyze selected CSV').handlers.click();assert.equal(calls.length,1);
+ const consent=document.getElementById('owgLogConsent');consent.checked=true;consent.handlers.change();
+ let release;window.__owgAuthReady=new Promise(resolve=>release=resolve);
+ const saving=find('button','Save analyzed log locally').handlers.click();
+ await new Promise(resolve=>setImmediate(resolve));consent.checked=false;consent.handlers.change();
+ consent.checked=true;consent.handlers.change();release();await saving;
+ assert.equal(calls.length,1);assert.equal(document.getElementById('owgLogSave').disabled,false);
+});

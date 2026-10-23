@@ -12,7 +12,9 @@ Only unique exact OWG header matches are preselected; nothing is applied
 automatically. Review the choices, confirm **exclude every other column from
 local analysis**, then choose **Use mapped columns for next analysis**.
 
-This creates an in-memory, UTF-8 CSV with exactly `case_id,activity,timestamp`.
+The structural mapping creates an in-memory UTF-8 CSV with `case_id,activity,timestamp`.
+Optional [participant/team columns](PROCESS_PARTICIPANT_COHORTS.md) require
+separate review and replace their native values with import-scoped labels.
 All unselected column headers and values are excluded, including multiline
 fields. Values are quoted correctly and outer whitespace is trimmed as in the
 existing importer. Select **Analyze selected CSV** to send that minimized log to
@@ -52,3 +54,8 @@ headers, exact minimization, malformed files, UTF-8/bounds, pending inspection,
 explicit confirmation and actual outgoing browser/API bytes. The owned browser
 fixture records only incoming header shape and synthetic-marker presence for
 the test; that fixture instrumentation is not part of production OWG.
+
+For several exports already sharing a source-of-truth case key, use the
+[reviewed shared-key import](REVIEWED_SHARED_CASE_IMPORTS.md) flow. It maps each
+source independently and preserves event origins without guessing equivalence
+from names, activity or time.

@@ -92,3 +92,8 @@ counts. Comparison never modifies the saved log or a process model.
 [Transition drill-down](OBSERVED_TRANSITION_INSPECTION.md) adds an exact adjacent
 activity-pair condition to case browsing. Its case and event pagination retain
 the active cohort filters and include each matching case only once.
+
+[Reviewed shared-case imports](REVIEWED_SHARED_CASE_IMPORTS.md) retain scoped
+case-key and event-origin aliases. Whole-case reconstructions preserve their
+original values, including a one-origin cohort from a multiple-origin snapshot.
+Native keys, source identity and cross-import equivalence are not recovered.
