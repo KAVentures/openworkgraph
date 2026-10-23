@@ -134,6 +134,7 @@
     setStatus('Analyzing selected CSV on this local OWG service…');
     try{
       await window.__owgAuthReady;
+      if(attempt!==generation)return;
       const response=await fetch('/v1/process-mining/preview'+(reference?'?'+new URLSearchParams(reference):''),{
         method:'POST',headers:{'Content-Type':'text/csv',...(participantLabelsAuthorized?{'X-OWG-Participant-Labels-Authorized':'true'}:{})},body:file,cache:'no-store'
       });

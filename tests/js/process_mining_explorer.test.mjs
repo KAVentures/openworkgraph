@@ -202,6 +202,17 @@ test('extra columns require reviewed mapping and selecting a canonical file disc
  assert.equal(calls.length,2);assert.equal(calls[1][1].body,canonical); // No old minimized file is reused.
 });
 
+test('a file change cancels a transfer still waiting for dashboard authentication',async()=>{
+ let release;const auth=new Promise(resolve=>release=resolve),{window,document,calls,find}=setup({});
+ window.__owgAuthReady=auth;
+ document.getElementById('owgProcessFile').files=[{size:100}];document.getElementById('owgProcessFile').handlers.change();
+ const analyzing=find('button','Analyze selected CSV').handlers.click();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,0);
+ document.getElementById('owgProcessFile').files=[];document.getElementById('owgProcessFile').handlers.change();
+ release();await analyzing;assert.equal(calls.length,0);
+ assert.equal(document.getElementById('owgProcessAnalyze').disabled,true);
+});
+
 test('late raw schema inspection cannot upload a previously selected file',async()=>{
  let finish;const pending=new Promise(resolve=>finish=resolve),{window,document,calls,find,root}=setup({});
  document.getElementById('owgProcessFile').files=[{size:100}];document.getElementById('owgProcessFile').handlers.change();

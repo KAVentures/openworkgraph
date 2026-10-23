@@ -70,3 +70,7 @@ intersection, support beyond sample caps, stable identities, schema upgrade,
 reload, mobile layout and deletion. Tests use owned synthetic files, isolated
 SQLite databases and the production local API; they do not certify customer
 identity, consent or source completeness.
+
+Changing the selected file or reviewed mapping invalidates stale inspection
+results and cancels uploads still waiting for dashboard authentication. Responses
+from an older selection cannot replace the current view.
