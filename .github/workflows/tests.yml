@@ -100,6 +100,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/bpmn_interchange.cjs
       - name: Verify explicit BPMN design import and reviewed draft lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_bpmn_import.cjs
+      - name: Verify explicit parallel BPMN design and full-branch structural analysis
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_parallel.cjs
       - name: Verify content-free recorder reports in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_status.cjs
       - name: Verify content-free device sync health in the company admin console

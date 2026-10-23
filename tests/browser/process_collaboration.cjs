@@ -777,9 +777,46 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       await reader.evaluate(() => [localStorage.length, sessionStorage.length]),
       [0, 0],
     );
+    // A reviewed parallel design stays descriptive: organization review cannot
+    // make a linear implementation exporter silently choose one branch.
+    const parallelOwner=await login("alice"),parallelPath=pathModule.join(scratch,"parallel.json");
+    await fs.writeFile(parallelPath,JSON.stringify({format:"openworkgraph.versioned-process-export.v1",title:"Shared parallel checks",
+      process_model:{goal:"Complete both independent checks",baseline_source:"user_declared",baseline_coverage:"user_declared_design",
+        supporting_case_count:0,business_rules:[],baseline_support_unit:"declared_cases",
+        baseline_path:["User declared parallel design"],activities:[{id:"fork",label:"Run checks",kind:"parallel_split"},
+          {id:"a",label:"Check A"},{id:"b",label:"Check B"},{id:"join",label:"All checks",kind:"parallel_join"},{id:"close",label:"Close"}].map(node=>({kind:"activity",implementation:"unmapped",...node})),
+        transitions:[["fork","a"],["fork","b"],["a","join"],["b","join"],["join","close"]].map(([source,target])=>({source,target})),
+        entry_activity_id:"fork",terminal_activity_ids:["close"]}}));
+    await upload(parallelOwner,parallelPath);
+    await parallelOwner.getByRole("button",{name:"Publish as a new shared process",exact:true}).click();
+    await parallelOwner.locator("#selectedTitle").filter({hasText:"Shared parallel checks · revision 1"}).waitFor();
+    await parallelOwner.getByRole("button",{name:"Edit selected design",exact:true}).click();
+    assert.equal(await parallelOwner.getByLabel("Draft kind fork",{exact:true}).inputValue(),"parallel_split");
+    assert.equal(await parallelOwner.getByLabel("Draft kind join",{exact:true}).inputValue(),"parallel_join");
+    await parallelOwner.getByRole("button",{name:"Add collaborator",exact:true}).click();
+    await parallelOwner.getByLabel("Collaborator 1 actor ID",{exact:true}).fill("bob");
+    await parallelOwner.getByLabel("Collaborator 1 role",{exact:true}).selectOption("reviewer");
+    await parallelOwner.locator("#accessConfirm").check();
+    await parallelOwner.getByRole("button",{name:"Save access",exact:true}).click();
+    await waitStatus(parallelOwner,"Ownership and collaborator roles saved.");
+    const parallelReviewer=await login("bob");
+    await parallelReviewer.getByRole("button",{name:"Shared parallel checks · r1",exact:true}).click();
+    await parallelReviewer.locator("#selectedTitle").filter({hasText:"Shared parallel checks · revision 1"}).waitFor();
+    await parallelReviewer.locator("#reviewConfirm").check();
+    await parallelReviewer.getByRole("button",{name:"Record design review",exact:true}).click();
+    await parallelReviewer.locator("#reviewState").filter({hasText:"Design review: reviewed design."}).waitFor();
+    assert(await parallelReviewer.getByRole("button",{name:"Download SDK implementation project",exact:true}).isDisabled());
+    assert((await parallelReviewer.locator("#exports").textContent()).includes("cannot execute parallel fork/join"));
+    const parallelDownload=parallelReviewer.waitForEvent("download");
+    await parallelReviewer.getByRole("button",{name:"Export saved BPMN",exact:true}).click();
+    const parallelArtifact=await parallelDownload,parallelXMLPath=pathModule.join(scratch,"shared-parallel.bpmn");
+    await parallelArtifact.saveAs(parallelXMLPath);
+    assert.equal(((await fs.readFile(parallelXMLPath,"utf8")).match(/<bpmn:parallelGateway/g)||[]).length,2);
+    await parallelReviewer.setViewportSize({width:390,height:844});
+    assert.equal(await parallelReviewer.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     assert.deepEqual(errors, []);
     console.log(
-      "Browser collaboration acceptance passed: explicit publication, independent review, revision invalidation, immediate revocation, exact historical export, tenant switch, mobile and no persistent credentials.",
+      "Browser collaboration acceptance passed: explicit publication, independent review, revision invalidation, immediate revocation, exact historical export, tenant switch, reviewed parallel-model preservation with linear-runtime refusal, mobile and no persistent credentials.",
     );
   } finally {
     if (browser) await browser.close();
