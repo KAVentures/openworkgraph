@@ -50,6 +50,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
+| `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel` | Download the log. |
@@ -72,6 +73,30 @@ following after **Analyse**.
 - **SLA breach rate**: share of cases whose throughput exceeds the SLA you enter.
 - **Automation rate**: share of events performed by the resources you list
   (for example `bot, system`). OWG does not guess which resources are automated.
+
+KPIs can be limited to a cohort with the query parameters `started_from` and
+`started_before` (timezone-qualified ISO times; a case belongs to the period
+its first event falls in), `resource` (a resource took part), `activity` (the
+case contains it) and `attribute` (`name=value` on the case object). The
+dashboard downloads the result as JSON or CSV; CSV cells that could be read as
+spreadsheet formulas are prefixed with `'`.
+
+### Cohort benchmark
+
+```json
+{"cohorts": [{"label": "Q1", "started_from": "2024-01-01T00:00:00Z", "started_before": "2024-04-01T00:00:00Z"},
+             {"label": "Q2", "started_from": "2024-04-01T00:00:00Z", "started_before": "2024-07-01T00:00:00Z"}],
+ "sla_seconds": 172800}
+```
+
+Each cohort uses the same filters as KPIs. The response gives, per cohort,
+cases, median and 90th-percentile throughput, rework rate and SLA breach rate;
+the second-minus-first differences in rework and SLA breach rate (Newcombe 95%
+interval) and in median throughput (percentile bootstrap over up to 5,000
+sampled cases per cohort, 400 rounds, fixed seed); and how often each activity
+and variant occurs in each cohort. Cases in both cohorts are counted, and the
+note warns that intervals then overstate certainty. Differences describe the
+cohorts; they do not say why the cohorts differ.
 
 ### Conformance
 

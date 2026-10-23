@@ -5,16 +5,20 @@ through the same path as the dashboard upload and times the analysis queries.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import os
 import time
 
 import pytest
 
 from server import event_log_analytics as analytics
+from server import event_log_cohorts as cohorts
 from server import event_log_workspace as workspace
 
 EVENTS = int(os.environ.get("OWG_EVENT_LOG_SCALE_EVENTS", "10000000"))
 QUERY_BUDGET_SECONDS = 30.0
+# Events are one minute apart, so half the cases start before this instant.
+MIDPOINT = (datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=EVENTS // 2)).isoformat()
 
 pytestmark = pytest.mark.skipif(os.environ.get("OWG_SCALE_ACCEPTANCE") != "1",
                                 reason="set OWG_SCALE_ACCEPTANCE=1 to run the 10M-event acceptance")
@@ -56,6 +60,9 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             "format": "openworkgraph.reference-model.v1",
             "paths": [["Receive", "Validate", "Review", "Approve", "Fix", "Check", "Invoice", "Pay", "Archive", "Close"]]})),
         ("root_cause", lambda: analytics.root_cause(log["log_id"], "rework")),
+        ("filtered_kpis", lambda: analytics.kpis(log["log_id"], cohort={"activity": "Skip"})),
+        ("benchmark", lambda: cohorts.benchmark(log["log_id"], [{"started_before": MIDPOINT}, {"started_from": MIDPOINT}],
+                                                sla_seconds=600)),
     ):
         began = time.perf_counter()
         result = call()
@@ -66,6 +73,10 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             assert result["distinct_variants"] == 4  # skip x rework combinations
         if name == "conformance":
             assert result["aligned_cases"] == EVENTS // 10
+        if name == "filtered_kpis":
+            assert result["cases"] == len(range(0, EVENTS // 10, 7))
+        if name == "benchmark":
+            assert sum(c["cases"] for c in result["cohorts"]) == EVENTS // 10 and result["overlapping_cases"] == 0
         if name == "root_cause":
             assert result["associations"][0]["feature"] == {"kind": "activity", "value": "Check"}
     print(f"\nimport {EVENTS:,} events: {import_seconds:.1f}s; queries: "

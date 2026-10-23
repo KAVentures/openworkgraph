@@ -194,28 +194,114 @@
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
 
-    results.appendChild(kpiSection());
+    const names=(activities.activities||[]).map(a=>a.activity);
+    results.appendChild(kpiSection(names));
+    results.appendChild(benchmarkSection(names));
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     status('');
   }
 
-  function kpiSection(){
+  // Cohort fields; dates are whole UTC days on the case's first event.
+  function cohortSpec(values){
+    const spec={};
+    const day=(v,label)=>{if(!v)return '';if(!/^\d{4}-\d{2}-\d{2}$/.test(v))throw new Error(label+' must be a date.');return v+'T00:00:00Z';};
+    if(values.label&&values.label.trim())spec.label=values.label.trim().slice(0,80);
+    const from=day(values.from,'Started from'),before=day(values.before,'Started before');
+    if(from)spec.started_from=from;if(before)spec.started_before=before;
+    if(from&&before&&from>=before)throw new Error('The cohort period is empty.');
+    for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key].trim();
+    if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
+    return spec;
+  }
+  function cohortFields(prefix,legend,activityNames){
+    const box=document.createElement('fieldset');box.id=prefix;box.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
+    box.appendChild(el('legend',legend));
+    const label=input(prefix+'Label','text','Name');label.maxLength=80;
+    const from=input(prefix+'From','date'),before=input(prefix+'Before','date');
+    const resource=input(prefix+'Resource','text','any');
+    const activity=select(prefix+'Activity',[['','any'],...activityNames.slice(0,500).map(a=>[a,a])]);
+    const attribute=input(prefix+'Attribute','text','name=value');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute));
+    box.appendChild(row);
+    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value})};
+  }
+  function toCSV(rows){
+    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+    return rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
+  }
+  function download(name,text,type){
+    const url=URL.createObjectURL(new Blob([text],{type}));
+    const link=el('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  function exportButtons(prefix,getResult,csvRows){
+    const json=button('Download JSON','secondary');json.id=prefix+'Json';json.disabled=true;
+    const csv=button('Download CSV','secondary');csv.id=prefix+'Csv';csv.disabled=true;
+    json.onclick=()=>{const r=getResult();if(r)download(prefix+'.json',JSON.stringify(r,null,2),'application/json');};
+    csv.onclick=()=>{const r=getResult();if(r)download(prefix+'.csv',toCSV(csvRows(r)),'text/csv');};
+    const row=el('div',null,'row');row.append(json,csv);
+    return {node:row,enable:on=>{json.disabled=!on;csv.disabled=!on;}};
+  }
+
+  function kpiSection(activityNames){
     const box=section('KPIs');
     const sla=input('owgEventLogSla','number','e.g. 48');sla.min='0';sla.step='any';
     const bots=input('owgEventLogBots','text','bot, system');
     const run=button('Calculate KPIs','secondary');run.id='owgEventLogKpiRun';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('SLA (hours)',sla),field('Automation resources (comma-separated)',bots),run);
-    const out=el('div');box.append(row,out);
+    const filter=cohortFields('owgEventLogKpiCohort','Only cases matching (optional)',activityNames);
+    let last=null;
+    const exports=exportButtons('owgEventLogKpi',()=>last,k=>[
+      ['metric','value'],['cases',k.cases],['throughput_p50_seconds',(k.throughput_seconds||{}).p50],['throughput_p90_seconds',(k.throughput_seconds||{}).p90],
+      ['throughput_p95_seconds',(k.throughput_seconds||{}).p95],['rework_rate',k.rework_rate],['sla_breach_rate',k.sla?k.sla.breach_rate:''],
+      ['automation_rate',k.automation?k.automation.automation_rate:''],[],['week_starting','cases','median_throughput_seconds'],
+      ...(k.completed_per_week||[]).map(w=>[w.week_starting,w.cases,w.median_throughput_seconds])]);
+    const out=el('div');box.append(row,filter.node,out,exports.node);
     run.onclick=async()=>{
       try{
-        const params={};const hours=Number(sla.value);
+        const params={...filter.read()};delete params.label;const hours=Number(sla.value);
         if(sla.value&&hours>0)params.sla_seconds=String(Math.round(hours*3600));
         if(bots.value.trim())params.automation_resources=bots.value;
-        const k=await getJSON(logPath('kpis',params));const t=k.throughput_seconds||{};
-        out.replaceChildren(table(['Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
+        const k=await getJSON(logPath('kpis',params));const t=k.throughput_seconds||{};last=k;exports.enable(true);
+        out.replaceChildren(table(['Cases','Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[Number(k.cases).toLocaleString(),duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
           el('div','Rework means a case repeats an activity. Automation rate counts events by the resources you listed.','muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
+  function benchmarkSection(activityNames){
+    const box=section('Compare cohorts');
+    box.appendChild(el('div','Compare two groups of cases, for example two periods, teams or case types. Differences describe the cohorts; they do not say why they differ.','muted'));
+    const first=cohortFields('owgEventLogCohortA','First cohort',activityNames),second=cohortFields('owgEventLogCohortB','Second cohort',activityNames);
+    const sla=input('owgEventLogBenchSla','number','optional');sla.min='0';sla.step='any';
+    const run=button('Compare','secondary');run.id='owgEventLogBenchRun';
+    const row=el('div',null,'row');row.style.cssText='align-items:end;margin-top:8px';row.append(field('SLA (hours)',sla),run);
+    let last=null;
+    const ci=d=>(d.difference>0?'+':'')+(d.difference*100).toFixed(1)+' pts ['+(d.ci95[0]*100).toFixed(1)+', '+(d.ci95[1]*100).toFixed(1)+']';
+    const exports=exportButtons('owgEventLogBenchmark',()=>last,r=>[
+      ['activity','share_in_first','share_in_second','difference','ci95_low','ci95_high'],
+      ...r.activity_presence.map(a=>[a.activity,a.share_in_first,a.share_in_second,a.difference,a.ci95[0],a.ci95[1]])]);
+    const out=el('div');box.append(first.node,second.node,row,out,exports.node);
+    run.onclick=async()=>{
+      try{
+        const spec={cohorts:[first.read(),second.read()]};const hours=Number(sla.value);
+        if(sla.value&&hours>0)spec.sla_seconds=Math.round(hours*3600);
+        const r=await (await api(logPath('benchmark'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        last=r;exports.enable(true);
+        const name=(c,i)=>c.definition.label||(i?'Second':'First');
+        const diff=r.differences_second_minus_first,m=diff.median_throughput_seconds;
+        out.replaceChildren(
+          table(['Cohort','Cases','Median time','90th percentile','Rework rate','SLA breach rate'],r.cohorts.map((c,i)=>[name(c,i),Number(c.cases).toLocaleString(),duration((c.throughput_seconds||{}).p50),duration((c.throughput_seconds||{}).p90),pct(c.rework_rate),c.sla_breach_rate===undefined?'—':pct(c.sla_breach_rate)])),
+          table(['Difference (second − first)','Value (95% CI)'],[
+            ['Median time',(m.difference>=0?'+':'−')+duration(Math.abs(m.difference))+' ['+duration(m.ci95[0])+', '+duration(m.ci95[1])+']'],
+            ['Rework rate',ci(diff.rework_rate)],...(diff.sla_breach_rate?[['SLA breach rate',ci(diff.sla_breach_rate)]]:[])]),
+          table(['Activity','Share of first','Share of second','Difference (95% CI)'],r.activity_presence.slice(0,10).map(a=>[a.activity,pct(a.share_in_first),pct(a.share_in_second),ci(a)])),
+          table(['Variant','Share of first','Share of second'],r.variants.slice(0,10).map(v=>[v.path.join(' → '),pct(v.share_in_first),pct(v.share_in_second)])),
+          el('div',(r.overlapping_cases?Number(r.overlapping_cases).toLocaleString()+' cases are in both cohorts. ':'')+r.note+'.','muted'));
+      }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
     };
     return box;
   }
@@ -268,6 +354,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration};
+  window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
