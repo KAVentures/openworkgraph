@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .continuity.scoring import _jsonl, aggregate, decision
+from .paired_statistics import compare_arms
 
 
 ARMS = ("control", "raw", "goal")
@@ -106,6 +107,12 @@ def report(
         "raw_vs_no_owg": decision(metrics["control"], metrics["raw"]),
         "goal_vs_raw": decision(metrics["raw"], metrics["goal"]),
     }
+    # Reported beside, never instead of, the pre-registered point-estimate gate.
+    paired_statistics = {
+        "goal_vs_no_owg": compare_arms(reviewed["control"], reviewed["goal"]),
+        "raw_vs_no_owg": compare_arms(reviewed["control"], reviewed["raw"]),
+        "goal_vs_raw": compare_arms(reviewed["raw"], reviewed["goal"]),
+    }
     return {
         "schema": "owg.product-value-three-arm.v1",
         "status": "reviewed_real_episode_comparison" if ready else "pilot_only",
@@ -114,6 +121,7 @@ def report(
         "model_calls_performed_by_this_script": 0,
         "metrics": metrics,
         "comparisons": comparisons,
+        "paired_statistics": paired_statistics,
         "product_decision": (comparisons["goal_vs_no_owg"]["decision"]
                              if ready else "insufficient_reviewed_real_episodes"),
         "limitations": [
