@@ -226,3 +226,7 @@ A saved [process catalog](PROCESS_CATALOG.md) revision can be selected as the
 reference for a new analysis. The returned structural comparison covers all
 cases and full variants, with bounded displayed alignments. It does not
 establish business-policy compliance or independently verified outcomes.
+
+Optional [participant and team cohorts](PROCESS_PARTICIPANT_COHORTS.md) use
+explicit column selection, browser-side identity replacement and separate
+retention authorization. Filters retain every event of each matching case.

@@ -130,6 +130,7 @@ async def process_mining_csv_preview(
     The existing secure_app middleware checks dashboard/bearer auth before
     entering this endpoint. Bound the actual chunked stream, not just headers.
     """
+    participant_labels_authorized=_participant_labels_authorized(request)
     reference = None
     if (workflow_id is None) != (revision is None):
         raise HTTPException(status_code=422, detail='conformance requires both process ID and exact revision')
@@ -137,7 +138,7 @@ async def process_mining_csv_preview(
         reference = _catalog_record(workflow_id, revision)
     payload = await _process_csv_body(request)
     try:
-        report = mine_csv_events(payload, reference_model=(
+        report = mine_csv_events(payload, participant_labels_authorized=participant_labels_authorized, reference_model=(
             ProcessModel.model_validate(reference['process_model']) if reference else None
         ))
         if reference:
@@ -161,6 +162,12 @@ def _require_process_log_dashboard(request):
         raise HTTPException(403, 'Local dashboard session required for retained process logs')
 
 
+def _participant_labels_authorized(request):
+    if request.headers.get('x-owg-participant-labels-authorized')!='true':return False
+    _require_process_log_dashboard(request)
+    return True
+
+
 def _log_response(operation, *args, **kwargs):
     try:
         return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control':'no-store'})
@@ -175,8 +182,10 @@ async def retain_process_log(request: Request, retention_days: int = Query(ge=1,
     _require_process_log_dashboard(request)
     if request.headers.get('x-owg-retention-confirmed') != 'true':
         raise HTTPException(403, 'Explicit local event-log retention confirmation required')
+    authorized=_participant_labels_authorized(request)
     raw = await _process_csv_body(request)
-    return _log_response(_process_logs.save, raw, retention_days=retention_days, confirmed=True)
+    return _log_response(_process_logs.save, raw, retention_days=retention_days, confirmed=True,
+                         participant_labels_authorized=authorized)
 
 
 @app.get('/v1/process-mining/datasets')
@@ -205,10 +214,13 @@ def retained_process_cases(request: Request, dataset_id: str = Query(pattern=_LO
                            variant_id: str | None = Query(default=None, pattern=r'^variant_[0-9]{1,4}$'),
                            contains_activity: str | None = Query(default=None, min_length=1, max_length=64),
                            started_since: str | None = Query(default=None, min_length=1, max_length=64),
-                           started_before: str | None = Query(default=None, min_length=1, max_length=64)):
+                           started_before: str | None = Query(default=None, min_length=1, max_length=64),
+                           contains_participant: str | None = Query(default=None,max_length=16),
+                           contains_team: str | None = Query(default=None,max_length=16)):
     _require_process_log_dashboard(request)
     return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id,
-        started_since=started_since, started_before=started_before, contains_activity=contains_activity)
+        started_since=started_since, started_before=started_before, contains_activity=contains_activity,
+        contains_participant=contains_participant,contains_team=contains_team)
 
 
 @app.get('/v1/process-mining/datasets/cohort')
@@ -218,13 +230,16 @@ def retained_process_cohort(request: Request, dataset_id: str = Query(pattern=_L
         started_since: str | None = Query(default=None, min_length=1, max_length=64),
         started_before: str | None = Query(default=None, min_length=1, max_length=64),
         workflow_id: str | None = Query(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
-        revision: int | None = Query(default=None, ge=1)):
+        revision: int | None = Query(default=None, ge=1),
+        contains_participant: str | None = Query(default=None,max_length=16),
+        contains_team: str | None = Query(default=None,max_length=16)):
     _require_process_log_dashboard(request)
     if (workflow_id is None) != (revision is None):
         raise HTTPException(422, 'Comparison requires a process ID and exact revision together')
     reference = _catalog_record(workflow_id, revision) if workflow_id else None
     return _log_response(_process_logs.cohort, dataset_id, contains_activity=contains_activity,
         variant_id=variant_id, started_since=started_since, started_before=started_before,
+        contains_participant=contains_participant,contains_team=contains_team,
         reference_model=ProcessModel.model_validate(reference['process_model']) if reference else None,
         reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
 

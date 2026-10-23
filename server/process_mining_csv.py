@@ -27,7 +27,8 @@ MAX_VARIANTS = 20
 MAX_PATH_STEPS = 24
 MAX_VARIANT_EXAMPLES = 5
 _REQUIRED = {"case_id", "activity", "timestamp"}
-_ALLOWED = _REQUIRED | {"source"}
+_ALLOWED = _REQUIRED | {"source", "participant", "team"}
+PARTICIPANT_DIMENSIONS = ("participant", "team")
 _ACTIVITY = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,63}$")
 
 
@@ -51,7 +52,7 @@ def _seconds(a: datetime, b: datetime) -> float:
     return max(0.0, (b - a).total_seconds())
 
 
-def parse_csv_events(raw_bytes: bytes) -> list[tuple[str, str, datetime, int]]:
+def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=False):
     """Validate one bounded CSV; callers must discard native case IDs after use."""
     if not isinstance(raw_bytes, bytes) or not raw_bytes or len(raw_bytes) > MAX_BYTES:
         raise ProcessMiningCSVError("CSV must be a nonempty file of at most 1 MiB")
@@ -71,9 +72,12 @@ def parse_csv_events(raw_bytes: bytes) -> list[tuple[str, str, datetime, int]]:
             not _REQUIRED.issubset(normalized) or
             not set(normalized).issubset(_ALLOWED)):
             raise ProcessMiningCSVError(
-                "CSV columns must be case_id,activity,timestamp and optional source; no extra columns"
+                "CSV columns must be case_id,activity,timestamp with optional source or authorized participant/team labels"
             )
-        event_rows: list[tuple[str, str, datetime, int]] = []
+        dimensions=tuple(key for key in PARTICIPANT_DIMENSIONS if key in normalized)
+        if dimensions and participant_labels_authorized is not True:
+            raise ProcessMiningCSVError('Participant/team labels require explicit local analysis authorization')
+        event_rows = []
         unique_cases: set[str] = set()
         unique_activities: set[str] = set()
         # Deliberately only include declared schema fields; other exports with
@@ -101,22 +105,68 @@ def parse_csv_events(raw_bytes: bytes) -> list[tuple[str, str, datetime, int]]:
             unique_activities.add(activity)
             if len(unique_cases) > MAX_CASES or len(unique_activities) > MAX_ACTIVITIES:
                 raise ProcessMiningCSVError("CSV exceeds the 1,000-case or 64-activity limit")
-            event_rows.append((case_id, activity, timestamp, index))
+            labels={}
+            for key in dimensions:
+                value=str(data.get(key) or '').strip()
+                if value and (not re.fullmatch(key+r'_[1-9][0-9]{0,3}',value) or int(value.rsplit('_',1)[1])>1000):
+                    raise ProcessMiningCSVError('Participant/team columns must contain bounded import-scoped labels, never native identities')
+                labels[key]=value or None
+            event_rows.append((case_id, activity, timestamp, index,labels.get('participant'),labels.get('team')))
     except csv.Error:
         raise ProcessMiningCSVError("CSV could not be parsed") from None
     if not event_rows:
         raise ProcessMiningCSVError("CSV has no events")
 
-    return event_rows
+    return event_rows,dimensions
 
 
-def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None) -> dict[str, Any]:
+def parse_csv_events(raw_bytes: bytes) -> list[tuple[str,str,datetime,int]]:
+    """Original structural-only interface; participant metadata is never implicit."""
+    rows,_dimensions=parse_csv_event_records(raw_bytes)
+    return [row[:4] for row in rows]
+
+
+def participant_label_analysis(by_case,dimensions):
+    """Supplied-label support and adjacent changes, not people or handoff proof."""
+    result={'label_scope':'this_selected_log_only','dimensions':list(dimensions),
+        'native_participant_identifiers_included':False,'labels_are_verified_people':False,
+        'label_source':'client_declared_import_scoped_aliases','anonymization_verified':False,
+        'team_membership_verified':False,'human_handoffs_verified':False,'dimensions_summary':{}}
+    for key in dimensions:
+        index=3 if key=='participant' else 4
+        events=Counter();cases=defaultdict(set);changes=Counter();change_cases=defaultdict(set)
+        missing=unknown_pairs=ties=0
+        for case_id,rows in by_case.items():
+            timestamp_support=Counter(row[1] for row in rows)
+            for i,row in enumerate(rows):
+                label=row[index]
+                if label:events[label]+=1;cases[label].add(case_id)
+                else:missing+=1
+                if not i:continue
+                previous=rows[i-1];before=previous[index]
+                if not label or not before:unknown_pairs+=1
+                elif label!=before:
+                    if timestamp_support[row[1]]>1 or timestamp_support[previous[1]]>1:ties+=1
+                    else:
+                        pair=(before,label);changes[pair]+=1;change_cases[pair].add(case_id)
+        ranked=sorted(changes,key=lambda pair:(-changes[pair],pair))
+        result['dimensions_summary'][key]={'label_count':len(events),'missing_label_events':missing,
+            'labels':[{'label':label,'event_count':events[label],'case_count':len(cases[label])} for label in sorted(events)],
+            'adjacent_label_change_count':sum(changes.values()),'unknown_adjacent_pairs':unknown_pairs,
+            'ambiguous_tied_timestamp_changes':ties,'change_type_count':len(changes),
+            'changes':[{'from':pair[0],'to':pair[1],'change_count':changes[pair],
+                        'case_count':len(change_cases[pair])} for pair in ranked[:50]],
+            'changes_truncated':len(ranked)>50}
+    return result
+
+
+def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None, participant_labels_authorized=False) -> dict[str, Any]:
     """Preview only: no retention, provider calls or source identifiers in output."""
-    event_rows = parse_csv_events(raw_bytes)
+    event_rows,dimensions = parse_csv_event_records(raw_bytes,participant_labels_authorized=participant_labels_authorized)
 
-    by_case: dict[str, list[tuple[str, datetime, int]]] = defaultdict(list)
-    for case_id, activity, stamp, line_index in event_rows:
-        by_case[case_id].append((activity, stamp, line_index))
+    by_case: dict[str, list[tuple[str, datetime, int, str | None, str | None]]] = defaultdict(list)
+    for case_id, activity, stamp, line_index, participant, team in event_rows:
+        by_case[case_id].append((activity, stamp, line_index,participant,team))
 
     durations: list[float] = []
     gaps: list[float] = []
@@ -148,7 +198,7 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         case_ties = sum(a[1] == b[1] for a, b in zip(rows, rows[1:]))
         timestamp_ties += case_ties
         repeated_case_activity_timestamps += sum(n - 1 for n in Counter(
-            (activity, stamp) for activity, stamp, _ in rows
+            (activity, stamp) for activity, stamp, *_ in rows
         ).values())
         path = tuple(item[0] for item in rows)
         duration = _seconds(rows[0][1], rows[-1][1])
@@ -171,6 +221,7 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
                 variant_gaps[path][edge].append(gap_seconds)
         cases.append({
             "case": f"Case {case_index}",
+            **{key+'_labels':sorted({row[3 if key=='participant' else 4] for row in rows if row[3 if key=='participant' else 4]}) for key in dimensions},
             "event_count": len(rows),
             "tied_timestamp_adjacent_pairs": case_ties,
             "ordering_basis": "timestamp_then_supplied_row_order",
@@ -187,11 +238,12 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
             "events": [{
                 "position": i + 1,
                 "activity": activity,
+                **{key:(participant if key=='participant' else team) for key in dimensions},
                 "observed_at": stamp.isoformat(),
                 "elapsed_since_previous_seconds": (
                     round(_seconds(rows[i - 1][1], stamp), 3) if i else None
                 ),
-            } for i, (activity, stamp, _) in enumerate(rows[:MAX_PATH_STEPS])],
+            } for i, (activity, stamp, _, participant, team) in enumerate(rows[:MAX_PATH_STEPS])],
         })
         variant_cases[path].append(cases[-1])
 
@@ -313,6 +365,9 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         "agent_permissions_granted": False,
         "authoritative": False,
     }
+
+    if dimensions:
+        result['participant_labels']=participant_label_analysis(by_case,dimensions)
 
     if reference_model is not None:
         comparisons = {path: compare_path(path, reference_model) for path in variants}

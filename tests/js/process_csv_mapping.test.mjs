@@ -65,3 +65,31 @@ test('actual file decoding rejects invalid UTF-8 and oversized files without rea
  const result=await api.inspectFile({size:raw.byteLength,arrayBuffer:async()=>raw.buffer});
  assert.equal(result.row_count,1);
 });
+
+test('optional participant and team identities become scoped aliases before upload with explicit authorization',async()=>{
+ const api=mapper(),value=api.inspectText('Case,Step,Time,Person,Group,Notes\na,Open,2026-10-20T00:00:00Z,ALICE_SECRET,SALES_SECRET,UNSELECTED_SECRET\na,Review,2026-10-20T00:01:00Z,BOB_SECRET,SALES_SECRET,x\na,Close,2026-10-20T00:02:00Z,ALICE_SECRET,OPS_SECRET,y\nb,Open,2026-10-20T00:03:00Z,,,z\n');
+ const mapping={case_id:0,activity:1,timestamp:2,participant:3,team:4};
+ assert.throws(()=>value.createMappedFile(mapping),/authorize/);
+ const file=value.createMappedFile(mapping,true),body=await file.text();
+ assert.equal(Object.prototype.propertyIsEnumerable.call(file,'localParticipantLookup'),false);
+ assert.equal(file.localParticipantLookup.participant[0].source,'ALICE_SECRET');
+ assert.equal(file.localParticipantLookup.participant[0].label,'participant_1');
+ assert(!JSON.stringify(file).includes('_SECRET'));
+
+ assert.equal(body.split('\n')[0],'case_id,activity,timestamp,participant,team');
+ assert(body.includes('"participant_1","team_1"'));assert(body.includes('"participant_2","team_1"'));
+ assert(body.includes('"participant_1","team_2"'));assert(body.includes('"b","Open","2026-10-20T00:03:00Z","",""'));
+ assert(!body.includes('_SECRET'));assert.equal(await value.createMappedFile(mapping,true).text(),body);
+ assert.equal((await value.createMappedFile({case_id:0,activity:1,timestamp:2}).text()).split('\n')[0],'case_id,activity,timestamp');
+});
+
+test('identity labels stay opaque data with bounded counts, separate columns and no implicit reuse',async()=>{
+ const api=mapper(),value=api.inspectText('c,a,t,p\nx,Open,2026-10-20T00:00:00Z,__proto__\nx,Close,2026-10-20T00:01:00Z,constructor\n');
+ const body=await value.createMappedFile({case_id:0,activity:1,timestamp:2,participant:3},true).text();
+ assert(body.includes('participant_1')&&body.includes('participant_2'));assert(!body.includes('__proto__')&&!body.includes('constructor'));
+ assert.throws(()=>value.createMappedFile({case_id:0,activity:1,timestamp:2,participant:3,team:3},true),/different/);
+ const tooLong=api.inspectText('c,a,t,p\nx,Open,2026-10-20T00:00:00Z,'+'a'.repeat(121));
+ assert.throws(()=>tooLong.createMappedFile({case_id:0,activity:1,timestamp:2,participant:3},true),/120/);
+ const tooMany=api.inspectText('c,a,t,p\n'+Array.from({length:1001},(_,i)=>'x,Open,2026-10-20T00:00:00Z,p'+i).join('\n'));
+ assert.throws(()=>tooMany.createMappedFile({case_id:0,activity:1,timestamp:2,participant:3},true),/1,000/);
+});

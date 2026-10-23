@@ -47,16 +47,32 @@
     if(records.slice(1).some(record=>record.length!==headers.length))fail('All event rows must have the same number of columns as the header.');
     const quote=value=>'"'+value.replaceAll('"','""')+'"';
     return Object.freeze({headers:Object.freeze([...headers]),row_count:records.length-1,
-      createMappedFile(mapping){
-        if(!mapping||Object.keys(mapping).sort().join(',')!=='activity,case_id,timestamp')
-          fail('Select exactly the case, activity and timestamp columns.');
-        const indices=['case_id','activity','timestamp'].map(key=>mapping[key]);
-        if(new Set(indices).size!==3||indices.some(index=>!Number.isInteger(index)||index<0||index>=headers.length))
-          fail('Case, activity and timestamp must use three different existing columns.');
-        const body='case_id,activity,timestamp\n'+records.slice(1).map(row=>indices.map(index=>quote(row[index].trim())).join(',')).join('\n')+'\n';
+      createMappedFile(mapping,participantLabelsAuthorized=false){
+        const required=['case_id','activity','timestamp'],optional=['participant','team'];
+        if(!mapping||required.some(key=>!Object.hasOwn(mapping,key))||Object.keys(mapping).some(key=>![...required,...optional].includes(key)))
+          fail('Select the case, activity and timestamp columns and only supported optional columns.');
+        const dimensions=optional.filter(key=>Object.hasOwn(mapping,key));
+        if(dimensions.length&&participantLabelsAuthorized!==true)fail('Explicitly authorize the selected participant/team columns.');
+        const keys=[...required,...dimensions],indices=keys.map(key=>mapping[key]);
+        if(new Set(indices).size!==keys.length||indices.some(index=>!Number.isInteger(index)||index<0||index>=headers.length))
+          fail('Selected columns must use different existing columns.');
+        const labels=Object.fromEntries(dimensions.map(key=>[key,new Map()]));
+        const body=keys.join(',')+'\n'+records.slice(1).map(row=>keys.map((key,i)=>{
+          let value=row[indices[i]].trim();
+          if(dimensions.includes(key)&&value){
+            if(value.length>120)fail('Participant/team identifiers must be at most 120 characters.');
+            const aliases=labels[key];if(!aliases.has(value)){
+              if(aliases.size>=1000)fail('Use at most 1,000 distinct participant/team labels per column.');
+              aliases.set(value,key+'_'+(aliases.size+1));
+            }value=aliases.get(value);
+          }return quote(value);
+        }).join(',')).join('\n')+'\n';
         const bytes=new TextEncoder().encode(body);
         if(bytes.byteLength>MAX_BYTES)fail('The mapped event log exceeds the 1 MiB limit.');
-        return new Blob([bytes],{type:'text/csv'});
+        const file=new Blob([bytes],{type:'text/csv'});
+        if(dimensions.length)Object.defineProperty(file,'localParticipantLookup',{value:Object.freeze(
+          Object.fromEntries(dimensions.map(key=>[key,Object.freeze([...labels[key]].map(([source,label])=>Object.freeze({source,label})))])))});
+        return file;
       }});
   }
   async function inspectFile(file,delimiter=','){

@@ -11,10 +11,11 @@ import csv
 from io import StringIO
 from hashlib import sha256
 import json
+import re
 from uuid import uuid4
 
 from . import db
-from .process_mining_csv import mine_csv_events, parse_csv_events
+from .process_mining_csv import mine_csv_events, parse_csv_event_records, PARTICIPANT_DIMENSIONS
 from shared.process_drift import compare_snapshots
 
 MAX_DATASETS = 20
@@ -24,7 +25,7 @@ class ProcessLogError(ValueError):
     pass
 
 
-def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None):
+def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None, contains_participant=None, contains_team=None):
     """Select whole cases. Never clip events or infer business start/completion."""
     filters = {}
     for key, value in (('started_since', started_since), ('started_before', started_before)):
@@ -47,6 +48,12 @@ def _case_cohort(*, started_since=None, started_before=None, contains_activity=N
             if not isinstance(value, str) or not 1 <= len(value) <= 64:
                 raise ProcessLogError('Cohort activity and variant filters must be short nonempty labels')
             filters[key] = value
+    for key,value in (('participant',contains_participant),('team',contains_team)):
+        if value is not None:
+            if (not isinstance(value,str) or not re.fullmatch(key+r'_[1-9][0-9]{0,3}',value)
+                or int(value.rsplit('_',1)[1])>1000):
+                raise ProcessLogError('Participant/team filters must use bounded labels from this snapshot')
+            filters['contains_'+key]=value
     sql, params = [], []
     for key, operator in (('started_since', '>='), ('started_before', '<')):
         if key in filters:
@@ -57,7 +64,23 @@ def _case_cohort(*, started_since=None, started_before=None, contains_activity=N
         params.append(filters['contains_activity'])
     if 'variant_id' in filters:
         sql.append('c.variant_id = ?');params.append(filters['variant_id'])
+    selected=[key for key in PARTICIPANT_DIMENSIONS if 'contains_'+key in filters]
+    if selected:
+        sql.append('EXISTS (SELECT 1 FROM process_log_events pe WHERE pe.dataset_id = c.dataset_id '
+            'AND pe.case_number = c.case_number'+''.join(' AND pe.'+key+' = ?' for key in selected)+')')
+        params.extend(filters['contains_'+key] for key in selected)
     return filters, ''.join(' AND ' + condition for condition in sql), params
+
+
+def _label_dimensions(report):
+    return [key for key in PARTICIPANT_DIMENSIONS if key in report.get('participant_labels',{}).get('dimensions',[])]
+
+
+def _snapshot_csv(rows,dimensions):
+    stream=StringIO(newline='');writer=csv.writer(stream)
+    writer.writerow(('case_id','activity','timestamp',*dimensions))
+    writer.writerows((f'{row[0]:04d}',row[1],row[2],*(row[3 if key=='participant' else 4] or '' for key in dimensions)) for row in rows)
+    return stream.getvalue().encode('utf-8')
 
 
 class ProcessLogStore:
@@ -77,9 +100,18 @@ class ProcessLogStore:
         conn.execute('''CREATE TABLE IF NOT EXISTS process_log_events (
             dataset_id TEXT NOT NULL, case_number INTEGER NOT NULL, position INTEGER NOT NULL,
             activity TEXT NOT NULL, observed_at TEXT NOT NULL, elapsed_since_previous_seconds REAL,
+            participant TEXT, team TEXT,
             PRIMARY KEY(dataset_id, case_number, position))''')
         conn.execute('''CREATE INDEX IF NOT EXISTS idx_process_log_activity
             ON process_log_events(dataset_id, activity, case_number)''')
+        columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_events)')}
+        if not set(PARTICIPANT_DIMENSIONS).issubset(columns):
+            if not conn.in_transaction:conn.execute('BEGIN IMMEDIATE')
+            columns={row[1] for row in conn.execute('PRAGMA table_info(process_log_events)')}
+            for key in PARTICIPANT_DIMENSIONS:
+                if key not in columns:conn.execute('ALTER TABLE process_log_events ADD COLUMN '+key+' TEXT')
+        for key in PARTICIPANT_DIMENSIONS:
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_process_log_'+key+' ON process_log_events(dataset_id,'+key+',case_number) WHERE '+key+' IS NOT NULL')
         expired = conn.execute('SELECT dataset_id FROM process_log_datasets WHERE expires_at <= ?',
                                (self.now().isoformat(),)).fetchall()
         for row in expired:
@@ -100,16 +132,16 @@ class ProcessLogStore:
             raise LookupError('Retained process log not found or expired')
         return dict(zip(('dataset_id','created_at','expires_at','case_count','event_count'),row))
 
-    def save(self, raw, *, retention_days, confirmed):
+    def save(self, raw, *, retention_days, confirmed, participant_labels_authorized=False):
         if confirmed is not True:
             raise ProcessLogError('Explicit local event-log retention confirmation is required')
         if type(retention_days) is not int or not 1 <= retention_days <= 30:
             raise ProcessLogError('Choose a retention period from 1 to 30 days')
-        rows = parse_csv_events(raw)
-        report = mine_csv_events(raw)
+        rows,dimensions = parse_csv_event_records(raw,participant_labels_authorized=participant_labels_authorized)
+        report = mine_csv_events(raw,participant_labels_authorized=participant_labels_authorized)
         groups = defaultdict(list)
-        for native_id, activity, stamp, supplied_order in rows:
-            groups[native_id].append((activity,stamp,supplied_order))
+        for native_id, activity, stamp, supplied_order, participant, team in rows:
+            groups[native_id].append((activity,stamp,supplied_order,participant,team))
         ordered = [values for _,values in sorted(groups.items(),
             key=lambda item:(min(r[1] for r in item[1]),item[0]))]
         for values in ordered:
@@ -137,12 +169,13 @@ class ProcessLogStore:
                 conn.execute('INSERT INTO process_log_cases VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                     (identifier,number,variants[path],len(values),values[0][1].isoformat(),values[-1][1].isoformat(),
                      round((values[-1][1]-values[0][1]).total_seconds(),3),ties))
-                conn.executemany('INSERT INTO process_log_events VALUES (?, ?, ?, ?, ?, ?)', [
+                conn.executemany('INSERT INTO process_log_events (dataset_id,case_number,position,activity,observed_at,elapsed_since_previous_seconds,participant,team) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
                     (identifier,number,i+1,activity,stamp.isoformat(),
-                     round((stamp-values[i-1][1]).total_seconds(),3) if i else None)
-                    for i,(activity,stamp,_) in enumerate(values)])
+                     round((stamp-values[i-1][1]).total_seconds(),3) if i else None,participant,team)
+                    for i,(activity,stamp,_,participant,team) in enumerate(values)])
             return self._dataset(conn,identifier) | {'native_case_ids_retained':False,
-                'source_values_retained':False,'synchronized':False,'ai_access_enabled':False}
+                'source_values_retained':False,'synchronized':False,'ai_access_enabled':False,
+                'native_participant_identifiers_retained':False,'participant_label_dimensions':list(dimensions)}
 
     def prune(self):
         with self.connect() as conn:
@@ -162,18 +195,19 @@ class ProcessLogStore:
     def report(self, dataset_id, *, reference_model=None, reference=None):
         with self.connect() as conn:
             self._open(conn)
+            if not conn.in_transaction:conn.execute('BEGIN')
             dataset=self._dataset(conn,dataset_id)
+            original=json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id = ?',
+                                             (dataset_id,)).fetchone()[0])
             if reference_model is None:
-                return json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id = ?',
-                                               (dataset_id,)).fetchone()[0])
+                return original
             # Compare every full retained path using the same bounded engine as
             # a fresh CSV. Dataset ordinals never recover discarded source keys.
-            rows=conn.execute('''SELECT case_number, activity, observed_at FROM process_log_events
+            rows=conn.execute('''SELECT case_number, activity, observed_at, participant, team FROM process_log_events
                 WHERE dataset_id = ? ORDER BY case_number, position''',(dataset_id,)).fetchall()
-        stream=StringIO(newline='');writer=csv.writer(stream)
-        writer.writerow(('case_id','activity','timestamp'))
-        writer.writerows((f'{number:04d}',activity,stamp) for number,activity,stamp in rows)
-        report=mine_csv_events(stream.getvalue().encode('utf-8'),reference_model=reference_model)
+        dimensions=_label_dimensions(original)
+        report=mine_csv_events(_snapshot_csv(rows,dimensions),reference_model=reference_model,
+            participant_labels_authorized=bool(dimensions))
         report.update(import_retained=True,dataset_id=dataset_id,
                       retention_scope='local_explicit_snapshot',expires_at=dataset['expires_at'])
         report['conformance']['reference']=reference
@@ -187,9 +221,10 @@ class ProcessLogStore:
         return report
 
     def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None,
-              started_since=None, started_before=None, contains_activity=None):
+              started_since=None, started_before=None, contains_activity=None, contains_participant=None, contains_team=None):
         filters, cohort_sql, cohort_params = _case_cohort(started_since=started_since,
-            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id)
+            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
+            contains_participant=contains_participant,contains_team=contains_team)
         with self.connect() as conn:
             self._open(conn)
             dataset=self._dataset(conn,dataset_id)
@@ -209,9 +244,10 @@ class ProcessLogStore:
                     'case_ids_are_dataset_ordinals':True,'case_end_is_business_completion':False}
 
     def cohort(self, dataset_id, *, started_since=None, started_before=None, contains_activity=None,
-               variant_id=None, reference_model=None, reference=None):
+               variant_id=None, reference_model=None, reference=None, contains_participant=None, contains_team=None):
         filters, predicate, params = _case_cohort(started_since=started_since,
-            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id)
+            started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
+            contains_participant=contains_participant,contains_team=contains_team)
         with self.connect() as conn:
             self._open(conn)
             if not conn.in_transaction:
@@ -222,7 +258,7 @@ class ProcessLogStore:
             selected = conn.execute('''SELECT c.case_number, c.variant_id FROM process_log_cases c
                 WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number',
                 [dataset_id, *params]).fetchall()
-            rows = conn.execute('''SELECT e.case_number, e.activity, e.observed_at FROM process_log_events e
+            rows = conn.execute('''SELECT e.case_number, e.activity, e.observed_at, e.participant, e.team FROM process_log_events e
                 JOIN process_log_cases c ON c.dataset_id = e.dataset_id AND c.case_number = e.case_number
                 WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number, e.position',
                 [dataset_id, *params]).fetchall()
@@ -235,15 +271,14 @@ class ProcessLogStore:
                     'selection':selection, 'report':None, 'selection_retained':False}
         if not selected:
             return envelope
-        stream=StringIO(newline='');writer=csv.writer(stream)
-        writer.writerow(('case_id','activity','timestamp'))
-        writer.writerows((f'{number:04d}',activity,stamp) for number,activity,stamp in rows)
-        result=mine_csv_events(stream.getvalue().encode('utf-8'),reference_model=reference_model)
+        dimensions=_label_dimensions(original)
+        result=mine_csv_events(_snapshot_csv(rows,dimensions),reference_model=reference_model,
+            participant_labels_authorized=bool(dimensions))
         # The mining engine returns per-analysis ordinals. Restore the immutable
         # snapshot's original case/variant identities before returning examples,
         # including variant examples outside the top-level 30-case display cap.
         paths=defaultdict(list)
-        for number,activity,_ in rows:
+        for number,activity,*_ in rows:
             paths[number].append(activity)
         stored_variants=dict(selected)
         variants=Counter(tuple(path) for path in paths.values())
@@ -320,11 +355,11 @@ class ProcessLogStore:
                                 (dataset_id,case_number)).fetchone():
                 raise LookupError('Retained case not found')
             cap=max(1,min(int(limit),100))
-            rows=conn.execute('''SELECT position, activity, observed_at, elapsed_since_previous_seconds
+            rows=conn.execute('''SELECT position, activity, observed_at, elapsed_since_previous_seconds, participant, team
                 FROM process_log_events WHERE dataset_id = ? AND case_number = ? AND position > ?
                 ORDER BY position LIMIT ?''',(dataset_id,case_number,after,cap+1)).fetchall()
             keys=('position','activity','observed_at','elapsed_since_previous_seconds')
-            items=[dict(zip(keys,row)) for row in rows[:cap]]
+            items=[dict(zip(keys,row[:4])) | {key:row[4+index] for index,key in enumerate(PARTICIPANT_DIMENSIONS) if row[4+index] is not None} for row in rows[:cap]]
             return {'dataset_id':dataset_id,'case_number':case_number,'events':items,
                     'has_more':len(rows)>cap,'next_after':items[-1]['position'] if len(rows)>cap else None,
                     'ordering_basis':'timestamp_then_supplied_row_order','tied_timestamp_order_verified':False,
