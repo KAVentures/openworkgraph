@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 from shared.event_log_formats import (
     CASE_TYPE, EventLogFormatError, EventRecord, ObjectRecord, ReadStats,
-    read_csv, read_ocel_json, read_xes, write_csv, write_ocel_json, write_xes,
+    read_csv, read_csv_header, read_ocel_json, read_xes, write_csv, write_ocel_json, write_xes,
 )
 
 from .db import DATA_DIR
@@ -131,6 +131,12 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
                  [log_id, str(paths[0])])
     conn.execute(f"""INSERT INTO objects SELECT ?, c0, c1, coalesce(c2, '{{}}') FROM read_csv(?, {opts},
         columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[1])])
+    # Validate globally in the columnar engine, preserving streaming XES memory
+    # instead of retaining every event ID in a Python set. The caller rolls the
+    # whole import back before any ambiguous identifier can reach a case query.
+    for table,column in (("events","event_id"),("objects","object_id")):
+        if conn.execute(f"SELECT 1 FROM {table} WHERE log_id=? GROUP BY {column} HAVING count(*)>1 LIMIT 1",[log_id]).fetchone():
+            raise EventLogFormatError("event and object identifiers must be unique within a log; generated and supplied identifiers cannot collide")
     conn.execute(f"""INSERT INTO event_objects SELECT DISTINCT ?, c0, c1, coalesce(c2, '') FROM read_csv(?, {opts},
         columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
 
@@ -144,8 +150,12 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     resource = mapping.get("resource_column") or ""
     if not all(columns):
         raise EventLogFormatError("case, activity and timestamp columns are required")
-    source = f"read_csv(?, header=true, delim='{delimiter}', all_varchar=true, sample_size=-1)"
-    header = [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM {source}", [str(path)]).fetchall()]
+    source = f"read_csv(?, header=true, names=?, delim='{delimiter}', all_varchar=true, sample_size=-1)"
+    with path.open("r",encoding="utf-8-sig",newline="") as handle:
+        original_header=read_csv_header(handle,delimiter)
+    header = [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM {source}", [str(path),original_header]).fetchall()]
+    if header!=original_header:
+        raise EventLogFormatError("CSV column names must be preserved literally without automatic renaming")
     missing = [name for name in columns + ([resource] if resource else []) if name not in header]
     if missing:
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
@@ -153,15 +163,19 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     case, activity, stamp = (q(c) for c in columns)
     res = q(resource) if resource else "''"
     conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
-          left(trim({case}), 200) AS case_id, left(trim({activity}), 200) AS activity,
+          {case} AS case_id, {activity} AS activity,
           CASE WHEN regexp_matches(trim({stamp}), '(Z|[+-][0-9]{{2}}:?[0-9]{{2}})$')
                THEN try_cast(trim({stamp}) AS TIMESTAMPTZ) END AS ts,
-          left(trim(coalesce({res}, '')), 200) AS resource,
+          coalesce({res}, '') AS resource,
           row_number() OVER () AS n
-        FROM {source}""", [str(path)])
+        FROM {source}""", [str(path),original_header])
+    if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
+        OR length(resource)>200 OR regexp_matches(concat_ws('',case_id,activity,resource),?)""",
+        [r'[\x00-\x1f\x7f-\x9f\x{fffe}\x{ffff}]']).fetchone()[0]:
+        raise EventLogFormatError("event-log identifiers and activity labels exceed their bounds or contain control characters")
     total = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
-    conn.execute("DELETE FROM staged WHERE case_id IS NULL OR case_id = '' OR activity IS NULL "
-                 "OR activity = '' OR ts IS NULL")
+    conn.execute("DELETE FROM staged WHERE case_id IS NULL OR trim(case_id) = '' OR activity IS NULL "
+                 "OR trim(activity) = '' OR ts IS NULL")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
     conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, '{}' FROM staged""",
                  [log_id])
@@ -259,7 +273,8 @@ def _case_type(conn: duckdb.DuckDBPyConnection, log_id: str, case_type: str | No
 _CASE_EVENTS = """
   SELECT eo.object_id AS case_id, e.activity, e.ts, e.resource, e.event_id, e.attributes
   FROM events e
-  JOIN event_objects eo ON eo.log_id = e.log_id AND eo.event_id = e.event_id
+  JOIN (SELECT DISTINCT log_id,event_id,object_id FROM event_objects) eo
+    ON eo.log_id = e.log_id AND eo.event_id = e.event_id
   JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
   WHERE e.log_id = ? AND o.object_type = ?
 """

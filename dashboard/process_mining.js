@@ -587,7 +587,10 @@
       host.append(make('h4','Same-revision structural comparison'),make('p','Process '+r.workflow_id+' revision '+r.revision+' · '+r.content_sha256),
         make('p','Exact structural matches: baseline '+c.baseline_exact_structural_match_cases+' / '+value.baseline.case_count+
         '; current '+c.current_exact_structural_match_cases+' / '+value.current.case_count+'. Match-share change '+
-        signed(c.exact_match_share_change_percentage_points)+' percentage points. Business rules and conditions were not evaluated.'));
+        (c.exact_match_share_change_percentage_points==null?'Not established':signed(c.exact_match_share_change_percentage_points)+' percentage points')+'. Business rules and conditions were not evaluated.'));
+      if(c.baseline_structural_comparison_unknown_cases||c.current_structural_comparison_unknown_cases)host.appendChild(make('p',
+        'Structural comparison unknown: baseline '+c.baseline_structural_comparison_unknown_cases+' cases; current '+
+        c.current_structural_comparison_unknown_cases+' cases. Bounded searches that did not finish are not deviations.','muted'));
     }
     driftTable(host,'Path mix and within-path timing',[
       'Observed path · full-path fingerprint','Presence','Baseline cases','Current cases','Case-share change (pp)','Baseline median elapsed','Current median elapsed'],
@@ -736,7 +739,7 @@
       host.appendChild(make('h3','Structural comparison · saved revision '+ref.revision));
       host.appendChild(make('p',comparison.exact_structural_match_cases+' exact path matches · '+
         comparison.structurally_deviating_cases+' differing cases · '+comparison.possible_incomplete_prefix_cases+
-        ' possible incomplete prefixes. All cases and full variants are compared.'));
+        ' possible incomplete prefixes. '+(comparison.structural_comparison_unknown_cases?comparison.structural_comparison_unknown_cases+' cases remain unknown because bounded alignment did not finish. All cases were attempted.':'All cases and full variants are compared.')));
       host.appendChild(make('p','Routing decisions are traversed structurally; rule conditions, business compliance, source completeness and successful outcomes are not evaluated.','muted'));
     }
     renderObservedMap(host);
@@ -785,10 +788,10 @@
     if(variant){
       if(variant.conformance){
         const c=variant.conformance;
-        host.appendChild(make('h4',c.exact_structural_match?'Selected variant matches the reference path':'Selected variant differs from the reference path'));
-        host.appendChild(make('p','Minimum activity edits: '+c.minimum_activity_edit_count+
+        host.appendChild(make('h4',c.exact_structural_match==null?'Selected variant structural comparison is unknown':c.exact_structural_match?'Selected variant matches the reference structure':'Selected variant differs from the reference structure'));
+        host.appendChild(make('p','Minimum activity edits: '+(c.minimum_activity_edit_count==null?'Not established':c.minimum_activity_edit_count)+
           (c.could_be_incomplete_log_prefix?' · this could be an incomplete source-log prefix.':'.')));
-        const alignment=make('details');alignment.appendChild(make('summary','Inspect one minimum-edit structural alignment'));
+        const alignment=make('details');alignment.appendChild(make('summary',c.comparison_complete===false?'Structural alignment unavailable · bounded search incomplete':'Inspect one minimum-edit structural alignment'));
         const list=make('ol');safe(c.alignment).forEach(item=>list.appendChild(make('li',item.type+' · '+item.activity+
           (item.log_position?' · log event '+item.log_position:'')+(item.model_activity_id?' · model '+item.model_activity_id:''))));
         alignment.appendChild(list);if(c.alignment_truncated)alignment.appendChild(make('p','Alignment is truncated to 80 entries.'));

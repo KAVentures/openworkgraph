@@ -15,7 +15,7 @@ from statistics import median
 from typing import Any
 
 from shared.process_model import ProcessModel
-from shared.process_conformance import compare_path
+from shared.process_conformance import compare_paths
 
 FORMAT = "openworkgraph.process-mining-csv-preview.v1"
 MAX_BYTES = 1024 * 1024
@@ -438,16 +438,19 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         result['participant_labels']=participant_label_analysis(by_case,dimensions)
 
     if reference_model is not None:
-        comparisons = {path: compare_path(path, reference_model) for path in variants}
+        comparisons = compare_paths(variants,reference_model)
         for item, (path, _) in zip(variant_rows, variants.most_common(MAX_VARIANTS)):
             item['conformance'] = comparisons[path]
         matched = sum(n for path, n in variants.items() if comparisons[path]['exact_structural_match'])
         possible_prefixes = sum(n for path, n in variants.items() if comparisons[path]['could_be_incomplete_log_prefix'])
+        unknown = sum(n for path,n in variants.items() if comparisons[path]['exact_structural_match'] is None)
         result['conformance'] = {
             'case_count': len(cases), 'exact_structural_match_cases': matched,
-            'structurally_deviating_cases': len(cases) - matched,
+            'structurally_deviating_cases': len(cases) - matched - unknown,
             'possible_incomplete_prefix_cases': possible_prefixes,
-            'comparison_covers_all_cases_and_variants': True,
+            'comparison_covers_all_cases_and_variants': not unknown,
+            **({'structural_comparison_unknown_cases':unknown,'all_cases_attempted':True}
+               if any('comparison_complete' in value for value in comparisons.values()) else {}),
             'matching_cases_with_ambiguous_timestamp_order': sum(
                 case['tied_timestamp_adjacent_pairs'] > 0
                 for path in variants if comparisons[path]['exact_structural_match']

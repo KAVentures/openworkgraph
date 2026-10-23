@@ -33,6 +33,7 @@ const path=require('node:path');
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    const card=page.locator('#owgEventLogCard');await card.waitFor();
+   await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    assert.equal(await page.locator('#owgEventLogManage').isHidden(),true);
 
    await page.locator('#owgEventLogFile').setInputFiles({name:'claims.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
@@ -116,9 +117,37 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    assert.equal(await page.locator('#owgEventLogManage').isHidden(),true);
    const listed=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.length);
    assert.equal(listed,0);
+   // Literal headers, case IDs, labels and resources survive the complete UI/API path.
+   const literalCSV=' case , activity , time , who \n Case, Review > ,2024-01-01T00:00:00Z," bot,system "\nCase ,Review→ ,2024-01-01T00:00:00Z,bot \n';
+   await page.locator('#owgEventLogFile').setInputFiles({name:'literal.csv',mimeType:'text/csv',buffer:Buffer.from(literalCSV)});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').value===' case ');
+   await page.locator('#owgEventLogActivity').selectOption(' activity ');
+   await page.locator('#owgEventLogTime').selectOption(' time ');
+   await page.locator('#owgEventLogResource').selectOption(' who ');
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgEventLogModel').waitFor();
+   const suggested=JSON.parse(await page.locator('#owgEventLogModel').inputValue());
+   assert.ok([' Review > ','Review→ '].includes(suggested.paths[0][0]));
+   await page.locator('#owgEventLogModel').fill(JSON.stringify({format:'openworkgraph.reference-model.v1',paths:[[' Review > '],['Review→ ']]}));
+   await page.locator('#owgEventLogConformanceRun').click();
+   await page.getByText('Fitting cases',{exact:true}).waitFor();
+   assert.match(await page.locator('#owgEventLogConformanceRun').locator('xpath=../..').textContent(),/100\.0%/);
+   await page.locator('#owgEventLogBots').fill(JSON.stringify([' bot,system ']));
+   await page.locator('#owgEventLogKpiRun').click();
+   await page.getByText('Automation rate',{exact:true}).waitFor();
+   assert.match(await page.locator('#owgEventLogKpiRun').locator('xpath=../..').textContent(),/50\.0%/);
+   page.once('dialog',dialog=>dialog.accept());
+   await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
+   assert.equal(await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.length),0);
    // Object-centric log: separate maps per object type, linked by shared events.
    const ocel={objectTypes:[],eventTypes:[],objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],events:[
      {id:'p',type:'Place order',time:'2024-01-01T08:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]},
