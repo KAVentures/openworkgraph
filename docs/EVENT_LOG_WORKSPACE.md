@@ -177,3 +177,10 @@ The dashboard accepts a JSON string array for exact resource labels and
 reference-model JSON for exact activity labels; its suggested reference is
 JSON so separators and whitespace cannot change imported activity names.
 CSV column selection also preserves literal header spelling.
+
+
+## Supporting case histories
+
+Variant and activity tables open complete, paginated case histories with
+whole-case cohort filtering and explicit timestamp-order uncertainty. See
+[case evidence](EVENT_LOG_CASE_EVIDENCE.md) for interaction and API details.
