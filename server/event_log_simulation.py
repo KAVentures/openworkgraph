@@ -56,7 +56,7 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10) ->
         return {
             "format": FORMAT,
             "arrivals_per_hour": arrivals,
-            "paths": [{"activities": p.split(_SEP)[:MAX_PATH_LENGTH], "weight": round(n / covered, 6)}
+            "paths": [{"activities": p.split(_SEP)[:MAX_PATH_LENGTH], "weight": n / covered}
                       for p, n in variants],
             "paths_cover_cases_share": round(covered / cases, 6) if cases else 0,
             "activities": {a: {"minutes": round((g or 0) / 60, 3), "resources": max(1, r),

@@ -48,6 +48,8 @@ def parallel_regions(model):
         if set(incoming[join]) != ends or len(incoming[join]) != len(paths):
             raise ValueError('Parallel joins must consume exactly the paired branch arrivals')
         flattened=[identifier for path in paths for identifier in path]
+        if model.entry_activity_id in flattened:
+            raise ValueError('A parallel process cannot enter a branch before its paired split; declare a separate process entry')
         if len(set(flattened)) != len(flattened):
             raise ValueError('Parallel branches must not share activities before their join')
         if any(edge.source in flattened and edge.rule_id for edge in model.transitions):

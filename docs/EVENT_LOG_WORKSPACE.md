@@ -226,3 +226,18 @@ CSV column selection also preserves literal header spelling.
 Variant and activity tables open complete, paginated case histories with
 whole-case cohort filtering and explicit timestamp-order uncertainty. See
 [case evidence](EVENT_LOG_CASE_EVIDENCE.md) for interaction and API details.
+
+
+## Saved process graph comparison
+
+Load an exact local catalog revision, inspect its map and compare selected
+retained cases using the shared structural engine. Full-population results keep
+bounded unknown cases separate from matches and deviations. See
+[saved process conformance](LARGE_LOG_SAVED_PROCESS_CONFORMANCE.md).
+
+Simulation routing accepts weighted text lines or JSON arrays of
+`{"activities":["literal label"],"weight":0.5}`. Calibration uses JSON when
+text formatting would change a label or routing probability. Small observed
+weights retain their precision; a zero-weight route may be disabled when
+another route has positive weight. Activity labels are data keys, including
+names that also occur on JavaScript object prototypes.

@@ -1067,3 +1067,30 @@ async def check_process_outcome(request: Request) -> Response:
         'business_objective_verified': False, 'execution_authorization': False,
         'result_persisted': False,
     }, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/event-logs/{log_id}/process-conformance')
+async def compare_event_log_saved_process(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from starlette.concurrency import run_in_threadpool
+    from . import event_log_model_conformance as graph_comparison
+    from .event_log_workspace import EventLogWorkspaceError
+    _require_process_log_dashboard(request)
+    value = await _process_json(request, maximum=65536)
+    try:
+        spec = graph_comparison.SavedGraphQuery.model_validate(value)
+    except ValidationError:
+        raise HTTPException(422, 'Invalid saved process comparison fields') from None
+    record = _catalog_record(spec.workflow_id, spec.revision)
+    if record['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    try:
+        result = await run_in_threadpool(graph_comparison.compare, log_id, record, spec, case_type)
+    except EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    # A deleted/recreated revision cannot masquerade as the selected artifact
+    # while a potentially expensive log query is in progress.
+    current = _catalog_record(spec.workflow_id, spec.revision)
+    if current['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed during comparison')
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
