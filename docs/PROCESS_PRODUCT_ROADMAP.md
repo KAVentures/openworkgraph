@@ -13,7 +13,7 @@ or full competitor parity.
 | Area | Available increment | Main remaining gap |
 | --- | --- | --- |
 | Visual exploration | Observed workflow lanes (#263), combined desktop candidate projections and CSV transition maps with distinct support counts and adjacent-pair inspection/drill-down, shared zoom/fit/keyboard scrolling and numerical frequency/elapsed overlays, complete retained case cohorts with date/activity/variant filters, CSV activity/case inspection with explicitly minimized participant/team cohorts and browser-local identity lookup, desktop/Jira-to-catalog drafting, versioned reviewed labels/splits/merges | Shared company cohorts across authorized sources and larger-scale interactive analysis |
-| Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories, supplied-label change signals inside declared CSV cases | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
+| Task/case reconstruction | Exact-record interleaving lanes (#265), explicit reviewed execution classifications with retained individual histories, supplied-label change signals inside declared CSV cases and caller-reviewed exact shared-key joins across selected exports with per-event source aliases | Verified cross-system case identity, business boundaries and consenting cross-person handoffs |
 | Process mining | Bounded local CSV (#266) with offline column mapping/minimization for comma/semicolon/tab exports, single/selected Jira audits (#270/#272), selected GitHub review/lifecycle, opted-in Zendesk status audits and separately selected Stripe invoice lifecycle fields in the same explorer, full-log structural conformance, explicitly consented current-source predicate comparisons, explicitly retained local snapshots with complete case/event queries | Additional source adapters, continuous/large-volume coverage and historical-case business attributes and source-authoritative business-policy conformance |
 | Opportunity ranking | Measured signals (#268), revisioned assumptions and currency-scoped local/organization improvement backlogs with exact peer-review gating | Validated employee effort, business outcomes and tool suitability |
 | Process design | Reviewed draft (#267), versioned graph catalog, direct shared graph editing, declared rules with bounded structured predicates and per-activity responsibilities, supported BPMN draft import with exclusive merge routing and retained manual guards, renderable BPMN/PDD/spec exports, authenticated shared ownership and independent revision review | Parallel/interprocess semantics, real-time collaboration, richer rule clarification and business-policy approval lifecycle |
@@ -111,3 +111,9 @@ causal improvement, statistical independence and business outcomes remain unveri
 [Observed transition inspection](OBSERVED_TRANSITION_INSPECTION.md) connects
 selectable arrows to full-path variant support and complete retained cases
 containing the exact adjacent pair, while preserving existing cohort filters.
+
+[Reviewed shared-case imports](REVIEWED_SHARED_CASE_IMPORTS.md) combine two to
+four authorized exports through explicitly selected literal case keys while
+preserving unmatched cases, import-scoped key aliases and per-event source
+provenance. Provider/account identity, business boundaries and source
+completeness remain unverified; no timestamp-based or cross-import join occurs.

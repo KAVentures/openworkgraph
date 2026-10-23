@@ -9,9 +9,9 @@
   let activeVariant=0;
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
-  let driftGeneration=0,cohortGeneration=0,cohortComparisonGeneration=0,cohortBaseline=null;
+  let driftGeneration=0,cohortGeneration=0,cohortComparisonGeneration=0,cohortBaseline=null,retentionGeneration=0;
   let mappingGeneration=0,mappingInspection=null,mappedFile=null,mappingRequired=false;
-  let mappedParticipantLabels=false,analyzedParticipantLabels=false,retainedLabelChoices={};
+  let mappedParticipantLabels=false,analyzedParticipantLabels=false,mappedCaseLinks=false,analyzedCaseLinks=false,retainedLabelChoices={};
   let zendeskGeneration=0;
   let observedExpanded=false, observedSelection=null, observedTransitionSelection=null,caseBrowserGeneration=0;
   const make=(tag,text,className)=>{
@@ -62,6 +62,7 @@
     });
     wrap.append(file,run);card.appendChild(wrap);
     installMapping(card);
+    window.owgProcessCaseJoin?.install?.(card);
     installZendesk(card);
     const referenceLabel=make('p','No saved reference selected.','muted');referenceLabel.id='owgProcessReference';card.appendChild(referenceLabel);
     card.appendChild(button('Clear reference model',()=>setReference(null)));
@@ -71,7 +72,7 @@
     const retention=make('details');retention.appendChild(make('summary','Retain or reopen a local event-log snapshot'));
     retention.appendChild(make('p','Saving is separate from preview. It retains structural activities, timestamps, case ordering and any explicitly selected participant/team labels in this local OWG database. Native case IDs and source values are discarded. No AI access or synchronization is enabled. Snapshots expire after the selected period; you can delete them here.','muted'));
     const consentLabel=make('label');const consent=make('input');consent.type='checkbox';consent.id='owgLogConsent';
-    consent.addEventListener('change',()=>retentionState());
+    consent.addEventListener('change',()=>{retentionGeneration++;retentionState();});
     consentLabel.append(consent,make('span',' I authorize retaining this selected event log locally.'));
     const days=make('select');days.id='owgLogDays';days.setAttribute('aria-label','Local event-log retention period');
     for(const value of [1,7,30]){const option=make('option',value+' days');option.value=String(value);days.appendChild(option);}
@@ -128,8 +129,8 @@
         }
       }catch(error){if(checkedGeneration===generation)setStatus('Unable to inspect selected CSV: '+error.message);return;}
     }
-    const participantLabelsAuthorized=!!(mappedFile&&mappedParticipantLabels);
-    const attempt=++generation;analyzedFile=null;analyzedParticipantLabels=false;retainedDataset=null;retentionState(true);
+    const participantLabelsAuthorized=!!(mappedFile&&mappedParticipantLabels),caseLinksAuthorized=!!(mappedFile&&mappedCaseLinks);
+    const attempt=++generation;analyzedFile=null;analyzedParticipantLabels=false;analyzedCaseLinks=false;retainedDataset=null;retentionState(true);
     report=null;clearReport();control.disabled=true;
     const mappedAnalyze=document.getElementById('owgCSVMapAnalyze');if(mappedAnalyze)mappedAnalyze.disabled=true;
     setStatus('Analyzing selected CSV on this local OWG service…');
@@ -137,7 +138,7 @@
       await window.__owgAuthReady;
       if(attempt!==generation)return;
       const response=await fetch('/v1/process-mining/preview'+(reference?'?'+new URLSearchParams(reference):''),{
-        method:'POST',headers:{'Content-Type':'text/csv',...(participantLabelsAuthorized?{'X-OWG-Participant-Labels-Authorized':'true'}:{})},body:file,cache:'no-store'
+        method:'POST',headers:{'Content-Type':'text/csv',...(participantLabelsAuthorized?{'X-OWG-Participant-Labels-Authorized':'true'}:{}),...(caseLinksAuthorized?{'X-OWG-Shared-Case-Keys-Reviewed':'true'}:{})},body:file,cache:'no-store'
       });
       if(!response.ok){
         const error=await response.json().catch(()=>({}));
@@ -147,7 +148,7 @@
       if(attempt!==generation)return;
       if(result.format!=='openworkgraph.process-mining-csv-preview.v1')
         throw new Error('Unexpected process-mining response.');
-      report=result;analyzedFile=file;analyzedParticipantLabels=participantLabelsAuthorized;activeVariant=0;activeActivity=null;render();retentionState();
+      report=result;analyzedFile=file;analyzedParticipantLabels=participantLabelsAuthorized;analyzedCaseLinks=caseLinksAuthorized;activeVariant=0;activeActivity=null;render();retentionState();
       setStatus('Local analysis complete. Case labels are temporary; nothing was stored in OWG. Refresh or leave this page to discard this preview.');
     }catch(error){
       if(attempt===generation)setStatus('Unable to analyze: '+String(error?.message||'Unknown error'));
@@ -210,15 +211,16 @@
     }catch(error){if(attempt===zendeskGeneration)status.textContent='Unable to read selected Zendesk audits: '+error.message;}
     finally{if(attempt===zendeskGeneration)control.disabled=!consent.checked;}
   }
-  function resetMapping(){
-    mappingGeneration++;mappingInspection=null;mappedFile=null;mappedParticipantLabels=false;mappingRequired=false;
+  function resetMapping(preserveSharedCases=false){
+    if(!preserveSharedCases)window.owgProcessCaseJoin?.reset?.();
+    mappingGeneration++;mappingInspection=null;mappedFile=null;mappedParticipantLabels=false;mappedCaseLinks=false;analyzedCaseLinks=false;mappingRequired=false;
     document.getElementById('owgCSVMappingFields')?.replaceChildren();
     const status=document.getElementById('owgCSVMappingStatus');if(status)status.textContent='No column mapping applied.';
     const inspect=document.getElementById('owgCSVInspect');if(inspect)inspect.disabled=false;
   }
   function invalidateMappedPreview(){
     document.getElementById('owgCSVLocalLookup')?.remove();
-    generation++;mappedFile=null;mappedParticipantLabels=false;analyzedFile=null;analyzedParticipantLabels=false;
+    generation++;mappedFile=null;mappedParticipantLabels=false;mappedCaseLinks=false;analyzedFile=null;analyzedParticipantLabels=false;analyzedCaseLinks=false;
     report=null;retainedDataset=null;clearReport(true);retentionState(true);mappingRequired=true;
     for(const id of ['owgCSVMapUse','owgProcessAnalyze','owgCSVMapAnalyze']){const control=document.getElementById(id);if(control)control.disabled=true;}
   }
@@ -276,7 +278,7 @@
       const labelsAuthorized=['participant','team'].some(key=>Object.hasOwn(mapping,key));
       const file=mappingInspection.createMappedFile(mapping,labelsAuthorized);
 
-      generation++;mappedFile=file;mappedParticipantLabels=labelsAuthorized;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);
+      generation++;mappedFile=file;mappedParticipantLabels=labelsAuthorized;mappedCaseLinks=false;report=null;analyzedFile=null;retainedDataset=null;clearReport();retentionState(true);
       document.getElementById('owgCSVLocalLookup')?.remove();
       if(labelsAuthorized){
         const lookup=make('div');lookup.id='owgCSVLocalLookup';
@@ -298,7 +300,7 @@
   }
   function retentionState(reset=false){
     const consent=document.getElementById('owgLogConsent'),save=document.getElementById('owgLogSave');
-    if(reset&&consent)consent.checked=false;
+    if(reset&&consent){retentionGeneration++;consent.checked=false;}
     if(save)save.disabled=!(report&&analyzedFile&&!retainedDataset&&consent?.checked);
     cohortControls(reset);
   }
@@ -312,15 +314,16 @@
   }
   async function saveLog(){
     if(!report||!analyzedFile||retainedDataset||!document.getElementById('owgLogConsent')?.checked)return;
-    const attempt=generation,file=analyzedFile,save=document.getElementById('owgLogSave');save.disabled=true;
+    const attempt=generation,saveAttempt=++retentionGeneration,file=analyzedFile,save=document.getElementById('owgLogSave');save.disabled=true;
     try{
       const value=await logRequest('?'+new URLSearchParams({retention_days:document.getElementById('owgLogDays').value}),{
-        method:'POST',headers:{'Content-Type':'text/csv','X-OWG-Retention-Confirmed':'true',...(analyzedParticipantLabels?{'X-OWG-Participant-Labels-Authorized':'true'}:{})},body:file});
-      if(attempt!==generation)return;
+        method:'POST',headers:{'Content-Type':'text/csv','X-OWG-Retention-Confirmed':'true',...(analyzedParticipantLabels?{'X-OWG-Participant-Labels-Authorized':'true'}:{}),...(analyzedCaseLinks?{'X-OWG-Shared-Case-Keys-Reviewed':'true'}:{})},body:file},
+        ()=>attempt===generation&&saveAttempt===retentionGeneration&&file===analyzedFile&&document.getElementById('owgLogConsent')?.checked);
+      if(!value||attempt!==generation||saveAttempt!==retentionGeneration)return;
       retainedDataset=value.dataset_id;report.import_retained=true;report.dataset_id=value.dataset_id;report.expires_at=value.expires_at;render();retentionState(true);
       setStatus('Saved a minimized local snapshot. Expires '+value.expires_at+'. Native case IDs and source values were discarded.');
       await listLogs();
-    }catch(error){if(attempt===generation){retentionState();setStatus('Unable to save log: '+error.message);}}
+    }catch(error){if(attempt===generation&&saveAttempt===retentionGeneration){retentionState();setStatus('Unable to save log: '+error.message);}}
   }
   async function listLogs(){
     const attempt=++inventoryGeneration,host=document.getElementById('owgLogInventory');
@@ -357,7 +360,7 @@
         ()=>attempt===generation&&caseAttempt===caseBrowserGeneration);if(attempt!==generation||caseAttempt!==caseBrowserGeneration)return;
       const host=document.getElementById('owgLogCases');host.replaceChildren(make('h3',transition?'Retained cases containing adjacent '+transition.from+' → '+transition.to:activity?'Retained cases containing '+activity:report?.cohort?'Selected retained cases · dataset ordinals':'All retained cases · dataset ordinals'));
       for(const entry of safe(value.cases)){
-        const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id));
+        const row=make('details');row.appendChild(make('summary','Case '+entry.case_number+' · '+entry.event_count+' events · '+entry.variant_id+(entry.case_key_alias?' · '+entry.case_key_alias:'')));
         const events=make('div');row.appendChild(events);let loaded=false;
         row.addEventListener('toggle',()=>{if(row.open&&!loaded){loaded=true;browseEvents(id,entry.case_number,events,0,attempt,caseAttempt);}});host.appendChild(row);
       }
@@ -614,8 +617,14 @@
     table.append(head,body);wrap.appendChild(table);host.appendChild(wrap);
   }
   function aliasLabel(value){return String(value).replace(/^participant_/, 'Participant ').replace(/^team_/, 'Team ');}
-  function eventLabelSuffix(event){return safe(report?.participant_labels?.dimensions).map(key=>
-    event[key]?aliasLabel(event[key]):'Unknown '+key).join(' · ');}
+  function eventLabelSuffix(event){return [...safe(report?.participant_labels?.dimensions).map(key=>
+    event[key]?aliasLabel(event[key]):'Unknown '+key),...(event.origin?[String(event.origin).replace(/^source_/,'Source ')]:[])].join(' · ');}
+  function renderCaseCorrelation(host){
+    const data=report?.case_correlation;if(!data)return;
+    host.append(make('h3','Reviewed shared case keys'),make('p',data.multi_source_case_count+' cases contain events from more than one of '+data.source_count+' supplied source aliases. Matching uses the caller-reviewed literal case key, not timing or activity similarity. The source namespace and case identity are caller declarations, not independently verified associations. Native case keys and source names were replaced before upload.','muted'));
+    const list=make('ul');for(const source of safe(data.sources))list.appendChild(make('li',String(source.origin).replace(/^source_/,'Source ')+' · '+source.event_count+' events across '+source.case_count+' cases'));
+    host.appendChild(list);
+  }
   function renderParticipantLabels(host){
     const metadata=report?.participant_labels;if(!metadata)return;
     host.append(make('h3','Participant and team labels'),make('p','Labels describe this import only. Counts and adjacent label changes do not verify people, team membership or human handoffs. Selected participant/team identifiers were replaced before upload.','muted'));
@@ -689,7 +698,7 @@
       metric('Median case elapsed',seconds(report.metrics?.median_case_elapsed_seconds)),
       metric('Median inter-event gap',report.metrics?.median_inter_event_gap_seconds==null?
         '—':seconds(report.metrics.median_inter_event_gap_seconds)));
-    host.appendChild(stats);renderParticipantLabels(host);
+    host.appendChild(stats);renderParticipantLabels(host);renderCaseCorrelation(host);
     host.appendChild(make('p','Elapsed time spans first to last logged event; gaps are not proven waiting, and repeated activities are not necessarily rework. No case outcome or automation authority is established.','muted'));
     if(report.data_quality){
       const quality=report.data_quality;
@@ -786,7 +795,7 @@
       host.appendChild(make('h3','Selected variant · case examples'));
       safe(variant.case_examples).forEach(example=>{
         const disclosure=make('details');
-        disclosure.appendChild(make('summary',example.case+' · '+example.event_count+' events · '+seconds(example.duration_seconds)));
+        disclosure.appendChild(make('summary',example.case+' · '+example.event_count+' events · '+seconds(example.duration_seconds)+(example.case_key_alias?' · '+example.case_key_alias:'')));
         const events=make('ol');
         safe(example.events).forEach(event=>{
           const item=make('li',event.activity+' · '+event.observed_at+
@@ -897,6 +906,18 @@
     document.getElementById('owgProcessCSV')?.scrollIntoView({block:'start'});
     return true;
   }
-  window.owgProcessMining={setReference,showSourcePreview};
+  function useSharedCaseImport(file){
+    if(!file||typeof file.arrayBuffer!=='function'||file.size<1||file.size>MAX_UPLOAD)return false;
+    if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before using this reviewed shared-key import?'))return false;
+    generation++;resetMapping(true);mappedFile=file;mappedCaseLinks=true;analyzedFile=null;analyzedCaseLinks=false;
+    report=null;retainedDataset=null;clearReport();retentionState(true);
+    const input=document.getElementById('owgProcessFile');if(input)input.value='';
+    document.getElementById('owgProcessAnalyze').disabled=false;
+    setStatus('Reviewed shared-key import ready. Analyze to send only structural events and import-scoped case/source aliases to local OWG. Nothing is retained automatically.');
+    return true;
+  }
+  function withdrawSharedCaseImport(){if(mappedCaseLinks||analyzedCaseLinks)invalidateMappedPreview();}
+  window.owgProcessMining={setReference,showSourcePreview,useSharedCaseImport,withdrawSharedCaseImport,
+    analyzeSharedCaseImport:()=>mappedCaseLinks?analyze():undefined};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();

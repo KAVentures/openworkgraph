@@ -27,7 +27,7 @@ MAX_VARIANTS = 20
 MAX_PATH_STEPS = 24
 MAX_VARIANT_EXAMPLES = 5
 _REQUIRED = {"case_id", "activity", "timestamp"}
-_ALLOWED = _REQUIRED | {"source", "participant", "team"}
+_ALLOWED = _REQUIRED | {"source", "participant", "team", "origin"}
 PARTICIPANT_DIMENSIONS = ("participant", "team")
 _ACTIVITY = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,63}$")
 
@@ -52,7 +52,7 @@ def _seconds(a: datetime, b: datetime) -> float:
     return max(0.0, (b - a).total_seconds())
 
 
-def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=False):
+def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=False, case_links_authorized=False):
     """Validate one bounded CSV; callers must discard native case IDs after use."""
     if not isinstance(raw_bytes, bytes) or not raw_bytes or len(raw_bytes) > MAX_BYTES:
         raise ProcessMiningCSVError("CSV must be a nonempty file of at most 1 MiB")
@@ -74,6 +74,10 @@ def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=F
             raise ProcessMiningCSVError(
                 "CSV columns must be case_id,activity,timestamp with optional source or authorized participant/team labels"
             )
+        if 'origin' in normalized and case_links_authorized is not True:
+            raise ProcessMiningCSVError('Shared case-key imports require explicit local review authorization')
+        if case_links_authorized is True and 'origin' not in normalized:
+            raise ProcessMiningCSVError('A reviewed shared-key import requires source aliases')
         dimensions=tuple(key for key in PARTICIPANT_DIMENSIONS if key in normalized)
         if dimensions and participant_labels_authorized is not True:
             raise ProcessMiningCSVError('Participant/team labels require explicit local analysis authorization')
@@ -89,6 +93,12 @@ def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=F
                 raise ProcessMiningCSVError("CSV contains a row with missing or extra columns")
             data = dict(zip(normalized, (row[h] for h in headers)))
             case_id = str(data["case_id"]).strip()
+            if case_links_authorized is True and (not re.fullmatch(r'case_key_[1-9][0-9]{0,3}',case_id)
+                    or int(case_id.rsplit('_',1)[1]) > 1000):
+                raise ProcessMiningCSVError('Reviewed shared case keys must use bounded import-scoped aliases')
+            origin=str(data.get('origin') or '').strip()
+            if case_links_authorized is True and not re.fullmatch(r'source_[1-4]',origin):
+                raise ProcessMiningCSVError('Reviewed source origins must use bounded import-scoped aliases')
             activity = str(data["activity"]).strip()
             if not case_id or len(case_id) > 120:
                 raise ProcessMiningCSVError("case_id must be nonempty and at most 120 characters")
@@ -111,7 +121,8 @@ def parse_csv_event_records(raw_bytes: bytes, *, participant_labels_authorized=F
                 if value and (not re.fullmatch(key+r'_[1-9][0-9]{0,3}',value) or int(value.rsplit('_',1)[1])>1000):
                     raise ProcessMiningCSVError('Participant/team columns must contain bounded import-scoped labels, never native identities')
                 labels[key]=value or None
-            event_rows.append((case_id, activity, timestamp, index,labels.get('participant'),labels.get('team')))
+            event_rows.append((case_id, activity, timestamp, index,labels.get('participant'),labels.get('team'))+
+                              ((origin,) if case_links_authorized is True else ()))
     except csv.Error:
         raise ProcessMiningCSVError("CSV could not be parsed") from None
     if not event_rows:
@@ -160,13 +171,13 @@ def participant_label_analysis(by_case,dimensions):
     return result
 
 
-def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None, participant_labels_authorized=False) -> dict[str, Any]:
+def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = None, participant_labels_authorized=False, case_links_authorized=False) -> dict[str, Any]:
     """Preview only: no retention, provider calls or source identifiers in output."""
-    event_rows,dimensions = parse_csv_event_records(raw_bytes,participant_labels_authorized=participant_labels_authorized)
+    event_rows,dimensions = parse_csv_event_records(raw_bytes,participant_labels_authorized=participant_labels_authorized,case_links_authorized=case_links_authorized)
 
-    by_case: dict[str, list[tuple[str, datetime, int, str | None, str | None]]] = defaultdict(list)
-    for case_id, activity, stamp, line_index, participant, team in event_rows:
-        by_case[case_id].append((activity, stamp, line_index,participant,team))
+    by_case: dict[str, list[tuple[str, datetime, int, str | None, str | None, str | None]]] = defaultdict(list)
+    for case_id, activity, stamp, line_index, participant, team, *origins in event_rows:
+        by_case[case_id].append((activity, stamp, line_index,participant,team,origins[0] if origins else None))
 
     durations: list[float] = []
     gaps: list[float] = []
@@ -221,6 +232,7 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
                 variant_gaps[path][edge].append(gap_seconds)
         cases.append({
             "case": f"Case {case_index}",
+            **({'case_key_alias':native_id,'origins':sorted({row[5] for row in rows})} if case_links_authorized is True else {}),
             **{key+'_labels':sorted({row[3 if key=='participant' else 4] for row in rows if row[3 if key=='participant' else 4]}) for key in dimensions},
             "event_count": len(rows),
             "tied_timestamp_adjacent_pairs": case_ties,
@@ -238,12 +250,13 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
             "events": [{
                 "position": i + 1,
                 "activity": activity,
+                **({"origin":origins[0]} if case_links_authorized is True else {}),
                 **{key:(participant if key=='participant' else team) for key in dimensions},
                 "observed_at": stamp.isoformat(),
                 "elapsed_since_previous_seconds": (
                     round(_seconds(rows[i - 1][1], stamp), 3) if i else None
                 ),
-            } for i, (activity, stamp, _, participant, team) in enumerate(rows[:MAX_PATH_STEPS])],
+            } for i, (activity, stamp, _, participant, team, *origins) in enumerate(rows[:MAX_PATH_STEPS])],
         })
         variant_cases[path].append(cases[-1])
 
@@ -365,6 +378,21 @@ def mine_csv_events(raw_bytes: bytes, *, reference_model: ProcessModel | None = 
         "agent_permissions_granted": False,
         "authoritative": False,
     }
+
+    if case_links_authorized is True:
+        source_events=Counter(row[5] for rows in by_case.values() for row in rows)
+        source_cases=Counter(origin for rows in by_case.values() for origin in {row[5] for row in rows})
+        result['case_correlation']={'scope':'this_selected_log_only',
+            'join_basis':'caller_reviewed_literal_shared_case_key',
+            'alias_source':'client_declared_import_scoped_aliases','anonymization_verified':False,
+            'authoritative_case_namespace_confirmed_by_caller':True,
+            'case_identity_independently_verified':False,'source_origins_independently_verified':False,
+            'native_case_keys_included':False,'native_source_identifiers_included':False,
+            'source_count':len(source_events),
+            'multi_source_case_count':sum(len({row[5] for row in rows})>1 for rows in by_case.values()),
+            'sources':[{'origin':origin,'event_count':source_events[origin],'case_count':source_cases[origin]}
+                       for origin in sorted(source_events)]}
+        result['case_identity_basis']='caller_reviewed_literal_shared_case_key'
 
     if dimensions:
         result['participant_labels']=participant_label_analysis(by_case,dimensions)

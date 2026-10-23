@@ -76,6 +76,11 @@ def process_csv_mapping_script() -> Response:
     return FileResponse(ROOT / 'dashboard' / 'process_csv_mapping.js', media_type='application/javascript')
 
 
+@app.get('/process-case-join.js')
+def process_case_join_script() -> Response:
+    return FileResponse(ROOT / 'dashboard' / 'process_case_join.js', media_type='application/javascript')
+
+
 @app.get('/workflow-groupings.js')
 def workflow_groupings_script():
     return FileResponse(ROOT/'dashboard'/'workflow_groupings.js',media_type='application/javascript')
@@ -131,6 +136,7 @@ async def process_mining_csv_preview(
     entering this endpoint. Bound the actual chunked stream, not just headers.
     """
     participant_labels_authorized=_participant_labels_authorized(request)
+    case_links_authorized=_case_links_authorized(request)
     reference = None
     if (workflow_id is None) != (revision is None):
         raise HTTPException(status_code=422, detail='conformance requires both process ID and exact revision')
@@ -138,7 +144,7 @@ async def process_mining_csv_preview(
         reference = _catalog_record(workflow_id, revision)
     payload = await _process_csv_body(request)
     try:
-        report = mine_csv_events(payload, participant_labels_authorized=participant_labels_authorized, reference_model=(
+        report = mine_csv_events(payload, participant_labels_authorized=participant_labels_authorized, case_links_authorized=case_links_authorized, reference_model=(
             ProcessModel.model_validate(reference['process_model']) if reference else None
         ))
         if reference:
@@ -168,6 +174,12 @@ def _participant_labels_authorized(request):
     return True
 
 
+def _case_links_authorized(request):
+    if request.headers.get('x-owg-shared-case-keys-reviewed') != 'true':return False
+    _require_process_log_dashboard(request)
+    return True
+
+
 def _log_response(operation, *args, **kwargs):
     try:
         return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control':'no-store'})
@@ -183,9 +195,10 @@ async def retain_process_log(request: Request, retention_days: int = Query(ge=1,
     if request.headers.get('x-owg-retention-confirmed') != 'true':
         raise HTTPException(403, 'Explicit local event-log retention confirmation required')
     authorized=_participant_labels_authorized(request)
+    case_links_authorized=_case_links_authorized(request)
     raw = await _process_csv_body(request)
     return _log_response(_process_logs.save, raw, retention_days=retention_days, confirmed=True,
-                         participant_labels_authorized=authorized)
+                         participant_labels_authorized=authorized,case_links_authorized=case_links_authorized)
 
 
 @app.get('/v1/process-mining/datasets')

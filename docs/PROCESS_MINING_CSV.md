@@ -234,3 +234,10 @@ establish business-policy compliance or independently verified outcomes.
 Optional [participant and team cohorts](PROCESS_PARTICIPANT_COHORTS.md) use
 explicit column selection, browser-side identity replacement and separate
 retention authorization. Filters retain every event of each matching case.
+
+## Explicitly combine source exports
+
+[Reviewed shared-case imports](REVIEWED_SHARED_CASE_IMPORTS.md) add an in-browser
+multi-export preparation flow with literal shared-key review, before-upload key
+minimization and per-event origin aliases. This richer path requires a separate
+local dashboard review grant and does not broaden ordinary CSV or AI imports.

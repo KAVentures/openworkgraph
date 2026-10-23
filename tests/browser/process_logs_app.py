@@ -20,7 +20,7 @@ async def inspect_owned_synthetic_preview(request, call_next):
         # and marker presence, never event/case payloads or credentials.
         (scratch/('last-preview-shape.json' if request.url.path.endswith('/preview') else 'last-retention-shape.json')).write_text(json.dumps({
             'header':body.partition(b'\n')[0].decode('utf-8',errors='replace').rstrip('\r'),
-            'unselected_test_markers_seen':any(marker in body for marker in (b'UNSELECTED_SECRET',b'ALICE_SECRET',b'BOB_SECRET',b'SALES_SECRET',b'OPS_SECRET','雪'.encode())),
+            'unselected_test_markers_seen':any(marker in body for marker in (b'UNSELECTED_SECRET',b'ALICE_SECRET',b'BOB_SECRET',b'SALES_SECRET',b'OPS_SECRET',b'JOIN_NATIVE_',b'JOIN_EXTRA_SECRET',b'JOIN_SYSTEM_ACCOUNT',b'JOIN_SOURCE_','雪'.encode())),
         }),encoding='utf-8')
     return await call_next(request)
 
