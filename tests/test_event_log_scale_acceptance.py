@@ -15,6 +15,7 @@ from server import event_log_analytics as analytics
 from server import event_log_cases as case_pages
 from server import event_log_model_conformance as graph_comparison
 from server import event_log_cohorts as cohorts
+from server import event_log_simulation as simulation
 from server import event_log_workspace as workspace
 
 EVENTS = int(os.environ.get("OWG_EVENT_LOG_SCALE_EVENTS", "10000000"))
@@ -79,6 +80,7 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
         ("filtered_kpis", lambda: analytics.kpis(log["log_id"], cohort={"activity": "Skip"})),
         ("benchmark", lambda: cohorts.benchmark(log["log_id"], [{"started_before": MIDPOINT}, {"started_from": MIDPOINT}],
                                                 sla_seconds=600)),
+        ("what_if", lambda: simulation.what_if(log["log_id"], {"activities": {"Fix": {"resources": 2}}, "cases": 5000})),
     ):
         began = time.perf_counter()
         result = call()
@@ -104,6 +106,8 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             assert result["cases"] == len(range(0, EVENTS // 10, 7))
         if name == "benchmark":
             assert sum(c["cases"] for c in result["cohorts"]) == EVENTS // 10 and result["overlapping_cases"] == 0
+        if name == "what_if":
+            assert len(result["calibration"]["paths"]) == 4 and result["result"]["cases_measured"] == 4500
         if name == "root_cause":
             assert result["associations"][0]["feature"] == {"kind": "activity", "value": "Check"}
     print(f"\nimport {EVENTS:,} events: {import_seconds:.1f}s; queries: "

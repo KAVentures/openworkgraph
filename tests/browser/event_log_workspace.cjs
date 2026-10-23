@@ -141,6 +141,19 @@ const path=require('node:path');
    const [benchJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogBenchmarkJson').click()]);
    assert.equal(JSON.parse(await fs.readFile(await benchJson.path(),'utf8')).cohorts[1].cases,20);
 
+   await page.locator('#owgEventLogSimLoad').click();
+   await page.locator('#owgEventLogSimRun').waitFor();
+   assert.match(await page.locator('#owgEventLogSimPaths').inputValue(),/^0\.600: Receive > Check > Approve > Close/);
+   await page.locator('#owgEventLogSimNewName').fill('Validate');await page.locator('#owgEventLogSimAdd').click();
+   const validate=page.getByLabel('Minutes for Validate');await validate.fill('5');
+   await page.getByLabel('Resources for Check').fill('3');
+   await page.locator('#owgEventLogSimPaths').fill('0.8: Receive > Validate > Check > Approve > Close\n0.2: Receive > Check > Fix > Check > Approve > Close');
+   await page.locator('#owgEventLogSimLabel').fill('Validate first');await page.locator('#owgEventLogSimCases').fill('500');
+   await page.locator('#owgEventLogSimRun').click();
+   await page.getByText('Measured baseline').waitFor();
+   const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
+   assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
+
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
    await page.getByText('Skipped reference step').waitFor();
@@ -233,7 +246,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

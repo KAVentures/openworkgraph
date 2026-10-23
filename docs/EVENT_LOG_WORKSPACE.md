@@ -55,6 +55,8 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
+| `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
+| `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel` | Download the log. |
@@ -135,6 +137,45 @@ contains an activity, or case ends with an activity. Every case feature
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
 and temporal order is not checked.
+
+### What-if simulation
+
+A discrete-event simulation of cases flowing through activities. Each
+activity has a pool of interchangeable resources that serve one case at a
+time, first come, first served. **Load measured values** fills in, from the
+log:
+
+- arrivals per hour (cases started, over the span of case starts);
+- routing: the most frequent variants with their shares;
+- minutes per activity: the median gap before the activity, which includes
+  any waiting, so the baseline can overstate processing time;
+- resources per activity: the distinct resources recorded for it (1 if none).
+
+Change any of them, add activities the log does not have, and run:
+
+```json
+{"format": "openworkgraph.simulation-scenario.v1", "label": "Validate first",
+ "arrivals_per_hour": 2.5,
+ "paths": [{"activities": ["Receive", "Validate", "Review", "Close"], "weight": 0.8},
+           {"activities": ["Receive", "Review", "Fix", "Review", "Close"], "weight": 0.2}],
+ "activities": {"Validate": {"minutes": 5, "resources": 1}, "Review": {"resources": 3}},
+ "distribution": "exponential", "cases": 2000, "seed": 1}
+```
+
+Every field is optional; omitted ones keep the measured value. The measured
+baseline and the scenario are simulated with the same seed, and arrivals and
+routing come from the same random streams in both runs. The response gives
+median, 90th-percentile and mean cycle time, completions per day,
+utilization, offered load and waiting per activity, and flags activities
+whose offered load is 1 or more (the queue grows without bound). The first
+10% of cases are a warm-up and are not measured. At most 20,000 cases, 20
+paths and 100 activities.
+
+The engine is checked against queueing theory in the test suite (M/M/1,
+M/D/1 and M/M/2 waiting times within 8%). It models no calendars, breaks,
+batching, priorities or abandonment. Results are model outputs under the
+stated assumptions, not forecasts or measured outcomes, and authorize
+nothing.
 
 ## Literal case identity and qualified relationships
 
