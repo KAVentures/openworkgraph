@@ -260,6 +260,47 @@ def compare_retained_process_logs(request: Request,
         reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
 
 
+class ProcessCohortFilters(BaseModel):
+    model_config = {'extra': 'forbid'}
+    started_since: str | None = Field(default=None, min_length=1, max_length=64)
+    started_before: str | None = Field(default=None, min_length=1, max_length=64)
+    contains_activity: str | None = Field(default=None, min_length=1, max_length=64)
+    variant_id: str | None = Field(default=None, pattern=r'^variant_[0-9]{1,4}$')
+    contains_participant: str | None = Field(default=None, max_length=16)
+    contains_team: str | None = Field(default=None, max_length=16)
+
+
+class ProcessCohortComparison(BaseModel):
+    model_config = {'extra': 'forbid'}
+    dataset_id: str = Field(pattern=_LOG_ID)
+    baseline_filters: ProcessCohortFilters
+    current_filters: ProcessCohortFilters
+    comparability_confirmed: StrictBool = False
+    workflow_id: str | None = Field(default=None, pattern=r'^[a-zA-Z0-9_-]{1,80}$')
+    revision: int | None = Field(default=None, ge=1, strict=True)
+
+
+@app.post('/v1/process-mining/datasets/cohorts/compare')
+async def compare_retained_process_cohorts(request: Request):
+    from pydantic import ValidationError
+    from starlette.concurrency import run_in_threadpool
+    _require_process_log_dashboard(request)
+    try:
+        body = ProcessCohortComparison.model_validate(await _process_json(request, maximum=4096))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid complete-case cohort comparison') from None
+    if not body.comparability_confirmed:
+        raise HTTPException(403, 'Review both cohort selections before comparing')
+    if (body.workflow_id is None) != (body.revision is None):
+        raise HTTPException(422, 'Comparison requires a process ID and exact revision together')
+    reference = _catalog_record(body.workflow_id, body.revision) if body.workflow_id else None
+    return await run_in_threadpool(_log_response, _process_logs.compare_cohorts, body.dataset_id,
+        baseline_filters=body.baseline_filters.model_dump(exclude_none=True),
+        current_filters=body.current_filters.model_dump(exclude_none=True), comparability_confirmed=True,
+        reference_model=ProcessModel.model_validate(reference['process_model']) if reference else None,
+        reference={key:reference[key] for key in ('workflow_id','revision','content_sha256')} if reference else None)
+
+
 @app.get('/v1/process-mining/datasets/events')
 def retained_process_events(request: Request, dataset_id: str = Query(pattern=_LOG_ID),
                             case_number: int = Query(ge=1), after: int = Query(default=0, ge=0),

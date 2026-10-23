@@ -347,6 +347,74 @@ class ProcessLogStore:
                 })
         return compare_snapshots(*snapshots, reference_model=reference_model, reference=reference)
 
+    def compare_cohorts(self, dataset_id, *, baseline_filters, current_filters,
+                        comparability_confirmed, reference_model=None, reference=None):
+        """Compare complete populations from one immutable local snapshot."""
+        if comparability_confirmed is not True:
+            raise ProcessLogError('Review both complete-case selections before comparing')
+        allowed = {'started_since', 'started_before', 'contains_activity', 'variant_id',
+                   'contains_participant', 'contains_team'}
+        selections = []
+        for value in (baseline_filters, current_filters):
+            if not isinstance(value, dict) or not set(value).issubset(allowed):
+                raise ProcessLogError('Use only supported complete-case filters')
+            selections.append(_case_cohort(**value))
+        snapshots, selected_cases = [], []
+        with self.connect() as conn:
+            self._open(conn)
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            dataset = self._dataset(conn, dataset_id)
+            for filters, predicate, params in selections:
+                rows = conn.execute('''SELECT e.case_number, e.position, e.activity, e.observed_at,
+                    e.elapsed_since_previous_seconds FROM process_log_events e
+                    JOIN process_log_cases c ON c.dataset_id = e.dataset_id AND c.case_number = e.case_number
+                    WHERE c.dataset_id = ?''' + predicate + ' ORDER BY e.case_number, e.position',
+                    [dataset_id, *params]).fetchall()
+                if not rows:
+                    raise ProcessLogError('Both cohort selections must contain at least one complete case')
+                groups = defaultdict(list)
+                for number, position, activity, stamp, gap in rows:
+                    groups[number].append((activity, stamp, gap))
+                selected_cases.append(set(groups))
+                cases = [{'path': tuple(event[0] for event in events),
+                          'duration_seconds': round((datetime.fromisoformat(events[-1][1]) -
+                                                     datetime.fromisoformat(events[0][1])).total_seconds(), 3),
+                          'gaps': [event[2] for event in events[1:]]} for events in groups.values()]
+                tied_cases = sum(any(a[1] == b[1] for a, b in zip(events, events[1:]))
+                                 for events in groups.values())
+                snapshots.append({
+                    'reference': dataset | {'dataset_case_count': dataset['case_count'],
+                        'case_count': len(groups), 'event_count': len(rows), 'cohort_filters': filters,
+                        'events_sha256': sha256(json.dumps([tuple(row) for row in rows],
+                            ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()},
+                    'cases': cases,
+                    'data_quality': {'cases_with_tied_timestamps': tied_cases,
+                                     'cases_sorted_from_nonchronological_input': None},
+                    'event_window': {'first_event_at': min(row[3] for row in rows),
+                                     'last_event_at': max(row[3] for row in rows)}})
+        result = compare_snapshots(*snapshots, reference_model=reference_model, reference=reference)
+        a, b = selected_cases
+        result['format'] = 'openworkgraph.process-cohort-comparison.v1'
+        result['comparison_scope'] = 'two_complete_case_cohorts_in_one_retained_snapshot'
+        result['cohort_overlap'] = {'case_identity_basis': 'same_snapshot_case_ordinal',
+            'shared_case_count': len(a & b), 'baseline_only_case_count': len(a - b),
+            'current_only_case_count': len(b - a), 'union_case_count': len(a | b),
+            'cohorts_are_disjoint': not bool(a & b)}
+        result['comparability'].update(cases_joined_across_snapshots=False,
+            case_overlap_known_within_snapshot=True, statistical_independence_verified=False)
+        result['warnings'] = [code for code in result['warnings'] if code != 'case_identity_not_joined']
+        if a & b:
+            result['warnings'].append('cohorts_share_retained_cases')
+        result['coverage'].pop('all_retained_cases_and_events_used')
+        result['coverage']['all_selected_complete_cases_and_events_used'] = True
+        result['coverage']['all_events_of_selected_cases_included'] = True
+        result['coverage']['events_clipped_to_filter_window'] = False
+        if 'conformance' in result:
+            result['conformance'].pop('all_retained_cases_and_full_paths_compared')
+            result['conformance']['all_selected_cases_and_full_paths_compared'] = True
+        return result
+
     def events(self, dataset_id, case_number, *, after=0, limit=100):
         with self.connect() as conn:
             self._open(conn)

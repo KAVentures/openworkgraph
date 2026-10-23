@@ -72,6 +72,29 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   const retainedReceipt=JSON.parse(await fs.readFile(path.join(scratch,'last-retention-shape.json'),'utf8'));
   assert.equal(retainedReceipt.header,'case_id,activity,timestamp,participant,team');assert.equal(retainedReceipt.unselected_test_markers_seen,false);
   const open=page.getByRole('button',{name:/^Open log_/});await open.waitFor();const id=(await open.textContent()).slice(5);
+  let comparisons=0;page.on('request',r=>{if(new URL(r.url()).pathname==='/v1/process-mining/datasets/cohorts/compare')comparisons++;});
+  await page.getByText('Compare two complete-case selections',{exact:true}).click();
+  await page.getByRole('button',{name:'Keep filters as comparison baseline',exact:true}).click();
+  assert.equal(comparisons,0);
+  await page.getByLabel('Cases with team label',{exact:true}).selectOption('team_2');
+  assert(await page.getByRole('button',{name:'Compare case selections',exact:true}).isDisabled());
+  await page.getByLabel('I reviewed these baseline and current case selections for comparison.',{exact:true}).check();
+  const compared=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-mining/datasets/cohorts/compare');
+  await page.getByRole('button',{name:'Compare case selections',exact:true}).click();
+  const comparison=await (await compared).json();
+  assert.equal(comparison.baseline.case_count,2);assert.equal(comparison.current.case_count,1);
+  assert.equal(comparison.current.event_count,3);assert.equal(comparison.cohort_overlap.shared_case_count,1);
+  assert.equal(comparison.summary.baseline_median_elapsed_seconds,90);
+  assert.equal(comparison.summary.current_median_elapsed_seconds,120);
+  await page.locator('#owgCohortCompareStatus').filter({hasText:'1 retained cases occur in both selections'}).waitFor();
+  assert((await page.locator('#owgCohortCompareResults').textContent()).includes('1 cases belong to both populations'));
+  assert.equal(comparisons,1);assert.equal(saves,1);assert(!JSON.stringify(comparison).includes('_SECRET'));
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+  await page.setViewportSize({width:1280,height:900});
+  await page.getByRole('button',{name:'Inspect current case selection',exact:true}).click();
+  await page.locator('#owgCohortStatus').filter({hasText:'Selected 1 of 2 retained cases, including all 3 events'}).waitFor();
+  assert.equal(await page.locator('#owgCohortCompareResults').textContent(),'');
+  assert(!(await page.getByLabel('I reviewed these baseline and current case selections for comparison.',{exact:true}).isChecked()));
   await page.getByLabel('Cases with participant label',{exact:true}).selectOption('participant_2');
   await page.getByLabel('Cases with team label',{exact:true}).selectOption('team_2');
   await page.getByRole('button',{name:'Apply case filters',exact:true}).click();
@@ -101,7 +124,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();
   await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, full-case label intersection, stable reload, mobile, deletion and unchanged canonical evidence.');
+  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, full-case label intersection and reviewed cohort comparison with exact overlap and explorer drill-down, stable reload, mobile, deletion and unchanged canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

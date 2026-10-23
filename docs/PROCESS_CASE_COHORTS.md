@@ -74,11 +74,17 @@ No new tables, native identifiers, source values, model-provider requests,
 business writes or retention controls are introduced. Existing per-log input
 bounds remain 1 MiB, 5,000 events, 1,000 cases and 64 activity labels. These
 cohorts operate on explicitly retained local snapshots; organization-wide source
-cohorts and consented employee/team dimensions need their own identity and
-access-control integration.
+cohorts need their own identity and access-control integration. Explicitly
+minimized participant/team labels are supported within one saved import; see
+[participant/team cohorts](PROCESS_PARTICIPANT_COHORTS.md). Native identities and
+verified cross-person handoffs are not established.
 
 Validation covers UTC conversion and inclusive/exclusive boundaries, full events
 outside the date window, hidden activities, immutable case/variant identity,
 rank reversals, paging, independent additional activity filters, full-path
 structural comparison, empty selections, validation/authentication, no writes,
 browser request invalidation and the actual dashboard/API/SQLite flow.
+
+[Compare two complete-case populations](PROCESS_COHORT_COMPARISON.md) using the
+same filters and saved snapshot, with full histories and explicit intersection
+counts. Comparison never modifies the saved log or a process model.
