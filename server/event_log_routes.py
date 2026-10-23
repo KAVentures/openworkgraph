@@ -25,8 +25,8 @@ from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "xes": "application/xml", "ocel": "application/json"}
-_SUFFIX = {"csv": "csv", "xes": "xes", "ocel": "jsonocel"}
+_TYPES = {"csv": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
+_SUFFIX = {"csv": "csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
 
 
 def _require_dashboard(request: Request) -> None:
@@ -57,7 +57,7 @@ def list_event_logs(request: Request):
 @router.post("/v1/event-logs/import")
 async def import_event_log(
     request: Request,
-    format: str = Query(pattern="^(csv|xes|ocel)$"),
+    format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
     name: str = Query(min_length=1, max_length=120),
     case_column: str = Query(default="", max_length=200),
     activity_column: str = Query(default="", max_length=200),
@@ -183,7 +183,7 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|xes|ocel)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
