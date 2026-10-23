@@ -125,3 +125,16 @@ with TestClient(app) as client:
     })
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_events_with_several_qualifiers_to_one_object_count_once():
+    doc = {"objectTypes": [], "eventTypes": [], "objects": [{"id": "o", "type": "order"}, {"id": "i", "type": "item"}],
+           "events": [
+               {"id": "a", "type": "Place", "time": "2024-01-01T08:00:00Z",
+                "relationships": [{"objectId": "o", "qualifier": "buyer"}, {"objectId": "o", "qualifier": "payer"},
+                                  {"objectId": "i", "qualifier": "line"}]},
+               {"id": "b", "type": "Ship", "time": "2024-01-01T09:00:00Z",
+                "relationships": [{"objectId": "o", "qualifier": "q"}, {"objectId": "i", "qualifier": "line"}]}]}
+    order = next(t for t in objects.object_graph(_ocel(doc))["object_types"] if t["object_type"] == "order")
+    assert [(e["from"], e["to"], e["transition_count"]) for e in order["transitions"]] == [("Place", "Ship", 1)]
+    assert {a["activity"]: a["event_count"] for a in order["activities"]} == {"Place": 1, "Ship": 1}

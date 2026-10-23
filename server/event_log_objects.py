@@ -15,8 +15,9 @@ MAX_TYPES = 20
 MAX_ACTIVITIES_PER_TYPE = 64
 MAX_EDGES_PER_TYPE = 400
 
+# An event related to the same object under several qualifiers is still one step of its lifecycle.
 _TYPED = """CREATE OR REPLACE TEMP TABLE te AS
-  SELECT o.object_type, eo.object_id, eo.qualifier, e.event_id, e.activity, e.ts
+  SELECT DISTINCT o.object_type, eo.object_id, e.event_id, e.activity, e.ts
   FROM event_objects eo
   JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
   JOIN events e ON e.log_id = eo.log_id AND e.event_id = eo.event_id
