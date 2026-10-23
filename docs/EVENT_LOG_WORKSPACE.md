@@ -184,3 +184,11 @@ CSV column selection also preserves literal header spelling.
 Variant and activity tables open complete, paginated case histories with
 whole-case cohort filtering and explicit timestamp-order uncertainty. See
 [case evidence](EVENT_LOG_CASE_EVIDENCE.md) for interaction and API details.
+
+
+## Saved process graph comparison
+
+Load an exact local catalog revision, inspect its map and compare selected
+retained cases using the shared structural engine. Full-population results keep
+bounded unknown cases separate from matches and deviations. See
+[saved process conformance](LARGE_LOG_SAVED_PROCESS_CONFORMANCE.md).

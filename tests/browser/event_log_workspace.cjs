@@ -66,6 +66,60 @@ const path=require('node:path');
    await page.locator('#owgEventLogCasesPath').filter({hasText:'Exact path:'}).waitFor();
    await page.getByRole('button',{name:'Inspect cases containing Fix',exact:true}).click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'20 matching cases.'}).waitFor();
+   // Save a reviewed graph through the actual catalog and pin a historical revision.
+   const saved=await page.evaluate(async()=>{
+     const labels=['Receive','Check','Approve','Close'];
+     const process_model={goal:'Complete the declared claim review',baseline_source:'user_declared',baseline_path:labels,
+       activities:labels.map(label=>({id:label.toLowerCase(),label})),
+       transitions:labels.slice(1).map((label,i)=>({source:labels[i].toLowerCase(),target:label.toLowerCase()})),
+       entry_activity_id:'receive',terminal_activity_ids:['close']};
+     const body={workflow_id:'claims_review',title:'Reviewed claims',user_confirmed:true,expected_revision:0,process_model};
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+     if(!response.ok)throw new Error(await response.text());return {record:await response.json(),body};
+   });
+   await page.locator('#owgEventLogGraphLoad').click();
+   await page.locator('#owgEventLogGraphPick').selectOption('claims_review');
+   await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogSavedGraphMap svg').waitFor();
+   await page.locator('#owgEventLogSavedGraphMap').getByRole('button',{name:'Select activity check',exact:true}).focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgEventLogCasesStatus').filter({hasText:'60 matching cases'}).waitFor();
+   const resultCell=()=>page.locator('#owgEventLogGraphResults table').first().locator('tbody tr td');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='60');
+   assert.equal(await resultCell().nth(1).textContent(),'36');assert.equal(await resultCell().nth(3).textContent(),'0');
+   const [graphJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogGraphJson').click()]);
+   const comparison=JSON.parse(await fs.readFile(await graphJson.path(),'utf8'));
+   assert.equal(comparison.process_reference.content_sha256,saved.record.content_sha256);
+   assert.equal(comparison.policy_compliance_verified,false);
+   await page.evaluate(async body=>{
+     body.expected_revision=1;body.process_model.activities[2].label='Authorize';
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+     if(!response.ok)throw new Error(await response.text());
+   },saved.body);
+   let graphRelease,graphSeen;
+   const graphGate=new Promise(resolve=>graphRelease=resolve),graphFetched=new Promise(resolve=>graphSeen=resolve);
+   await page.route('**/process-conformance*',async route=>{const response=await route.fetch();graphSeen();await graphGate;await route.fulfill({response});});
+   await page.locator('#owgEventLogGraphRun').click();await graphFetched;
+   await page.locator('#owgEventLogGraphRevision').fill('2');
+   assert.equal(await page.locator('#owgEventLogGraphRun').isDisabled(),true);
+   await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'revision 2.'}).waitFor();
+   const oldGraph=page.waitForResponse(response=>response.url().includes('/process-conformance'));
+   graphRelease();await (await oldGraph).finished();await page.unroute('**/process-conformance*');
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.equal(await page.locator('#owgEventLogGraphResults').textContent(),'','old revision results cannot repaint a newly loaded graph');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='60');
+   assert.equal(await resultCell().nth(1).textContent(),'0');assert.equal(await resultCell().nth(2).textContent(),'60');
+   await page.locator('#owgEventLogSavedGraphMap').getByRole('button',{name:'Select activity approve',exact:true}).click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'No displayed log activity has the exact label'}).waitFor();
+   await page.locator('#owgEventLogGraphRevision').fill('1');await page.locator('#owgEventLogGraphOpen').click();
+   await page.locator('#owgEventLogGraphStatus').filter({hasText:'revision 1.'}).waitFor();
+   await page.locator('#owgEventLogGraphCohortResource').fill('ann');
+   await page.locator('#owgEventLogGraphRun').click();
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='20');
+   assert.equal(await resultCell().nth(2).textContent(),'20');
    await page.locator('#owgEventLogSla').fill('4');await page.locator('#owgEventLogBots').fill('bot');
    await page.locator('#owgEventLogKpiRun').click();
    await page.getByText('Rework rate').waitFor();

@@ -13,6 +13,7 @@ import pytest
 
 from server import event_log_analytics as analytics
 from server import event_log_cases as case_pages
+from server import event_log_model_conformance as graph_comparison
 from server import event_log_cohorts as cohorts
 from server import event_log_workspace as workspace
 
@@ -50,8 +51,19 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
     import_seconds = time.perf_counter() - started
     assert log["events"] == EVENTS and log["rejected_events"] == 0
 
+    from shared.process_model import ProcessModel
+    labels=['Receive','Validate','Review','Approve','Fix','Check','Invoice','Pay','Archive','Close']
+    design=ProcessModel(goal='Compare the declared invoice process',baseline_source='user_declared',
+        baseline_coverage='user_declared_design',baseline_path=labels,
+        activities=[{'id':label.lower(),'label':label} for label in labels],
+        transitions=[{'source':a.lower(),'target':b.lower()} for a,b in zip(labels,labels[1:])],
+        entry_activity_id='receive',terminal_activity_ids=['close'])
+    reference={'workflow_id':'scale_graph','revision':1,'content_sha256':'a'*64,'title':'Scale graph',
+               'saved_at':'2024-01-01T00:00:00Z','process_model':design.model_dump()}
+    graph_spec=graph_comparison.SavedGraphQuery.model_validate({key:reference[key] for key in ('workflow_id','revision','content_sha256')})
     timings = {}
     for name, call in (
+        ("saved_graph", lambda: graph_comparison.compare(log["log_id"],reference,graph_spec)),
         ("case_query", lambda: case_pages.cases(log["log_id"], {})),
         ("variant_cases", lambda: case_pages.cases(log["log_id"], {"path":["Receive", "Validate", "Skip", "Approve", "Fix", "Fix", "Invoice", "Pay", "Archive", "Close"]})),
         ("case_events", lambda: case_pages.events(log["log_id"], {"case_id":"case-0","limit":3})),
@@ -71,6 +83,11 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
         began = time.perf_counter()
         result = call()
         timings[name] = time.perf_counter() - began
+        if name == "saved_graph":
+            cases=EVENTS//10
+            expected=cases-len(range(0,cases,7))-len(range(0,cases,5))+len(range(0,cases,35))
+            assert result["cases"]==result["analyzed_cases"]==cases and result["unknown_cases"]==0
+            assert result["structural_match_cases"]==expected
         if name == "case_query":
             assert result["selected_cases"] == EVENTS // 10 and len(result["cases"]) == 30
         if name == "variant_cases":
