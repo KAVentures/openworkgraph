@@ -63,3 +63,7 @@ Actual browser flows inspect source support across a full log and a selected
 variant, and inspect participant/team aliases without revealing native names
 or inventing source attribution. Existing native-key minimization, retention,
 reopening, complete case browsing and mobile checks run in those same flows.
+
+[Open matching cases](PROCESS_ACTIVITY_LABEL_CASES.md) from a retained label
+row or missing-label summary. Matching requires the label and activity on one
+event and preserves the current cohort and optional exact-variant scope.

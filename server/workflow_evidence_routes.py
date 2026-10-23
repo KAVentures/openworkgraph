@@ -231,12 +231,16 @@ def retained_process_cases(request: Request, dataset_id: str = Query(pattern=_LO
                            contains_participant: str | None = Query(default=None,max_length=16),
                            contains_team: str | None = Query(default=None,max_length=16),
                            transition_from: str | None = Query(default=None,min_length=1,max_length=64),
-                           transition_to: str | None = Query(default=None,min_length=1,max_length=64)):
+                           transition_to: str | None = Query(default=None,min_length=1,max_length=64),
+                           label_dimension: str | None = Query(default=None),
+                           label_value: str | None = Query(default=None),
+                           label_missing: bool = Query(default=False)):
     _require_process_log_dashboard(request)
     return _log_response(_process_logs.cases, dataset_id, after=after, limit=limit, activity=activity, variant_id=variant_id,
         started_since=started_since, started_before=started_before, contains_activity=contains_activity,
         contains_participant=contains_participant,contains_team=contains_team,
-        transition_from=transition_from,transition_to=transition_to)
+        transition_from=transition_from,transition_to=transition_to,
+        label_dimension=label_dimension,label_value=label_value,label_missing=label_missing)
 
 
 @app.get('/v1/process-mining/datasets/cohort')

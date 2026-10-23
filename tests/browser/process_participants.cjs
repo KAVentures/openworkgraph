@@ -78,6 +78,13 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   const retainedReceipt=JSON.parse(await fs.readFile(path.join(scratch,'last-retention-shape.json'),'utf8'));
   assert.equal(retainedReceipt.header,'case_id,activity,timestamp,participant,team');assert.equal(retainedReceipt.unselected_test_markers_seen,false);
   const open=page.getByRole('button',{name:/^Open log_/});await open.waitFor();const id=(await open.textContent()).slice(5);
+  await page.getByRole('button',{name:'Explore all observed transitions',exact:true}).click();
+  await page.getByRole('button',{name:'Inspect observed activity Open',exact:true}).click();
+  await page.locator('#owgObservedActivityDetails').getByRole('button',{name:'Browse cases · Participant 2 · Open',exact:true}).click();
+  await page.locator('#owgLogCases h3').filter({hasText:'Participant 2 label on Open'}).waitFor();
+  assert.equal(await page.locator('#owgLogCases details').count(),1);
+  assert((await page.locator('#owgLogCases summary').textContent()).startsWith('Case 2 · 2 events'));
+  // Participant 2 appears on Review in Case 1, but is not attributed to its Open event.
   let comparisons=0;page.on('request',r=>{if(new URL(r.url()).pathname==='/v1/process-mining/datasets/cohorts/compare')comparisons++;});
   await page.getByText('Compare two complete-case selections',{exact:true}).click();
   await page.getByRole('button',{name:'Keep filters as comparison baseline',exact:true}).click();
@@ -130,7 +137,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();
   await page.locator('#owgProcessStatus').filter({hasText:'Deleted local event-log snapshot.'}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, per-activity participant/team support, full-case label intersection and reviewed cohort comparison with exact overlap and explorer drill-down, stable reload, mobile, deletion and unchanged canonical evidence.');
+  console.log('Participant/team browser acceptance passed: explicit mapping and identity minimization before upload, consent clearing with draft preservation, no automatic retention, per-activity participant/team support and same-event case attribution, full-case label intersection and reviewed cohort comparison with exact overlap and explorer drill-down, stable reload, mobile, deletion and unchanged canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
