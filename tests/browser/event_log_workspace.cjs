@@ -58,6 +58,21 @@ const path=require('node:path');
    await page.getByText('Rework rate').waitFor();
    const kpi=await page.locator('#owgEventLogKpiRun').locator('xpath=../..').textContent();
    assert.match(kpi,/33\.3%/,'rework and SLA breach both cover the 20 slow cases');
+   await page.locator('#owgEventLogKpiCohortResource').fill('ann');
+   await page.locator('#owgEventLogKpiRun').click();
+   await page.waitForFunction(()=>/\b20\b/.test(document.querySelector('#owgEventLogKpiRun').parentElement.parentElement.querySelector('table tbody tr td').textContent));
+   const [kpiCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogKpiCsv').click()]);
+   const kpiText=await fs.readFile(await kpiCsv.path(),'utf8');
+   assert.match(kpiText,/^metric,value\r\ncases,20\r\n/);assert.match(kpiText,/rework_rate,1\r\n/);
+
+   await page.locator('#owgEventLogCohortALabel').fill('Bob');await page.locator('#owgEventLogCohortAResource').fill('bob');
+   await page.locator('#owgEventLogCohortBLabel').fill('Ann');await page.locator('#owgEventLogCohortBResource').fill('ann');
+   await page.locator('#owgEventLogBenchRun').click();
+   await page.getByText('Difference (second − first)').waitFor();
+   const bench=await page.locator('#owgEventLogBenchRun').locator('xpath=../..').textContent();
+   assert.match(bench,/Bob40/);assert.match(bench,/Ann20/);assert.match(bench,/Rework rate\+100\.0 pts/);assert.match(bench,/do not say why/);
+   const [benchJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogBenchmarkJson').click()]);
+   assert.equal(JSON.parse(await fs.readFile(await benchJson.path(),'utf8')).cohorts[1].cases,20);
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -122,7 +137,7 @@ const path=require('node:path');
    assert.equal(await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.length),0);
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, KPIs, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, conformance, root-cause associations, WCAG audit, mobile width, OCEL export, verified deletion.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

@@ -138,7 +138,9 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
 # ---------------------------------------------------------------- KPIs
 
 def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = None,
-         automation_resources: list[str] | None = None) -> dict[str, Any]:
+         automation_resources: list[str] | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    from .event_log_cohorts import describe, parse_cohort, restrict
+    chosen = parse_cohort(cohort)
     automation = list(dict.fromkeys(r for r in (automation_resources or []) if r))
     if len(automation) > MAX_AUTOMATION_RESOURCES or any(len(r) > 200 for r in automation):
         raise EventLogWorkspaceError("too many or too long automation resource names")
@@ -146,6 +148,7 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
         raise EventLogWorkspaceError("sla_seconds must be a positive number of seconds")
 
     def run(conn):
+        restrict(conn, chosen, log_id)
         conn.execute("""CREATE OR REPLACE TEMP TABLE cs AS SELECT case_id, count(*) AS events,
               date_diff('second', min(ts), max(ts)) AS duration, max(ts) AS ended,
               count(*) > count(DISTINCT activity) AS rework
@@ -153,6 +156,7 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
         cases, q, mean, events, rework = conn.execute("""SELECT count(*), quantile_cont(duration, [0.5, 0.9, 0.95]),
               avg(duration), avg(events), count(*) FILTER (WHERE rework) FROM cs""").fetchone()
         result: dict[str, Any] = {
+            "cohort": describe(chosen),
             "cases": cases,
             "throughput_seconds": {"p50": q[0], "p90": q[1], "p95": q[2], "mean": mean} if cases else None,
             "events_per_case": round(events, 3) if cases else None,
