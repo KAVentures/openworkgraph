@@ -32,7 +32,7 @@ from typing import Any
 from shared.time_utils import normalize_timestamp
 from .auth import DEVICE_SCOPES, issue_token, token_hash
 from .db import GatewayDB
-from .fleet_health import recorder_status
+from .fleet_health import recorder_status, sync_health
 
 PERSON_TOKEN_PREFIX = "owg_enroll_person"
 MAX_INVITE_DAYS = 30
@@ -720,6 +720,7 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
             "SELECT device_id, COUNT(*) AS events, MAX(ingested_at) AS last_evidence FROM evidence_events WHERE organization_id = ? GROUP BY device_id",
             (org,),
         )
+        sync_reports = db.current_sync_health(conn, org)
     by_device = {a["device_id"]: a for a in activity}
     employees = list_employees(db, org)
     by_actor = {e["actor_id"]: e for e in employees}
@@ -738,6 +739,8 @@ def people_and_devices(db: GatewayDB, organization_id: str) -> dict[str, Any]:
             "events": int(act.get("events") or 0),
             "identity_source": d.get("identity_source") or "self_reported",
             "recorder_status": recorder_status(d if d.get('received_at') else None,
+                enrolled_at=d['created_at'],identity_linked_at=d.get('linked_at'),now=status_time),
+            "sync_health": sync_health(sync_reports.get((d["actor_id"], d["device_id"], d["token_id"])),
                 enrolled_at=d['created_at'],identity_linked_at=d.get('linked_at'),now=status_time),
         }
         owner = by_id.get(d.get("employee_id") or "") or by_actor.get(d["actor_id"])
