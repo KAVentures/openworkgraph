@@ -158,12 +158,12 @@ from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
 
-csv_body = "\n".join(["case,activity,time"] + [
-    f"c{i},{a},2024-01-01T0{n}:00:00Z" for i in range(12) for n, a in enumerate(["A", "B", "C"] if i % 2 else ["A", "C"])
+csv_body = "\n".join(["case,activity,time,who"] + [
+    f"c{i},{a},2024-01-01T0{n}:00:00Z, bot " for i in range(12) for n, a in enumerate(["A", "B", "C"] if i % 2 else ["A", "C"])
 ]).encode()
 with TestClient(app) as client:
     headers = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
-    made = client.post("/v1/event-logs/import?format=csv&name=t&case_column=case&activity_column=activity&timestamp_column=time",
+    made = client.post("/v1/event-logs/import?format=csv&name=t&case_column=case&activity_column=activity&timestamp_column=time&resource_column=who",
                        content=csv_body, headers={**headers, "x-owg-local-storage-confirmed": "true"})
     assert made.status_code == 200, made.text
     base = "/v1/event-logs/" + made.json()["log_id"]
@@ -177,6 +177,10 @@ with TestClient(app) as client:
     kpis = client.get(base + "/kpis?sla_seconds=3600&automation_resources=bot,%20system", headers=headers)
     assert kpis.status_code == 200 and kpis.json()["sla"]["breached_cases"] == 6, kpis.text
     assert kpis.json()["automation"]["resources"] == ["bot", "system"]
+    exact = client.get(base + "/kpis", params=[("automation_resource", " bot "), ("automation_resource", "bot,system")], headers=headers)
+    assert exact.status_code == 200, exact.text
+    assert exact.json()["automation"]["resources"] == [" bot ", "bot,system"]
+    assert exact.json()["automation"]["automated_events"] == 30
     cause = client.get(base + "/root-cause?outcome=contains_activity&activity=B", headers=headers)
     assert cause.status_code == 200 and cause.json()["outcome_cases"] == 6, cause.text
     assert client.get(base + "/root-cause?outcome=duration_over", headers=headers).status_code == 422
@@ -209,6 +213,8 @@ vm.runInNewContext(fs.readFileSync('dashboard/event_log_workspace.js','utf8'),sc
 const m=scope.window.__owgEventLogModel;
 assert.deepEqual(JSON.parse(JSON.stringify(m.parsePaths('A > B → C\n\nA>C'))),{format:'openworkgraph.reference-model.v1',paths:[['A','B','C'],['A','C']]});
 assert.throws(()=>m.parsePaths('  '));
+assert.deepEqual(JSON.parse(JSON.stringify(m.parsePaths('{"format":"openworkgraph.reference-model.v1","paths":[[" Review > ","Close→ "]]}'))).paths,[[' Review > ','Close→ ']]);
+assert.deepEqual(JSON.parse(JSON.stringify(m.csvHeader(' case ,"step\nname",time\nx',','))),[' case ','step\nname','time']);
 assert.deepEqual(JSON.parse(JSON.stringify(m.csvHeader('﻿"case, id";"step""s";time\nx','; '.trim()))),['case, id','step"s','time']);
 assert.equal(m.detectFormat('log.XES'),'xes');assert.equal(m.detectFormat('o.jsonocel'),'ocel');assert.equal(m.detectFormat('a.tsv'),'csv');
 assert.equal(m.duration(90),'90 s');assert.equal(m.duration(3600),'60 min');assert.equal(m.duration(86400*3),'3.0 d');

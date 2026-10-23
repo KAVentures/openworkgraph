@@ -144,3 +144,11 @@ CSV headers are bounded to one million characters and must have nonempty,
 unambiguous names, including casing. Automatic column renaming is refused.
 OCEL JSON rejects repeated fields and nonstandard numeric constants instead
 of silently taking one of two conflicting identifiers.
+
+The KPI API accepts repeated `automation_resource` query parameters for literal
+resource labels, including commas and surrounding spaces. The older
+`automation_resources` comma-separated shorthand still trims each item.
+The dashboard accepts a JSON string array for exact resource labels and
+reference-model JSON for exact activity labels; its suggested reference is
+JSON so separators and whitespace cannot change imported activity names.
+CSV column selection also preserves literal header spelling.

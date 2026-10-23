@@ -123,9 +123,11 @@ def event_log_activities(request: Request, log_id: str, case_type: str | None = 
 @router.get("/v1/event-logs/{log_id}/kpis")
 def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                    sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
-                   automation_resources: str = Query(default="", max_length=10000)):
+                   automation_resources: str = Query(default="", max_length=10000),
+                   automation_resource: list[str] | None = Query(default=None, max_length=50)):
     _require_dashboard(request)
-    resources = [item.strip() for item in automation_resources.split(",") if item.strip()]
+    resources = (automation_resource if automation_resource is not None else
+                 [item.strip() for item in automation_resources.split(",") if item.strip()])
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources)
 
 
