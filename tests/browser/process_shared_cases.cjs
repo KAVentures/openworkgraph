@@ -96,6 +96,36 @@ const {spawn,spawnSync}=require('node:child_process'),{tmpdir}=require('node:os'
   await page.locator('#owgLogCases details').first().waitFor();assert.equal(await page.locator('#owgLogCases details').count(),1);
   const first=page.locator('#owgLogCases details').filter({hasText:'Case 1 · 3 events'});await first.locator('summary').click();
   await first.locator('li').filter({hasText:'Source 2'}).first().waitFor();assert.equal(await first.locator('li').count(),3);
+  // Source selection is a complete-case population, including other sources.
+  const sourceFilter=page.getByLabel('Cases with source alias',{exact:true});
+  assert.deepEqual(await sourceFilter.locator('option').allTextContents(),['Any source alias','Source 1','Source 2']);
+  await sourceFilter.selectOption('source_2');
+  await page.getByRole('button',{name:'Apply case filters',exact:true}).click();
+  await page.locator('#owgCohortStatus').filter({hasText:'Selected 2 of 3 retained cases, including all 4 events'}).waitFor();
+  await page.locator('#owgLogCases summary').filter({hasText:'Case 2 · 1 events'}).waitFor();
+  assert.equal(await page.locator('#owgLogCases details').count(),2);
+  // Choices stay anchored to the full retained snapshot after filtering.
+  assert.deepEqual(await sourceFilter.locator('option').allTextContents(),['Any source alias','Source 1','Source 2']);
+  const mixed=page.locator('#owgLogCases details').filter({hasText:'Case 1 · 3 events'});
+  await mixed.locator('summary').click();await mixed.locator('li').filter({hasText:'Source 1'}).waitFor();
+  assert.equal(await mixed.locator('li').count(),3);
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+  await page.setViewportSize({width:1280,height:900});
+  await page.getByText('Compare two complete-case selections',{exact:true}).click();
+  await sourceFilter.selectOption('source_1');
+  await page.getByRole('button',{name:'Keep filters as comparison baseline',exact:true}).click();
+  await sourceFilter.selectOption('source_2');
+  await page.getByLabel('I reviewed these baseline and current case selections for comparison.',{exact:true}).check();
+  const comparedSources=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-mining/datasets/cohorts/compare');
+  await page.getByRole('button',{name:'Compare case selections',exact:true}).click();
+  const sourceComparison=await (await comparedSources).json();
+  assert.equal(sourceComparison.baseline.case_count,2);assert.equal(sourceComparison.current.case_count,2);
+  assert.equal(sourceComparison.current.event_count,4);assert.equal(sourceComparison.cohort_overlap.shared_case_count,1);
+  assert.equal(sourceComparison.baseline.cohort_filters.contains_origin,'source_1');
+  assert.equal(sourceComparison.current.cohort_filters.contains_origin,'source_2');
+  await page.getByRole('button',{name:'Inspect current case selection',exact:true}).click();
+  await page.locator('#owgCohortStatus').filter({hasText:'Selected 2 of 3 retained cases, including all 4 events'}).waitFor();
+  await sourceFilter.selectOption('');
   await page.getByLabel('Case contains exact activity',{exact:true}).fill('Waiting');
   await page.getByRole('button',{name:'Apply case filters',exact:true}).click();
   await page.locator('#owgCohortStatus').filter({hasText:'Selected 1 of 3 retained cases, including all 1 events'}).waitFor();
@@ -113,7 +143,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.setViewportSize({width:1280,height:900});page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Delete '+id,exact:true}).click();await page.getByText('No retained local logs.',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case/source history and full-versus-variant activity support and exact scoped case drill-down, pending retention withdrawal, saved alias stability, whole-case filtering, deletion, mobile and no canonical evidence.');
+  console.log('Shared-case browser acceptance passed: two reviewed exports, browser-minimized keys and unused fields, no automatic upload/retention, exact shared case/source history and full-versus-variant activity support and exact scoped case drill-down, pending retention withdrawal, saved alias stability, source-based whole-case filtering and reviewed overlap comparison, deletion, mobile and no canonical evidence.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

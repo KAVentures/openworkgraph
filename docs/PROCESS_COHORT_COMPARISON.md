@@ -90,3 +90,7 @@ case intersections, disjoint/reversed populations, full histories beyond date
 bounds, zero durations, tied timestamps, exact model comparison, deletion
 concurrency, expiry, bounded/authenticated API requests, private error values,
 pending-review invalidation and a production dashboard/API/SQLite browser flow.
+
+[Source cohort filters](PROCESS_SOURCE_COHORTS.md) now select complete cases by
+supplied import-scoped origin and participate in reviewed baseline/current
+comparison. Other sources’ events stay in each case history.

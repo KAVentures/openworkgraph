@@ -133,3 +133,7 @@ observations.
 [Activity label support](PROCESS_ACTIVITY_LABEL_SUPPORT.md) also shows source
 alias event/case counts for a selected activity, using the whole selected
 population or exact variant without confusing sample examples with support.
+
+[Source cohort filters](PROCESS_SOURCE_COHORTS.md) now select complete cases by
+supplied import-scoped origin and participate in reviewed baseline/current
+comparison. Other sources’ events stay in each case history.

@@ -25,7 +25,7 @@ class ProcessLogError(ValueError):
     pass
 
 
-def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None, contains_participant=None, contains_team=None):
+def _case_cohort(*, started_since=None, started_before=None, contains_activity=None, variant_id=None, contains_participant=None, contains_team=None, contains_origin=None):
     """Select whole cases. Never clip events or infer business start/completion."""
     filters = {}
     for key, value in (('started_since', started_since), ('started_before', started_before)):
@@ -54,6 +54,10 @@ def _case_cohort(*, started_since=None, started_before=None, contains_activity=N
                 or int(value.rsplit('_',1)[1])>1000):
                 raise ProcessLogError('Participant/team filters must use bounded labels from this snapshot')
             filters['contains_'+key]=value
+    if contains_origin is not None:
+        if not isinstance(contains_origin,str) or not re.fullmatch(r'source_[1-4]',contains_origin):
+            raise ProcessLogError('Source filters must use bounded aliases from this snapshot')
+        filters['contains_origin']=contains_origin
     sql, params = [], []
     for key, operator in (('started_since', '>='), ('started_before', '<')):
         if key in filters:
@@ -64,7 +68,7 @@ def _case_cohort(*, started_since=None, started_before=None, contains_activity=N
         params.append(filters['contains_activity'])
     if 'variant_id' in filters:
         sql.append('c.variant_id = ?');params.append(filters['variant_id'])
-    selected=[key for key in PARTICIPANT_DIMENSIONS if 'contains_'+key in filters]
+    selected=[key for key in (*PARTICIPANT_DIMENSIONS,'origin') if 'contains_'+key in filters]
     if selected:
         sql.append('EXISTS (SELECT 1 FROM process_log_events pe WHERE pe.dataset_id = c.dataset_id '
             'AND pe.case_number = c.case_number'+''.join(' AND pe.'+key+' = ?' for key in selected)+')')
@@ -236,7 +240,7 @@ class ProcessLogStore:
     def cases(self, dataset_id, *, after=0, limit=25, activity=None, variant_id=None,
               started_since=None, started_before=None, contains_activity=None, contains_participant=None, contains_team=None,
               transition_from=None, transition_to=None,
-              label_dimension=None, label_value=None, label_missing=False):
+              label_dimension=None, label_value=None, label_missing=False, contains_origin=None):
         label_filter=None
         if label_dimension is not None or label_value is not None or label_missing:
             if label_dimension not in (*PARTICIPANT_DIMENSIONS,"origin") or not isinstance(activity,str) or not 1 <= len(activity) <= 64:
@@ -257,13 +261,16 @@ class ProcessLogStore:
             raise ProcessLogError("Transition activity labels must be short and nonempty")
         filters, cohort_sql, cohort_params = _case_cohort(started_since=started_since,
             started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
-            contains_participant=contains_participant,contains_team=contains_team)
+            contains_participant=contains_participant,contains_team=contains_team,contains_origin=contains_origin)
         with self.connect() as conn:
             self._open(conn)
             if not conn.in_transaction:conn.execute('BEGIN')
             dataset=self._dataset(conn,dataset_id)
-            if label_filter:
+            if contains_origin or label_filter:
                 original=json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id=?',(dataset_id,)).fetchone()[0])
+                if contains_origin and not original.get('case_correlation'):
+                    raise ProcessLogError('Source aliases were not retained in this snapshot')
+            if label_filter:
                 available=set(_label_dimensions(original))
                 if original.get('case_correlation'):available.add('origin')
                 if label_dimension not in available:
@@ -305,10 +312,10 @@ class ProcessLogStore:
                         'tied_timestamp_order_verified':False} if transition_from is not None else {})}
 
     def cohort(self, dataset_id, *, started_since=None, started_before=None, contains_activity=None,
-               variant_id=None, reference_model=None, reference=None, contains_participant=None, contains_team=None):
+               variant_id=None, reference_model=None, reference=None, contains_participant=None, contains_team=None, contains_origin=None):
         filters, predicate, params = _case_cohort(started_since=started_since,
             started_before=started_before, contains_activity=contains_activity, variant_id=variant_id,
-            contains_participant=contains_participant,contains_team=contains_team)
+            contains_participant=contains_participant,contains_team=contains_team,contains_origin=contains_origin)
         with self.connect() as conn:
             self._open(conn)
             if not conn.in_transaction:
@@ -316,6 +323,8 @@ class ProcessLogStore:
             dataset = self._dataset(conn, dataset_id)
             original = json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id = ?',
                                                (dataset_id,)).fetchone()[0])
+            if contains_origin and not original.get('case_correlation'):
+                raise ProcessLogError('Source aliases were not retained in this snapshot')
             selected = conn.execute('''SELECT c.case_number, c.variant_id FROM process_log_cases c
                 WHERE c.dataset_id = ?''' + predicate + ' ORDER BY c.first_event_at, c.case_number',
                 [dataset_id, *params]).fetchall()
@@ -414,7 +423,7 @@ class ProcessLogStore:
         if comparability_confirmed is not True:
             raise ProcessLogError('Review both complete-case selections before comparing')
         allowed = {'started_since', 'started_before', 'contains_activity', 'variant_id',
-                   'contains_participant', 'contains_team'}
+                   'contains_participant', 'contains_team', 'contains_origin'}
         selections = []
         for value in (baseline_filters, current_filters):
             if not isinstance(value, dict) or not set(value).issubset(allowed):
@@ -426,6 +435,9 @@ class ProcessLogStore:
             if not conn.in_transaction:
                 conn.execute('BEGIN')
             dataset = self._dataset(conn, dataset_id)
+            if any(filters.get('contains_origin') for filters,_,_ in selections):
+                original=json.loads(conn.execute('SELECT report_json FROM process_log_datasets WHERE dataset_id=?',(dataset_id,)).fetchone()[0])
+                if not original.get('case_correlation'):raise ProcessLogError('Source aliases were not retained in this snapshot')
             for filters, predicate, params in selections:
                 rows = conn.execute('''SELECT e.case_number, e.position, e.activity, e.observed_at,
                     e.elapsed_since_previous_seconds FROM process_log_events e
