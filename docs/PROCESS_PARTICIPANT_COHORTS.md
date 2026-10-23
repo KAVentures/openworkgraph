@@ -74,3 +74,8 @@ identity, consent or source completeness.
 Changing the selected file or reviewed mapping invalidates stale inspection
 results and cancels uploads still waiting for dashboard authentication. Responses
 from an older selection cannot replace the current view.
+
+Use [complete-cohort comparison](PROCESS_COHORT_COMPARISON.md) to review
+differences between label-selected populations from the same snapshot. A case
+can contain several labels and belong to both selections; exact overlap is
+reported before drawing conclusions from timing or path differences.

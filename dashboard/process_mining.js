@@ -8,7 +8,7 @@
   let activeVariant=0;
   let activeActivity=null;
   let analyzedFile=null, retainedDataset=null, generation=0, inventoryGeneration=0;
-  let driftGeneration=0,cohortGeneration=0;
+  let driftGeneration=0,cohortGeneration=0,cohortComparisonGeneration=0,cohortBaseline=null;
   let mappingGeneration=0,mappingInspection=null,mappedFile=null,mappingRequired=false;
   let mappedParticipantLabels=false,analyzedParticipantLabels=false,retainedLabelChoices={};
   let zendeskGeneration=0;
@@ -301,8 +301,9 @@
     if(save)save.disabled=!(report&&analyzedFile&&!retainedDataset&&consent?.checked);
     cohortControls(reset);
   }
-  async function logRequest(path,options){
+  async function logRequest(path,options,isCurrent){
     await window.__owgAuthReady;
+    if(isCurrent&&!isCurrent())return null;
     const response=await fetch('/v1/process-mining/datasets'+path,{...options,cache:'no-store'});
     const value=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(String(value.detail||'Local log request failed'));
@@ -395,7 +396,7 @@
       const label=make('label',title),input=make(dimension?'select':'input');input.id=id;if(!dimension){input.type='text';input.maxLength=64;}input.disabled=true;
       input.setAttribute('aria-label',title);
       input.addEventListener(dimension?'change':'input',()=>{
-        cohortGeneration++;
+        cohortGeneration++;invalidateCohortComparison();
         document.getElementById('owgCohortStatus').textContent='Filter inputs changed. Apply to update the results.';
         document.getElementById('owgCohortApply').disabled=!retainedDataset;
       });label.appendChild(input);controls.appendChild(label);
@@ -403,10 +404,28 @@
     const apply=button('Apply case filters',applyCohort);apply.id='owgCohortApply';apply.disabled=true;
     const clear=button('Clear case filters',()=>{if(retainedDataset)openLog(retainedDataset);});clear.id='owgCohortClear';clear.disabled=true;
     const status=make('p','Open a retained snapshot to filter complete cases.','muted');status.id='owgCohortStatus';status.setAttribute('role','status');
-    controls.append(apply,clear);section.append(controls,status);parent.appendChild(section);
+    controls.append(apply,clear);section.append(controls,status);
+    const comparison=make('details');comparison.appendChild(make('summary','Compare two complete-case selections'));
+    comparison.appendChild(make('p','Choose baseline filters above and keep them as a comparison baseline. Then change the filters for the current selection. Both populations come from this saved log; all events of each case are used, including events outside date filters. Cases can appear in both selections.','muted'));
+    const keep=button('Keep filters as comparison baseline',()=>{
+      if(!retainedDataset)return;
+      cohortBaseline={dataset_id:retainedDataset,filters:readCohortFilters()};invalidateCohortComparison();
+      document.getElementById('owgCohortBaseline').textContent='Baseline filters: '+JSON.stringify(cohortBaseline.filters)+'. Empty filters include every case.';
+    });keep.id='owgCohortKeep';keep.disabled=true;
+    const baseline=make('p','No baseline selected.','muted');baseline.id='owgCohortBaseline';
+    const label=make('label'),consent=make('input');consent.type='checkbox';consent.id='owgCohortCompareConsent';
+    label.append(consent,make('span',' I reviewed these baseline and current case selections for comparison.'));
+    consent.addEventListener('change',()=>invalidateCohortComparison(false));
+    const compare=button('Compare case selections',compareCohorts);compare.id='owgCohortCompare';compare.disabled=true;
+    const resultStatus=make('p','No comparison requested.','muted');resultStatus.id='owgCohortCompareStatus';resultStatus.setAttribute('role','status');
+    const output=make('div');output.id='owgCohortCompareResults';
+    comparison.append(keep,baseline,label,compare,resultStatus,output);section.appendChild(comparison);parent.appendChild(section);
   }
   function cohortControls(reset=false){
-    if(reset)cohortGeneration++;
+    if(reset){
+      cohortGeneration++;cohortBaseline=null;invalidateCohortComparison();
+      const text=document.getElementById('owgCohortBaseline');if(text)text.textContent='No baseline selected.';
+    }
     if(!retainedDataset)retainedLabelChoices={};
     else if(report&&!report.cohort)retainedLabelChoices=report.participant_labels?.dimensions_summary||{};
     for(const [id,,,dimension] of cohortInputs){const input=document.getElementById(id);if(input){
@@ -416,15 +435,50 @@
         input.value=labels.some(row=>row.label===previous)?previous:'';input.disabled=!retainedDataset||!labels.length;
       }else{input.disabled=!retainedDataset;if(reset)input.value='';}
     }}
-    for(const id of ['owgCohortApply','owgCohortClear']){const control=document.getElementById(id);if(control)control.disabled=!retainedDataset;}
+    for(const id of ['owgCohortApply','owgCohortClear','owgCohortKeep']){const control=document.getElementById(id);if(control)control.disabled=!retainedDataset;}
     if(reset){const status=document.getElementById('owgCohortStatus');if(status)status.textContent=retainedDataset?'Full retained log selected. Case filters are optional.':'Open a retained snapshot to filter complete cases.';}
+  }
+  function readCohortFilters(){
+    const filters={};
+    for(const [element,,key] of cohortInputs){const value=document.getElementById(element).value.trim();if(value)filters[key]=value;}
+    return filters;
+  }
+  function cohortComparisonEnabled(){
+    return !!(retainedDataset&&cohortBaseline?.dataset_id===retainedDataset&&document.getElementById('owgCohortCompareConsent')?.checked);
+  }
+  function invalidateCohortComparison(resetConsent=true){
+    cohortComparisonGeneration++;
+    if(resetConsent){const consent=document.getElementById('owgCohortCompareConsent');if(consent)consent.checked=false;}
+    document.getElementById('owgCohortCompareResults')?.replaceChildren();
+    const status=document.getElementById('owgCohortCompareStatus');if(status)status.textContent='No comparison requested for these selections.';
+    const control=document.getElementById('owgCohortCompare');if(control)control.disabled=!cohortComparisonEnabled();
+  }
+  async function compareCohorts(){
+    if(!cohortComparisonEnabled())return;
+    const attempt=++cohortComparisonGeneration,selectedGeneration=generation;
+    const control=document.getElementById('owgCohortCompare'),status=document.getElementById('owgCohortCompareStatus');control.disabled=true;
+    const body={dataset_id:retainedDataset,baseline_filters:{...cohortBaseline.filters},current_filters:readCohortFilters(),
+      comparability_confirmed:true,...(reference?{workflow_id:reference.workflow_id,revision:Number(reference.revision)}:{})};
+    document.getElementById('owgCohortCompareResults').replaceChildren();status.textContent='Comparing complete retained case populations…';
+    try{
+      const value=await logRequest('/cohorts/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},
+        ()=>attempt===cohortComparisonGeneration&&selectedGeneration===generation&&cohortComparisonEnabled());
+      if(attempt!==cohortComparisonGeneration||selectedGeneration!==generation)return;
+      if(value.format!=='openworkgraph.process-cohort-comparison.v1')throw new Error('Unexpected complete-case comparison response');
+      renderDrift(value,'owgCohortCompareResults');status.textContent='Case comparison complete. '+value.cohort_overlap.shared_case_count+' retained cases occur in both selections. No saved process was changed.';
+    }catch(error){if(attempt===cohortComparisonGeneration&&selectedGeneration===generation)status.textContent='Unable to compare case selections: '+error.message;}
+    finally{if(attempt===cohortComparisonGeneration&&selectedGeneration===generation)control.disabled=!cohortComparisonEnabled();}
+  }
+  function inspectComparedCohort(filters){
+    for(const [id,,key] of cohortInputs)document.getElementById(id).value=filters[key]||'';
+    invalidateCohortComparison();applyCohort();
   }
   async function applyCohort(){
     if(!retainedDataset)return;
     if(window.owgProcessDesigner?.hasDraft?.()&&!window.confirm('Discard the unsaved proposed process before filtering this retained log?'))return;
     const id=retainedDataset,attempt=++generation,cohortAttempt=++cohortGeneration;
-    const query={dataset_id:id,...(reference||{})};
-    for(const [element,,key] of cohortInputs){const value=document.getElementById(element).value.trim();if(value)query[key]=value;}
+    const query={dataset_id:id,...(reference||{}),...readCohortFilters()};
+    invalidateCohortComparison();
     report=null;analyzedFile=null;clearReport();
     const control=document.getElementById('owgCohortApply'),status=document.getElementById('owgCohortStatus');control.disabled=true;
     status.textContent='Analyzing all events of matching retained cases…';
@@ -494,19 +548,22 @@
     }catch(error){if(attempt===driftGeneration)status.textContent='Unable to compare retained logs: '+error.message;}
     finally{if(attempt===driftGeneration)control.disabled=!driftEnabled();}
   }
-  function renderDrift(value){
-    const host=document.getElementById('owgDriftResults');host.replaceChildren(make('h3','Observed log changes'));
+  function renderDrift(value,hostId='owgDriftResults'){
+    const cohort=!!value.cohort_overlap,host=document.getElementById(hostId);host.replaceChildren(make('h3',cohort?'Observed differences between case selections':'Observed log changes'));
+    if(cohort){
+      host.appendChild(make('p','Baseline filters: '+JSON.stringify(value.baseline.cohort_filters)+'; current filters: '+JSON.stringify(value.current.cohort_filters)+'. '+value.cohort_overlap.shared_case_count+' cases belong to both populations; '+value.cohort_overlap.baseline_only_case_count+' only to baseline; '+value.cohort_overlap.current_only_case_count+' only to current. Cases are identified by their unchanged ordinal in this one snapshot. These are not verified independent samples.','muted'));
+    }
     host.appendChild(make('p','Baseline '+value.baseline.dataset_id+' ('+value.baseline.case_count+' cases) → current '+
-      value.current.dataset_id+' ('+value.current.case_count+' cases). All retained events and full paths contribute to the metrics.','muted'));
+      value.current.dataset_id+' ('+value.current.case_count+' cases). '+(cohort?'All events and full paths of the selected cases':'All retained events and full paths')+' contribute to the metrics.','muted'));
     const metrics=make('div',null,'owg-pmetrics'),s=value.summary;
     metrics.append(metric('Observed path-mix distance · 0 identical, 1 disjoint',s.path_mix_total_variation_distance),
-      metric('Paths seen only in current log',s.current_only_path_count),metric('Paths seen only in baseline',s.baseline_only_path_count),
+      metric(cohort?'Paths seen only in current selection':'Paths seen only in current log',s.current_only_path_count),metric('Paths seen only in baseline',s.baseline_only_path_count),
       metric('Baseline → current median case elapsed',seconds(s.baseline_median_elapsed_seconds)+' → '+seconds(s.current_median_elapsed_seconds)),
       metric('Baseline → current p90 case elapsed',seconds(s.baseline_p90_case_elapsed_seconds)+' → '+seconds(s.current_p90_case_elapsed_seconds)));
     host.appendChild(metrics);
     host.appendChild(make('p','This is a descriptive comparison, not a significance test or a verified change in business behavior. Case counts and time windows can differ; mix changes may explain overall timing changes. Within-path medians below compare the same complete activity sequence. Elapsed time is not active labor or verified waiting.','muted'));
-    const warningText={observed_event_windows_overlap:'Event windows overlap. Duplicate or overlapping cases cannot be ruled out because native case IDs were discarded.',
-      fewer_than_twenty_cases_in_at_least_one_snapshot:'At least one snapshot has fewer than 20 cases; this advisory is not a significance threshold.',
+    const warningText={observed_event_windows_overlap:cohort?'Event windows overlap. Exact shared-case counts are shown above; event overlap does not establish employee effort or causal dependencies.':'Event windows overlap. Duplicate or overlapping cases cannot be ruled out because native case IDs were discarded.',
+      fewer_than_twenty_cases_in_at_least_one_snapshot:cohort?'At least one selection has fewer than 20 cases; this advisory is not a significance threshold.':'At least one snapshot has fewer than 20 cases; this advisory is not a significance threshold.',
       timestamp_ties_have_unverified_order:'Some events share timestamps; their supplied row order is unverified.'};
     for(const code of safe(value.warnings)){if(warningText[code])host.appendChild(make('p',warningText[code],'muted'));}
     for(const [title,entry] of [['Baseline',value.baseline],['Current',value.current]]){
@@ -532,6 +589,10 @@
       safe(value.transitions).map(row=>[row.from+' → '+row.to,row.baseline_transition_count,row.current_transition_count,
         signed(row.case_share_change_percentage_points),optionalSeconds(row.baseline_median_elapsed_seconds),optionalSeconds(row.current_median_elapsed_seconds)]));
     if(value.coverage.transition_rows_truncated)host.appendChild(make('p','Showing '+value.coverage.transition_rows_returned+' of '+value.coverage.transition_rows_total+' transition types.','muted'));
+    if(cohort){
+      host.append(button('Inspect baseline case selection',()=>inspectComparedCohort(value.baseline.cohort_filters)),
+        button('Inspect current case selection',()=>inspectComparedCohort(value.current.cohort_filters)));return;
+    }
     host.append(make('p','Inspect a snapshot to review its paths and supporting cases. Drafting and saving any improved process requires a separate explicit review. No business outcomes or execution authority are inferred.','muted'),
       button('Inspect baseline snapshot',()=>openLog(value.baseline.dataset_id)),
       button('Inspect current snapshot',()=>openLog(value.current.dataset_id)));
@@ -793,7 +854,7 @@
     host.appendChild(details);
   }
   function setReference(value){
-    invalidateDrift();
+    invalidateDrift();invalidateCohortComparison();
     cohortGeneration++;cohortControls();
     reference=value?{workflow_id:value.workflow_id,revision:String(value.revision)}:null;
     const label=document.getElementById('owgProcessReference');

@@ -256,3 +256,44 @@ test('Zendesk audit reads require explicit selection and consent; changed select
  assert.equal(find('button','Explore selected Zendesk status history'),undefined);
  assert.equal(run.disabled,true);assert.equal(calls.length,1);
 });
+
+test('cohort comparison freezes baseline filters and discards results after selection changes',async()=>{
+  let finish;const pending=new Promise(resolve=>finish=resolve),id='log_'+'a'.repeat(32);
+  const report={format:'openworkgraph.process-mining-csv-preview.v1',dataset_id:id,case_count:40,
+    metrics:{},variants:[],activities:[],transitions:[]};
+  const {window,document,calls,find,root}=setup(url=>url.includes('/cohorts/compare')?pending:
+    url.includes('/report?')?report:url.includes('/cases?')?{cases:[]}:
+    {datasets:[{dataset_id:id,case_count:40,created_at:'2026-10-21T00:00:00Z'}]});
+  await find('button','List saved local logs').handlers.click();await find('button','Open '+id).handlers.click();
+  const activity=document.getElementById('owgCohortActivity'),consent=document.getElementById('owgCohortCompareConsent'),
+    compare=document.getElementById('owgCohortCompare');
+  activity.value='Open';activity.handlers.input();find('button','Keep filters as comparison baseline').handlers.click();
+  activity.value='Review';activity.handlers.input();assert.equal(compare.disabled,true);
+  window.owgProcessMining.setReference({workflow_id:'reviewed',revision:3});
+  consent.checked=true;consent.handlers.change();assert.equal(compare.disabled,false);assert.equal(calls.length,3);
+  const comparing=compare.handlers.click();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.length,4);
+  assert.deepEqual(JSON.parse(calls[3][1].body),{dataset_id:id,baseline_filters:{contains_activity:'Open'},
+    current_filters:{contains_activity:'Review'},comparability_confirmed:true,workflow_id:'reviewed',revision:3});
+  activity.value='Close';activity.handlers.input();assert.equal(consent.checked,false);assert.equal(compare.disabled,true);
+  finish({format:'openworkgraph.process-cohort-comparison.v1',summary:{current_only_path_count:999}});await comparing;
+  assert.equal(document.getElementById('owgCohortCompareResults').children.length,0);assert(!root.text.includes('999'));
+  // A changed exact reference also requires another explicit review.
+  consent.checked=true;consent.handlers.change();window.owgProcessMining.setReference({workflow_id:'reviewed',revision:4});
+  assert.equal(consent.checked,false);assert.equal(compare.disabled,true);
+});
+
+test('withdrawing cohort comparison review while authentication is pending cancels the request',async()=>{
+  const id='log_'+'a'.repeat(32),report={format:'openworkgraph.process-mining-csv-preview.v1',dataset_id:id,
+    case_count:2,metrics:{},variants:[],activities:[],transitions:[]};
+  const {window,document,calls,find}=setup(url=>url.includes('/report?')?report:url.includes('/cases?')?{cases:[]}:
+    {datasets:[{dataset_id:id,case_count:2,created_at:'2026-10-21T00:00:00Z'}]});
+  await find('button','List saved local logs').handlers.click();await find('button','Open '+id).handlers.click();
+  find('button','Keep filters as comparison baseline').handlers.click();
+  let release;window.__owgAuthReady=new Promise(resolve=>release=resolve);
+  const consent=document.getElementById('owgCohortCompareConsent');consent.checked=true;consent.handlers.change();
+  const comparing=document.getElementById('owgCohortCompare').handlers.click();
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,3);
+  consent.checked=false;consent.handlers.change();release();await comparing;assert.equal(calls.length,3);
+  assert.equal(document.getElementById('owgCohortCompare').disabled,true);
+});

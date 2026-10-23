@@ -101,3 +101,8 @@ Analysis artifact: `/tmp/owg-rea-drift-analysis.json`, evidence
 The artifact is a development-workspace file, not part of the distributed
 product. It analyzes the selected source file only; other files are outside
 that invocation's scope.
+
+For two populations within one log, use
+[complete-cohort comparison](PROCESS_COHORT_COMPARISON.md). Unlike separate
+imports, one retained snapshot preserves case identity, so exact population
+overlap is reported without recovering native case identifiers.
