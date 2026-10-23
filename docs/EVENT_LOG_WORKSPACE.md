@@ -16,6 +16,7 @@ delete them.
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events and event-to-object relationships with qualifiers. |
+| OCEL 2.0 XML | yes | yes | The same content in the OCEL 2.0 XML layout (`.xmlocel`). Objects must precede events, as the standard requires; the file is streamed, so memory stays bounded. |
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
 object type, `case`. For an OCEL log you choose the case notion (`order`,
@@ -59,7 +60,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | Route | Purpose |
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
-| `POST /v1/event-logs/import?format=csv\|xes\|ocel&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column` and `delimiter` (`t` for tab). |
+| `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column` and `delimiter` (`t` for tab). |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
@@ -73,7 +74,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
-| `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel` | Download the log. |
+| `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
 Analysis routes take an optional `case_type` for OCEL logs. Every response is
 `Cache-Control: no-store` and is marked descriptive: it reports what the log

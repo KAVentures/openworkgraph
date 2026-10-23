@@ -329,6 +329,98 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
     json.dump(document, out, ensure_ascii=False)
 
 
+def _ocel_xml_attributes(element: ET.Element | None) -> dict[str, str]:
+    if element is None:
+        return {}
+    return _attributes((child.get("name"), child.text or "") for child in element if child.tag == "attribute")
+
+
+def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
+    """Stream OCEL 2.0 XML: objects (which must precede events), then events with qualified relationships.
+
+    Each processed object or event is removed from its section, so memory stays bounded by one element.
+    """
+    stats = stats if stats is not None else ReadStats()
+    _refuse_dtd(stream)
+    types: dict[str, str] = {}
+    depth, section, container, events_seen = 0, "", None, False
+    try:
+        for kind, element in ET.iterparse(stream, events=("start", "end")):
+            if kind == "start":
+                depth += 1
+                if depth == 1 and element.tag != "log":
+                    raise EventLogFormatError("OCEL 2.0 XML must have a log root element")
+                if depth == 2:
+                    section, container = element.tag, element
+                    if section == "objects" and events_seen:
+                        raise EventLogFormatError("OCEL 2.0 XML objects must precede events")
+                    events_seen = events_seen or section == "events"
+                continue
+            depth -= 1
+            if depth != 2:
+                continue
+            if section == "objects" and element.tag == "object":
+                object_id, object_type = _exact_key(element.get("id")), _exact_key(element.get("type"))
+                if object_id and object_type:
+                    if object_id in types:
+                        raise EventLogFormatError("OCEL object identifiers must be unique")
+                    types[object_id] = object_type
+                    stats.objects += 1
+                    yield ObjectRecord(object_id, object_type, _ocel_xml_attributes(element.find("attributes")))
+            elif section == "events" and element.tag == "event":
+                event_id, activity = _exact_key(element.get("id")), _exact_key(element.get("type"), MAX_ACTIVITY)
+                stamp = parse_timestamp(element.get("time"))
+                if not event_id or not activity or stamp is None:
+                    stats.rejected_events += 1
+                else:
+                    related = element.find("objects")
+                    links = [(_exact_key(link.get("object-id")), _exact_key(link.get("qualifier"), 80))
+                             for link in (related if related is not None else [])
+                             if link.tag == "relationship" and _exact_key(link.get("object-id")) in types]
+                    stats.events += 1
+                    yield EventRecord(event_id, activity, stamp, "", _ocel_xml_attributes(element.find("attributes")), links)
+            if container is not None:
+                container.remove(element)
+    except ET.ParseError:
+        raise EventLogFormatError("OCEL XML could not be parsed") from None
+
+
+_XML_INVALID = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def write_ocel_xml(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]], out: IO[str]) -> None:
+    """OCEL 2.0 XML with declared object/event types and qualified relationships."""
+    from xml.sax.saxutils import escape as _escape, quoteattr as _quoteattr
+
+    # Characters XML 1.0 cannot represent are dropped rather than producing an unreadable file.
+    escape = lambda value: _escape(_XML_INVALID.sub("", str(value)))
+    quoteattr = lambda value: _quoteattr(_XML_INVALID.sub("", str(value)))
+
+    objects, events = list(objects), list(events)
+    out.write("<?xml version='1.0' encoding='UTF-8'?>\n<log>\n<object-types>\n")
+    for name in sorted({o["object_type"] for o in objects}):
+        out.write(f"<object-type name={quoteattr(name)}><attributes/></object-type>\n")
+    out.write("</object-types>\n<event-types>\n")
+    for name in sorted({e["activity"] for e in events}):
+        out.write(f"<event-type name={quoteattr(name)}><attributes/></event-type>\n")
+    out.write("</event-types>\n<objects>\n")
+    for o in objects:
+        out.write(f"<object id={quoteattr(o['object_id'])} type={quoteattr(o['object_type'])}><attributes>")
+        for key, value in sorted((o.get("attributes") or {}).items()):
+            out.write(f"<attribute name={quoteattr(key)} time=\"1970-01-01T00:00:00Z\">{escape(value)}</attribute>")
+        out.write("</attributes></object>\n")
+    out.write("</objects>\n<events>\n")
+    for e in events:
+        out.write(f"<event id={quoteattr(e['event_id'])} type={quoteattr(e['activity'])} time={quoteattr(_iso(e['timestamp']))}><attributes>")
+        for key, value in sorted((e.get("attributes") or {}).items()):
+            out.write(f"<attribute name={quoteattr(key)}>{escape(value)}</attribute>")
+        out.write("</attributes><objects>")
+        for object_id, qualifier in e.get("objects") or []:
+            out.write(f"<relationship object-id={quoteattr(object_id)} qualifier={quoteattr(qualifier)}/>")
+        out.write("</objects></event>\n")
+    out.write("</events>\n</log>\n")
+
+
 def detect_format(head: bytes) -> str:
     """Best-effort detection from the first bytes; callers may also choose explicitly."""
     text = head.lstrip(b"\xef\xbb\xbf \t\r\n")[:2048]
@@ -341,6 +433,6 @@ def detect_format(head: bytes) -> str:
 
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
-    "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_xes",
-    "write_csv", "write_ocel_json", "write_xes",
+    "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
+    "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]
