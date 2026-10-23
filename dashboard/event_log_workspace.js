@@ -464,7 +464,7 @@
             const inspect=button('Inspect cases','secondary');inspect.onclick=()=>inspection.path(v.path);
             return [v.path.slice(0,40).join(' → ')+(v.path.length>40?' …':''),v.cases,v.comparison_complete?(v.exact_structural_match?'Match':'Deviation'):'Unknown',v.minimum_activity_edit_count===null?'—':v.minimum_activity_edit_count,v.could_be_incomplete_log_prefix===null?'Unknown':(v.could_be_incomplete_log_prefix?'Yes':'No'),inspect];
           })),
-          el('div',result.comparison_complete?'Every selected case was structurally compared. Business rules and outcomes were not checked.':'Some cases remain unknown. They are neither matches nor deviations. Business rules and outcomes were not checked.','muted'));
+          el('div',result.cases===0?'No cases match this selection; no verdict was established.':result.comparison_complete?'Every selected case was structurally compared. Business rules and outcomes were not checked.':'Some cases remain unknown. They are neither matches nor deviations. Business rules and outcomes were not checked.','muted'));
       }catch(error){if(current()&&ticket===comparing)out.replaceChildren(el('div',error.message));}
       finally{if(current()&&ticket===comparing)run.disabled=false;}
     };
@@ -473,6 +473,16 @@
 
   // "0.6: A > B > C" per line; the weight is optional and defaults to 1.
   function parseWeightedPaths(text){
+    if(String(text||'').trimStart().startsWith('[')){
+      const paths=JSON.parse(text);
+      if(!Array.isArray(paths)||!paths.length||paths.length>20)throw new Error('Use 1 to 20 weighted paths.');
+      const decoded=paths.map(p=>{
+        if(!p||!Array.isArray(p.activities)||!p.activities.length||p.activities.some(a=>typeof a!=='string'||!a.trim())||typeof p.weight!=='number'||!Number.isFinite(p.weight)||p.weight<0)throw new Error('Each JSON path needs literal activities and a nonnegative numeric weight.');
+        return {activities:p.activities.slice(),weight:p.weight};
+      });
+      if(!decoded.some(p=>p.weight>0))throw new Error('At least one path weight must be positive.');
+      return decoded;
+    }
     const paths=[];
     for(const line of String(text||'').split(/\r?\n/)){
       if(!line.trim())continue;
@@ -485,7 +495,8 @@
     if(paths.length>20)throw new Error('Use at most 20 paths.');
     return paths;
   }
-  const formatWeightedPaths=paths=>paths.map(p=>Number(p.weight).toFixed(3)+': '+p.activities.join(' > ')).join('\n');
+  const formatWeightedPaths=paths=>paths.some(p=>Number(Number(p.weight).toFixed(3))!==Number(p.weight)||p.activities.some(a=>a!==a.trim()||/[>→]/.test(a)))
+    ?JSON.stringify(paths,null,2):paths.map(p=>Number(p.weight).toFixed(3)+': '+p.activities.join(' > ')).join('\n');
 
   function simulationSection(){
     const box=section('What-if simulation');
@@ -520,11 +531,11 @@
         add.onclick=()=>{const name=newName.value.trim();if(!name||rows.some(r=>r.name===name))return;addRow(name,{minutes:0,resources:1});newName.value='';};
         const addRowNode=el('div',null,'row');addRowNode.style.alignItems='end';addRowNode.append(field('Activity not in the log',newName),add);
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
-        form.replaceChildren(top,field('Routing: weight: activity > activity (one path per line)',paths),wrap,addRowNode,
+        form.replaceChildren(top,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,
           el('div','Measured times are median gaps before each activity and include waiting. '+(cal.paths_cover_cases_share<1?'Listed paths cover '+pct(cal.paths_cover_cases_share)+' of cases.':''),'muted'),run);
         run.onclick=async()=>{
           try{
-            const activities={};
+            const activities=Object.create(null);
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
             const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000)};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);

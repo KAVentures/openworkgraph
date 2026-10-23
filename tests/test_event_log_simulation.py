@@ -146,6 +146,20 @@ const plain=v=>JSON.parse(JSON.stringify(v));
 assert.deepEqual(plain(m.parseWeightedPaths('0.7: A > B\n\n.3: A → C\nA>D')),[{activities:['A','B'],weight:0.7},{activities:['A','C'],weight:0.3},{activities:['A','D'],weight:1}]);
 assert.throws(()=>m.parseWeightedPaths(''));assert.throws(()=>m.parseWeightedPaths('0.5:'));
 assert.equal(m.formatWeightedPaths([{activities:['A','B'],weight:0.6}]),'0.600: A > B');
+const exact=[{activities:[' Review > ','Close→','__proto__'],weight:0.000001}];
+assert.deepEqual(plain(m.parseWeightedPaths(m.formatWeightedPaths(exact))),exact);
+assert.deepEqual(plain(m.parseWeightedPaths(m.formatWeightedPaths([{activities:['A'],weight:0.1234567}]))),[{activities:['A'],weight:0.1234567}]);
+assert.throws(()=>m.parseWeightedPaths('[{"activities":["A"],"weight":0}]'));
+assert.throws(()=>m.parseWeightedPaths('[{"activities":[3],"weight":1}]'));
+assert.deepEqual(plain(m.parseWeightedPaths('[{"activities":["A"],"weight":0},{"activities":["B"],"weight":1}]')),[{activities:['A'],weight:0},{activities:['B'],weight:1}]);
 """
     result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_calibration_preserves_small_observed_variant_weights():
+    rows=['case,activity,time,who']+[f'c{i},{"Rare" if i==0 else "Common"},2024-01-01T00:00:{i%60:02d}Z,person' for i in range(1001)]
+    log=workspace.import_log(BytesIO(('\n'.join(rows)).encode()),name='weights',source_format='csv',mapping=MAPPING)['log_id']
+    weights={tuple(p['activities']):p['weight'] for p in sim.calibrate(log)['paths']}
+    assert weights[('Rare',)]==1/1001
+    assert weights[('Common',)]==1000/1001

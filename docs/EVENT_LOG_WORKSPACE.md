@@ -233,3 +233,10 @@ Load an exact local catalog revision, inspect its map and compare selected
 retained cases using the shared structural engine. Full-population results keep
 bounded unknown cases separate from matches and deviations. See
 [saved process conformance](LARGE_LOG_SAVED_PROCESS_CONFORMANCE.md).
+
+Simulation routing accepts weighted text lines or JSON arrays of
+`{"activities":["literal label"],"weight":0.5}`. Calibration uses JSON when
+text formatting would change a label or routing probability. Small observed
+weights retain their precision; a zero-weight route may be disabled when
+another route has positive weight. Activity labels are data keys, including
+names that also occur on JavaScript object prototypes.
