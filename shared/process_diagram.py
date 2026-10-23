@@ -11,7 +11,7 @@ MODEL = 'http://www.omg.org/spec/BPMN/20100524/MODEL'
 BPMNDI = 'http://www.omg.org/spec/BPMN/20100524/DI'
 DC = 'http://www.omg.org/spec/DD/20100524/DC'
 DI = 'http://www.omg.org/spec/DD/20100524/DI'
-_NODES = {'task', 'manualTask', 'exclusiveGateway', 'startEvent', 'endEvent'}
+_NODES = {'task', 'manualTask', 'exclusiveGateway', 'parallelGateway', 'startEvent', 'endEvent'}
 
 
 def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str) -> None:
@@ -53,7 +53,7 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
     top = 100 + len(flows) * 8
     for node_id, node in by_id.items():
         kind = node.tag.removeprefix('{'+MODEL+'}')
-        width, height = (50, 50) if kind == 'exclusiveGateway' else ((36, 36) if kind.endswith('Event') else (180, 80))
+        width, height = (50, 50) if kind in {'exclusiveGateway','parallelGateway'} else ((36, 36) if kind.endswith('Event') else (180, 80))
         level = levels[node_id]
         x, y = 100 + 280 * level + (180-width)//2, top + 160*rows[level] + (80-height)//2
         rows[level] += 1

@@ -110,6 +110,11 @@ const assert = require("node:assert/strict");
       for (const e of result.edges) assert(e.waypoints >= 2, JSON.stringify(e));
       assert.match(result.svg, /<svg/);
       assert.match(result.roundtrip, /isExecutable="false"/);
+      if (fixture.name === "paired-parallel") {
+        assert.equal(result.nodes.filter(n=>n.type==="bpmn:ParallelGateway").length,2);
+        assert.match(result.roundtrip,/gatewayDirection="Diverging"/);
+        assert.match(result.roundtrip,/gatewayDirection="Converging"/);
+      }
       if (fixture.name === "branches-and-loop") {
         assert.match(result.roundtrip, /Evidence missing/);
         assert.match(result.roundtrip, /sha256 a{64}/);
@@ -118,7 +123,7 @@ const assert = require("node:assert/strict");
     }
     assert.deepEqual(errors, []);
     console.log(
-      "External BPMN modeler round trips passed: linear, branches, cycles, self-loop and manual-review starter; every activity/edge rendered and execution stayed disabled.",
+      "External BPMN modeler round trips passed: linear, branches, paired parallel gateways, cycles, self-loop and manual-review starter; every activity/edge rendered and execution stayed disabled.",
     );
   } finally {
     if (browser) await browser.close();

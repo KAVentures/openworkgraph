@@ -7,17 +7,21 @@ the selected file through the authenticated local dashboard API, without saving
 a design, recording source evidence, calling providers or executing XML.
 
 The supported BPMN 2.0 subset is one process containing plain start/end events,
-tasks and exclusive gateways connected by sequence flows. A gateway with
+tasks, exclusive gateways and supported paired parallel gateways connected by
+sequence flows. An exclusive gateway with
 multiple outgoing routes becomes a decision with unconfirmed branch descriptions;
 a gateway with one outgoing route becomes a merge/routing node. Routing nodes
 are not source-log activities and need no business-tool mapping in generated
 projects. Import supports exclusive loops when the graph has an unambiguous
 entry and a route to a terminal.
 
-Parallel/inclusive gateways, subprocesses, event triggers, message collaborations,
+Nested or conditional parallel regions, inclusive gateways, subprocesses, event triggers, message collaborations,
 external imports, executable extensions, scripts and loop characteristics are
 rejected. Their semantics are not flattened into an incorrect serial graph.
-Tasks with implicit branching are rejected; use an explicit exclusive gateway.
+Tasks with implicit branching are rejected; use an explicit gateway.
+[Parallel regions](PARALLEL_PROCESS_MODELS.md) require disjoint linear branches
+and a complete paired join. Their descriptive exports and structural analysis
+preserve all branches; the current linear agent-project exporter refuses them.
 A process needs one plain start event, or one structurally unambiguous entry
 when no start event is supplied. All imported nodes must be reachable and able
 to reach a terminal. Multiple processes, ambiguous entries, duplicate IDs or

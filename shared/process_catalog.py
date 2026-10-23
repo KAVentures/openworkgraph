@@ -117,9 +117,11 @@ def process_bpmn(packet: dict[str, Any]) -> str:
         f"Reviewed design {packet['workflow_id']} revision {packet['revision']} "
         f"sha256 {packet['content_sha256']}; not policy or execution authority."
     )
-    tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'routing': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent'}
+    tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'routing': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent', 'parallel_split':'parallelGateway', 'parallel_join':'parallelGateway'}
     for activity in model.activities:
         node = ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})
+        if activity.kind in {'parallel_split','parallel_join'}:
+            node.set('gatewayDirection','Diverging' if activity.kind=='parallel_split' else 'Converging')
         if activity.responsibility_label:
             ET.SubElement(node,f'{{{ns}}}documentation').text=(
                 'User-declared responsibility: '+activity.responsibility_label+

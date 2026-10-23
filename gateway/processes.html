@@ -1162,7 +1162,7 @@
               "Draft kind " + activity.id,
               activity.kind,
               (value) => (activity.kind = value),
-              ["activity", "decision", "routing", "start", "end"],
+              ["activity", "decision", "routing", "start", "end", "parallel_split", "parallel_join"],
             );
             draftField(
               row,
@@ -1703,13 +1703,16 @@
           const project = button("Download SDK implementation project", () =>
             download("agent-project"),
           );
-          project.disabled =
+          const parallel = data.process.process_model.activities.some(node =>
+            ["parallel_split", "parallel_join"].includes(node.kind));
+          project.disabled = parallel ||
             data.archived || data.review.status !== "reviewed_design";
           $("exports").appendChild(project);
           if (project.disabled)
             $("exports").appendChild(
               el(
                 "p",
+                parallel ? "This linear agent runtime cannot execute parallel fork/join designs. BPMN, JSON and PDD exports preserve the model." :
                 "Implementation export requires an active process and independent review of this exact revision. Customer tool permissions remain separate.",
               ),
             );
