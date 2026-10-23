@@ -746,6 +746,8 @@ from .local_source_routes import router as _local_source_router  # noqa: E402
 app.include_router(_local_source_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
+from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
+app.include_router(_process_pdd_router)
 
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
