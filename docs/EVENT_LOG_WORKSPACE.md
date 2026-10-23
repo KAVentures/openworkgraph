@@ -53,12 +53,63 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
+| `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
+| `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
+| `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel` | Download the log. |
 
 Analysis routes take an optional `case_type` for OCEL logs. Every response is
 `Cache-Control: no-store` and is marked descriptive: it reports what the log
 contains and makes no causal claims, verifies no business policy and
 authorizes nothing.
+
+## Analytics
+
+The dashboard card **Large event logs** (Evidence tab) offers all of the
+following after **Analyse**.
+
+### KPIs
+
+- **Throughput**: time from a case's first to its last event (p50, p90, p95,
+  mean), plus completions per week.
+- **Rework rate**: share of cases that repeat at least one activity.
+- **SLA breach rate**: share of cases whose throughput exceeds the SLA you enter.
+- **Automation rate**: share of events performed by the resources you list
+  (for example `bot, system`). OWG does not guess which resources are automated.
+
+### Conformance
+
+The reference model is one or more accepted paths:
+
+```json
+{"format": "openworkgraph.reference-model.v1",
+ "paths": [["Receive", "Review", "Approve", "Close"]]}
+```
+
+The most frequent variants (500 by default, `max_variants` up to 2,000; the
+response reports the share of cases they cover) are each optimally aligned with the closest path, at a cost of one per *skipped*
+reference step and one per *extra* observed step. Fitness per case is
+`1 - cost / (trace length + shortest path length)`. The case-weighted mean
+is reported together with the share of perfectly fitting cases, the steps
+most often skipped or added, and the most common deviating variants. Up to
+10 paths of up to 100 steps are accepted. The reference is whatever you
+enter; it is not treated as approved policy.
+
+### Root cause
+
+Choose an outcome: case takes longer than N hours, case has rework, case
+contains an activity, or case ends with an activity. Every case feature
+(activity present, resource involved, case-object attribute value) that both
+5+ cases have and 5+ cases lack is compared:
+
+- outcome rate with and without the feature, and the risk difference;
+- a 95% Newcombe hybrid-score interval for that difference;
+- whether the interval still excludes zero after a Bonferroni correction for
+  the number of features tested.
+
+These are associations in the imported log. They are not causes: a feature
+can be a consequence of the outcome (a fix step in slow cases, for example),
+and temporal order is not checked.
 
 ## Literal case identity and qualified relationships
 
