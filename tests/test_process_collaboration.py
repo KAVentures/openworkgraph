@@ -461,3 +461,39 @@ def test_shared_case_rule_api_requires_delegated_row_access_and_explicit_raw_fac
     import sqlite3
     with sqlite3.connect(tmp_path/'api.db') as conn:
         assert 'PRIVATE_FACT' not in '\n'.join(conn.iterdump())
+
+
+def test_parallel_model_round_trip_review_and_organization_isolation(store):
+    from test_parallel_process_model import parallel_model
+    from shared.process_catalog import ProcessCatalog,process_bpmn
+    from shared.process_conformance import compare_path
+    saved=store.save(person(),SharedProcessWrite(title='Parallel checks',process_model=parallel_model(),
+        user_confirmed=True,organization_sharing_confirmed=True))
+    process=saved['process'];wid=process['workflow_id']
+    assert saved['review']['status']=='needs_review'
+    grant(store,wid,members=[{'actor_id':'bob','role':'reviewer'}])
+    accepted=store.review(person('bob'),wid,review(process))
+    assert accepted['review']['status']=='reviewed_design'
+    with pytest.raises(ProcessCollaborationError):store.detail(person('bob',org='other'),wid)
+    packet=ProcessCatalog(store.knowledge,namespace('acme')).export(wid,1)
+    assert 'parallelGateway' in process_bpmn(packet)
+    assert compare_path(('B1','A1','A2','B2','Close'),ProcessModel.model_validate(packet['process_model']))['exact_structural_match']
+
+
+def test_shared_parallel_export_remains_descriptive_after_independent_review(tmp_path):
+    from test_parallel_process_model import parallel_model
+    with TestClient(app(tmp_path)) as client:
+        headers=lambda who:{'Authorization':'Bearer '+who}
+        body=write().model_dump();body['process_model']=parallel_model().model_dump()
+        saved=client.post('/v1/human/processes',headers=headers('alice'),json=body)
+        assert saved.status_code==200,saved.text
+        process=saved.json()['process'];url='/v1/human/processes/'+process['workflow_id']
+        access=ProcessAccessWrite(expected_access_revision=1,members=[ProcessMember(actor_id='bob',role='reviewer')],user_confirmed=True)
+        assert client.post(url+'/access',headers=headers('alice'),json=access.model_dump()).status_code==200
+        assert client.post(url+'/reviews',headers=headers('bob'),json=review(process).model_dump()).status_code==200
+        for fmt in ('json','bpmn','pdd'):
+            response=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':fmt})
+            assert response.status_code==200,response.text
+        response=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':'agent-project'})
+        assert response.status_code==422 and 'fork/join-capable' in response.text
+        assert client.get(url+'/export',headers=headers('foreign'),params={'revision':1,'format':'agent-project'}).status_code==404

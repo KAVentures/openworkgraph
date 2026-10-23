@@ -162,6 +162,7 @@ const plain=v=>JSON.parse(JSON.stringify(v));
 assert.deepEqual(plain(m.cohortSpec({label:' Q1 ',from:'2024-01-01',before:'2024-04-01',resource:'',activity:'Fix',attribute:'region=EU'})),
   {label:'Q1',started_from:'2024-01-01T00:00:00Z',started_before:'2024-04-01T00:00:00Z',activity:'Fix',attribute:'region=EU'});
 assert.deepEqual(plain(m.cohortSpec({})),{});
+assert.deepEqual(plain(m.cohortSpec({resource:' bot,system ',activity:' Review > '})),{resource:' bot,system ',activity:' Review > '});
 assert.throws(()=>m.cohortSpec({from:'2024-02-01',before:'2024-01-01'}));
 assert.throws(()=>m.cohortSpec({attribute:'region'}));
 assert.equal(m.toCSV([['a','b'],['=1+1','x,\x22y\x22'],[null,'-2']]),'a,b\r\n\'=1+1,\x22x,\x22\x22y\x22\x22\x22\r\n,\'-2\r\n');

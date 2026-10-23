@@ -11,6 +11,8 @@ def load_spec():
 
 
 def validate_spec(spec):
+    if any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities']):
+        raise ValueError('This linear runtime cannot plan or execute parallel fork/join designs')
     digest = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
     if (digest != spec['process_model_sha256'] or spec.get('execution_authorization') is not False
             or spec.get('live_business_tools') != []):

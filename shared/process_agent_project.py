@@ -14,6 +14,8 @@ _TEMPLATES = Path(__file__).parent / 'process_agent_templates'
 
 def synthetic_routes(model: ProcessModel) -> dict:
     """Bounded example routes, never representative customer business cases."""
+    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+        raise ValueError('Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
     outgoing = {activity.id: [] for activity in model.activities}
     for edge in model.transitions:
         outgoing[edge.source].append(edge.target)
@@ -69,6 +71,8 @@ def build_runtime_spec(packet: dict) -> dict:
             or packet.get('execution_authorization') is not False):
         raise ValueError('A non-authorizing saved revision and content hash are required')
     model = ProcessModel.model_validate(packet['process_model'])
+    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+        raise ValueError('Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
     # Explicit output allowlist: no arbitrary captured/provider fields get copied.
     spec = {key: packet[key] for key in ('workflow_id', 'revision', 'content_sha256')}
     spec.update(format='openworkgraph.agent-runtime-project.v1', process_model=model.model_dump(),

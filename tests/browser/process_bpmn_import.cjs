@@ -89,7 +89,7 @@ const path=require('node:path');
   const reportDownload=await minimized,reportPath=path.join(scratch,'rule-check.json');await reportDownload.saveAs(reportPath);
   assert(!(await fs.readFile(reportPath,'utf8')).includes('PRIVATE_RAW_CASE_VALUE'));
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
-  await page.getByLabel('Choose BPMN process design',{exact:true}).setInputFiles({name:'unsupported.bpmn',mimeType:'application/bpmn+xml',buffer:Buffer.from(xml.replace('<exclusiveGateway id="j"','<parallelGateway id="j"'))});
+  await page.getByLabel('Choose BPMN process design',{exact:true}).setInputFiles({name:'unsupported.bpmn',mimeType:'application/bpmn+xml',buffer:Buffer.from(xml.replace('<exclusiveGateway id="j"','<inclusiveGateway id="j"'))});
   assert.equal(await page.getByRole('button',{name:'Open imported draft in editor',exact:true}).count(),0);
   await page.getByRole('button',{name:'Preview selected BPMN',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'other process semantics cannot be flattened'}).waitFor();assert.equal(saves,2);
