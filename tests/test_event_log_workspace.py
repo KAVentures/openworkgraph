@@ -222,6 +222,20 @@ with TestClient(app) as client:
     assert client.get("/v1/event-logs/log_0000000000000000/summary", headers=headers).status_code == 422
     bad = client.post("/v1/event-logs/import?format=xes&name=x", content=b"<!DOCTYPE x><log/>", headers=confirmed)
     assert bad.status_code == 422
+    invalid_body=("case,activity,time\nPRIVATE_"+"X"*200+",A,2026-10-20T00:00:00Z\n").encode()
+    invalid=client.post("/v1/event-logs/import?"+query,content=invalid_body,headers=confirmed)
+    assert invalid.status_code==422 and "PRIVATE_" not in invalid.text
+    assert len(client.get("/v1/event-logs",headers=headers).json()["logs"])==1
+    assert client.get("/v1/event-logs",headers={"Authorization":"Bearer "+local_auth.ensure_api_token()}).status_code==403
+    qualified={"objects":[{"id":"o","type":"order"}],"events":[{"id":"e","type":"Review","time":"2026-10-20T00:00:00Z",
+        "relationships":[{"objectId":"o","qualifier":"created"},{"objectId":"o","qualifier":"reviewed"}]}]}
+    made_qualified=client.post("/v1/event-logs/import?format=ocel&name=qualified",content=json.dumps(qualified).encode(),headers=confirmed)
+    assert made_qualified.status_code==200,made_qualified.text
+    qualified_id=made_qualified.json()["log_id"]
+    assert client.get(f"/v1/event-logs/{qualified_id}/summary",headers=headers).json()["events"]==1
+    exported_qualified=client.get(f"/v1/event-logs/{qualified_id}/export?format=ocel",headers=headers).json()
+    assert len(exported_qualified["events"][0]["relationships"])==2
+    assert client.post(f"/v1/event-logs/{qualified_id}/delete",headers=headers).status_code==200
     assert client.post(f"/v1/event-logs/{log_id}/delete", headers=headers).status_code == 200
     assert client.get("/v1/event-logs", headers=headers).json()["logs"] == []
 '''
@@ -234,3 +248,106 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_case_keys_and_activity_labels_are_literal_in_bulk_and_streaming_csv():
+    import csv
+    identifiers=['Case',' Case','Case ','case','e\u0301','é']
+    labels=['Review',' Review','Review ','review','Check','Close']
+    stream=StringIO(newline='');writer=csv.writer(stream);writer.writerow(['case','activity','time','who'])
+    for index,(identifier,label) in enumerate(zip(identifiers,labels)):
+        writer.writerow([identifier,label,f'2026-10-20T00:0{index}:00Z',' person '])
+    text=stream.getvalue()
+    records=list(formats.read_csv(StringIO(text),**MAPPING))
+    assert [row.object_id for row in records if isinstance(row,formats.ObjectRecord)]==identifiers
+    assert [row.activity for row in records if isinstance(row,formats.EventRecord)]==labels
+    log=_import(text,'csv',mapping=MAPPING)
+    assert workspace.summary(log['log_id'])['cases']==6
+    assert {tuple(row['path']) for row in workspace.variants(log['log_id'])['variants']}=={(label,) for label in labels}
+    exported=StringIO();workspace.export_log(log['log_id'],'csv',exported)
+    rows=list(csv.DictReader(StringIO(exported.getvalue())))
+    assert {row['case_id'] for row in rows}==set(identifiers)
+    assert {row['resource'] for row in rows}=={' person '}
+
+
+@pytest.mark.parametrize('bad',['PRIVATE_'+('X'*200),'PRIVATE_N\x00UL','PRIVATE_\x85ID','PRIVATE_\ufffeID'])
+def test_invalid_or_overlong_identifiers_never_become_prefix_keys_in_either_csv_reader(bad):
+    import csv
+    for field in range(3):
+        values=['case','Review','person'];values[field]=bad
+        stream=StringIO(newline='');writer=csv.writer(stream);writer.writerow(['case','activity','who','time'])
+        writer.writerow([*values,'2026-10-20T00:00:00Z']);text=stream.getvalue()
+        with pytest.raises(formats.EventLogFormatError) as exc:list(formats.read_csv(StringIO(text),**MAPPING))
+        assert 'PRIVATE_' not in str(exc.value)
+        with pytest.raises(workspace.EventLogWorkspaceError) as exc:_import(text,'csv',mapping=MAPPING)
+        assert 'PRIVATE_' not in str(exc.value)
+        assert workspace.list_logs()['logs']==[]
+
+
+def test_duplicate_ocel_ids_and_overlong_foreign_references_reject_atomically():
+    bad=[]
+    source=json.loads(json.dumps(OCEL));source['objects'].append(dict(source['objects'][0]));bad.append(source)
+    source=json.loads(json.dumps(OCEL));source['events'].append(dict(source['events'][0]));bad.append(source)
+    source=json.loads(json.dumps(OCEL));source['events'][0]['relationships'][0]['objectId']='PRIVATE_'+('X'*200);bad.append(source)
+    source=json.loads(json.dumps(OCEL));source['objects'][0]['id']=7;bad.append(source)
+    for source in bad:
+        with pytest.raises(workspace.EventLogWorkspaceError) as exc:_import(json.dumps(source),'ocel')
+        assert 'PRIVATE_' not in str(exc.value)
+        assert workspace.list_logs()['logs']==[]
+
+
+def _identity_xes(traces):
+    from xml.sax.saxutils import quoteattr
+    parts=['<log>']
+    for name,event_id in traces:
+        parts.append('<trace>')
+        if name is not None:parts.append('<string key="concept:name" value='+quoteattr(name)+'/>')
+        parts.append('<event><string key="concept:name" value="Review"/><date key="time:timestamp" value="2026-10-20T00:00:00Z"/>')
+        if event_id is not None:parts.append('<id key="identity:id" value='+quoteattr(event_id)+'/>')
+        parts.append('</event></trace>')
+    return ''.join(parts+['</log>'])
+
+
+def test_xes_duplicate_and_generated_identifier_collisions_do_not_join_histories():
+    for traces in ([('case',None),('case',None)],[(None,None),('trace1',None)],
+        [('first',None),('second','e1')],[('first','native'),('second','native')], [('PRIVATE_'+('X'*200),None)]):
+        with pytest.raises(workspace.EventLogWorkspaceError) as exc:_import(_identity_xes(traces),'xes')
+        assert 'PRIVATE_' not in str(exc.value)
+        assert workspace.list_logs()['logs']==[]
+    log=_import(_identity_xes([('case','native'),(' case',' native'),(None,None)]),'xes')
+    assert log['events']==log['objects']==3
+    assert workspace.summary(log['log_id'])['cases']==3
+
+
+def test_qualified_relationships_preserve_provenance_without_multiplying_case_events():
+    source={'objects':[{'id':'o1','type':'order'},{'id':'o2','type':'order'}],
+        'events':[{'id':'e1','type':'Review','time':'2026-10-20T00:00:00Z',
+            'relationships':[{'objectId':'o1','qualifier':'created'},{'objectId':'o1','qualifier':'reviewed'},
+                             {'objectId':'o2','qualifier':'observed'}]},
+                  {'id':'e2','type':'Review','time':'2026-10-20T00:00:00Z',
+                   'relationships':[{'objectId':'o1','qualifier':'reviewed'}]}]}
+    log=_import(json.dumps(source),'ocel')
+    summary=workspace.summary(log['log_id'])
+    assert log['events']==2 and summary['events']==3 and summary['cases']==2
+    assert {tuple(row['path']) for row in workspace.variants(log['log_id'])['variants']}=={('Review',),('Review','Review')}
+    out=StringIO();workspace.export_log(log['log_id'],'ocel',out)
+    events=json.loads(out.getvalue())['events'];first=next(row for row in events if row['id']=='e1')
+    assert len(first['relationships'])==3  # Original qualifiers are retained for export.
+
+
+@pytest.mark.parametrize('header',['case,case,activity,time','case,CASE,activity,time','case,,activity,time'])
+def test_csv_duplicate_or_empty_headers_cannot_choose_different_case_columns(header):
+    raw=header+'\na,b,Review,2026-10-20T00:00:00Z\n'
+    with pytest.raises(formats.EventLogFormatError):list(formats.read_csv(StringIO(raw),**(MAPPING|{'resource_column':''})))
+    with pytest.raises(workspace.EventLogWorkspaceError):_import(raw,'csv',mapping=MAPPING|{'resource_column':''})
+    assert workspace.list_logs()['logs']==[]
+
+
+def test_ocel_duplicate_fields_nonstandard_constants_and_oversized_csv_header_fail_closed():
+    for raw in ('{"objects":[],"objects":[],"events":[]}',
+                '{"objects":[{"id":"a","id":"b","type":"case"}],"events":[]}',
+                '{"objects":[],"events":[],"other":NaN}'):
+        with pytest.raises(workspace.EventLogWorkspaceError):_import(raw,'ocel')
+        assert workspace.list_logs()['logs']==[]
+    with pytest.raises(formats.EventLogFormatError):
+        formats.read_csv_header(StringIO('H'*(formats.MAX_HEADER_CHARS+1)))
