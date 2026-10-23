@@ -18,6 +18,9 @@ def compare_path(path: tuple[str, ...], model: ProcessModel) -> dict[str, Any]:
     """
     if len(path) > 5000:
         raise ValueError('Conformance path exceeds the 5,000 event limit')
+    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+        from .process_parallel import compare_parallel_path
+        return compare_parallel_path(path,model)
     nodes = {activity.id: activity for activity in model.activities}
     outgoing: dict[str, list[str]] = {node: [] for node in nodes}
     for edge in model.transitions:
@@ -83,3 +86,18 @@ def compare_path(path: tuple[str, ...], model: ProcessModel) -> dict[str, Any]:
         'business_rules_evaluated': False, 'policy_compliance_verified': False,
         'business_outcome_verified': False,
     }
+
+
+def compare_paths(paths,model):
+    """Cache full paths; bound total parallel search work across one analysis."""
+    if not any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+        return {path:compare_path(path,model) for path in paths}
+    from . import process_parallel
+    remaining=process_parallel.MAX_BATCH_ALIGNMENT_STATES
+    results={}
+    for path in sorted(set(paths)):
+        if len(path)>5000:raise ValueError('Conformance path exceeds the 5,000 event limit')
+        result=process_parallel.compare_parallel_path(path,model,max_states=remaining)
+        remaining-=result['alignment_state_count']
+        results[path]=result
+    return results

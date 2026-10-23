@@ -181,7 +181,7 @@
         y: p.y,
         width: 190,
         height: 64,
-        rx: ["decision", "routing"].includes(activity.kind) ? 25 : 6,
+        rx: ["decision", "routing", "parallel_split", "parallel_join"].includes(activity.kind) ? 25 : 6,
         fill: "#f1f7f4",
         stroke: "#557e70",
         "stroke-width": 2,
@@ -204,7 +204,7 @@
         "font-size": 13,
         fill: "#25372e",
       });
-      label.textContent = String(activity.label).slice(0, 24);
+      label.textContent = (["parallel_split", "parallel_join"].includes(activity.kind)?"+ ":"")+String(activity.label).slice(0, 24);
       const detail = svg("text", {
         x: p.x + 10,
         y: p.y + 47,

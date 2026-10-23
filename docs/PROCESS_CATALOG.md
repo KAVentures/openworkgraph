@@ -270,3 +270,8 @@ caused the operation, that the whole process ran, or that the customer goal was
 achieved. The association is explicitly user-selected. The receipt is not saved
 as a new policy or process revision. No live connector or production business
 outcome was certified by the synthetic acceptance tests.
+
+[Explicit parallel regions](PARALLEL_PROCESS_MODELS.md) now support paired
+unconditional fork/join modeling, descriptive interchange and token-based
+structural analysis. Nested/conditional regions and linear implementation
+export for parallel designs remain unsupported.
