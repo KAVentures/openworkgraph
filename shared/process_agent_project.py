@@ -8,18 +8,22 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from shared.process_model import ProcessModel
+from shared.process_parallel import parallel_regions, replay_node_ids
 
 _TEMPLATES = Path(__file__).parent / 'process_agent_templates'
 
 
 def synthetic_routes(model: ProcessModel) -> dict:
     """Bounded example routes, never representative customer business cases."""
-    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
-        raise ValueError('Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
+    regions = {region['split']: region for region in parallel_regions(model)}
+    def expand(identifier):
+        region = regions.get(identifier)
+        return ([identifier] + [step for branch in region['branches'] for step in branch] + [region['join']]
+                if region else [identifier])
     outgoing = {activity.id: [] for activity in model.activities}
     for edge in model.transitions:
         outgoing[edge.source].append(edge.target)
-    pending = deque([[model.entry_activity_id]])
+    pending = deque([expand(model.entry_activity_id)])
     routes = []
     expanded = 0
     while pending and len(routes) < 8 and expanded < 2000:
@@ -30,13 +34,15 @@ def synthetic_routes(model: ProcessModel) -> dict:
         elif len(path) < 80:
             for node in outgoing[path[-1]]:
                 if path.count(node) < 2:
-                    pending.append(path + [node])
+                    following = path + expand(node)
+                    if len(following) <= 80:
+                        pending.append(following)
     # Graph validation guarantees a simple entry-to-terminal route, but BFS may
     # exhaust its bounded search first for a highly branching graph. Find one
     # directly so an exported test suite never silently has no positive cases.
     if not routes:
-        pending = deque([[model.entry_activity_id]])
-        visited = {model.entry_activity_id}
+        pending = deque([expand(model.entry_activity_id)])
+        visited = set(expand(model.entry_activity_id))
         while pending:
             path = pending.popleft()
             if path[-1] in model.terminal_activity_ids:
@@ -44,9 +50,10 @@ def synthetic_routes(model: ProcessModel) -> dict:
                 break
             for node in outgoing[path[-1]]:
                 if node not in visited:
-                    visited.add(node)
-                    pending.append(path + [node])
-    used = {tuple(pair) for route in routes for pair in zip(route['activity_ids'], route['activity_ids'][1:])}
+                    visited.update(expand(node))
+                    pending.append(path + expand(node))
+    used = ({index for route in routes for index in replay_node_ids(route['activity_ids'], model)['transition_indices']}
+            if regions else {tuple(pair) for route in routes for pair in zip(route['activity_ids'], route['activity_ids'][1:])})
     return {'mode': 'synthetic_structure_only', 'cases': routes,
             'covered_transition_count': len(used), 'total_transition_count': len(model.transitions),
             'all_transitions_covered': len(used) == len(model.transitions),
@@ -71,14 +78,15 @@ def build_runtime_spec(packet: dict) -> dict:
             or packet.get('execution_authorization') is not False):
         raise ValueError('A non-authorizing saved revision and content hash are required')
     model = ProcessModel.model_validate(packet['process_model'])
-    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
-        raise ValueError('Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
     # Explicit output allowlist: no arbitrary captured/provider fields get copied.
     spec = {key: packet[key] for key in ('workflow_id', 'revision', 'content_sha256')}
     spec.update(format='openworkgraph.agent-runtime-project.v1', process_model=model.model_dump(),
                 execution_authorization=False, source_records_included=False,
                 generated_for='openai-agents-python', live_business_tools=[])
     spec['process_model_sha256'] = process_model_digest(spec['process_model'])
+    if parallel_regions(model):
+        spec.update(control_flow_contract='openworkgraph.parallel-node-firing-plan.v1',
+                    execution_schedule='serial_token_valid_node_order')
     origin = packet.get('organization_catalog_reference')
     if origin is not None:
         if (not isinstance(origin, dict) or set(origin) != {'organization_id'}
@@ -96,6 +104,10 @@ def build_runtime_project(packet: dict) -> bytes:
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
+    if spec.get('control_flow_contract'):
+        files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
+        for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py'):
+            files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'
     files['synthetic-cases.json'] = json.dumps(synthetic_routes(model), indent=2) + '\n'
@@ -298,6 +310,27 @@ def build_runtime_project(packet: dict) -> bytes:
         'OWG adapters/openai_agents.py can optionally record structural traces\n'
         'when separately configured; this export enables no observation or sync.\n'
     )
+    if spec.get('control_flow_contract'):
+        files['README.md'] = files['README.md'].replace(
+            '## Offline shadow tests (no installation or model access required)',
+            '## Offline shadow tests (no model access required)\n\nInstall requirements.txt for the bundled process validator.')
+        files['README.md'] += (
+            '\n## Paired parallel schedules\n\n'
+            'This specification uses openworkgraph.parallel-node-firing-plan.v1.\n'
+            'activity_ids is a full node firing order, including split/join gateways.\n'
+            'Every branch must finish before its join; the selected order may interleave\n'
+            'branch activities while preserving their individual order. Validation uses\n'
+            'the same bounded ProcessModel and edge-token code as OWG, bundled in owg_model.\n'
+            'Replay is limited to 80 node firings and 100,000 candidate firing checks.\n'
+            'Incomplete or exhausted replay cannot authorize actions.\n\n'
+            'The customer executor performs one activity at a time in this exact\n'
+            'reviewed schedule. It does not run tool calls concurrently. All existing\n'
+            'customer intent, tool/schema mappings, human confirmations, conditional\n'
+            'writes, fresh source invariants and independent receipt checks still apply.\n'
+            'Every required branch needs its own mappings and confirmations.\n'
+            'Previously generated linear projects do not gain fork/join support by\n'
+            'rehashing a changed model; export a new reviewed contract and review its\n'
+            'exact spec, plan, case and bindings with the authorized customer operator.\n')
     memory = BytesIO()
     with ZipFile(memory, 'w', compression=ZIP_DEFLATED) as archive:
         for name, content in files.items():

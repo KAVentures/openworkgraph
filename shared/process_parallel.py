@@ -9,6 +9,7 @@ from itertools import count
 PARALLEL_KINDS = {'parallel_split', 'parallel_join'}
 MAX_ALIGNMENT_STATES = 100_000
 MAX_BATCH_ALIGNMENT_STATES = 200_000
+MAX_FIRING_REPLAY_WORK = 100_000
 
 
 def parallel_regions(model):
@@ -82,7 +83,7 @@ class EdgeTokenModel:
         self.incoming[model.entry_activity_id].append(-1)
         for terminal in model.terminal_activity_ids:self.outgoing[terminal]=[-2]
 
-    def moves(self, marking):
+    def firings(self, marking):
         for identifier,node in self.nodes.items():
             arrived=[place for place in self.incoming[identifier] if place in marking]
             if not arrived:continue
@@ -94,7 +95,46 @@ class EdgeTokenModel:
                        else [frozenset({place}) for place in self.outgoing[identifier]])
             for consumed in consumptions:
                 for emitted in emissions:
-                    yield node,(marking-consumed)|emitted
+                    yield node,(marking-consumed)|emitted,emitted
+
+    def moves(self, marking):
+        for node, following, _emitted in self.firings(marking):
+            yield node, following
+
+
+def replay_node_ids(node_ids, model, *, max_work=MAX_FIRING_REPLAY_WORK):
+    """Validate a full node-firing order, retaining every viable token history.
+
+    Gateways are explicit firings. A join needs all branch tokens, and completion
+    needs the sole terminal token. Returned edge IDs cover complete replays only.
+    This structural schedule grants no tool or business execution permission.
+    """
+    if (not isinstance(node_ids, (list, tuple)) or not 1 <= len(node_ids) <= 80
+            or any(not isinstance(identifier, str) for identifier in node_ids)
+            or type(max_work) is not int or max_work < 0):
+        raise ValueError('A bounded node-firing sequence and replay work limit are required')
+    automaton = EdgeTokenModel(model)
+    states = {(automaton.initial, frozenset())}
+    work = 0
+    for identifier in node_ids:
+        following = set()
+        for marking, used in states:
+            for node, result, emitted in automaton.firings(marking):
+                if work >= max_work:
+                    raise ValueError('Node-firing replay work limit reached; no valid schedule established')
+                work += 1
+                if node.id == identifier:
+                    following.add((result, used | frozenset(p for p in emitted if p >= 0)))
+        if not following:
+            raise ValueError('Node-firing sequence violates the reviewed process token flow')
+        states = following
+    complete = [used for marking, used in states if marking == automaton.done]
+    if not complete:
+        raise ValueError('Node-firing sequence leaves unfinished branches or no terminal completion')
+    used = sorted(set().union(*complete))
+    return {'transition_indices': used,
+            'rule_ids': sorted({model.transitions[p].rule_id for p in used if model.transitions[p].rule_id}),
+            'work_count': work, 'all_produced_branch_tokens_consumed': True}
 
 
 def compare_parallel_path(path, model, *, max_states=None):

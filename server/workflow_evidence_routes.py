@@ -999,8 +999,6 @@ async def forget_process_catalog(request: Request) -> Response:
 def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1)) -> Response:
     from .process_agent_project import build_runtime_project
     packet=_catalog_export(workflow_id, revision)
-    if any(node['kind'] in {'parallel_split','parallel_join'} for node in packet['process_model']['activities']):
-        raise HTTPException(422,'Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
     archive = build_runtime_project(packet)
     return Response(archive, media_type='application/zip', headers={
         'Cache-Control': 'no-store',

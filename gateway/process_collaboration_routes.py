@@ -189,9 +189,6 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         packet['revision_author_actor_id'] = detail['author_actor_id']
         if format == 'agent-project' and (detail['archived'] or detail['review']['status'] != 'reviewed_design'):
             raise HTTPException(409, 'An active process and independent review of this exact revision are required before implementation export')
-        if format == 'agent-project' and any(node['kind'] in {'parallel_split','parallel_join'}
-                                               for node in packet['process_model']['activities']):
-            raise HTTPException(422,'Parallel designs require a fork/join-capable runtime; linear agent projects are unavailable')
         store.db.audit(organization_id=p.organization_id, principal_id=p.audit_id,
                        action='process.exported', details={'workflow_id': workflow_id, 'revision': revision, 'format': format})
         packet['shared_design_is_business_policy'] = False

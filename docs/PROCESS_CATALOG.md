@@ -273,5 +273,6 @@ outcome was certified by the synthetic acceptance tests.
 
 [Explicit parallel regions](PARALLEL_PROCESS_MODELS.md) now support paired
 unconditional fork/join modeling, descriptive interchange and token-based
-structural analysis. Nested/conditional regions and linear implementation
-export for parallel designs remain unsupported.
+structural analysis. SDK projects now support complete node-firing plans with
+serial customer-authorized execution across every required branch and join.
+Nested/conditional regions remain unsupported.
