@@ -1,0 +1,189 @@
+"""Persistent, counts-only quality and mapping reports for saved event logs (#370 R6).
+
+Every import and every appended batch stores one report next to the log:
+
+- the transform: source format, column mapping, mapping version, and SHA-256
+  digests of the uploaded bytes, of the transform definition and of the stored
+  content, so the same file with the same mapping reproduces the same digests;
+- what was accepted and rejected, with reasons where the reader knows them
+  (rejected rows themselves are never kept);
+- sample-free diagnostics: duplicate events, events sharing a timestamp within
+  a case (their order then falls back to the event identifier), missing
+  resources, events without a case, single-event cases, attribute coverage and
+  events dated after the import.
+
+A report only describes the rows that were supplied. Whether the source system
+holds more history is unknown, and the report says so instead of calling the
+log complete.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from . import event_log_workspace as workspace
+
+MAPPING_VERSION = "owg.event-log-mapping.v1"
+TRANSFORM_VERSION = "owg.event-log-import.v1"
+MAX_ATTRIBUTES_REPORTED = 32
+COMPLETENESS_NOTE = ("Counts describe the supplied rows only. Whether the source system holds events that were not "
+                     "exported is unknown, so this log is not known to be complete.")
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, Any]:
+    """The declared transform. Attribute column order is kept: it is part of what gets stored."""
+    mapping = mapping or {}
+    declared: dict[str, Any] = {"importer": TRANSFORM_VERSION, "format": source_format,
+                                "timestamps": "explicit UTC offset required; stored as UTC"}
+    if source_format == "csv":
+        declared["mapping"] = {
+            "mapping_version": MAPPING_VERSION,
+            "case_column": mapping.get("case_column") or "",
+            "activity_column": mapping.get("activity_column") or "",
+            "timestamp_column": mapping.get("timestamp_column") or "",
+            "resource_column": mapping.get("resource_column") or "",
+            "attribute_columns": list(dict.fromkeys(mapping.get("attribute_columns") or [])),
+            "delimiter": mapping.get("delimiter") or ",",
+        }
+    else:
+        declared["mapping"] = {"mapping_version": MAPPING_VERSION, "standard": {
+            "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
+            "ocel": "OCEL 2.0 JSON event types, objects and qualified relationships",
+            "ocelxml": "OCEL 2.0 XML event types, objects and qualified relationships"}[source_format]}
+    return {**declared, "transform_sha256": hashlib.sha256(_canonical(declared).encode()).hexdigest()}
+
+
+def source_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _scope(prefix: str | None) -> tuple[str, list[Any]]:
+    return ("AND starts_with(e.event_id, ?)", [prefix]) if prefix else ("", [])
+
+
+def _set_digest(conn, sql: str, params: list[Any]) -> str:
+    """SHA-256 over the sorted per-row hashes of ``sql`` (one text column), bucketed so it stays bounded."""
+    buckets = conn.execute(f"""WITH r AS ({sql})
+        SELECT left(h, 2) AS b, count(*), sha256(string_agg(h, '' ORDER BY h)) FROM r GROUP BY b ORDER BY b""",
+                           params).fetchall()
+    digest = hashlib.sha256()
+    for b, n, h in buckets:
+        digest.update(f"{b}:{n}:{h};".encode())
+    return digest.hexdigest()
+
+
+def content_digest(conn, log_id: str, prefix: str | None = None) -> str:
+    """Order-independent SHA-256 over every stored event and, separately, every event-object link."""
+    where, extra = _scope(prefix)
+    events = _set_digest(conn, f"""SELECT sha256(concat_ws(chr(31), e.event_id, e.activity,
+            strftime(e.ts, '%Y-%m-%dT%H:%M:%S.%f'), e.resource, e.attributes)) AS h
+        FROM events e WHERE e.log_id = ? {where}""", [log_id, *extra])
+    link_scope = "AND starts_with(l.event_id, ?)" if prefix else ""
+    links = _set_digest(conn, f"""SELECT sha256(concat_ws(chr(31), l.event_id, l.object_id, l.qualifier)) AS h
+        FROM event_objects l WHERE l.log_id = ? {link_scope}""", [log_id, *extra])
+    return hashlib.sha256(f"owg.event-log-content.v1:{events}:{links}".encode()).hexdigest()
+
+
+def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
+    where, extra = _scope(prefix)
+    params = [log_id, *extra]
+    conn.execute(f"CREATE OR REPLACE TEMP TABLE qe AS SELECT e.* FROM events e WHERE e.log_id = ? {where}", params)
+    events, first, last, no_resource, future = conn.execute(
+        "SELECT count(*), min(ts), max(ts), count(*) FILTER (WHERE resource = ''), count(*) FILTER (WHERE ts > ?) FROM qe",
+        [datetime.now(timezone.utc).replace(tzinfo=None)]).fetchone()
+    conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, o.object_type
+        FROM event_objects eo JOIN qe USING (event_id)
+        JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
+    unlinked = conn.execute("SELECT count(*) FROM qe WHERE event_id NOT IN (SELECT event_id FROM qlinks)").fetchone()[0]
+    notions = conn.execute("""SELECT object_type, count(DISTINCT object_id),
+          count(DISTINCT object_id) FILTER (WHERE n = 1) FROM (
+            SELECT object_type, object_id, count(*) OVER (PARTITION BY object_id) AS n FROM qlinks)
+        GROUP BY 1 ORDER BY 2 DESC, 1""").fetchall()
+    tied_events, tied_cases = conn.execute("""SELECT coalesce(sum(n), 0), count(DISTINCT object_id) FROM (
+          SELECT l.object_id, q.ts, count(*) AS n FROM qlinks l JOIN qe q USING (event_id)
+          GROUP BY 1, 2 HAVING count(*) > 1)""").fetchone()
+    duplicates = conn.execute("""SELECT coalesce(sum(n - 1), 0) FROM (SELECT count(*) AS n FROM (
+          SELECT q.event_id, q.activity, q.ts, q.resource,
+                 list(l.object_id ORDER BY l.object_id) FILTER (WHERE l.object_id IS NOT NULL) AS objs
+          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4)
+        GROUP BY activity, ts, resource, objs HAVING count(*) > 1)""").fetchone()[0]
+    attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.value <> '""') FROM qe, json_each(qe.attributes) j
+        GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
+    return {
+        "events": events,
+        "first_event_at": first.isoformat() + "Z" if first else None,
+        "last_event_at": last.isoformat() + "Z" if last else None,
+        "case_notions": [{"object_type": t, "cases": c, "single_event_cases": s} for t, c, s in notions],
+        "events_without_case": unlinked,
+        "events_without_resource": no_resource,
+        "duplicate_events": int(duplicates),
+        "events_sharing_a_timestamp_in_a_case": int(tied_events),
+        "cases_with_shared_timestamps": tied_cases,
+        "tied_order": "events with the same time in a case are ordered by event identifier, not by observation",
+        "events_dated_after_import": future,
+        "attribute_coverage": [{"attribute": k, "events_with_value": n, "events_without_value": events - n}
+                               for k, n in attributes],
+    }
+
+
+def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapping: dict[str, Any] | None,
+           upload: Path, rows_accepted: int, rows_rejected: int, rejection_reasons: dict[str, int] | None,
+           duplicates_skipped: int | None = None, prefix: str | None = None) -> dict[str, Any]:
+    """Store the report for one import (batch 0) or appended batch, inside the caller's transaction."""
+    report = {
+        "format": "openworkgraph.event-log-quality.v1",
+        "batch": batch, "kind": kind,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "transform": transform(source_format, mapping),
+        "source_sha256": source_digest(upload),
+        "content_sha256": content_digest(conn, log_id, prefix),
+        "rows": {"accepted": rows_accepted, "rejected": rows_rejected,
+                 "rejected_by_reason": rejection_reasons,
+                 "reason_counts_can_overlap": bool(rejection_reasons),
+                 "rejected_rows_retained": False,
+                 **({"duplicates_skipped_on_append": duplicates_skipped} if duplicates_skipped is not None else {})},
+        "diagnostics": diagnostics(conn, log_id, prefix),
+        "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE},
+    }
+    if rejection_reasons is None:
+        report["rows"]["rejected_by_reason_note"] = ("This reader reports only the total of rejected entries; "
+                                                     "reasons are not broken down.")
+    conn.execute("INSERT INTO log_quality VALUES (?, ?, ?, ?)",
+                 [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), _canonical(report)])
+    return report
+
+
+def quality(log_id: str) -> dict[str, Any]:
+    """Stored reports, oldest first, and the current whole-log diagnostics and content digest."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            info = workspace._check_log(conn, log_id)
+            reports = [json.loads(r[0]) for r in conn.execute(
+                "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+            batches = [0] + [r[0] for r in conn.execute(
+                "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+            current = diagnostics(conn, log_id)
+            digest = content_digest(conn, log_id)
+        finally:
+            conn.close()
+    present = {r["batch"] for r in reports}
+    # Logs imported before reports existed, or whose report could not be written, have none.
+    return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
+            "current": {"content_sha256": digest, "diagnostics": current,
+                        "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
+            **workspace.DESCRIPTIVE_ONLY}
+
+
+__all__ = ["quality", "record", "transform", "content_digest", "diagnostics", "MAPPING_VERSION"]

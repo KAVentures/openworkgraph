@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
   log_id VARCHAR NOT NULL, analysis_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS log_quality (
+  log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, created_at TIMESTAMP NOT NULL, report VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS signal_rules (
   log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL, last_evaluated_at TIMESTAMP, last_state VARCHAR
@@ -158,7 +161,8 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
             columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
 
 
-def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, mapping: dict[str, Any]) -> ReadStats:
+def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, mapping: dict[str, Any],
+                   reasons: dict[str, int] | None = None) -> ReadStats:
     """Bulk CSV import in SQL, with the same rules as the streaming reader."""
     delimiter = mapping.get("delimiter") or ","
     if delimiter not in {",", ";", "\t", "|"}:
@@ -199,7 +203,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
           {case} AS case_id, {activity} AS activity,
           CASE WHEN regexp_matches(trim({stamp}), '(Z|[+-][0-9]{{2}}:?[0-9]{{2}})$')
                THEN try_cast(trim({stamp}) AS TIMESTAMPTZ) END AS ts,
-          coalesce({res}, '') AS resource, {attrs} AS attributes,
+          coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
           row_number() OVER () AS n
         FROM {source}""", [str(path),original_header])
     if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
@@ -207,6 +211,17 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         [r'[\x00-\x1f\x7f-\x9f\x{fffe}\x{ffff}]']).fetchone()[0]:
         raise EventLogFormatError("event-log identifiers and activity labels exceed their bounds or contain control characters")
     total = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
+    if reasons is not None:
+        counts = conn.execute("""SELECT count(*) FILTER (WHERE case_id IS NULL OR trim(case_id) = ''),
+              count(*) FILTER (WHERE activity IS NULL OR trim(activity) = ''),
+              count(*) FILTER (WHERE raw_ts IS NULL OR trim(raw_ts) = ''),
+              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> ''
+                               AND NOT regexp_matches(trim(raw_ts), '(Z|[+-][0-9]{2}:?[0-9]{2})$')),
+              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> '' AND ts IS NULL
+                               AND regexp_matches(trim(raw_ts), '(Z|[+-][0-9]{2}:?[0-9]{2})$'))
+            FROM staged""").fetchone()
+        reasons.update(zip(("missing_case", "missing_activity", "missing_timestamp",
+                            "timestamp_without_utc_offset", "unparseable_timestamp"), counts))
     conn.execute("DELETE FROM staged WHERE case_id IS NULL OR trim(case_id) = '' OR activity IS NULL "
                  "OR trim(activity) = '' OR ts IS NULL")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
@@ -220,9 +235,9 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
 
 
 def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: Path, source_format: str,
-            mapping: dict[str, Any] | None) -> ReadStats:
+            mapping: dict[str, Any] | None, reasons: dict[str, int] | None = None) -> ReadStats:
     if source_format == "csv":
-        return _load_csv_fast(conn, log_id, upload, mapping or {})
+        return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons)
     stats = ReadStats()
     with upload.open("rb") as raw:
         reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
@@ -260,7 +275,8 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                 raise EventLogWorkspaceError("delete an event log before importing another")
             conn.execute("BEGIN")
             try:
-                stats = _ingest(conn, log_id, upload, folder, source_format, mapping)
+                reasons: dict[str, int] = {}
+                stats = _ingest(conn, log_id, upload, folder, source_format, mapping, reasons)
                 if stats.events == 0:
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -270,7 +286,11 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-            return _check_log(conn, log_id)
+            report = _record_quality(conn, log_id, batch=0, kind="import", source_format=source_format,
+                                     mapping=mapping, upload=upload, rows_accepted=stats.events,
+                                     rows_rejected=stats.rejected_events,
+                                     rejection_reasons=reasons if source_format == "csv" else None)
+            return {**_check_log(conn, log_id), "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
@@ -304,7 +324,8 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             upload = _receive(source, folder)
             conn.execute("BEGIN")
             try:
-                stats = _ingest(conn, staging, upload, folder, source_format, mapping)
+                reasons: dict[str, int] = {}
+                stats = _ingest(conn, staging, upload, folder, source_format, mapping, reasons)
                 if stats.events == 0:
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 batch = conn.execute("SELECT coalesce(max(batch), 0) + 1 FROM log_appends WHERE log_id = ?",
@@ -345,14 +366,43 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+            report = _record_quality(conn, log_id, batch=batch, kind="append", source_format=source_format,
+                                     mapping=mapping, upload=upload, rows_accepted=added,
+                                     rows_rejected=stats.rejected_events,
+                                     rejection_reasons=reasons if source_format == "csv" else None,
+                                     duplicates_skipped=duplicates, prefix=prefix)
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
-                    "appended_event_id_prefix": prefix}
+                    "appended_event_id_prefix": prefix, "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
             conn.close()
+
+
+def _record_quality(conn: duckdb.DuckDBPyConnection, log_id: str, **details: Any) -> dict[str, Any] | None:
+    """Store the batch's quality report after the events commit (it is twice as slow inside the import
+    transaction). A failure here never undoes the import; the log then simply has no report."""
+    from . import event_log_quality as quality
+    try:
+        conn.execute("BEGIN")
+        report = quality.record(conn, log_id, **details)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        return None
+    return _quality_summary(report)
+
+
+def _quality_summary(report: dict[str, Any]) -> dict[str, Any]:
+    d = report["diagnostics"]
+    return {"batch": report["batch"], "content_sha256": report["content_sha256"],
+            "transform_sha256": report["transform"]["transform_sha256"],
+            "rejected_by_reason": report["rows"]["rejected_by_reason"],
+            "duplicate_events": d["duplicate_events"],
+            "events_sharing_a_timestamp_in_a_case": d["events_sharing_a_timestamp_in_a_case"],
+            "events_without_resource": d["events_without_resource"]}
 
 
 def append_history(log_id: str) -> dict[str, Any]:
@@ -385,7 +435,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("log_appends", "saved_analyses", "signal_rules", "event_objects", "events", "objects", "logs"):
+            for table in ("log_appends", "log_quality", "saved_analyses", "signal_rules", "event_objects", "events",
+                          "objects", "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
             return {"deleted": True, "log_id": log_id}

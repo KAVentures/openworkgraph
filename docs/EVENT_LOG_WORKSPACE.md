@@ -81,6 +81,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
@@ -664,3 +665,47 @@ its case count and median case duration. A change that starts mid-window usually
 sides of that window. One million events take a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_drift.py`). A change point does not say why
 behaviour changed, and a change in how events are recorded looks the same.
+
+## Data quality and mapping reports
+
+Every import and every appended batch stores a counts-only quality report next to the log. The
+import and append responses include a short summary as `quality`, and
+`GET /v1/event-logs/{log_id}/quality` returns every report (batch 0 is the import) together with
+the current diagnostics and content digest of the whole log.
+
+Each report records:
+
+- **Transform**: the source format, the column mapping (case, activity, timestamp, resource and the
+  extra columns kept, in order) or the standard mapping for XES/OCEL, the mapping version
+  (`owg.event-log-mapping.v1`) and the importer version, with `transform_sha256` over that
+  definition.
+- **Digests**: `source_sha256` of the uploaded bytes and `content_sha256` of what was stored. The
+  content digest is order-independent: one SHA-256 over the sorted per-event hashes and one over
+  the sorted event-object links. Importing the same file with the same mapping again gives the same
+  three digests. Reordering the kept columns changes the transform and content digests, because
+  attributes are stored in the declared order.
+- **Rows**: accepted and rejected rows. For CSV the rejections are broken down into missing case,
+  missing activity, missing time, time without a UTC offset and unreadable time; one row can count
+  under several reasons. XES and OCEL readers only report a total, and the report says so. Rejected
+  rows are never kept. Appends also record how many events were skipped as already present.
+- **Diagnostics** (for the batch; the endpoint also gives them for the whole log):
+  - duplicate events: same case objects, activity, time and resource;
+  - events sharing a timestamp with another event of the same case, and the number of such cases.
+    Their order falls back to the event identifier, not to when they happened;
+  - events without a resource;
+  - events without a case object;
+  - single-event cases per case notion;
+  - events dated after the import;
+  - for up to 32 attributes, how many events have a value.
+- **Completeness**: always `unknown`. The counts describe the supplied rows only; whether the
+  source system holds more history is not known.
+
+Reports contain counts, column names and digests, never case IDs, activity labels, resources or
+attribute values. They are deleted with the log. The report is written in its own short
+transaction after the events commit, so a failure to write it never undoes an import. Logs imported
+before reports existed, or batches whose report could not be written, appear in
+`batches_without_report`.
+
+Writing a report adds about 2 seconds per million events to an import. In the dashboard, the
+"Data quality" section under the overview shows the reports, mapping and diagnostics, and the
+import status line names the rejection reasons.
