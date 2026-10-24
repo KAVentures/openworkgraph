@@ -160,6 +160,37 @@ def install_organization_admin(
         )
         return result
 
+    @app.get("/v1/admin/team-insights/{organization_id}")
+    def get_team_insights(
+        organization_id: str,
+        authorization: str | None = Header(default=None),
+        since: str | None = None,
+        until: str | None = None,
+        team: str | None = None,
+    ) -> dict[str, Any]:
+        # Aggregate team motifs only; no actor filter can lower the floor.
+        require_admin(authorization)
+        org = str(organization_id or "").strip()
+        if not org or len(org) > 512:
+            raise HTTPException(status_code=400, detail="organization_id must be 1-512 characters")
+        from .team_task_discovery import team_task_discovery
+        try:
+            result = team_task_discovery(db, organization_id=org, since=since, until=until,
+                                         teams={team} if team else None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from .admin_accounts import current_admin
+        identity = current_admin()
+        db.audit(
+            organization_id=org,
+            principal_id=identity.audit_id if identity else "gateway-admin",
+            action="manager.team_insights.read",
+            details={"teams": [item["team_id"] for item in result["teams"]],
+                     "suppressed_teams": len(result["suppressed_teams"]),
+                     "effective_since": result["effective_since"], "effective_until": result["effective_until"]},
+        )
+        return result
+
     @app.get("/v1/admin/device-activity/{organization_id}")
     def get_device_activity(
         organization_id: str,
