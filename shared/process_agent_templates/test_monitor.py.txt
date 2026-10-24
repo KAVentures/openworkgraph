@@ -1,0 +1,119 @@
+"""Synthetic journal projection; no tools, providers or customer records."""
+from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
+import unittest
+
+from execute import ImplementationError, digest, reference
+from monitor import MAX_BYTES, read_journal, report
+from test_execution import fixture
+
+
+class MonitoringCases(unittest.TestCase):
+    def setUp(self):
+        self.spec = fixture()[0]
+        self.at = '2026-01-01T00:00:00+00:00'
+        self.start = self.row('started', execution_id='b'*64,
+                              process_reference=reference(self.spec), spec_sha256=digest(self.spec))
+
+    def row(self, phase, **details):
+        return {'phase': phase, 'at': self.at, **details}
+
+    def attempt(self, activity='resolve', attempt=1, status='tool_returned_expected_structure'):
+        return [self.row('attempt_pending', activity_id=activity, attempt=attempt),
+                self.row(status, activity_id=activity, attempt=attempt)]
+
+    def finish(self, good=True):
+        return self.row('finished', declared_route_checks_satisfied=good,
+                        all_tool_results_matched=good, all_declared_operations_verified=good)
+
+    def test_success_projects_observed_tool_steps_only_and_drops_all_private_fields(self):
+        rows = [self.start, *self.attempt(), *self.attempt('readback', 2), self.finish()]
+        for row in rows:
+            row.update(private_record='PRIVATE_RECORD', arguments={'secret':'PRIVATE_SECRET'},
+                       resource_ref='owg:r:'+'c'*32, result={'private':'PRIVATE_RESULT'})
+        value = report(self.spec, rows, 'Synthetic deployment')
+        run = value['runs'][0]
+        self.assertEqual(run['status'], 'succeeded')
+        self.assertEqual([s['step_id'] for s in run['steps']], ['resolve','readback'])
+        self.assertEqual(run['outcome']['verified'], None)
+        self.assertEqual(value['deployment']['workflow_spec_sha256'], digest(self.spec))
+        for secret in ('PRIVATE', 'owg:r:', 'arguments', 'all_declared_operations_verified'):
+            self.assertNotIn(secret, json.dumps(value))
+        self.assertNotIn('done', [s['step_id'] for s in run['steps']])
+
+    def test_interrupted_attempt_stays_running_with_unknown_tool_result(self):
+        value = report(self.spec, [self.start, self.row('attempt_pending', activity_id='resolve', attempt=1)], 'Run')
+        run = value['runs'][0]
+        self.assertEqual(run['status'], 'running')
+        self.assertIsNone(run['finished_at'])
+        self.assertEqual(run['steps'][0]['status'], 'handed_to_human')
+        self.assertEqual(report(self.spec, [self.start], 'Run')['runs'][0]['steps'], [])
+
+    def test_ambiguous_results_need_reconciliation_and_explicit_tool_failure_is_reported(self):
+        for phase, status in [('uncertain','handed_to_human'), ('tool_reported_failure','failed')]:
+            run = report(self.spec, [self.start, *self.attempt(status=phase), self.finish(False)], 'Run')['runs'][0]
+            self.assertEqual(run['status'], status)
+            self.assertEqual(run['steps'][0]['status'], status)
+            self.assertIsNone(run['outcome']['verified'])
+
+    def test_precondition_failure_does_not_claim_the_business_tool_was_called(self):
+        rows = [self.start, self.row('precondition_pending', activity_id='resolve', attempt=1),
+                self.row('precondition_not_established', activity_id='resolve', attempt=1), self.finish(False)]
+        run = report(self.spec, rows, 'Run')['runs'][0]
+        self.assertEqual(run['status'], 'handed_to_human')
+        self.assertEqual(run['steps'], [])
+
+    def test_safe_stop_before_tools_has_no_invented_activity_or_verified_outcome(self):
+        run = report(self.spec, [self.start, self.row('stopped_before_tools', reason='unavailable')], 'Run')['runs'][0]
+        self.assertEqual(run['status'], 'handed_to_human')
+        self.assertEqual(run['steps'], [])
+        self.assertIsNotNone(run['finished_at'])
+        self.assertIsNone(run['outcome']['verified'])
+
+    def test_wrong_spec_legacy_or_nonmatching_process_reference_is_rejected(self):
+        for field, replacement in [('spec_sha256',None), ('spec_sha256','f'*64),
+                                   ('process_reference',{'workflow_id':'another'}), ('execution_id','private id')]:
+            row = {**self.start, field:replacement}
+            with self.assertRaises(ImplementationError):report(self.spec, [row], 'Run')
+        changed = deepcopy(self.spec); changed['workflow_id']='different'
+        with self.assertRaises(ImplementationError):report(changed, [self.start], 'Run')
+
+    def test_invalid_order_contradictory_success_and_unobserved_completions_are_rejected(self):
+        invalid = [
+            [self.start, self.start],
+            [self.start, *self.attempt(), self.finish(), self.finish()],
+            [self.start, self.attempt()[1]],
+            [self.start, *self.attempt(activity='done')],
+            [self.start, *self.attempt(attempt=2)],
+            [self.start, self.attempt()[0], self.attempt()[0]],
+            [self.start, self.attempt()[0], {**self.attempt()[1], 'activity_id':'readback'}],
+            [self.start, *self.attempt(status='uncertain'), self.finish()],
+            [self.start, self.row('source_rule_checked', status='unknown'), self.finish()],
+            [self.start, self.row('catalog_checked', current_independent_design_review=False), self.finish()],
+            [self.start, self.row('finished', declared_route_checks_satisfied=True,
+                                  all_tool_results_matched=True, all_declared_operations_verified=1)],
+            [self.start, self.row('future_success')],
+            [self.start, self.row([])],
+            [self.start, self.row('attempt_pending', activity_id={}, attempt=1)],
+            [self.start, self.attempt()[0], {**self.attempt()[1], 'attempt':True}],
+            [self.start, {**self.finish(), 'at':'2025-01-01T00:00:00Z'}],
+            [self.start, {**self.finish(), 'at':'2026-01-01T00:00:00'}],
+        ]
+        for rows in invalid:
+            with self.subTest(rows=rows), self.assertRaises(ImplementationError):report(self.spec, rows, 'Run')
+
+    def test_journal_reader_bounds_torn_lines_duplicate_keys_and_nonstandard_json(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/'selected.jsonl'
+            path.write_text(json.dumps(self.start)+'\n', encoding='utf-8')
+            self.assertEqual(read_journal(path), [self.start])
+            for content in (b'', b'{}', b'{"phase":"started","phase":"finished"}\n',
+                            b'{"value":NaN}\n', b'\xff\n', b'{}\n' * 10001, b'x'*(MAX_BYTES+1)):
+                path.write_bytes(content)
+                with self.assertRaises(ImplementationError):read_journal(path)
+
+
+if __name__ == '__main__':
+    unittest.main()
