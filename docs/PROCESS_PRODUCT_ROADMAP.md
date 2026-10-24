@@ -135,4 +135,12 @@ Source/account authority, completeness and causal performance remain unverified.
 [Explicit parallel process models](PARALLEL_PROCESS_MODELS.md) preserve paired
 fork/join regions through reviewed design, BPMN/PDD/JSON and bounded structural
 alignment. Incomplete searches remain unknown. Linear agent projects cannot
-execute these new designs and are explicitly unavailable for them.
+silently acquire parallel semantics. Newly exported SDK projects include the
+same token-flow validator and require every selected branch to complete before
+joining; customer-authorized tool calls follow a serial token-valid schedule.
+
+[Automation monitoring](AUTOMATION_MONITORING.md) accepts exact-spec minimized
+SDK execution-journal reports and immutable versioned design snapshots. Reported
+completed activity IDs are compared against the full graph with visible search
+coverage and missing evidence. Imported reports do not independently verify
+rules, human work, current approval, outcomes or agent causality.

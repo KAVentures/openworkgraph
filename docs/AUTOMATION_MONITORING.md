@@ -76,8 +76,8 @@ that value unknown rather than reconstructing it from an attached design.
   An unfinished journal remains running; uncertain effects require reconciliation.
   A reported success means the runner's declared route checks matched, not that
   the business objective was achieved. `outcome.verified` remains unknown, even
-  if the journal reports successful source checks. These SDK process graphs are
-  not the linear starter format accepted by the design attachment screen.
+  if the journal reports successful source checks. Attach that project's exact
+  `workflow.spec.json` to compare reported activity IDs against the saved graph.
 - **Other Agents SDK implementations**: write a run object from your run result
   and tool-call trace.
 
@@ -98,6 +98,22 @@ that value unknown rather than reconstructing it from an attached design.
   `workflow.spec.json`: runs that completed every design step in order, mean
   alignment fitness, design steps never completed, and step IDs that are not
   in the design.
+- **SDK graph comparison** accepts a versioned SDK project's exact spec as a
+  separate design format. Its immutable normalized graph and declared revision
+  reference are retained locally with the deployment; no catalog is modified or
+  queried and current independent review is not established by attachment.
+  Completed activity IDs are aligned against the full graph, including paired
+  forks/joins, alternative branches and loops. Repeated labels cannot combine
+  distinct activities. Routing nodes are silent; unreported human activities
+  remain missing evidence rather than being invented or treated as proven
+  process deviations. Failed or uncertain steps never count as completed.
+  The view shows exact structural matches, mean minimum activity edits **among
+  compared runs**, missing reported activities and unexpected step IDs. A match
+  does not verify business rules, policy, human work or outcomes. At most 128
+  distinct completed paths are selected by frequency with deterministic ties;
+  parallel search also uses the existing 200,000-state batch budget. Coverage
+  and the counts excluded for each limit or for having no completed steps stay
+  visible. Unknown runs are not counted as matches or assigned a fitness value.
 - **Runs per week** by status.
 
 **Analyse as event log** copies the reported steps into the event-log
@@ -108,7 +124,7 @@ variants, KPIs, cohorts, simulation and conformance apply.
 
 Imports need **Store these runs on this computer**. Runs are kept in
 `automation_runs.duckdb` (owner-only permissions) until you delete the
-deployment, at most 50 deployments. All routes need the local dashboard
+deployment, including attached design snapshots, at most 50 deployments. All routes need the local dashboard
 session; AI bearer tokens and MCP clients cannot read or change them.
 
 | Route | Purpose |
