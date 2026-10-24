@@ -190,18 +190,11 @@ def _motifs(events: list[tuple[float, str, float]]):
             if len(key) == 4 or key not in covered_triples}
 
 
-def manager_insights(
-    db: Any, *,
-    organization_id: str,
-    event_limit: int = 25000,
-    min_contributors: int = MIN_CONTRIBUTORS,
-) -> dict[str, Any]:
-    threshold = max(MIN_CONTRIBUTORS, min(100, int(min_contributors)))
-    bounded = max(100, min(25000, int(event_limit)))
-    rows = load_gateway_evidence(
-        db, organization_id=organization_id, actor_id=None,
-        since=None, until=None, limit=bounded,
-    )
+def session_motifs(rows: list[Any]):
+    """Yield (actor, day, ordered app motif, observed seconds) per source session.
+
+    Actor ids stay server-side; callers must threshold before reporting.
+    """
     sessions: dict[
         tuple[str, str, str, str], list[tuple[float, str, float]]
     ] = defaultdict(list)
@@ -225,16 +218,32 @@ def manager_insights(
             duration = 0.0
         sessions[(actor, device, session, day)].append((at, name, duration))
 
-    groups: dict[tuple[str, ...], dict[str, Any]] = {}
     for (actor, _device, _session, day), events in sessions.items():
         for key, duration in _motifs(events).items():
-            summary = groups.setdefault(
-                key, {"actors": set(), "sessions": 0, "seconds": 0.0, "days": set()}
-            )
-            summary["actors"].add(actor)
-            summary["sessions"] += 1
-            summary["seconds"] += duration
-            summary["days"].add(day)
+            yield actor, day, key, duration
+
+
+def manager_insights(
+    db: Any, *,
+    organization_id: str,
+    event_limit: int = 25000,
+    min_contributors: int = MIN_CONTRIBUTORS,
+) -> dict[str, Any]:
+    threshold = max(MIN_CONTRIBUTORS, min(100, int(min_contributors)))
+    bounded = max(100, min(25000, int(event_limit)))
+    rows = load_gateway_evidence(
+        db, organization_id=organization_id, actor_id=None,
+        since=None, until=None, limit=bounded,
+    )
+    groups: dict[tuple[str, ...], dict[str, Any]] = {}
+    for actor, day, key, duration in session_motifs(rows):
+        summary = groups.setdefault(
+            key, {"actors": set(), "sessions": 0, "seconds": 0.0, "days": set()}
+        )
+        summary["actors"].add(actor)
+        summary["sessions"] += 1
+        summary["seconds"] += duration
+        summary["days"].add(day)
 
     # Enforce the k>=3 privacy threshold BEFORE sorting, rendering or
     # reporting any count. Never expose raw actor/device/session identifiers.

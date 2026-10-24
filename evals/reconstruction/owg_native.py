@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from server.record_case_lanes import record_case_lanes
+from server.work_item_links import link_observations
 
 from .fixtures import load_cases
 from .scoring import aggregate
@@ -58,6 +59,46 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
+    """Merged multi-signal items. Accepting the ambiguous candidate links is a
+    diagnostic upper bound only: OWG itself never merges them."""
+    events = list(case.get("source_events") or case["presented_evidence"])
+    linked = link_observations(events)
+    members = list(linked["members"].values())
+    if accept_candidates:
+        parent = {event_id: index for index, ids in enumerate(members) for event_id in ids}
+        merged: dict[int, set[int]] = {index: {index} for index in range(len(members))}
+        for candidate in linked["candidates"]:
+            a, b = parent[candidate["event_id"]], parent[candidate["toward_event_id"]]
+            if merged[a] is not merged[b]:
+                union = merged[a] | merged[b]
+                for index in union:
+                    merged[index] = union
+        position = {row["event_id"]: index for index, row in enumerate(linked["rows"])}
+        groups = {id(group): group for group in merged.values()}.values()
+        members = [sorted((e for index in group for e in members[index]), key=position.__getitem__)
+                   for group in groups]
+    members = [ids for ids in members if len(ids) >= 2]
+    assigned = {event_id for ids in members for event_id in ids}
+    all_ids = [str(e["event_id"]) for e in case["presented_evidence"]]
+    return {
+        "case_id": case["case_id"],
+        "workflows": [{
+            "prediction_id": f"item_{index}",
+            "event_ids": ids,
+            "ordered_event_ids": ids,
+            "automation_relevant_event_ids": ids,
+            "ui_mechanic_event_ids": [],
+        } for index, ids in enumerate(members, start=1)],
+        "unassigned_event_ids": [event_id for event_id in all_ids if event_id not in assigned],
+        "insufficient_evidence": False,
+    }
+
+
+def score_linked_items(cases: list[dict[str, Any]], *, accept_candidates: bool = False) -> dict[str, Any]:
+    return aggregate(cases, [predict_linked_items(case, accept_candidates=accept_candidates) for case in cases])
+
+
 def score_record_lanes(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return aggregate(cases, [predict_record_lanes(case) for case in cases])
 
@@ -66,12 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Score OWG's exact-record lanes on the reconstruction corpus")
     parser.add_argument("--cases", help="optional exported JSONL corpus")
     parser.add_argument("--split", choices=("all", "development", "holdout"), default="all")
+    parser.add_argument("--grouping", choices=("record_lanes", "linked_items", "linked_items_accepting_candidates"),
+                        default="record_lanes")
     args = parser.parse_args(argv)
     cases = load_cases(Path(args.cases)) if args.cases else load_cases()
     if args.split != "all":
         from .prepare import split_cases
         cases = split_cases(cases, args.split)
-    print(json.dumps(score_record_lanes(cases), indent=2, sort_keys=True))
+    if args.grouping == "record_lanes":
+        report = score_record_lanes(cases)
+    else:
+        report = score_linked_items(cases, accept_candidates=args.grouping != "linked_items")
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 

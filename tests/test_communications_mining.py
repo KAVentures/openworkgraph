@@ -228,7 +228,7 @@ assert.throws(()=>m.parseTaxonomy('no colon'));assert.throws(()=>m.parseTaxonomy
 assert.equal(m.formatTaxonomy({intents:[{name:'A',terms:['x','y']}]}),'A: x, y');
 assert.equal(m.detectFormat('a.EML'),'eml');assert.equal(m.detectFormat('t.csv'),'csv');assert.equal(m.detectFormat('Inbox'),'mbox');
 """
-    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
 
 

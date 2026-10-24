@@ -628,6 +628,33 @@ def install_human_access(
         )
         return payload
 
+    @app.get("/v1/human/aggregate/team-patterns")
+    def aggregate_team_patterns(
+        since: str | None = None,
+        until: str | None = None,
+        p: HumanPrincipal = Depends(human),
+    ) -> dict[str, Any]:
+        """Team motifs for the caller's own team scopes (or all teams with org scope)."""
+        if "aggregate:read" not in p.scopes:
+            raise HTTPException(status_code=403, detail="missing required scope: aggregate:read")
+        teams = None if "org:evidence:read" in p.scopes else set(p.team_ids)
+        if teams is not None and not teams:
+            raise HTTPException(status_code=403, detail="no team scope granted")
+        from .team_task_discovery import team_task_discovery
+        try:
+            payload = team_task_discovery(db, organization_id=p.organization_id, since=since, until=until,
+                                          teams=teams, min_contributors=settings.aggregate_min_actors)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.audit(
+            organization_id=p.organization_id,
+            principal_id=p.audit_id,
+            action="human_access.team_aggregate.read",
+            details={"teams": [item["team_id"] for item in payload["teams"]],
+                     "minimum_contributors": payload["minimum_contributors"]},
+        )
+        return payload
+
     @app.get("/v1/human/aggregate/patterns")
     def aggregate_patterns(
         since: str | None = None,

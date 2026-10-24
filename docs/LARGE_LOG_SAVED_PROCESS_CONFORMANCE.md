@@ -103,3 +103,29 @@ Process revisions and retained logs keep their existing storage and deletion
 controls. Organization references require their own authenticated review scope
 and are outside this local comparison. No AI, source, recording or execution
 permission changes.
+
+## Token-based replay
+
+`token_replay` in the comparison result replays each retained variant on the saved graph,
+weighted by its case count. It uses the same edge-token semantics as the alignment: a
+parallel split emits a token on every branch, a parallel join waits for all of them, and
+other nodes pass one token on. This is the classic produced (p), consumed (c), missing (m)
+and remaining (r) token method:
+
+    token_fitness = 1/2 (1 - m / c) + 1/2 (1 - r / p)
+
+- `missing_tokens_by_activity`: activities that ran without the graph enabling them. This
+  covers skipped predecessors, swapped order and labels the graph does not contain (also
+  listed in `unmodelled_activities`).
+- `remaining_tokens_by_activity`: steps the graph expected but the case never performed,
+  such as unfinished cases or skipped branches.
+- Gateways, start, end and routing nodes are silent. They fire only when that enables the
+  next observed activity or completion.
+- Replay is greedy, as in the classic method, so it can count more deviations than the
+  minimum-edit alignment reported above. Use the alignment for edit counts and replay to
+  see where tokens go missing or are left over.
+- Work is bounded: 300,000 replayed events and a silent-search state budget. When either
+  limit is reached, `replay_truncated` is true and `case_population_coverage` gives the
+  share of cases that were replayed.
+
+As with the rest of the comparison, no business rule, policy or outcome is evaluated.
