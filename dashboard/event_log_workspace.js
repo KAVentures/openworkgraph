@@ -840,6 +840,15 @@
 
   window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   // Builds a signal rule body from the form values; throws a readable error.
+  function newCaseChange(signal){
+    if(signal.new_cases_since_last_evaluation!==null&&signal.new_cases_since_last_evaluation!==undefined)
+      return Number(signal.new_cases_since_last_evaluation).toLocaleString();
+    const c=signal.new_cases_comparison;
+    if(!c||c.reason==='first_check')return 'first check';
+    if(c.lower_bound!==null&&c.upper_bound!==null)
+      return Number(c.lower_bound).toLocaleString()+'–'+Number(c.upper_bound).toLocaleString()+' (bounded history)';
+    return 'unknown (bounded history)';
+  }
   function signalRule(values){
     const name=String(values.name||'').trim();if(!name)throw new Error('Name the signal.');
     const hours=Number(values.hours);
@@ -908,8 +917,9 @@
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
             sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
-            sig.when.kind==='kpi'?(sig.changed_since_last_evaluation?'changed':'—'):(sig.new_cases_since_last_evaluation===null?'first check':Number(sig.new_cases_since_last_evaluation).toLocaleString()),
-            (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id).join(', ')])),
+            sig.when.kind==='kpi'?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
+            (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(sig.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
+              ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ')])),
           el('div',r.interpretation,'muted'));
         await refresh();
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
@@ -918,6 +928,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={analysisSpec,signalRule,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
