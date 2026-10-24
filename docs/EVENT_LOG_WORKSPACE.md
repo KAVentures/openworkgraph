@@ -388,6 +388,21 @@ is executed as a query. Attribute names and values are passed as parameters.
   `case_type`.
 - Results return at most 500 rows, with `rows_truncated` when there are more.
 
+Variant dimensions use complete ordered activity arrays encoded as JSON strings
+(`variant_encoding: ordered_activity_json_array`). A single activity named
+`A > B` stays distinct from the two-activity sequence `A`, `B`; quotes, commas
+and backslashes also retain their literal identity. These replace the earlier
+display-separated strings, which could combine different paths.
+
+Complete paths are built only when a variant dimension is requested, after
+cohort and case filters. Other counts and duration summaries never materialize
+unused path strings. Variant grouping preflights the actual UTF-8 JSON size:
+at most 1 MiB per selected case path and 64 MiB across selected case paths.
+An oversized selection receives an explicit error with no partial paths grouped;
+choose narrower cases or another dimension. Memory exhaustion also returns a
+safe error rather than an empty, partial or zero-valued result. The 500-row
+display/export limit remains separate from these path-processing limits.
+
 Saved analyses are stored with the log and deleted with it, at most 50 per log:
 `GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
