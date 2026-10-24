@@ -473,3 +473,34 @@ The dashboard's "Process map" section has the two sliders (redrawn as you move t
 "Slowest paths" table. Gaps are elapsed time between recorded events, not measured work or
 verified waiting. Redrawing a one-million-event log takes a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_process_map.py`).
+
+## Predicting open cases
+
+`POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,
+optionally, an outcome risk for open cases. This is the local equivalent of ABBYY Timeline, IBM
+Process Mining or Celonis predictive monitoring.
+
+```json
+{"end_activities": ["Close", "Cancel"],
+ "outcome": {"kind": "duration_over", "seconds": 172800},
+ "min_support": 20, "backtest_share": 0.3, "limit": 50}
+```
+
+- A case is open when its latest activity is not one of `end_activities`.
+- Each open case is compared with completed cases that were in the same state: the same latest
+  activity and the same number of events so far, with event counts above 10 grouped together.
+- When fewer than `min_support` distinct completed cases match, the comparison falls back to
+  the same latest activity, then to all completed cases. Cases without enough history are
+  counted in `unsupported_open_cases` and not guessed.
+- Each prediction gives the median remaining time and its 10th–90th percentile range. With an
+  `outcome` (`duration_over` or `contains_activity`), it also gives the probability with a
+  Wilson 95% interval.
+- **Backtest:** the model learns from cases that ended before a cutoff (the most recent
+  `backtest_share` of completed cases are held out) and predicts every step of the held-out cases.
+- The backtest reports the mean absolute error against a naive baseline (the overall median
+  remaining time) and how often the actual remaining time fell inside the 10th–90th percentile
+  range (80% expected). With an outcome it also reports the Brier score against the base rate.
+
+Remaining time is measured to the last recorded event. Predictions are estimates from this log's
+history, not commitments or targets, and no resources are used. One million events take a few
+seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
