@@ -307,7 +307,8 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogObjectMap').textContent(),/Place order.*Ship/s);
    // The global analysis still selects item; map evidence must explicitly select order.
    assert.equal(await page.locator('#owgEventLogCaseType').inputValue(),'item');
-   await page.locator('#owgEventLogObjectGraph').getByRole('button',{name:'Inspect observed transition Place order → Ship',exact:true}).click();
+   await page.locator('#owgEventLogObjectGraph').getByRole('button',{name:'Inspect observed transition Place order → Ship',exact:true}).focus();
+   await page.keyboard.press('Enter');
    await page.locator('#owgEventLogObjectSelection').getByRole('button',{name:'Browse cases for adjacent transition',exact:true}).click();
    await page.locator('#owgEventLogObjectCasesStatus').filter({hasText:'1 matching cases'}).waitFor();
    await page.locator('#owgEventLogObjectCasesList').getByRole('button',{name:'Open case o1',exact:true}).click();
