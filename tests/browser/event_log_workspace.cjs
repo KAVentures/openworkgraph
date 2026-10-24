@@ -323,6 +323,17 @@ const path=require('node:path');
    const mapAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(mapAudit.violations.map(v=>v.id+': '+v.nodes[0].target.join(' ')),[],'object map WCAG violations');
+   // Owned response fixture for the explicit unknown-relations contract.
+   await page.route('**/object-map',async route=>{
+     const response=await route.fetch(),value=await response.json();
+     value.relations=[];value.relations_calculation_complete=false;value.relations_unknown_reason='relation_pair_work_budget';
+     await route.fulfill({status:200,contentType:'application/json',headers:{'Cache-Control':'no-store'},body:JSON.stringify(value)});
+   });
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgEventLogObjectMap').getByText('Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.',{exact:true}).waitFor();
+   await page.locator('#owgEventLogObjectGraph').waitFor();
+   assert.equal(await page.locator('#owgEventLogObjectMap th').filter({hasText:'Linked to'}).count(),0,'unknown relations are not rendered as zero-valued metrics');
+   await page.unrouteAll({behavior:'wait'});
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();

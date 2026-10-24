@@ -166,3 +166,93 @@ def test_events_with_several_qualifiers_to_one_object_count_once():
     order = next(t for t in objects.object_graph(_ocel(doc))["object_types"] if t["object_type"] == "order")
     assert [(e["from"], e["to"], e["transition_count"]) for e in order["transitions"]] == [("Place", "Ship", 1)]
     assert {a["activity"]: a["event_count"] for a in order["activities"]} == {"Place": 1, "Ship": 1}
+
+
+def _link_oracle(document):
+    from collections import defaultdict
+    kinds={o['id']:o['type'] for o in document['objects']}
+    seen=defaultdict(set); linked=defaultdict(lambda:defaultdict(set))
+    for event in document['events']:
+        ids={r['objectId'] for r in event['relationships']}
+        for a in ids:
+            seen[kinds[a]].add(a)
+            for b in ids:
+                if kinds[a]!=kinds[b]:linked[kinds[a],kinds[b]][a].add(b)
+    return {(a,b):{'objects_with_link':len(rows), 'linked_objects_total':sum(map(len,rows.values())),
+        'share_of_from_objects':round(len(rows)/len(seen[a]),6),
+        'mean_linked_per_object':round(sum(map(len,rows.values()))/len(rows),4),
+        'max_linked_per_object':max(map(len,rows.values()))} for (a,b),rows in linked.items()}
+
+
+def _assert_links(graph, document):
+    actual={(r['from_type'],r['to_type']):{k:v for k,v in r.items() if k not in {'from_type','to_type'}}
+            for r in graph['relations']}
+    assert graph['relations_calculation_complete'] and actual==_link_oracle(document)
+
+
+@pytest.mark.parametrize('seed',range(5))
+def test_compacted_event_sets_match_independent_object_pair_sets(seed,monkeypatch):
+    import random
+    rng=random.Random(seed)
+    document={'objects':[], 'events':[{'id':f'e{i}','type':'Work','time':f'2024-01-01T0{i}:00:00Z','relationships':[]} for i in range(4)]}
+    for kind in ('order','item','delivery'):
+        for group in range(4):
+            event_ids=rng.sample(range(4),rng.randint(1,4))
+            for member in range(rng.randint(8,12)):
+                key=f'{kind}-{group}-{member}';document['objects'].append({'id':key,'type':kind})
+                for event_id in event_ids:
+                    document['events'][event_id]['relationships'] += [
+                        {'objectId':key,'qualifier':'first'}, {'objectId':key,'qualifier':'second'}]
+    monkeypatch.setattr(objects,'MAX_RELATION_PAIRS',500)
+    graph=objects.object_graph(_ocel(document))
+    assert graph['relations_count_method']=='identical_event_set_groups'
+    assert graph['relation_pair_candidates']>500>=graph['relation_group_pair_candidates']
+    _assert_links(graph,document)
+
+
+def test_relation_budget_unknown_is_never_reported_as_no_links(monkeypatch):
+    document=_order_to_cash();log=_ocel(document)
+    monkeypatch.setattr(objects,'MAX_RELATION_PAIRS',1)
+    result=objects.object_graph(log)
+    assert not result['relations_calculation_complete'] and result['relations']==[]
+    assert result['relations_unknown_reason']=='relation_pair_work_budget'
+    assert result['relation_pair_candidates']>1 and result['relation_group_pair_candidates']>1
+    assert result['object_types'] and result['object_types'][0]['activities']
+    monkeypatch.setattr(objects,'MAX_SIGNATURE_LINKS',1)
+    result=objects.object_graph(log)
+    assert not result['relations_calculation_complete'] and result['relation_group_pair_candidates'] is None
+
+
+def test_relation_memory_failure_remains_unknown_with_no_fabricated_zero_counts(monkeypatch):
+    import duckdb
+    def exhausted(*args):raise duckdb.OutOfMemoryException('owned test limit')
+    monkeypatch.setattr(objects,'_pair_candidates',exhausted)
+    result=objects.object_graph(_ocel(_order_to_cash()))
+    assert result['relations_unknown_reason']=='relation_resource_limit'
+    assert not result['relations_calculation_complete'] and result['relations']==[]
+    assert result['relation_pair_candidates'] is None and result['object_types']
+
+
+def test_bulk_shared_events_keep_exact_counts_under_bounded_memory(monkeypatch):
+    # The former pair join expanded this tiny log into 36M candidate rows.
+    # Equal complete event sets need only two signature groups, not 18M distinct pairs.
+    count=3000
+    document={'objects':[{'id':f'{kind}-{i}','type':kind} for kind in ('order','item') for i in range(count)],'events':[]}
+    for i in range(2):
+        document['events'].append({'id':f'batch-{i}','type':'Batch','time':f'2024-01-01T0{i}:00:00Z',
+            'relationships':[{'objectId':o['id'],'qualifier':q} for o in document['objects'] for q in ('one','two')]})
+    log=_ocel(document);original=workspace._connect
+    def bounded():
+        conn=original();conn.execute("SET memory_limit='256MB'");conn.execute("SET max_temp_directory_size='256MB'")
+        conn.execute('SET threads=2');return conn
+    monkeypatch.setattr(workspace,'_connect',bounded)
+    graph=objects.object_graph(log)
+    assert graph['relations_calculation_complete'] and graph['relations_count_method']=='identical_event_set_groups'
+    assert graph['relation_pair_candidates']==4*count*count and graph['relation_group_pair_candidates']==4
+    assert len(graph['relations'])==2
+    for row in graph['relations']:
+        assert row['objects_with_link']==count and row['linked_objects_total']==count*count
+        assert row['mean_linked_per_object']==row['max_linked_per_object']==count
+        assert row['share_of_from_objects']==1
+    overview=workspace.object_types(log)
+    assert overview['shared_events_between_types']==[{'types':['item','order'],'events':2}]
