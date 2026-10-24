@@ -202,6 +202,14 @@ const prompt=m.aiPrompt(design);assert.ok(prompt.includes('step_002: Close'));as
 const req=plain(m.buildRequest(design,[{step_id:'step_001',image_base64:'AA',caption:'c',masked_regions:2,preview:'data:'}],{text:'n',ai_drafted:true},true));
 assert.equal(req.format,'openworkgraph.pdd-package-request.v1');assert.equal(req.screenshots[0].preview,undefined);
 assert.equal(req.narrative.ai_drafted,true);assert.equal(req.screenshots_reviewed_and_redacted_by_user,true);
+const saved={format:'openworkgraph.versioned-process-export.v1',workflow_id:'saved_graph',revision:3,content_sha256:'a'.repeat(64),
+process_model:{goal:'Review both branches',activities:[{id:'fork',label:'Both',kind:'parallel_split'},{id:'A',label:'Review',kind:'activity'}],transitions:[{source:'fork',target:'A'}],business_rules:[]}};
+assert.deepEqual(plain(m.stepsFromDesign(saved)),[{id:'fork',activity:'Both'},{id:'A',activity:'Review'}]);
+const source=plain(m.buildRequest(saved,[],{text:'',ai_drafted:false},false));
+assert.deepEqual(source.process_reference,{workflow_id:'saved_graph',revision:3,content_sha256:'a'.repeat(64)});
+assert.equal(source.design,undefined);assert.equal(source.process_model,undefined);
+assert.match(m.aiPrompt(saved),/parallel_split/);assert.match(m.aiPrompt(saved),/fork → A/);
+assert.match(m.aiPrompt(saved),/not an execution sequence/);
 """
     result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
