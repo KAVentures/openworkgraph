@@ -461,13 +461,42 @@
     const first=cohortFields('owgEventLogCohortA','First cohort',activityNames),second=cohortFields('owgEventLogCohortB','Second cohort',activityNames);
     const sla=input('owgEventLogBenchSla','number','optional');sla.min='0';sla.step='any';
     const run=button('Compare','secondary');run.id='owgEventLogBenchRun';
-    const row=el('div',null,'row');row.style.cssText='align-items:end;margin-top:8px';row.append(field('SLA (hours)',sla),run);
+    const row=el('div',null,'row');row.style.cssText='align-items:end;margin-top:8px';const mapRun=button('Compare maps','secondary');mapRun.id='owgMapCompareRun';
+    row.append(field('SLA (hours)',sla),run,mapRun);
     let last=null;
     const ci=d=>(d.difference>0?'+':'')+(d.difference*100).toFixed(1)+' pts ['+(d.ci95[0]*100).toFixed(1)+', '+(d.ci95[1]*100).toFixed(1)+']';
     const exports=exportButtons('owgEventLogBenchmark',()=>last,r=>[
       ['activity','share_in_first','share_in_second','difference','ci95_low','ci95_high'],
       ...r.activity_presence.map(a=>[a.activity,a.share_in_first,a.share_in_second,a.difference,a.ci95[0],a.ci95[1]])]);
     const out=el('div');box.append(first.node,second.node,row,out,exports.node);
+    const mapOut=el('div');mapOut.id='owgMapCompareResults';mapOut.setAttribute('role','status');box.appendChild(mapOut);
+    mapRun.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        mapRun.disabled=true;mapOut.replaceChildren(el('div','Comparing maps…','muted'));
+        const cohortsSpec=[first.read(),second.read()];
+        const r=await (await api(logPath('map-comparison'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cohorts:cohortsSpec})})).json();
+        if(generation!==state.generation)return;
+        const names=[cohortsSpec[0].label||'First',cohortsSpec[1].label||'Second'];
+        const maps=el('div');maps.style.cssText='display:flex;flex-wrap:wrap;gap:12px';
+        r.maps.forEach((m,i)=>{
+          const pane=el('div');pane.style.cssText='flex:1 1 300px;min-width:0';
+          pane.appendChild(el('h4',names[i]+' · '+Number(m.cases).toLocaleString()+' cases'));
+          const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
+          if(draw&&m.activities.length){try{const start=Object.keys(m.start_activities)[0];pane.appendChild(draw({activities:m.activities,transitions:m.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{}));}
+            catch(_){pane.appendChild(el('div','Map unavailable for this cohort; the paths are listed below.','muted'));}}
+          maps.appendChild(pane);
+        });
+        const share=p=>pct(p.case_share_in_first)+' → '+pct(p.case_share_in_second);
+        const ci=p=>(p.case_share_difference>0?'+':'')+(p.case_share_difference*100).toFixed(1)+' pts ['+(p.ci95[0]*100).toFixed(1)+', '+(p.ci95[1]*100).toFixed(1)+']'+(p.only_in?' · only in '+names[p.only_in==='first'?0:1]:'');
+        const gap=p=>p.median_gap_difference?((p.median_gap_difference.seconds>=0?'+':'−')+duration(Math.abs(p.median_gap_difference.seconds))+' ['+duration(p.median_gap_difference.ci95[0])+', '+duration(p.median_gap_difference.ci95[1])+']'):'';
+        mapOut.replaceChildren(maps,
+          el('div',Number(r.paths_only_in_second).toLocaleString()+' paths appear only in '+names[1]+' and '+Number(r.paths_only_in_first).toLocaleString()+' only in '+names[0]+', of '+Number(r.paths_total).toLocaleString()+'.','muted'),
+          table(['Path','Cases with path','Difference (95% CI)','Median gap','Gap difference (95% CI)'],r.paths.slice(0,25).map(p=>[p.from+' → '+p.to,share(p),ci(p),duration(p.median_gap_seconds_first)+' → '+duration(p.median_gap_seconds_second),gap(p)])),
+          el('div',(r.overlapping_cases?Number(r.overlapping_cases).toLocaleString()+' cases are in both cohorts; ':'')+r.note+'.','muted'));
+      }catch(error){if(generation===state.generation)mapOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{mapRun.disabled=false;}
+    };
     run.onclick=async()=>{
       try{
         const spec={cohorts:[first.read(),second.read()]};const hours=Number(sla.value);

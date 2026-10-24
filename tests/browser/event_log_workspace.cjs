@@ -188,6 +188,12 @@ const path=require('node:path');
    assert.match(bench,/Bob40/);assert.match(bench,/Ann20/);assert.match(bench,/Rework rate\+100\.0 pts/);assert.match(bench,/do not say why/);
    const [benchJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogBenchmarkJson').click()]);
    assert.equal(JSON.parse(await fs.readFile(await benchJson.path(),'utf8')).cohorts[1].cases,20);
+   await page.locator('#owgMapCompareRun').click();
+   await page.locator('#owgMapCompareResults').getByText('only in Ann',{exact:false}).first().waitFor();
+   const firstPath=await page.locator('#owgMapCompareResults tbody tr').first().textContent();
+   assert.match(firstPath,/^Check → Fix0\.0% → 100\.0%\+100\.0 pts/);
+   assert.match(await page.locator('#owgMapCompareResults h4').allTextContents().then(t=>t.join('|')),/^Bob · 40 cases\|Ann · 20 cases$/);
+   assert.equal(await page.locator('#owgMapCompareResults svg').count()>=2,true,'both maps are drawn');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
@@ -504,7 +510,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

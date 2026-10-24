@@ -21,6 +21,7 @@ from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
+from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
 from . import event_log_organization as organization
@@ -242,6 +243,20 @@ async def event_log_compliance(request: Request, log_id: str):
     spec = await _json_body(request, "compliance rules")
     try:
         result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/map-comparison")
+async def event_log_map_comparison(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "map comparison")
+    if not isinstance(spec, dict):
+        raise HTTPException(422, "map comparison must be a JSON object")
+    try:
+        result = await run_in_threadpool(map_comparison.compare_maps, log_id, spec.get("cohorts"), case_type)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
