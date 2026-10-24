@@ -114,6 +114,68 @@ def test_reimporting_a_run_replaces_it_and_reports_append():
     assert next(s for s in m["steps"] if s["step_id"] == "step_001")["attempts"] == 2
 
 
+def test_report_hash_is_pinned_before_any_design_is_attached():
+    spec=_spec();digest=am.spec_digest(spec)
+    deployment=am.import_report(_report([_run(1,'succeeded',0)],workflow_spec_sha256=digest))['deployment']
+    key=deployment['deployment_id']
+    assert deployment['reported_spec_sha256']==digest and not deployment['design_attached']
+    other={**spec,'title':'A different spec'}
+    with pytest.raises(am.MonitoringError,match='does not match'):
+        am.attach_design(key,other)
+    with pytest.raises(am.MonitoringError,match='different workflow spec'):
+        am.import_report(_report([_run(2,'failed',1)],workflow_spec_sha256=am.spec_digest(other)),key)
+    unchanged=am.list_deployments()['deployments'][0]
+    assert unchanged['runs']==1 and not unchanged['design_attached'] and unchanged['reported_spec_sha256']==digest
+    assert am.attach_design(key,spec)['design_sha256']==digest
+
+
+def test_first_declared_hash_pins_an_existing_unhashed_deployment():
+    key=am.import_report(_report([_run(1,'failed',0)]))['deployment']['deployment_id']
+    assert am.list_deployments()['deployments'][0]['reported_spec_sha256'] is None
+    digest=am.spec_digest(_spec())
+    result=am.import_report(_report([_run(2,'succeeded',1)],workflow_spec_sha256=digest),key)
+    assert result['deployment']['reported_spec_sha256']==digest
+    # Missing metadata stays supported; it does not clear an existing declared pin.
+    result=am.import_report(_report([_run(3,'failed',2)]),key)
+    assert result['deployment']['reported_spec_sha256']==digest and result['deployment']['runs']==3
+
+
+def test_design_first_import_cannot_set_a_conflicting_report_pin():
+    key=am.import_report(_report([_run(1,'failed',0)]))['deployment']['deployment_id']
+    am.attach_design(key,_spec())
+    with pytest.raises(am.MonitoringError):
+        am.import_report(_report([_run(2,'succeeded',1)],workflow_spec_sha256='0'*64),key)
+    info=am.list_deployments()['deployments'][0]
+    assert info['reported_spec_sha256'] is None and info['runs']==1
+
+
+def test_failed_import_rolls_back_a_new_spec_pin(monkeypatch):
+    key=am.import_report(_report([_run(1,'failed',0)]))['deployment']['deployment_id']
+    def failed(*args):raise RuntimeError('owned storage failure')
+    monkeypatch.setattr(am,'_bulk_load',failed)
+    with pytest.raises(RuntimeError):
+        am.import_report(_report([_run(2,'succeeded',1)],workflow_spec_sha256=am.spec_digest(_spec())),key)
+    info=am.list_deployments()['deployments'][0]
+    assert info['reported_spec_sha256'] is None and info['runs']==1
+
+
+def test_old_database_migrates_idempotently_without_inventing_a_pin():
+    key=am.import_report(_report([_run(1,'succeeded',0)]))['deployment']['deployment_id']
+    conn=am._connect()
+    try:conn.execute('ALTER TABLE deployments DROP COLUMN reported_spec_sha256')
+    finally:conn.close()
+    for _ in range(2):
+        info=am.list_deployments()['deployments'][0]
+        assert info['deployment_id']==key and info['reported_spec_sha256'] is None and info['runs']==1
+    assert am.monitor(key)['overall']['runs']==1
+
+
+def test_nonfinite_attached_spec_is_a_validation_error():
+    key=am.import_report(_report([_run(1,'failed',0)]))['deployment']['deployment_id']
+    with pytest.raises(am.MonitoringError,match='finite JSON'):
+        am.attach_design(key,{**_spec(),'invalid':float('nan')})
+
+
 @pytest.mark.parametrize("change", [
     {"format": "x"}, {"extra": 1}, {"runs": []}, {"deployment": {"runtime": "zapier"}},
     {"deployment": {"workflow_spec_sha256": "ABC"}},

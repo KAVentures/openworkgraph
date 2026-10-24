@@ -45,8 +45,16 @@ outcome. Everything shown is **reported by the automation**.
   run (64 MB).
 
 `workflow_spec_sha256` is the starter's own digest: SHA-256 of UTF-8
-`json.dumps(spec, sort_keys=True, allow_nan=False)`. If set, reports for a
-different spec are refused once a design is attached.
+`json.dumps(spec, sort_keys=True, allow_nan=False)`. The first supplied digest
+pins the deployment, including when reports arrive before the design. Later
+reports declaring a different digest and mismatched design attachments are
+refused. Use a separate deployment for another specification version. The
+declared pin is returned as `reported_spec_sha256`; it is automation-supplied
+metadata, not independent verification of the model or its review.
+
+Reports without a digest remain supported and do not clear an existing pin.
+Older stored reports did not retain their declared digest, so migration leaves
+that value unknown rather than reconstructing it from an attached design.
 
 ### Producing reports
 
