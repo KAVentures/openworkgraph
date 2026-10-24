@@ -23,6 +23,7 @@ from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_process_map as process_maps
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
@@ -188,6 +189,20 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
     cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
               "activity": activity, "attribute": attribute}
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/process-map")
+def event_log_process_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                          activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                          started_from: str = Query(default="", max_length=64),
+                          started_before: str = Query(default="", max_length=64),
+                          resource: str = Query(default="", max_length=200),
+                          activity: str = Query(default="", max_length=200),
+                          attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/organization")
