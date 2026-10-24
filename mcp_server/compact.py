@@ -625,6 +625,20 @@ def get_current_work_context(
         continuity_context["source_notice"] = continuity_source_notice
     continuity_context["coverage"]["stable_reference_capture_is_best_effort"] = True
     continuity_context["coverage"]["zero_resources_proves_no_relevant_work"] = False
+    # Earlier sessions (including previous days inside the saved-history grant)
+    # that share stable pointers with the latest one. Pointer overlap only;
+    # elapsed time never creates or strengthens a candidate.
+    try:
+        continuity_context["resumption"] = secure_runtime.secure_get(
+            "/v1/work-resumption", {"limit": max(3, min(10, int(limit)))},
+        )
+    except Exception:
+        continuity_context["resumption"] = {
+            "candidates": [],
+            "source_status": "unavailable",
+            "notice": "Earlier-session lookup could not be checked; no absence of resumed work was established.",
+        }
+    resumption_count = len(list(continuity_context["resumption"].get("candidates") or []))
 
     tasks_scope = "current" if scope_used == "current" else "all"
     try:
@@ -674,6 +688,13 @@ def get_current_work_context(
             "tool": "use continuity_context resource pointers, then inspect the live object with an authorized source connector",
             "reason": "stable resource candidates are available",
         })
+    if resumption_count:
+        navigation_hints.append({
+            "when": "the user is resuming work started in an earlier session or on a previous day",
+            "tool": "get_workflow_trace",
+            "then": "inspect the shared pointers with an authorized source connector",
+            "reason": "earlier sessions share stable resource pointers with the latest one; use each candidate's trace_window as since/until",
+        })
     if not navigation_hints:
         navigation_hints.append({
             "when": "older work may still matter",
@@ -700,6 +721,7 @@ def get_current_work_context(
             "resource_candidates_available": resource_count > 0,
             "repeated_work_candidates_available": bool(repeated_patterns),
             "nearby_agent_runs_available": agent_run_count > 0,
+            "earlier_session_resumption_candidates_available": resumption_count > 0,
             "hints_are_navigation_not_ground_truth": True,
         },
         "scope_used": scope_used,

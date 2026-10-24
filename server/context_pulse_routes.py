@@ -145,4 +145,23 @@ def get_continuity_references(request: Request, limit: int = 24) -> dict[str, An
         )
 
 
+@app.get("/v1/work-resumption")
+def get_work_resumption(request: Request, gap_minutes: int = 30, limit: int = 6) -> dict[str, Any]:
+    """Earlier sessions sharing stable pointers with the latest one.
+
+    Same AI-context requirement and saved-history grant as the continuity
+    reference tail; returns opaque pointers and session windows only.
+    """
+    if str(request.headers.get("X-OpenWorkGraph-Context") or "").strip().lower() != "ai":
+        raise HTTPException(status_code=403, detail="AI-context access required")
+    from .db import connect
+    from .work_resumption import resumption_candidates
+    with connect() as connection:
+        return resumption_candidates(
+            connection, lease=active_ai_history_access(),
+            run_started_at=os.getenv("WORKFLOW_OBSERVER_RUN_STARTED_AT"),
+            gap_minutes=gap_minutes, limit=limit,
+        )
+
+
 __all__ = ["app", "get_context_pulse"]
