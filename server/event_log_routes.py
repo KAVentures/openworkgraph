@@ -22,6 +22,7 @@ from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
 from . import event_log_dotted_chart as dotted
+from . import event_log_drift as drift
 from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
@@ -245,6 +246,23 @@ def event_log_dotted_chart(request: Request, log_id: str, case_type: str | None 
     cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
               "activity": activity, "attribute": attribute}
     return _respond(dotted.dotted_chart, log_id, case_type, time=time, order=order, max_cases=max_cases, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/drift")
+def event_log_drift(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    window: str = Query(default="month", pattern="^(week|month|cases)$"),
+                    window_cases: int = Query(default=500, ge=20, le=100_000),
+                    min_cases: int = Query(default=30, ge=10, le=10_000),
+                    started_from: str = Query(default="", max_length=64),
+                    started_before: str = Query(default="", max_length=64),
+                    resource: str = Query(default="", max_length=200),
+                    activity: str = Query(default="", max_length=200),
+                    attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(drift.drift, log_id, case_type, window=window, window_cases=window_cases, min_cases=min_cases,
+                    cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/organization")

@@ -233,6 +233,7 @@
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(discoverySection());
+    results.appendChild(driftSection());
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
@@ -931,6 +932,42 @@
         out.append(legend,plotHost,details,el('div',r.interpretation,'muted'));
         draw();
         if(window.ResizeObserver){const watcher=new ResizeObserver(()=>{if(!plotHost.isConnected){watcher.disconnect();return;}draw();});watcher.observe(plotHost);}
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
+  function driftSection(){
+    const box=section('Changes over time');box.id='owgConceptDrift';
+    box.appendChild(el('div','Finds when the way cases run changed: cases are grouped by when they started, and each window\'s paths are compared with the next. A change point means the difference is larger than random splits of the same cases give. It does not say why, and a change in how events are recorded looks the same.','muted'));
+    const windowKind=select('owgConceptDriftWindow',[['month','Month'],['week','Week'],['cases','Fixed number of cases']]);
+    const perWindow=input('owgConceptDriftCases','number');perWindow.min='20';perWindow.step='1';perWindow.value='500';
+    const casesField=field('Cases per window',perWindow);show(casesField,false);
+    windowKind.onchange=()=>show(casesField,windowKind.value==='cases');
+    const run=button('Find changes','secondary');run.id='owgConceptDriftRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Window',windowKind),casesField,run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgConceptDriftStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgConceptDriftResults';
+    box.append(row,statusLine,out);
+    run.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        run.disabled=true;out.replaceChildren();statusLine.textContent='Comparing windows…';
+        const params={window:windowKind.value};
+        if(windowKind.value==='cases'){const n=Math.round(Number(perWindow.value));if(!(n>=20))throw new Error('Use at least 20 cases per window.');params.window_cases=String(n);params.min_cases=String(Math.max(10,Math.min(30,n)));}
+        const r=await getJSON(logPath('drift',params));
+        if(generation!==state.generation)return;
+        statusLine.textContent=r.change_points.length+' change point'+(r.change_points.length===1?'':'s')+' among '+r.boundaries_tested+' window boundaries tested'+(r.boundaries_skipped_small_windows?' ('+r.boundaries_skipped_small_windows+' skipped because a window had fewer than '+r.settings.min_cases+' cases)':'')+'.';
+        const byAfter=Object.fromEntries(r.boundaries.map(b=>[b.after,b]));
+        const p=v=>v<0.0001?'< 0.0001':v.toFixed(4);
+        out.appendChild(table(['Window','Cases','Median case time','Change from previous window'],r.windows.map(w=>{const b=byAfter[w.window];
+          return [w.window,Number(w.cases).toLocaleString(),duration(w.median_case_duration_seconds),b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):'—'];})));
+        r.change_points.forEach(c=>{
+          out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
+          out.appendChild(table(['Path','Cases with path before','After'],c.paths_that_moved.map(m=>[m.path,pct(m.case_share_before),pct(m.case_share_after)])));
+        });
+        out.appendChild(el('div',r.interpretation,'muted'));
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };
