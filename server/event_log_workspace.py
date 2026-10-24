@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     import duckdb
 
 from shared.event_log_formats import (
-    CASE_TYPE, EventLogFormatError, EventRecord, ObjectRecord, ReadStats,
+    CASE_TYPE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, EventLogFormatError, EventRecord, ObjectRecord, ReadStats,
     read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
     write_ocel_xml, write_xes,
 )
@@ -179,11 +179,27 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     q = lambda name: '"' + name.replace('"', '""') + '"'
     case, activity, stamp = (q(c) for c in columns)
     res = q(resource) if resource else "''"
+    # Optional extra columns kept as event attributes, with the streaming reader's bounds.
+    extra = list(dict.fromkeys(mapping.get("attribute_columns") or []))
+    if len(extra) > MAX_ATTRIBUTES:
+        raise EventLogFormatError(f"keep at most {MAX_ATTRIBUTES} attribute columns")
+    unknown = [name for name in extra if name not in header]
+    if unknown:
+        raise EventLogFormatError("missing attribute columns: " + ", ".join(sorted(unknown))[:300])
+    names: dict[str, str] = {}
+    for column in extra:
+        key = column.replace("\x00", "").strip()[:80]
+        if key and key not in names.values() and column not in columns + [resource]:
+            names[column] = key
+    sql_literal = lambda text: "'" + text.replace("'", "''") + "'"
+    attrs = ("json_object(" + ", ".join(
+        f"{sql_literal(key)}, left(trim(replace(coalesce({q(column)}, ''), chr(0), '')), {MAX_ATTRIBUTE_VALUE})"
+        for column, key in names.items()) + ")::VARCHAR") if names else "'{}'"
     conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
           {case} AS case_id, {activity} AS activity,
           CASE WHEN regexp_matches(trim({stamp}), '(Z|[+-][0-9]{{2}}:?[0-9]{{2}})$')
                THEN try_cast(trim({stamp}) AS TIMESTAMPTZ) END AS ts,
-          coalesce({res}, '') AS resource,
+          coalesce({res}, '') AS resource, {attrs} AS attributes,
           row_number() OVER () AS n
         FROM {source}""", [str(path),original_header])
     if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
@@ -194,7 +210,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     conn.execute("DELETE FROM staged WHERE case_id IS NULL OR trim(case_id) = '' OR activity IS NULL "
                  "OR trim(activity) = '' OR ts IS NULL")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
-    conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, '{}' FROM staged""",
+    conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, attributes FROM staged""",
                  [log_id])
     conn.execute("INSERT INTO objects SELECT DISTINCT ?, case_id, ?, '{}' FROM staged", [log_id, CASE_TYPE])
     conn.execute("INSERT INTO event_objects SELECT ?, 'e' || n, case_id, ? FROM staged", [log_id, CASE_TYPE])
