@@ -53,6 +53,15 @@ const path=require('node:path');
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
 
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
+   assert.equal(await page.locator('#owgMapDrawing').count(),1);
+   await page.locator('#owgMapActivities').evaluate(node=>{node.value='50';node.dispatchEvent(new Event('input',{bubbles:true}));});
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 2 activities'}).waitFor();
+   assert.equal(await page.locator('#owgMapActivitiesValue').textContent(),'50%');
+   await page.locator('#owgMapActivities').evaluate(node=>{node.value='100';node.dispatchEvent(new Event('input',{bubbles:true}));});
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
+   assert.match(await page.locator('#owgMapSlowest').textContent(),/Slowest paths/);
+
    await page.locator('#owgEventLogCasesBrowse').click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'60 matching cases. Showing 30'}).waitFor();
    await page.getByRole('button',{name:'Next case page',exact:true}).click();
@@ -469,7 +478,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

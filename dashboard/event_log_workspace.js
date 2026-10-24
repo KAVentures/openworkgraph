@@ -219,6 +219,7 @@
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(objectMapSection());
+    results.appendChild(processMapSection());
 
     const activityBox=section('Activities');
     activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
@@ -956,6 +957,38 @@
           table(['Rule','Cases it applies to','Violating cases','Violation rate (95% CI)','Unknown','Example cases',''],rows),el('div',r.interpretation,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
+    return box;
+  }
+
+  function processMapSection(){
+    const box=section('Process map');box.id='owgEventLogProcessMap';
+    box.appendChild(el('div','Simplify the map with the sliders. Hidden activities are removed first, so arrows can join steps that had hidden work between them. Times are gaps between recorded events, not measured work.','muted'));
+    const slider=(id,label,value)=>{const node=input(id,'range');node.min='5';node.max='100';node.step='5';node.value=String(value);
+      const out=el('output',value+'%');out.id=id+'Value';out.htmlFor=id;node.oninput=()=>{out.textContent=node.value+'%';schedule();};
+      const wrap=field(label,node);wrap.appendChild(out);return {node,wrap};};
+    const acts=slider('owgMapActivities','Activities shown',100),paths=slider('owgMapPaths','Paths shown',100);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(acts.wrap,paths.wrap);
+    const status=el('div',null,'muted');status.id='owgMapStatus';status.setAttribute('role','status');
+    const graphHost=el('div');graphHost.id='owgMapGraph';const slow=el('div');slow.id='owgMapSlowest';
+    box.append(row,status,graphHost,slow);
+    const generation=state.generation;let timer=null,request=0;
+    function schedule(){clearTimeout(timer);timer=setTimeout(()=>draw().catch(error=>{status.textContent=error.message;}),250);}
+    async function draw(){
+      const mine=++request;
+      const r=await getJSON(logPath('process-map',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
+      if(mine!==request||generation!==state.generation)return;
+      const c=r.coverage;
+      status.textContent='Showing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths ('+pct(c.transition_share_shown)+' of transitions).'+(c.activity_limit_reached?' The map shows at most 64 activities.':'');
+      const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
+      graphHost.replaceChildren();
+      if(draw&&r.activities.length){
+        try{const start=Object.keys(r.start_activities)[0];const drawing=draw({activities:r.activities,transitions:r.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{});drawing.id='owgMapDrawing';graphHost.appendChild(drawing);}
+        catch(_){graphHost.appendChild(el('div','Map unavailable at this level; the paths are listed below.','muted'));}
+      }
+      const slowest=[...r.transitions].filter(t=>t.median_elapsed_gap_seconds!==null).sort((x,y)=>y.median_elapsed_gap_seconds-x.median_elapsed_gap_seconds).slice(0,10);
+      slow.replaceChildren(el('h4','Slowest paths'),table(['From','To','Transitions','Median gap','Mean gap','90th percentile gap'],slowest.map(t=>[t.from,t.to,Number(t.transition_count).toLocaleString(),duration(t.median_elapsed_gap_seconds),duration(t.mean_elapsed_gap_seconds),duration(t.p90_elapsed_gap_seconds)])));
+    }
+    draw().catch(error=>{status.textContent=error.message;});
     return box;
   }
 

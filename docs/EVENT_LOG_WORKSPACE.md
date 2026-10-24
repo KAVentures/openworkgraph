@@ -506,6 +506,28 @@ One million events take about 2 seconds locally
 describes the imported log. It is not a verified workflow or policy, and it never authorizes
 execution.
 
+## Process map with abstraction sliders
+
+`GET /v1/event-logs/{log_id}/process-map?activities=0.8&paths=0.5` (dashboard session only)
+returns a simplified directly-follows map, like Fluxicon Disco or Apromore. It takes the same
+case filters as KPIs.
+
+- **`activities`** (share of events, above 0 and up to 1): keeps the most frequent activities
+  until they cover that share of events, at most 64. Hidden activities' events are removed
+  *before* the map is computed, so cases are reconnected through the remaining steps. An arrow
+  can therefore join steps that had hidden work between them.
+- **`paths`** (share of transitions): keeps the most frequent transitions until they cover that
+  share. It then adds back each visible activity's strongest incoming and outgoing path, so no
+  activity is stranded. Start and end counts are always returned.
+- Each transition carries its count, cases, and the median, mean and 90th-percentile elapsed gap.
+- `coverage` reports the shown and hidden activities, and the event and transition shares
+  shown.
+
+The dashboard's "Process map" section has the two sliders (redrawn as you move them) and a
+"Slowest paths" table. Gaps are elapsed time between recorded events, not measured work or
+verified waiting. Redrawing a one-million-event log takes a few seconds
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_process_map.py`).
+
 ## Predicting open cases
 
 `POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,
