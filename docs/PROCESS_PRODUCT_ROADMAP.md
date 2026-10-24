@@ -5,6 +5,10 @@ workflow mapping, handoff to existing agents, and independent outcome
 verification. Existing evidence, record graphs, procedural memory, source
 adapters and agent traces remain the foundation.
 
+The [October 2026 competitor assessment](COMPETITOR_GAP_ASSESSMENT_2026_10.md)
+and [issue #370](https://github.com/KAVentures/openworkgraph/issues/370) track
+remaining functionality, primary sources and concrete acceptance gates.
+
 ## Current implementation
 
 This inventory reflects repository capabilities, not runtime certification
