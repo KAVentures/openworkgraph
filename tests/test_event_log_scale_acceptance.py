@@ -120,6 +120,8 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             assert result["object_types"][0]["objects"] == EVENTS // 10 and result["relations"] == []
         if name == "what_if":
             assert len(result["calibration"]["paths"]) == 4 and result["result"]["cases_measured"] == 4500
+            assert result['calibration']['observed_cases']==result['calibration']['calibrated_cases']==EVENTS//10
+            assert all(n==0 for n in result['calibration']['excluded_case_reasons'].values())
         if name == "root_cause":
             assert result["associations"][0]["feature"] == {"kind": "activity", "value": "Check"}
     print(f"\nimport {EVENTS:,} events: {import_seconds:.1f}s; queries: "

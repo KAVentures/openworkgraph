@@ -17,7 +17,6 @@ from typing import Any
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
-_SEP = workspace._SEP
 FORMAT = "openworkgraph.simulation-scenario.v1"
 MAX_CASES = 20000
 MAX_ACTIVITIES = 100
@@ -30,6 +29,7 @@ ASSUMPTIONS = [
     "Each activity has a pool of interchangeable resources that serve one case at a time, first come, first served.",
     "Calibrated activity times are the median gap before each activity in the log; those gaps include any waiting, so the baseline can overstate processing time.",
     "Calibrated resources are the distinct resources observed per activity (1 when none is recorded).",
+    "Calibration uses only the selected complete cases; routing, arrivals and activity parameters do not represent omitted cases.",
     "Resources work around the clock; no calendars, breaks, batching, priorities or abandonment are modeled.",
     "The first 10% of simulated cases are a warm-up and excluded from the statistics.",
 ]
@@ -40,25 +40,46 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10) ->
     max_paths = max(1, min(int(max_paths), MAX_PATHS))
 
     def run(conn):
-        cases, first, last = conn.execute("""SELECT count(*), min(start), max(start) FROM (
-            SELECT min(ts) AS start FROM ce GROUP BY case_id)""").fetchone()
-        span_hours = (last - first).total_seconds() / 3600 if cases and last > first else 0
-        arrivals = round((cases - 1) / span_hours, 6) if span_hours > 0 else None
+        # Count first: never build or simulate a truncated long-case prefix.
+        conn.execute("""CREATE TEMP TABLE simulation_case_counts AS
+            SELECT case_id, count(*) AS events, min(ts) AS started FROM ce GROUP BY case_id""")
+        cases, too_long = conn.execute("""SELECT count(*), count(*) FILTER (WHERE events > ?)
+            FROM simulation_case_counts""", [MAX_PATH_LENGTH]).fetchone()
+        names = [r[0] for r in conn.execute(f"""SELECT activity FROM ce JOIN simulation_case_counts USING(case_id)
+            WHERE events <= ? GROUP BY activity ORDER BY count(*) DESC, activity LIMIT {MAX_ACTIVITIES}""",
+            [MAX_PATH_LENGTH]).fetchall()]
+        conn.execute("""CREATE TEMP TABLE simulation_case_paths AS
+            SELECT case_id, list(activity ORDER BY ts, event_id) AS path
+            FROM ce JOIN simulation_case_counts USING(case_id) WHERE events <= ?
+            GROUP BY case_id HAVING bool_and(list_contains(?, activity))""", [MAX_PATH_LENGTH, names])
+        conn.execute(f"""CREATE TEMP TABLE simulation_paths AS SELECT path, count(*) AS n
+            FROM simulation_case_paths GROUP BY path ORDER BY n DESC, path LIMIT {max_paths}""")
+        variants = conn.execute("SELECT path, n FROM simulation_paths ORDER BY n DESC, path").fetchall()
+        covered = sum(n for _, n in variants)
+        eligible = conn.execute("SELECT count(*) FROM simulation_case_paths").fetchone()[0]
+        conn.execute("""CREATE TEMP TABLE simulation_selected AS
+            SELECT case_id FROM simulation_case_paths JOIN simulation_paths USING(path)""")
+        first, last = conn.execute("""SELECT min(started), max(started) FROM simulation_case_counts
+            JOIN simulation_selected USING(case_id)""").fetchone()
+        span_hours = (last - first).total_seconds() / 3600 if covered and last > first else 0
+        arrivals = round((covered - 1) / span_hours, 6) if span_hours > 0 else None
         rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(*), count(DISTINCT nullif(resource, ''))
             FROM (SELECT activity, resource,
                     date_diff('second', lag(ts) OVER w, ts) AS gap
-                  FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
+                  FROM ce JOIN simulation_selected USING(case_id)
+                  WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
             GROUP BY activity ORDER BY count(*) DESC LIMIT {MAX_ACTIVITIES}""").fetchall()
-        variants = conn.execute(f"""SELECT path, count(*) AS n FROM (
-              SELECT string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
-            GROUP BY path ORDER BY n DESC, path LIMIT {max_paths}""").fetchall()
-        covered = sum(n for _, n in variants)
         return {
             "format": FORMAT,
             "arrivals_per_hour": arrivals,
-            "paths": [{"activities": p.split(_SEP)[:MAX_PATH_LENGTH], "weight": n / covered}
+            "paths": [{"activities": p, "weight": n / covered}
                       for p, n in variants],
             "paths_cover_cases_share": round(covered / cases, 6) if cases else 0,
+            "observed_cases": cases, "calibrated_cases": covered,
+            "excluded_case_reasons": {"path_length_limit": too_long,
+                "activity_limit": cases - too_long - eligible, "variant_limit": eligible - covered},
+            "limits": {"path_events": MAX_PATH_LENGTH, "activities": MAX_ACTIVITIES, "paths": max_paths},
+            "arrival_rate_basis": "selected_complete_cases",
             "activities": {a: {"minutes": round((g or 0) / 60, 3), "resources": max(1, r),
                                "time_source": "median observed gap" if g is not None else "first activity; no gap"}
                            for a, g, _, r in rows},
@@ -224,6 +245,8 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
 
 def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[str, Any]:
     base = calibrate(log_id, case_type)
+    if not base["paths"]:
+        raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_model = parse_scenario({"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
                                      "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}, base)
     scenario_model = parse_scenario(scenario, base)
@@ -231,7 +254,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     b, s = baseline["cycle_time_seconds"]["p50"], changed["cycle_time_seconds"]["p50"]
     return {
         "log": base["log"], "case_notion": base["case_notion"],
-        "calibration": {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share", "activities")},
+        "calibration": {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share", "activities",
+            "observed_cases", "calibrated_cases", "excluded_case_reasons", "limits", "arrival_rate_basis")},
         "scenario": {"label": scenario_model["label"], "arrivals_per_hour": scenario_model["arrivals_per_hour"],
                      "paths": [{"activities": p, "weight": round(w, 6)} for p, w in scenario_model["paths"]],
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],

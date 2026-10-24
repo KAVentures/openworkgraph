@@ -156,6 +156,7 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
+   assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 60 of 60 complete cases/);
    const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
    assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
    await page.locator('#owgEventLogSimNewName').fill('Validate');await page.locator('#owgEventLogSimAdd').click();
@@ -169,7 +170,7 @@ const path=require('node:path');
    const [simulationResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
    const special=(await simulationResponse.json()).result.activities.find(a=>a.activity==='__proto__');
    assert.equal(special.minutes,7);assert.equal(special.resources,2);
-   await page.getByText('Measured baseline').waitFor();
+   await page.getByText('Simulated baseline').waitFor();
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
 
@@ -261,6 +262,10 @@ const path=require('node:path');
    await page.locator('#owgEventLogCaseEvents [role=status]').filter({hasText:'Showing 205 of 205'}).waitFor();
    assert.equal(await page.locator('#owgEventLogCaseEvents tbody tr').count(),205);
    assert.match(await page.locator('#owgEventLogCaseEvents').textContent(),/204 equal-timestamp events/);
+   await page.locator('#owgEventLogSimLoad').click();
+   await page.locator('#owgEventLogSimForm').filter({hasText:'No complete paths fit the simulation limits'}).waitFor();
+   assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 0 of 1 complete cases/);
+   assert.equal(await page.locator('#owgEventLogSimRun').count(),0,'a partial long case cannot become a simulated baseline');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    // Object-centric log: separate maps per object type, linked by shared events.
