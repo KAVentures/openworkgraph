@@ -198,7 +198,8 @@ Complete means all supplied events for a case key in this import; it does not
 verify that the source captured an entire business case or its completion.
 
 If fewer than two selected cases have distinct start times, enter an arrival
-rate explicitly. With no supported complete paths, the dashboard reports the
+rate explicitly; both runs use that rate as a disclosed user assumption while
+the measured rate remains unknown. With no supported complete paths, the dashboard reports the
 coverage and no baseline simulation can run. Responses include the population
 counts and limits alongside the calibration, including in what-if results.
 

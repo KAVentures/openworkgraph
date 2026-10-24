@@ -247,8 +247,12 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     base = calibrate(log_id, case_type)
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
-    baseline_model = parse_scenario({"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
-                                     "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}, base)
+    baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
+                     "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}
+    assumed_arrivals = base["arrivals_per_hour"] is None
+    if assumed_arrivals and isinstance(scenario, dict) and "arrivals_per_hour" in scenario:
+        baseline_spec["arrivals_per_hour"] = scenario["arrivals_per_hour"]
+    baseline_model = parse_scenario(baseline_spec, base)
     scenario_model = parse_scenario(scenario, base)
     baseline, changed = simulate(baseline_model), simulate(scenario_model)
     b, s = baseline["cycle_time_seconds"]["p50"], changed["cycle_time_seconds"]["p50"]
@@ -261,10 +265,12 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],
                      "cases": scenario_model["cases"], "seed": scenario_model["seed"]},
         "baseline": baseline,
+        "baseline_arrivals_per_hour": baseline_model["arrivals_per_hour"],
+        "baseline_arrival_rate_source": "user_assumption" if assumed_arrivals else "selected_case_start_times",
         "result": changed,
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
-        "assumptions": ASSUMPTIONS,
+        "assumptions": ASSUMPTIONS + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,

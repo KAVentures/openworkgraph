@@ -211,3 +211,15 @@ def test_no_supported_complete_cases_cannot_produce_a_baseline(monkeypatch):
     with pytest.raises(workspace.EventLogWorkspaceError,match='no complete case paths'):
         sim.what_if(log,{'arrivals_per_hour':1,'paths':[{'activities':['A'],'weight':1}],
                          'activities':{'A':{'minutes':1}},'cases':10})
+
+
+def test_single_selected_case_needs_an_explicit_disclosed_arrival_assumption():
+    rows=['case,activity,time,who','one,A,2024-01-01T00:00:00Z,person']
+    log=workspace.import_log(BytesIO('\n'.join(rows).encode()),name='single case',source_format='csv',mapping=MAPPING)['log_id']
+    with pytest.raises(workspace.EventLogWorkspaceError,match='too few cases'):
+        sim.what_if(log,{'cases':10})
+    result=sim.what_if(log,{'cases':10,'arrivals_per_hour':2})
+    assert result['calibration']['arrivals_per_hour'] is None
+    assert result['baseline_arrival_rate_source']=='user_assumption' and result['baseline_arrivals_per_hour']==2
+    assert result['baseline']['cases_measured']==result['result']['cases_measured']==9
+    assert any("user's explicit rate" in line for line in result['assumptions'])
