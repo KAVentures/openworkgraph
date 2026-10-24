@@ -41,7 +41,8 @@ _LOCK = threading.RLock()
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS deployments (
   deployment_id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, runtime VARCHAR NOT NULL,
-  created_at TIMESTAMP NOT NULL, design_sha256 VARCHAR, design_steps VARCHAR
+  created_at TIMESTAMP NOT NULL, design_sha256 VARCHAR, design_steps VARCHAR,
+  reported_spec_sha256 VARCHAR
 );
 CREATE TABLE IF NOT EXISTS runs (
   deployment_id VARCHAR NOT NULL, run_id VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL,
@@ -76,6 +77,8 @@ def _connect():
     conn = duckdb.connect(str(path))
     conn.execute("SET enable_progress_bar = false")
     conn.execute(_SCHEMA)
+    # Older reports did not retain their declared spec hash; leave those unknown.
+    conn.execute('ALTER TABLE deployments ADD COLUMN IF NOT EXISTS reported_spec_sha256 VARCHAR')
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -172,7 +175,10 @@ def parse_report(document: Any) -> dict[str, Any]:
 
 def spec_digest(spec: Any) -> str:
     """The starter's own digest: UTF-8 json.dumps(sort_keys=True, allow_nan=False)."""
-    return sha256(json.dumps(spec, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+    try:
+        return sha256(json.dumps(spec, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+    except (TypeError, ValueError):
+        raise MonitoringError("workflow specification must be finite JSON") from None
 
 
 def parse_design(spec: Any) -> tuple[str, list[dict[str, str]]]:
@@ -191,13 +197,14 @@ def _check(conn, deployment_id: str) -> dict[str, Any]:
     if not isinstance(deployment_id, str) or not _DEPLOYMENT.fullmatch(deployment_id):
         raise MonitoringError("unknown deployment")
     row = conn.execute("""SELECT deployment_id, name, runtime, created_at, design_sha256, design_steps,
-          (SELECT count(*) FROM runs r WHERE r.deployment_id = d.deployment_id)
+          (SELECT count(*) FROM runs r WHERE r.deployment_id = d.deployment_id), reported_spec_sha256
         FROM deployments d WHERE deployment_id = ?""", [deployment_id]).fetchone()
     if row is None:
         raise MonitoringError("unknown deployment")
     return {"deployment_id": row[0], "name": row[1], "runtime": row[2], "created_at": _iso(row[3]),
             "design_attached": row[4] is not None, "design_sha256": row[4],
-            "design_steps": json.loads(row[5]) if row[5] else None, "runs": row[6]}
+            "design_steps": json.loads(row[5]) if row[5] else None, "runs": row[6],
+            "reported_spec_sha256": row[7]}
 
 
 def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]]) -> int:
@@ -241,12 +248,19 @@ def import_report(document: Any, deployment_id: str | None = None) -> dict[str, 
                     if conn.execute("SELECT count(*) FROM deployments").fetchone()[0] >= MAX_DEPLOYMENTS:
                         raise MonitoringError("delete a deployment before adding another")
                     deployment_id = "dep_" + secrets.token_hex(8)
-                    conn.execute("INSERT INTO deployments VALUES (?, ?, ?, ?, NULL, NULL)",
+                    conn.execute("""INSERT INTO deployments
+                        (deployment_id,name,runtime,created_at,design_sha256,design_steps,reported_spec_sha256)
+                        VALUES (?, ?, ?, ?, NULL, NULL, ?)""",
                                  [deployment_id, report["name"], report["runtime"],
-                                  datetime.now(timezone.utc).replace(tzinfo=None)])
+                                  datetime.now(timezone.utc).replace(tzinfo=None), report['spec_hash']])
                 info = _check(conn, deployment_id)
                 if report["spec_hash"] and info["design_sha256"] and report["spec_hash"] != info["design_sha256"]:
                     raise MonitoringError("this report names a different workflow spec than the attached design")
+                if report['spec_hash'] and info['reported_spec_sha256'] and report['spec_hash'] != info['reported_spec_sha256']:
+                    raise MonitoringError('this report names a different workflow spec than the retained reports')
+                if report['spec_hash'] and not info['reported_spec_sha256']:
+                    conn.execute('UPDATE deployments SET reported_spec_sha256=? WHERE deployment_id=?',
+                                 [report['spec_hash'],deployment_id])
                 ids = [r["run_id"] for r in report["runs"]]
                 conn.execute("DELETE FROM steps WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
                 conn.execute("DELETE FROM runs WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
@@ -266,7 +280,9 @@ def attach_design(deployment_id: str, spec: Any) -> dict[str, Any]:
     with _LOCK:
         conn = _connect()
         try:
-            _check(conn, deployment_id)
+            info = _check(conn, deployment_id)
+            if info['reported_spec_sha256'] and digest != info['reported_spec_sha256']:
+                raise MonitoringError('this design does not match the workflow spec named by retained reports')
             conn.execute("UPDATE deployments SET design_sha256 = ?, design_steps = ? WHERE deployment_id = ?",
                          [digest, json.dumps(steps), deployment_id])
             return _check(conn, deployment_id)
