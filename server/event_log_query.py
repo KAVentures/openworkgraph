@@ -19,6 +19,8 @@ from . import event_log_workspace as workspace
 
 MAX_ROWS = 500
 MAX_SAVED = 50
+MAX_VARIANT_PATH_BYTES = 1024 * 1024
+MAX_VARIANT_TOTAL_BYTES = 64 * 1024 * 1024
 Name = Annotated[str, Field(min_length=1, max_length=200)]
 
 # Fixed SQL fragments per vocabulary entry; user values only travel as parameters.
@@ -123,8 +125,28 @@ def _column(measure: Measure) -> tuple[str, str]:
     return label, _FUNCTIONS[measure.fn].format(x=_CASE_VALUES[measure.of])
 
 
+def _materialize_variants(conn, where_sql: str, params: list[Any]) -> None:
+    """Build complete literal paths only for selected cases, after a byte preflight."""
+    selected = 'SELECT case_id FROM qc' + where_sql
+    maximum, total = conn.execute(f"""SELECT max(path_bytes), sum(path_bytes) FROM (
+        SELECT case_id, sum(octet_length(encode(to_json(activity))) + 1) + 1 AS path_bytes
+        FROM ce WHERE case_id IN ({selected}) GROUP BY case_id)""", params).fetchone()
+    if (maximum or 0) > MAX_VARIANT_PATH_BYTES or (total or 0) > MAX_VARIANT_TOTAL_BYTES:
+        raise workspace.EventLogWorkspaceError(
+            'Complete variant paths exceed the analysis byte limits (1 MiB per case, 64 MiB total); '
+            'select narrower cases or another dimension. No partial paths were grouped.')
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE qv AS
+        SELECT case_id, CAST(to_json(list(activity ORDER BY ts, event_id)) AS VARCHAR) AS variant
+        FROM ce WHERE case_id IN ({selected}) GROUP BY case_id""", params)
+    conn.execute('UPDATE qc SET variant = qv.variant FROM qv WHERE qc.case_id = qv.case_id')
+
+
 def run(log_id: str, spec: Any) -> dict[str, Any]:
     parsed = parse(spec)
+    try:
+        import duckdb
+    except ImportError:
+        raise workspace.EventLogWorkspaceError('event-log workspace requires the duckdb package; reinstall OpenWorkGraph') from None
 
     def execute(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(parsed.cohort), log_id)
@@ -137,7 +159,7 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
                     count(DISTINCT activity) AS distinct_activities, count(*) > count(DISTINCT activity) AS rework,
                     arg_min(activity, struct_pack(at := ts, event_order := event_id)) AS first_activity,
                     arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
-                    string_agg(activity, ' > ' ORDER BY ts, event_id) AS variant
+                    NULL::VARCHAR AS variant
                   FROM ce GROUP BY case_id) c
                 LEFT JOIN (SELECT object_id, any_value(attributes) AS attributes FROM objects
                            WHERE log_id = ? AND object_type = ? GROUP BY object_id) o ON o.object_id = c.case_id""",
@@ -180,6 +202,8 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
         measures = [_column(m) for m in parsed.measures]
         select = [f"{sql} AS d{i}" for i, sql in enumerate(dimension_sql)] + [f"{sql} AS m{i}" for i, (_, sql) in enumerate(measures)]
         where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+        if parsed.level == 'cases' and 'variant' in parsed.dimensions:
+            _materialize_variants(conn, where_sql, params)
         group = " GROUP BY " + ", ".join(f"d{i}" for i in range(len(dimension_sql))) if dimension_sql else ""
         order = {"first_measure_desc": "m0 DESC NULLS LAST", "first_measure_asc": "m0 ASC NULLS LAST",
                  "dimensions": ", ".join(f"d{i} NULLS LAST" for i in range(len(dimension_sql))) or "m0 DESC"}[parsed.order]
@@ -196,8 +220,14 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
             "matching": {"rows": total[0], "cases": total[1]},
             "cohort": cohorts.describe(cohorts.parse_cohort(parsed.cohort)),
             "query_basis": "typed_spec_compiled_to_parameterized_sql",
+            "variant_encoding": 'ordered_activity_json_array' if 'variant' in parsed.dimensions else None,
         }
-    return workspace._query(log_id, parsed.case_type, execute)
+    try:
+        return workspace._query(log_id, parsed.case_type, execute)
+    except duckdb.OutOfMemoryException:
+        raise workspace.EventLogWorkspaceError(
+            'Analysis exceeds available memory; select narrower cases or another dimension. '
+            'No partial result was returned.') from None
 
 
 def list_saved(log_id: str) -> dict[str, Any]:

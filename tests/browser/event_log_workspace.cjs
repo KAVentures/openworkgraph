@@ -490,6 +490,32 @@ const path=require('node:path');
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   const literalRows=['case_id,activity,time','single,A > B,2024-01-01T00:00:00Z',
+     'sequence,A,2024-01-01T00:00:00Z','sequence,B,2024-01-01T00:01:00Z',
+     'repeat,A,2024-01-01T00:00:00Z','repeat,B,2024-01-01T00:01:00Z'];
+   await page.locator('#owgEventLogFile').setInputFiles({name:'literal-variants.csv',mimeType:'text/csv',buffer:Buffer.from(literalRows.join('\n'))});
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
+   await page.locator('#owgEventLogCase').selectOption('case_id');
+   await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 5 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgAnalysisLevel').selectOption('cases');
+   await page.locator('#owgAnalysisDim1').selectOption('variant');
+   await page.locator('#owgAnalysisDim2').selectOption('');
+   await page.locator('#owgAnalysisMeasure1').selectOption('count');
+   await page.locator('#owgAnalysisMeasure2').selectOption('');
+   const literalResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis'));
+   await page.locator('#owgAnalysisRun').click();const literalResult=await(await literalResponse).json();
+   assert.equal(literalResult.variant_encoding,'ordered_activity_json_array');
+   assert.deepEqual(literalResult.rows,[['["A","B"]',2],['["A > B"]',1]]);
+   await page.locator('#owgAnalysisResults tbody tr').nth(1).waitFor();
+   assert.equal(await page.locator('#owgAnalysisResults tbody tr').count(),2);
+   const [literalExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   const literalExportPath=path.join(scratch,'literal-variant-analysis.csv');await literalExport.saveAs(literalExportPath);
+   assert.match(await fs.readFile(literalExportPath,'utf8'),/""A > B""/);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
    console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, a dotted chart with hover, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
