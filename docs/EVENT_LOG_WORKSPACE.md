@@ -291,3 +291,27 @@ text formatting would change a label or routing probability. Small observed
 weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
+
+## Organizational mining (handovers)
+
+`GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
+between the resources named in the log's resource column:
+
+- `handover_of_work`: consecutive events in a case performed by different resources, with
+  handover and case counts;
+- `working_together`: pairs of resources that both touched the same cases;
+- `activity_resource_matrix`: event counts per activity and resource;
+- `resources`: events, cases and distinct activities per resource. Resources listed in
+  `automation_resource` are marked `automation`.
+
+Resources are pseudonymous by default (`Resource 01`, numbered by event count within that
+response). Pass `names=shown` to see the names from your own log. Resources beyond the 200
+most active are grouped as `Other resources`. Cases touched by more than 50 resources are
+left out of the shared-case pairs and counted in `working_together_excluded_cases`. The
+same case filters as KPIs apply (`started_from`, `started_before`, `resource`, `activity`,
+`attribute`).
+
+No per-person duration, waiting time, speed, ranking or performance score is calculated,
+not even on handover edges. Handover counts say who touched a case next, not who was
+responsible or how well anyone worked. One million events are analysed in seconds
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
