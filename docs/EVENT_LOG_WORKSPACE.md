@@ -291,3 +291,33 @@ text formatting would change a label or routing probability. Small observed
 weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
+
+## Signals
+
+Signals are saved conditions you check a log against. This is local, signal-only parity with
+Celonis Action Engine and UiPath process alerts. Rules belong to one log, are immutable
+(delete and add again to change one), are limited to 50 per log, and are deleted with the log.
+
+- `GET /v1/event-logs/{log_id}/signals` lists the rules.
+- `POST /v1/event-logs/{log_id}/signals` adds one, for example:
+  `{"name":"Left open","when":{"kind":"cases","condition":"open_longer_than","seconds":172800,"end_activities":["Close"]}}`
+- `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
+- `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+
+Rule kinds:
+
+- `kpi`: `case_count`, `median_throughput_seconds`, `p90_throughput_seconds`, `rework_rate` or
+  `sla_breach_rate` (with `sla_seconds`), compared `above` or `below` a threshold. Rates are
+  fractions.
+- `cases`: `duration_over` (seconds), `contains_activity` / `lacks_activity` (activity),
+  `has_rework`, or `open_longer_than` (seconds plus the activities that end a case, measured
+  against the log's latest event, not the wall clock). `minimum_cases` sets how many matches
+  trigger the signal.
+
+Each rule can also carry the KPI case filters (`cohort`) and a `case_type`. Checking returns
+whether each signal holds, its value or matching-case count, up to 50 evidence cases, and what
+changed since the previous check. KPI rules report whether they flipped. Case rules report how
+many matching cases are new (up to 10,000 remembered case IDs per rule).
+
+A signal never sends messages, calls source systems or runs automations. It describes the
+saved log; it is not a verified business problem, a cause or an instruction to act.
