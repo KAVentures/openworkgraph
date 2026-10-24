@@ -228,6 +228,7 @@
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
+    results.appendChild(discoverySection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
     results.appendChild(analysisSection());
@@ -722,6 +723,64 @@
     return box;
   }
 
+  // Plain-language outline of a discovered process tree, one line per step.
+  function treeOutline(node,depth=0){
+    const pad='  '.repeat(depth);
+    if(node.op==='activity')return [pad+node.activity];
+    if(node.op==='tau')return [pad+'(skip)'];
+    const kids=node.children||[];
+    if(node.op==='seq')return node.simplified_from==='parallel'?[pad+'In the most common observed order:',...kids.flatMap(c=>treeOutline(c,depth+1))]:kids.flatMap(c=>treeOutline(c,depth));
+    if(node.op==='xor')return [pad+'Choose one of:',...kids.flatMap((c,i)=>[pad+'  Option '+(i+1)+' · '+Number(node.cases[i]).toLocaleString()+' '+(node.unit||'cases')+':',...treeOutline(c,depth+2)])];
+    if(node.op==='and')return [pad+'In parallel:',...kids.flatMap((c,i)=>[pad+'  Branch '+(i+1)+':',...treeOutline(c,depth+2)])];
+    const [body,redo]=kids;
+    return [pad+(node.unstructured?'In any order, as often as needed:':'Repeat as needed ('+Number(node.repeats).toLocaleString()+' repeats):'),...treeOutline(body,depth+1),
+      ...(redo&&redo.op!=='tau'?[pad+'  going round again through:',...treeOutline(redo,depth+2)]:[])];
+  }
+
+  function discoverySection(){
+    const box=section('Discover a process model');box.id='owgDiscovery';
+    box.appendChild(el('div','Builds a draft model with decisions, loops and parallel steps from the cases in this log, like an inductive miner. Choices are labelled with the share of cases observed, not with business rules. Open the draft in the process catalog to review it, state the real conditions and export it as BPMN.','muted'));
+    const noise=input('owgDiscoveryNoise','range');noise.min='0';noise.max='50';noise.step='5';noise.value='20';
+    const acts=input('owgDiscoveryActivities','range');acts.min='10';acts.max='100';acts.step='5';acts.value='100';
+    const noiseOut=el('output','20%');noiseOut.id='owgDiscoveryNoiseValue';
+    const actsOut=el('output','100%');actsOut.id='owgDiscoveryActivitiesValue';
+    noise.oninput=()=>{noiseOut.textContent=noise.value+'%';};acts.oninput=()=>{actsOut.textContent=acts.value+'%';};
+    const noiseField=field('Leave out infrequent behaviour below',noise);noiseField.appendChild(noiseOut);
+    const actsField=field('Activities covering this share of events',acts);actsField.appendChild(actsOut);
+    const run=button('Discover model','secondary');run.id='owgDiscoveryRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(noiseField,actsField,run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgDiscoveryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgDiscoveryResults';
+    box.append(row,statusLine,out);
+    run.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        run.disabled=true;out.replaceChildren();statusLine.textContent='Discovering…';
+        const r=await getJSON(logPath('model-discovery',{noise:String(Number(noise.value)/100),activities:String(Number(acts.value)/100)}));
+        if(generation!==state.generation)return;
+        const q=r.quality,kinds=r.process_model.activities.map(a=>a.kind);
+        const count=kind=>kinds.filter(k=>k===kind).length;
+        const loops=r.process_model.activities.filter(a=>a.id.startsWith('repeat_')).length;
+        statusLine.textContent='Draft with '+count('activity')+' steps, '+(count('decision')-loops)+' decisions, '+loops+' loops and '+count('parallel_split')+' parallel regions. It fits '+Number(q.fitting_cases).toLocaleString()+' of '+Number(q.checked_cases).toLocaleString()+' checked cases ('+pct(q.fitting_case_share)+').'+(q.activities_hidden?' '+q.activities_hidden+' less frequent activities are hidden.':'');
+        const outline=el('pre',treeOutline(r.tree).join('\n'));outline.id='owgDiscoveryOutline';outline.style.cssText='white-space:pre-wrap;max-width:100%;overflow-x:auto';
+        out.appendChild(outline);
+        if(r.simplifications.length){const list=el('ul');r.simplifications.forEach(n=>list.appendChild(el('li',n)));out.appendChild(list);}
+        const excluded=q.cases_excluded_trace_length+q.cases_excluded_variant_limit;
+        out.appendChild(el('div',r.interpretation+(excluded?' '+Number(excluded).toLocaleString()+' cases with very long or rare paths were left out of discovery.':''),'muted'));
+        const draft=button('Review as catalog draft');draft.id='owgDiscoveryDraft';
+        draft.onclick=()=>{
+          try{
+            if(!window.owgProcessCatalog?.draftDiscovered)throw new Error('Process catalog unavailable. Reopen the local dashboard.');
+            if(window.owgProcessCatalog.draftDiscovered({model:r.process_model,logName:(r.log&&r.log.name)||''}))statusLine.textContent='Opened in the process catalog as an unsaved draft.';
+          }catch(error){statusLine.textContent=error.message;}
+        };
+        out.appendChild(draft);
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function organizationSection(){
     const box=section('Who hands work to whom');box.id='owgEventLogOrganization';
     box.appendChild(el('div','Handovers and shared cases between the resources in this log. Resources are shown as Resource 01, 02… unless you choose to show names. No speed, waiting time or performance score is calculated for anyone.','muted'));
@@ -989,6 +1048,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={treeOutline,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

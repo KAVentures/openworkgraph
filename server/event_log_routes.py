@@ -21,6 +21,7 @@ from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
+from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
 from . import event_log_organization as organization
 from . import event_log_query as analysis
@@ -300,6 +301,21 @@ async def event_log_conformance(request: Request, log_id: str,
     _require_dashboard(request)
     model = await _json_body(request, "reference model")
     return _respond(analytics.conformance, log_id, model, case_type, max_variants)
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery")
+def event_log_model_discovery(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              noise: float = Query(default=0.2, ge=0, lt=1),
+                              activities: float = Query(default=1.0, gt=0, le=1),
+                              started_from: str = Query(default="", max_length=64),
+                              started_before: str = Query(default="", max_length=64),
+                              resource: str = Query(default="", max_length=200),
+                              activity: str = Query(default="", max_length=200),
+                              attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/root-cause")

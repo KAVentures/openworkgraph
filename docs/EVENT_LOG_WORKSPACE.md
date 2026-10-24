@@ -92,6 +92,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
+| `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -451,3 +452,56 @@ Six rules over one million events take about 7 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_compliance.py`). These checks describe the
 imported log against rules you entered. They are not verified policy, audit evidence or legal
 compliance, and a violation may reflect missing events.
+
+## Process model discovery
+
+`GET /v1/event-logs/{log_id}/model-discovery` builds a draft process model from the log, in the
+style of an inductive miner (as in PM4Py, ProM or Apromore). It takes the same cohort parameters as
+the other analyses, plus:
+
+- `noise` (0 up to, but not including, 1; default 0.2): leaves out infrequent behaviour. For each
+  activity, directly-follows paths below this share of its strongest path are ignored, with ending
+  the case counted as a path. Steps that fewer than this share of cases skip are treated as
+  always done.
+- `activities` (above 0, up to 1; default 1): keeps only the most frequent activities that cover
+  this share of events.
+
+How it works:
+
+1. The most frequent 5,000 variants are used. Cases with more than 300 events are left out.
+2. The log is split recursively at exclusive choices, sequences, parallel regions and loops found
+   on the filtered directly-follows graph. Each part of the log is projected onto its own
+   activities, so rare deviations are dropped rather than forced into the model.
+3. When no split applies, one of two fallbacks is used and reported in `simplifications`:
+   - an activity that occurs exactly once in every case is put in parallel with the rest;
+   - otherwise the activities are drawn as a loop where they can occur in any order.
+
+The result contains:
+
+- `tree`: the process tree, with case counts on every choice and repeat counts on every loop.
+- `process_model`: a catalog process model with start and end events, decisions with merges,
+  loops and parallel split/join pairs. It is valid against the catalog schema, except that its
+  business `goal` is empty. The reviewer states the goal before saving, and the catalog rejects
+  a save without one.
+- `quality`: how many cases were used and left out, and the share of checked cases the draft
+  replays exactly over the activities shown. Checked cases are those in the 500 most frequent
+  variants with at most 120 events.
+
+Every decision branch has an unconfirmed rule that states only the observed share, for example
+"Observed choice, not a confirmed rule: 54 of 60 cases (90%) continued with Approve". These
+shares are not business conditions.
+
+A catalog parallel region cannot contain decisions or loops, or more than eight branches. When
+discovered concurrency needs more than that, it is drawn in its most common observed order if that
+order still fits at least (1 − `noise`) of the cases. Otherwise it is drawn as an any-order loop.
+Both cases are reported. Drafts larger than the catalog's bounds (40 nodes, 100 transitions,
+40 rules) are refused with a request to lower `activities` or raise `noise`.
+
+In the dashboard, "Discover a process model" has the two sliders, a plain-language outline of the
+draft and "Review as catalog draft". That button opens the draft in the process catalog editor,
+unsaved. After review it can be saved as a revision and exported as BPMN through the catalog.
+
+One million events take about 2 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_model_discovery.py`). A discovered draft
+describes the imported log. It is not a verified workflow or policy, and it never authorizes
+execution.

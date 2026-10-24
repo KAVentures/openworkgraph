@@ -521,6 +521,21 @@
     }catch(error){if(attempt===importGeneration){host.replaceChildren();status(error.message);}}
     finally{if(attempt===importGeneration)control.disabled=!input.files?.length;}
   }
+  function draftDiscovered(source){
+    if(busy)throw new Error('Wait for the current process request.');
+    const value=source&&source.model;
+    if(!value||!Array.isArray(value.activities)||!value.activities.length||!Array.isArray(value.transitions))
+      throw new Error('A discovered process model is required.');
+    if(!replaceDraft())return false;
+    model=copy(value);
+    record={workflow_id:null,revision:0,title:String(source.logName?'Discovered from '+source.logName:'Discovered process draft').slice(0,240),
+      process_model:copy(model),evidence_refs:[]};
+    reviewed=false;renderEditor();
+    status('Unsaved draft discovered from an event log. Add a business goal, replace each observed-share rule with the real condition and review every step before saving. Saving never authorizes execution.');
+    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+    document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
+    return true;
+  }
   function openImportedDraft(value){
     if(busy)throw new Error('Wait for the current process request.');
     if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
@@ -545,7 +560,7 @@
     const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);
     panel.appendChild(host);
   }
-  window.owgProcessCatalog={saveDesigner,draftObserved};
+  window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered};
   window.__owgProcessCatalogModel={linearModel};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
