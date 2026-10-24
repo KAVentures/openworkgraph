@@ -323,13 +323,13 @@ def object_types(log_id: str) -> dict[str, Any]:
             types = conn.execute("""SELECT o.object_type, count(DISTINCT o.object_id), count(eo.event_id)
                 FROM objects o LEFT JOIN event_objects eo ON eo.log_id = o.log_id AND eo.object_id = o.object_id
                 WHERE o.log_id = ? GROUP BY 1 ORDER BY 2 DESC, 1""", [log_id]).fetchall()
-            relations = conn.execute("""SELECT a.object_type, b.object_type, count(DISTINCT a.event_id)
-                FROM (SELECT eo.event_id, o.object_type FROM event_objects eo JOIN objects o
-                      ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?) a
-                JOIN (SELECT eo.event_id, o.object_type FROM event_objects eo JOIN objects o
-                      ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?) b
+            relations = conn.execute("""WITH event_types AS (
+                SELECT DISTINCT eo.event_id, o.object_type FROM event_objects eo JOIN objects o
+                  ON o.log_id=eo.log_id AND o.object_id=eo.object_id WHERE eo.log_id=?)
+                SELECT a.object_type, b.object_type, count(*)
+                FROM event_types a JOIN event_types b
                   ON a.event_id = b.event_id AND a.object_type < b.object_type
-                GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 50""", [log_id, log_id]).fetchall()
+                GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 50""", [log_id]).fetchall()
             return {"log": info, "object_types": [{"object_type": t, "objects": n, "event_links": e} for t, n, e in types],
                     "shared_events_between_types": [{"types": [a, b], "events": n} for a, b, n in relations],
                     **DESCRIPTIVE_ONLY}

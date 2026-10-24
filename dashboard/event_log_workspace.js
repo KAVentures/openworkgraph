@@ -384,7 +384,8 @@
         return [t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds),inspect];
       })));
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
-      if(links.length)parts.push(table(['Linked to','Share of '+type.object_type+' objects','Mean linked per object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
+      if(graph.relations_calculation_complete===false)parts.push(el('p','Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.','muted'));
+      if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
       parts.push(inspection.node);out.replaceChildren(...parts);
     };
     showMap.onclick=render;pick.onchange=render;

@@ -40,6 +40,25 @@ types, which is where lifecycles converge or diverge. Links come from shared
 events only; they are not verified relationships. Maps are capped at 64
 activities and 400 transitions per type, and 20 object types.
 
+The map counts observed object lifecycles (objects with at least one linked
+event). Inter-type links cover the displayed object types. The share uses all
+observed source-type objects; the mean uses only source objects with at least
+one link to that destination type. Counts deduplicate repeated shared events
+and multiple qualifiers relating the same event to an object.
+
+Batch events can link thousands of objects at once. The query groups identical
+complete event-ID sets to reduce repeated arithmetic while retaining exact
+weighted object-link counts. Each object keeps its individual case history.
+The overview also reduces shared-event counts to distinct event/type pairs.
+
+Relation analysis bounds pair work to two million candidate pairs; event-set
+grouping uses at most one million input links. If neither representation fits,
+or the relation calculation reaches its memory limit, link counts are unknown.
+Lifecycle maps remain available. API clients must inspect
+`relations_calculation_complete`; an empty `relations` list with a false flag
+does not establish absence of links. Responses include a fixed unknown reason,
+count method, scope and work limits. No partial link estimates are reported.
+
 ## Limits
 
 - 4 GB per import, 50 stored logs (delete one to import another).
