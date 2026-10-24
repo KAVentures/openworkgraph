@@ -57,7 +57,7 @@ def test_case_filters_variants_and_ordering():
     log = _log()
     closed = query.run(log, {"level": "cases", "dimensions": ["variant"], "measures": [{"fn": "count"}],
                              "where": {"ends_with": "Close"}, "order": "dimensions"})
-    assert [row[0] for row in closed["rows"]] == ["Receive > Check > Check > Close", "Receive > Check > Close"]
+    assert [json.loads(row[0]) for row in closed["rows"]] == [["Receive","Check","Check","Close"],["Receive","Check","Close"]]
     slow = query.run(log, {"level": "cases", "dimensions": ["has_rework"], "measures": [{"fn": "share"}],
                            "where": {"duration_over_seconds": 1800}})
     assert _table(slow) == [{"has_rework": "no rework", "share": 0.5}, {"has_rework": "rework", "share": 0.5}]
