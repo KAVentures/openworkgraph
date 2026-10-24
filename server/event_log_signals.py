@@ -20,6 +20,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError
 
 from . import event_log_cohorts as cohorts
+from . import event_log_compliance as compliance
 from . import event_log_workspace as workspace
 
 MAX_RULES = 50
@@ -50,11 +51,18 @@ class CaseCondition(_Strict):
     minimum_cases: StrictInt = Field(default=1, ge=1, le=10 ** 9)
 
 
+class ComplianceCondition(_Strict):
+    """A declarative compliance rule (see event_log_compliance); triggers on violating cases."""
+    kind: Literal["compliance"]
+    rule: compliance.Rule
+    minimum_cases: StrictInt = Field(default=1, ge=1, le=10 ** 9)
+
+
 class SignalRule(_Strict):
     name: str = Field(min_length=1, max_length=120)
     case_type: Label | None = None
     cohort: dict[str, Any] = Field(default_factory=dict)
-    when: Annotated[Union[KpiCondition, CaseCondition], Field(discriminator="kind")]
+    when: Annotated[Union[KpiCondition, CaseCondition, ComplianceCondition], Field(discriminator="kind")]
 
 
 def _validate(spec: Any) -> SignalRule:
@@ -71,6 +79,8 @@ def _validate(spec: Any) -> SignalRule:
             raise workspace.EventLogWorkspaceError("sla_breach_rate needs sla_seconds")
         if when.metric.endswith("_rate") and when.threshold > 1:
             raise workspace.EventLogWorkspaceError("rate thresholds are fractions between 0 and 1")
+    elif isinstance(when, ComplianceCondition):
+        compliance.parse({"rules": [when.rule.model_dump()]})
     else:
         needs_seconds = when.condition in {"duration_over", "open_longer_than"}
         needs_activity = when.condition in {"contains_activity", "lacks_activity"}
@@ -231,7 +241,14 @@ def evaluate(log_id: str) -> dict[str, Any]:
                                   else previous.get("triggered") != triggered)
                     state = {"triggered": triggered, "value": value}
                 else:
-                    total, evidence, ids = _matching(conn, rule.when, as_of)
+                    if isinstance(rule.when, ComplianceCondition):
+                        compliance.positions(conn, "rc")
+                        summary, ids = compliance.evaluate_rule(conn, rule.when.rule)
+                        total, evidence, ids = summary["violating_cases"], summary["violating_case_examples"], ids[:MAX_REMEMBERED_CASES]
+                        result["compliance"] = {k: summary[k] for k in (
+                            "description", "activated_cases", "violation_rate", "violation_rate_ci95", "unknown_cases")}
+                    else:
+                        total, evidence, ids = _matching(conn, rule.when, as_of)
                     triggered = total >= rule.when.minimum_cases
                     comparison = _new_case_comparison(total, ids, previous)
                     result.update(matching_cases=total, triggered=triggered, evidence_cases=evidence,
