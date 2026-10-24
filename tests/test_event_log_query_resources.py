@@ -75,7 +75,10 @@ def test_counting_a_large_case_does_not_materialize_its_unused_variant(monkeypat
     conn.execute('UPDATE logs SET events=300001 WHERE log_id=?',[log]);conn.close()
     original=workspace._connect
     def limited():
-        result=original();result.execute("SET memory_limit='128MB'")
+        result=original()
+        # Per-worker buffers depend on host CPU count. Compare one serial
+        # worker on every OS while keeping the data/memory/spill limits fixed.
+        result.execute('SET threads=1');result.execute("SET memory_limit='128MB'")
         result.execute("SET max_temp_directory_size='0B'");return result
     monkeypatch.setattr(workspace,'_connect',limited)
     result=query.run(log,{'level':'cases','measures':[{'fn':'count'}]})
