@@ -61,25 +61,32 @@
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[];
+    let deployments=[],renderVersion=0,loadVersion=0;
+    const clearResults=()=>{renderVersion++;results.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
-      deployments=(await api('/v1/automation-monitoring/deployments')).deployments||[];
+      const version=++loadVersion;
+      const loaded=(await api('/v1/automation-monitoring/deployments')).deployments||[];
+      if(version!==loadVersion)return;
+      const previous=pick.value;
+      clearResults();deployments=loaded;
       const options=deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime+' · '+Number(d.runs).toLocaleString()+' runs']);
       setOptions(pick,options);setOptions(target,[['','New deployment'],...options]);
       show(manage,deployments.length>0);
       if(select&&deployments.some(d=>d.deployment_id===select))pick.value=select;
+      else if(deployments.some(d=>d.deployment_id===previous))pick.value=previous;
       if(!deployments.length)results.replaceChildren();
     }
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
+      const selectedTarget=target.value;
       importButton.disabled=true;status.textContent='Importing '+chosen.name+'…';
       try{
         const text=await chosen.text();let doc;
         try{doc=JSON.parse(text);}catch(_){throw new Error('That file is not valid JSON.');}
         checkReport(doc);
-        const q=target.value?'?deployment_id='+encodeURIComponent(target.value):'';
+        const q=selectedTarget?'?deployment_id='+encodeURIComponent(selectedTarget):'';
         const r=await api('/v1/automation-monitoring/reports'+q,{method:'POST',body:text,headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'}});
         status.textContent='Imported '+Number(r.runs_imported).toLocaleString()+' runs ('+Number(r.steps_imported).toLocaleString()+' steps) into '+r.deployment.name+'.';
         file.value='';consent.checked=false;await load(r.deployment.deployment_id);await render();
@@ -87,12 +94,14 @@
     };
     design.onchange=async()=>{
       const chosen=design.files&&design.files[0];if(!chosen||!pick.value)return;design.value='';
-      try{await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/design',{method:'PUT',headers:{'Content-Type':'application/json'},body:await chosen.text()});
-        status.textContent='Reviewed design attached.';await load(pick.value);await render();}
-      catch(error){status.textContent=error.message;}
+      const selected=pick.value;
+      try{await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/design',{method:'PUT',headers:{'Content-Type':'application/json'},body:await chosen.text()});
+        if(pick.value!==selected)return;
+        status.textContent='Reviewed design attached.';await load(selected);await render();}
+      catch(error){if(pick.value===selected)status.textContent=error.message;}
     };
     view.onclick=()=>render().catch(error=>{status.textContent=error.message;});
-    pick.onchange=()=>results.replaceChildren();
+    pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
     toLog.onclick=async()=>{
       if(!window.confirm('Store this deployment\'s reported steps as an event log on this computer?'))return;
       try{const log=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/event-log',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}});
@@ -107,7 +116,11 @@
     };
     async function render(){
       if(!pick.value)return;
-      const m=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/monitor?recent_days='+encodeURIComponent(recent.value||7)+'&baseline_days='+encodeURIComponent(baseline.value||28));
+      const selected=pick.value,version=++renderVersion;
+      let m;
+      try{m=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/monitor?recent_days='+encodeURIComponent(recent.value||7)+'&baseline_days='+encodeURIComponent(baseline.value||28));}
+      catch(error){if(version!==renderVersion||pick.value!==selected)return;throw error;}
+      if(version!==renderVersion||pick.value!==selected)return;
       const parts=[];
       if(m.alerts.length){const box=el('div',null,'note');box.setAttribute('role','alert');box.appendChild(el('strong','Changes in the recent window'));
         const list=el('ul');m.alerts.forEach(a=>list.appendChild(el('li',a.message+(a.code==='duration_up'?'':' ('+change(a)+')'))));box.appendChild(list);parts.push(box);}
@@ -121,8 +134,17 @@
         table(['Recent minus baseline','Change (95% CI)'],[['Success rate',change(m.drift.success_rate)],['Handoff rate',change(m.drift.handoff_rate)],['Failure rate',change(m.drift.failure_rate)]]));
       if(m.steps.length)parts.push(el('h3','Steps'),table(['Step','Attempts','Failed','Handed to a person','Median time since previous step'],m.steps.slice(0,20).map(s=>[s.step_id+' '+s.activity,Number(s.attempts).toLocaleString(),pct(s.failure_rate),pct(s.handoff_rate),s.median_seconds_since_previous_step===null?'—':Math.round(s.median_seconds_since_previous_step)+' s'])));
       const c=m.design_conformance;
-      if(c)parts.push(el('h3','Compared with the reviewed design'),table(['Runs with steps','Completed every step in order','Mean fitness','Design steps never completed','Unexpected steps'],[[Number(c.runs_with_steps).toLocaleString(),Number(c.runs_completing_every_design_step_in_order).toLocaleString(),c.mean_fitness===null?'—':Number(c.mean_fitness).toFixed(3),c.design_steps_never_completed.map(s=>s.id).join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]));
-      else parts.push(el('div','Attach the starter\'s workflow.spec.json to compare executed steps with the reviewed design.','muted'));
+      if(c&&c.kind==='runtime_graph')parts.push(el('h3','Reported activity structure against the saved graph'),
+        table(['Runs compared / total','Exact structural matches','Mean minimum activity edits among compared runs','Activities never reported completed','Unexpected step IDs'],[[
+          Number(c.runs_compared).toLocaleString()+' / '+Number(c.total_runs).toLocaleString(),Number(c.runs_exact_structural_match).toLocaleString(),
+          c.mean_minimum_activity_edits_among_compared_runs===null?'—':Number(c.mean_minimum_activity_edits_among_compared_runs).toFixed(3),
+          c.activity_ids_never_reported_completed.join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]),
+        el('div','Comparison coverage: '+pct(c.covered_run_share)+'. Not compared: '+Number(c.runs_not_compared).toLocaleString()+
+          ' (no completed steps: '+c.not_compared_by_reason.no_completed_steps+', distinct-path limit: '+c.not_compared_by_reason.distinct_path_limit+
+          ', alignment-state limit: '+c.not_compared_by_reason.alignment_state_limit+'). Missing activities mean missing reported evidence, not proven process deviations. '+
+          'Rules, human work, current catalog approval and business outcomes are not verified.','muted'));
+      else if(c)parts.push(el('h3','Compared with the reviewed design'),table(['Runs with steps','Completed every step in order','Mean fitness','Design steps never completed','Unexpected steps'],[[Number(c.runs_with_steps).toLocaleString(),Number(c.runs_completing_every_design_step_in_order).toLocaleString(),c.mean_fitness===null?'—':Number(c.mean_fitness).toFixed(3),c.design_steps_never_completed.map(s=>s.id).join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]));
+      else parts.push(el('div','Attach the starter\'s or SDK project\'s workflow.spec.json to compare reported steps with its design.','muted'));
       if(m.weekly.length)parts.push(el('h3','Runs per week'),table(['Week','Succeeded','Handed to a person','Failed','Cancelled','Running'],m.weekly.slice(-12).map(w=>[w.week,w.succeeded,w.handed_to_human,w.failed,w.cancelled,w.running])));
       results.replaceChildren(...parts);
     }

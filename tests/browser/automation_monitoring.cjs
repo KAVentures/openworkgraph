@@ -72,6 +72,81 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMonitorManage').isHidden(),true);
    const left=await page.evaluate(async()=>(await (await fetch('/v1/automation-monitoring/deployments')).json()).deployments.length);
    assert.equal(left,0);
+   // A real exported paired graph accepts either interleaving without flattening.
+   const graphExport=spawnSync(python,['-c',`
+import json
+from shared.process_model import ProcessModel
+from shared.process_agent_project import build_runtime_spec
+m=ProcessModel(goal='Synthetic parallel checks',baseline_source='user_declared',baseline_path=['Checks'],
+ activities=[{'id':'fork','label':'Both','kind':'parallel_split'},
+ {'id':'checkA','label':'Same check'}, {'id':'checkB','label':'Same check'},
+ {'id':'join','label':'Joined','kind':'parallel_join'}, {'id':'close','label':'Close'}],
+ transitions=[{'source':a,'target':b} for a,b in [('fork','checkA'),('fork','checkB'),('checkA','join'),('checkB','join'),('join','close')]],
+ entry_activity_id='fork',terminal_activity_ids=['close'])
+s=build_runtime_spec(dict(format='openworkgraph.versioned-process-export.v1',workflow_id='synthetic_graph',revision=1,
+ content_sha256='a'*64,execution_authorization=False,process_model=m.model_dump()))
+import hashlib
+print(json.dumps(dict(spec=s,sha=hashlib.sha256(json.dumps(s,sort_keys=True,allow_nan=False).encode()).hexdigest())))
+`],{encoding:'utf8'});
+   assert.equal(graphExport.status,0,graphExport.stderr);
+   const graph=JSON.parse(graphExport.stdout);
+   const graphReport={format:report.format,deployment:{name:'Parallel checks',runtime:'openai-agents',workflow_spec_sha256:graph.sha},
+     runs:[['checkA','checkB','close'],['checkB','checkA','close'],['checkA','close']].map((ids,i)=>({run_id:'graph'+i,
+       started_at:new Date(start).toISOString(),finished_at:new Date(start+60000).toISOString(),status:'succeeded',
+       steps:ids.map(step_id=>({step_id,activity:'Check',status:'completed',at:new Date(start).toISOString()}))}))};
+   await page.locator('#owgMonitorReport').setInputFiles({name:'graph-runs.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(graphReport))});
+   await page.locator('#owgMonitorConsent').check();await page.locator('#owgMonitorImport').click();
+   await page.locator('#owgMonitorStatus').filter({hasText:'Imported 3 runs (8 steps) into Parallel checks'}).waitFor();
+   await page.locator('#owgMonitorManage').waitFor({state:'visible'});
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported results'}).waitFor();
+   await page.locator('#owgMonitorDesign').setInputFiles({name:'workflow.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(graph.spec))});
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const structure=await page.locator('#owgMonitorResults').textContent();
+   assert.match(structure,/Exact structural matches/);assert.match(structure,/3 \/ 3/);
+   assert.match(structure,/Missing activities mean missing reported evidence/);
+   const compared=await page.evaluate(async()=>{const ds=(await(await fetch('/v1/automation-monitoring/deployments')).json()).deployments;
+     return (await(await fetch('/v1/automation-monitoring/deployments/'+ds[0].deployment_id+'/monitor')).json()).design_conformance;});
+   assert.equal(compared.runs_exact_structural_match,2);assert.equal(compared.runs_compared,3);
+   assert.equal(compared.business_outcome_verified,false);
+   // A late result must not replace the currently selected deployment/window.
+   const graphId=await page.locator('#owgMonitorPick').inputValue();
+   const otherReport={...graphReport,deployment:{...graphReport.deployment,name:'Other implementation'},runs:[graphReport.runs[0]]};
+   await page.locator('#owgMonitorTarget').selectOption('');
+   await page.locator('#owgMonitorReport').setInputFiles({name:'other-runs.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(otherReport))});
+   await page.locator('#owgMonitorConsent').check();await page.locator('#owgMonitorImport').click();
+   await page.locator('#owgMonitorStatus').filter({hasText:'Imported 1 runs (3 steps) into Other implementation'}).waitFor();
+   await page.waitForFunction(()=>document.querySelector('#owgMonitorPick').selectedOptions[0]?.textContent.includes('Other implementation'));
+   await page.locator('#owgMonitorDesign').setInputFiles({name:'workflow.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(graph.spec))});
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const otherId=await page.locator('#owgMonitorPick').inputValue();
+   let release,responseReady;const hold=new Promise(resolve=>{release=resolve;}),held=new Promise(resolve=>{responseReady=resolve;});
+   const pattern='**/v1/automation-monitoring/deployments/'+graphId+'/monitor?*';
+   await page.route(pattern,async route=>{const response=await route.fetch();responseReady();await hold;await route.fulfill({response});});
+   await page.locator('#owgMonitorPick').selectOption(graphId);await page.locator('#owgMonitorShow').click();
+   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Delayed monitoring response was not intercepted')),15000);
+     held.then(()=>{clearTimeout(timer);resolve();});});
+   await page.locator('#owgMonitorPick').selectOption(otherId);await page.locator('#owgMonitorShow').click();
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const completed=page.waitForEvent('requestfinished',{predicate:r=>r.url().includes('/'+graphId+'/monitor?')});
+   release();await completed;
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.match(await page.locator('#owgMonitorResults').textContent(),/1 \/ 1/,'late response cannot replace the selected deployment');
+   assert.doesNotMatch(await page.locator('#owgMonitorResults').textContent(),/3 \/ 3/);
+   await page.unroute(pattern);
+   await page.locator('#owgMonitorRecent').fill('14');
+   assert.equal(await page.locator('#owgMonitorResults').textContent(),'','window edits invalidate old results');
+   await page.locator('#owgMonitorShow').click();
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const graphAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(graphAudit.violations.map(v=>v.id),[]);
+   await page.setViewportSize({width:390,height:844});
+   assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgMonitorDelete').click();
+   await page.locator('#owgMonitorStatus').filter({hasText:'Deployment deleted.'}).waitFor();
+   assert.equal(await page.locator('#owgMonitorPick').inputValue(),graphId);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgMonitorDelete').click();
+   await page.locator('#owgMonitorManage').waitFor({state:'hidden'});
    assert.deepEqual(errors,[]);
    console.log('Automation monitoring acceptance passed: consented run-report import, reported rates with intervals, drift alerts, reviewed-design comparison, WCAG audit, mobile width, event-log export, verified deletion.');
  }finally{

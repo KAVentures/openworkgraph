@@ -25,7 +25,7 @@ ROOT=Path(__file__).resolve().parents[1]
 @pytest.mark.skipif(not os.getenv('OWG_AGENT_SDK_PYTHON'),reason='Set an isolated Agents SDK interpreter for the real MCP implementation check')
 @pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True)])
 @pytest.mark.parametrize('parallel_schedule',[False,True])
-def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,shared_catalog,source_invariant,parallel_schedule):
+def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,monkeypatch,shared_catalog,source_invariant,parallel_schedule):
     sdk=os.environ['OWG_AGENT_SDK_PYTHON']
     model=ProcessModel(goal='Resolve a selected synthetic case',baseline_source='user_declared',
         baseline_path=['Resolve','Read case','Done'],activities=[
@@ -279,6 +279,32 @@ print(json.dumps(report))
             assert observed['source_reads']==2
             assert observed['source_rule_reads']==(6 if source_invariant else 0)
             assert report['source_rules_matched_at_completion'] is True
+            exported=run('monitor.py','--journal',f"execution-journal/{report['execution_id']}.jsonl",
+                         '--deployment-name','Synthetic SDK implementation','--output','monitoring.json')
+            assert exported.returncode==0,exported.stderr
+            monitoring=json.loads((project/'monitoring.json').read_text())
+            from server.automation_monitoring import parse_report
+            parsed=parse_report(monitoring)
+            assert parsed['runtime']=='openai-agents'
+            assert parsed['runs'][0]['status']=='succeeded'
+            assert parsed['runs'][0]['verified'] is None
+            assert [step[0] for step in parsed['runs'][0]['steps']]==['resolve','readback']
+            from server import automation_monitoring as monitoring_store
+            monkeypatch.setattr(monitoring_store,'DATA_DIR',tmp_path/'monitoring')
+            deployment=monitoring_store.import_report(monitoring)['deployment']['deployment_id']
+            monitoring_store.attach_design(deployment,json.loads((project/'workflow.spec.json').read_text()))
+            measured=monitoring_store.monitor(deployment)
+            assert measured['design_conformance']['runs_compared']==1
+            assert measured['design_conformance']['runs_exact_structural_match']==1
+            assert measured['design_conformance']['current_catalog_review_verified'] is False
+            assert measured['overall']['outcome_reported_verified'] is None
+            monitoring_store.delete_deployment(deployment)
+            assert monitoring_store.list_deployments()['deployments']==[]
+            assert stats()==observed  # Offline projection cannot re-read or execute anything.
+            overwrite=run('monitor.py','--journal',f"execution-journal/{report['execution_id']}.jsonl",
+                          '--deployment-name','Synthetic SDK implementation','--output','monitoring.json')
+            assert overwrite.returncode!=0
+            assert json.loads((project/'monitoring.json').read_text())==monitoring
             repeated=run(*args,'--intent','intent.json','--execute-approved')
             assert repeated.returncode!=0
             assert stats()==observed
@@ -298,6 +324,7 @@ print(json.dumps(report))
                 assert after['source_rule_reads']==observed['source_rule_reads']
             for private in ('SYNTHETIC_TOOL_SECRET','SYNTHETIC_SOURCE_SECRET','SYNTHETIC_CATALOG_SECRET','SYNTHETIC_PRIVATE_RECORD'):
                 assert private not in execute.stdout+execute.stderr
+                assert private not in json.dumps(monitoring)+exported.stdout+exported.stderr
         finally:
             server.terminate()
             try:server.wait(timeout=10)
