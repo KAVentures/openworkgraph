@@ -92,6 +92,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
+| `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -407,3 +408,168 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 `GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
+## Appending newer exports
+
+`POST /v1/event-logs/{log_id}/append?format=…` (dashboard session plus the
+`X-OWG-Local-Storage-Confirmed: true` header; same CSV mapping parameters as import) adds a
+newer export to a saved log, so trends, KPIs and signals update without rebuilding the log.
+In the dashboard, choose the file, confirm local storage and press "Add file to selected log".
+
+- An event the log already holds (same activity, time, resource and linked objects) is skipped
+  and counted in `duplicate_events_skipped`, so overlapping exports can be appended repeatedly.
+- Appended events get a batch prefix on their identifier (`a1:`, `a2:`, …). Objects the log
+  already holds keep their attributes; new objects are added.
+- The whole append is one transaction. Malformed files, files without valid events, and
+  identifier conflicts (for example an object ID reused with another type) leave the log
+  unchanged.
+- `GET /v1/event-logs/{log_id}/appends` lists each append's counts. The history is deleted with
+  the log.
+
+Appending one million events, half of them already in the log, takes about 12 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_append.py`).
+
+## Compliance rules
+
+`POST /v1/event-logs/{log_id}/compliance` (dashboard session only) checks cases against up to 20
+declarative rules. These are Declare-style templates, as in ProM Declare, ABBYY Timeline or
+Signavio process adherence:
+
+| Template | Holds when | Applies to |
+|---|---|---|
+| `response` (`a`, `b`) | every A is eventually followed by B | cases containing A |
+| `precedence` (`a`, `b`) | every B has an earlier A | cases containing B |
+| `response_within` (`a`, `b`, `seconds`) | every A is followed by B within the limit | cases containing A |
+| `existence` (`a`, `min`, `max`) | A occurs between min and max times | every case |
+| `not_coexistence` (`a`, `b`) | A and B never occur in the same case | cases containing A or B |
+| `segregation_of_duties` (`a`, `b`) | no single resource performs both (four eyes) | cases containing both |
+
+```json
+{"rules": [{"template": "segregation_of_duties", "a": "Create PO", "b": "Approve PO"},
+           {"template": "response_within", "a": "Create PO", "b": "Approve PO", "seconds": 7200}],
+ "cohort": {"started_from": "2024-01-01T00:00:00Z"}}
+```
+
+- Event order is time, then event ID.
+- For each rule the result gives:
+  - the cases the rule applies to (other cases satisfy it vacuously);
+  - violating and satisfied cases;
+  - the violation rate with a Wilson 95% interval;
+  - up to 50 example cases with a short reason.
+- Segregation of duties counts a case as `unknown`, never as satisfied, when either step has no
+  recorded resource. No resource names are returned.
+
+A rule can also be saved as a signal with `{"kind": "compliance", "rule": {…}}`. That signal
+triggers on violating cases and reports new violations since the previous check, for example
+after appending a newer export. In the dashboard, "Compliance rules" builds the rule list,
+checks it and offers "Save as signal" for each rule.
+
+Six rules over one million events take about 7 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_compliance.py`). These checks describe the
+imported log against rules you entered. They are not verified policy, audit evidence or legal
+compliance, and a violation may reflect missing events.
+
+## Process model discovery
+
+`GET /v1/event-logs/{log_id}/model-discovery` builds a draft process model from the log, in the
+style of an inductive miner (as in PM4Py, ProM or Apromore). It takes the same cohort parameters as
+the other analyses, plus:
+
+- `noise` (0 up to, but not including, 1; default 0.2): leaves out infrequent behaviour. For each
+  activity, directly-follows paths below this share of its strongest path are ignored, with ending
+  the case counted as a path. Steps that fewer than this share of cases skip are treated as
+  always done.
+- `activities` (above 0, up to 1; default 1): keeps only the most frequent activities that cover
+  this share of events.
+
+How it works:
+
+1. The most frequent 5,000 variants are used. Cases with more than 300 events are left out.
+2. The log is split recursively at exclusive choices, sequences, parallel regions and loops found
+   on the filtered directly-follows graph. Each part of the log is projected onto its own
+   activities, so rare deviations are dropped rather than forced into the model.
+3. When no split applies, one of two fallbacks is used and reported in `simplifications`:
+   - an activity that occurs exactly once in every case is put in parallel with the rest;
+   - otherwise the activities are drawn as a loop where they can occur in any order.
+
+The result contains:
+
+- `tree`: the process tree, with case counts on every choice and repeat counts on every loop.
+- `process_model`: a catalog process model with start and end events, decisions with merges,
+  loops and parallel split/join pairs. It is valid against the catalog schema, except that its
+  business `goal` is empty. The reviewer states the goal before saving, and the catalog rejects
+  a save without one.
+- `quality`: how many cases were used and left out, and the share of checked cases the draft
+  replays exactly over the activities shown. Checked cases are those in the 500 most frequent
+  variants with at most 120 events.
+
+Every decision branch has an unconfirmed rule that states only the observed share, for example
+"Observed choice, not a confirmed rule: 54 of 60 cases (90%) continued with Approve". These
+shares are not business conditions.
+
+A catalog parallel region cannot contain decisions or loops, or more than eight branches. When
+discovered concurrency needs more than that, it is drawn in its most common observed order if that
+order still fits at least (1 − `noise`) of the cases. Otherwise it is drawn as an any-order loop.
+Both cases are reported. Drafts larger than the catalog's bounds (40 nodes, 100 transitions,
+40 rules) are refused with a request to lower `activities` or raise `noise`.
+
+In the dashboard, "Discover a process model" has the two sliders, a plain-language outline of the
+draft and "Review as catalog draft". That button opens the draft in the process catalog editor,
+unsaved. After review it can be saved as a revision and exported as BPMN through the catalog.
+
+One million events take about 2 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_model_discovery.py`). A discovered draft
+describes the imported log. It is not a verified workflow or policy, and it never authorizes
+execution.
+
+## Process map with abstraction sliders
+
+`GET /v1/event-logs/{log_id}/process-map?activities=0.8&paths=0.5` (dashboard session only)
+returns a simplified directly-follows map, like Fluxicon Disco or Apromore. It takes the same
+case filters as KPIs.
+
+- **`activities`** (share of events, above 0 and up to 1): keeps the most frequent activities
+  until they cover that share of events, at most 64. Hidden activities' events are removed
+  *before* the map is computed, so cases are reconnected through the remaining steps. An arrow
+  can therefore join steps that had hidden work between them.
+- **`paths`** (share of transitions): keeps the most frequent transitions until they cover that
+  share. It then adds back each visible activity's strongest incoming and outgoing path, so no
+  activity is stranded. Start and end counts are always returned.
+- Each transition carries its count, cases, and the median, mean and 90th-percentile elapsed gap.
+- `coverage` reports the shown and hidden activities, and the event and transition shares
+  shown.
+
+The dashboard's "Process map" section has the two sliders (redrawn as you move them) and a
+"Slowest paths" table. Gaps are elapsed time between recorded events, not measured work or
+verified waiting. Redrawing a one-million-event log takes a few seconds
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_process_map.py`).
+
+## Predicting open cases
+
+`POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,
+optionally, an outcome risk for open cases. This is the local equivalent of ABBYY Timeline, IBM
+Process Mining or Celonis predictive monitoring.
+
+```json
+{"end_activities": ["Close", "Cancel"],
+ "outcome": {"kind": "duration_over", "seconds": 172800},
+ "min_support": 20, "backtest_share": 0.3, "limit": 50}
+```
+
+- A case is open when its latest activity is not one of `end_activities`.
+- Each open case is compared with completed cases that were in the same state: the same latest
+  activity and the same number of events so far, with event counts above 10 grouped together.
+- When fewer than `min_support` distinct completed cases match, the comparison falls back to
+  the same latest activity, then to all completed cases. Cases without enough history are
+  counted in `unsupported_open_cases` and not guessed.
+- Each prediction gives the median remaining time and its 10th–90th percentile range. With an
+  `outcome` (`duration_over` or `contains_activity`), it also gives the probability with a
+  Wilson 95% interval.
+- **Backtest:** the model learns from cases that ended before a cutoff (the most recent
+  `backtest_share` of completed cases are held out) and predicts every step of the held-out cases.
+- The backtest reports the mean absolute error against a naive baseline (the overall median
+  remaining time) and how often the actual remaining time fell inside the 10th–90th percentile
+  range (80% expected). With an outcome it also reports the Brier score against the base rate.
+
+Remaining time is measured to the last recorded event. Predictions are estimates from this log's
+history, not commitments or targets, and no resources are used. One million events take a few
+seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).

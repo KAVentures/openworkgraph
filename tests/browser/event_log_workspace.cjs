@@ -53,6 +53,15 @@ const path=require('node:path');
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
 
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
+   assert.equal(await page.locator('#owgMapDrawing').count(),1);
+   await page.locator('#owgMapActivities').evaluate(node=>{node.value='50';node.dispatchEvent(new Event('input',{bubbles:true}));});
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 2 activities'}).waitFor();
+   assert.equal(await page.locator('#owgMapActivitiesValue').textContent(),'50%');
+   await page.locator('#owgMapActivities').evaluate(node=>{node.value='100';node.dispatchEvent(new Event('input',{bubbles:true}));});
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
+   assert.match(await page.locator('#owgMapSlowest').textContent(),/Slowest paths/);
+
    await page.locator('#owgEventLogCasesBrowse').click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'60 matching cases. Showing 30'}).waitFor();
    await page.getByRole('button',{name:'Next case page',exact:true}).click();
@@ -66,6 +75,30 @@ const path=require('node:path');
    await page.locator('#owgEventLogCasesPath').filter({hasText:'Exact path:'}).waitFor();
    await page.getByRole('button',{name:'Inspect cases containing Fix',exact:true}).click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'20 matching cases.'}).waitFor();
+   // Inductive-miner style discovery into a reviewable catalog draft.
+   await page.locator('#owgDiscoveryRun').click();
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'checked cases'}).waitFor();
+   let outline=await page.locator('#owgDiscoveryOutline').textContent();
+   assert.match(outline,/Receive\nRepeat as needed \(20 repeats\):\n {2}Check\n {2}going round again through:\n {4}Fix\nApprove\nClose/,'rework loop');
+   assert.doesNotMatch(outline,/\(skip\)/,'the 10% that skip approval is below the default noise filter');
+   await page.locator('#owgDiscoveryNoise').fill('0');
+   await page.locator('#owgDiscoveryRun').click();
+   await page.locator('#owgDiscoveryOutline').filter({hasText:'(skip)'}).waitFor();
+   outline=await page.locator('#owgDiscoveryOutline').textContent();
+   assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
+   assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
+   await page.locator('#owgDiscoveryDraft').click();
+   await page.locator('#owgCatalogStatus').filter({hasText:'Unsaved draft discovered from an event log'}).waitFor();
+   const draftRules=await page.locator('#owgCatalogEditor').evaluate(node=>[...node.querySelectorAll('input,textarea')].map(i=>i.value).join('\n'));
+   assert.match(draftRules,/Observed choice, not a confirmed rule: 54 of 60 cases/);
+   const discoveredBPMN=await page.evaluate(async()=>{
+     const logId=document.querySelector('#owgEventLogPick').value;
+     const result=await fetch('/v1/event-logs/'+encodeURIComponent(logId)+'/model-discovery?noise=0',{cache:'no-store'}).then(r=>r.json());
+     const saved=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({title:'Discovered claims',user_confirmed:true,process_model:{...result.process_model,goal:'Decide claims'}})}).then(r=>r.json());
+     return fetch('/v1/process-catalog/export?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:String(saved.revision),format:'bpmn'})).then(r=>r.text());
+   });
+   assert.match(discoveredBPMN,/exclusiveGateway/);
    // Save a reviewed graph through the actual catalog and pin a historical revision.
    const saved=await page.evaluate(async()=>{
      const labels=['Receive','Check','Approve','Close'];
@@ -218,6 +251,28 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSaved').getByRole('button',{name:'Run saved analysis Rework split'}).click();
    const badSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.analysisSpec({level:'cases',dim1:'attribute',attr1:' ',measure1:'count'});return 'accepted';}catch(e){return e.message;}});
    assert.equal(badSpec,'Enter the attribute name.');
+   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictOutcome').selectOption('duration_over');
+   await page.locator('#owgPredictHours').fill('5');await page.locator('#owgPredictRun').click();
+   await page.locator('#owgPredictResults').getByText('open cases;').waitFor();
+   const predictText=await page.locator('#owgPredictResults').textContent();
+   assert.match(predictText,/0 open cases/);assert.match(predictText,/Backtest on \d+ later steps/);assert.match(predictText,/Brier score/);
+   const predictSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:' , ',outcome:''});return 'accepted';}catch(e){return e.message;}});
+   assert.equal(predictSpec,'List the activities that end a case.');
+
+   await page.locator('#owgComplianceTemplate').selectOption('response');
+   await page.locator('#owgComplianceA').selectOption('Receive');await page.locator('#owgComplianceB').selectOption('Approve');
+   await page.locator('#owgComplianceAdd').click();
+   await page.locator('#owgComplianceTemplate').selectOption('segregation_of_duties');
+   await page.locator('#owgComplianceA').selectOption('Check');await page.locator('#owgComplianceB').selectOption('Approve');
+   await page.locator('#owgComplianceAdd').click();
+   await page.locator('#owgComplianceRun').click();
+   await page.locator('#owgComplianceResults table').waitFor();
+   const complianceText=await page.locator('#owgComplianceResults').textContent();
+   assert.match(complianceText,/1 of 2 rules have violations/);
+   assert.match(complianceText,/every Receive is eventually followed by Approve606/,'60 cases apply, 6 skip Approve');
+   assert.doesNotMatch(complianceText,/\bann\b|\bbob\b/);
+   await page.getByRole('button',{name:'Save as signal: every Receive is eventually followed by Approve'}).click();
+   await page.locator('#owgComplianceStatus').filter({hasText:'Saved as a signal.'}).waitFor();
 
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});
@@ -233,6 +288,19 @@ const path=require('node:path');
    const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
    const exported=JSON.parse(await fs.readFile(await download.path(),'utf8'));
    assert.equal(exported.events.length,274);assert.equal(exported.objects.length,60);
+
+   // A newer, overlapping export: one known event is skipped, two new events (one new case) are added.
+   const newer=['case_id;step;time;who',rows[1],'C200;Receive;2024-02-01T08:00:00Z;bob','C200;Check;2024-02-01T09:00:00Z;bot'].join('\n');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'claims-newer.csv',mimeType:'text/csv',buffer:Buffer.from(newer)});
+   await page.locator('#owgEventLogDelimiter').selectOption(';');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
+   await page.locator('#owgEventLogActivity').selectOption('step');
+   assert.equal(await page.locator('#owgEventLogAppend').isDisabled(),true,'append needs explicit local-storage consent');
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogAppend').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Added 2 new events'}).waitFor();
+   assert.match(await page.locator('#owgEventLogStatus').textContent(),/skipped 1 already in the log/);
+   assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/276 events/);
 
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
@@ -436,7 +504,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

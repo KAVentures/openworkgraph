@@ -20,8 +20,12 @@ from starlette.concurrency import run_in_threadpool
 from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
+from . import event_log_compliance as compliance
+from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_process_map as process_maps
+from . import event_log_predictions as predictions
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
@@ -89,6 +93,43 @@ async def import_event_log(
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
 
+@router.post("/v1/event-logs/{log_id}/append")
+async def append_event_log(
+    request: Request, log_id: str,
+    format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
+    case_column: str = Query(default="", max_length=200),
+    activity_column: str = Query(default="", max_length=200),
+    timestamp_column: str = Query(default="", max_length=200),
+    resource_column: str = Query(default="", max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+):
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > workspace.MAX_IMPORT_BYTES:
+                raise HTTPException(413, "event log is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        mapping = {"case_column": case_column, "activity_column": activity_column,
+                   "timestamp_column": timestamp_column, "resource_column": resource_column,
+                   "delimiter": "\t" if delimiter == "t" else delimiter}
+        try:
+            result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
+        except workspace.EventLogWorkspaceError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/appends")
+def event_log_appends(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(workspace.append_history, log_id)
+
+
 @router.post("/v1/event-logs/{log_id}/delete")
 def delete_event_log(request: Request, log_id: str):
     _require_dashboard(request)
@@ -152,6 +193,20 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/process-map")
+def event_log_process_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                          activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                          started_from: str = Query(default="", max_length=64),
+                          started_before: str = Query(default="", max_length=64),
+                          resource: str = Query(default="", max_length=200),
+                          activity: str = Query(default="", max_length=200),
+                          attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/organization")
 def event_log_organization(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            names: str = Query(default="pseudonymous", max_length=20),
@@ -179,6 +234,28 @@ async def _json_body(request: Request, what: str) -> Any:
         return json.loads(body)
     except ValueError:
         raise HTTPException(422, f"{what} is not valid JSON") from None
+
+
+@router.post("/v1/event-logs/{log_id}/compliance")
+async def event_log_compliance(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "compliance rules")
+    try:
+        result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/predictions")
+async def event_log_predictions(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "prediction settings")
+    try:
+        result = await run_in_threadpool(predictions.predict, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/{log_id}/analysis")
@@ -251,6 +328,21 @@ async def event_log_conformance(request: Request, log_id: str,
     _require_dashboard(request)
     model = await _json_body(request, "reference model")
     return _respond(analytics.conformance, log_id, model, case_type, max_variants)
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery")
+def event_log_model_discovery(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              noise: float = Query(default=0.2, ge=0, lt=1),
+                              activities: float = Query(default=1.0, gt=0, le=1),
+                              started_from: str = Query(default="", max_length=64),
+                              started_before: str = Query(default="", max_length=64),
+                              resource: str = Query(default="", max_length=200),
+                              activity: str = Query(default="", max_length=200),
+                              attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/root-cause")
