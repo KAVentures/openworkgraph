@@ -15,13 +15,14 @@ are not source-log activities and need no business-tool mapping in generated
 projects. Import supports exclusive loops when the graph has an unambiguous
 entry and a route to a terminal.
 
-Nested or conditional parallel regions, inclusive gateways, subprocesses, event triggers, message collaborations,
+Conditional parallel regions, inclusive gateways, subprocesses, event triggers, message collaborations,
 external imports, executable extensions, scripts and loop characteristics are
 rejected. Their semantics are not flattened into an incorrect serial graph.
 Tasks with implicit branching are rejected; use an explicit gateway.
-[Parallel regions](PARALLEL_PROCESS_MODELS.md) require disjoint linear branches
-and a complete paired join. Their descriptive exports and structural analysis
-preserve all branches; the current linear agent-project exporter refuses them.
+[Parallel regions](PARALLEL_PROCESS_MODELS.md) require disjoint unconditional
+branch chains, which may contain complete nested paired regions, and a complete
+paired join. Exports, analysis and newly generated SDK projects preserve every
+branch. Customer-authorized SDK tool calls use a serial token-valid schedule.
 A process needs one plain start event, or one structurally unambiguous entry
 when no start event is supplied. All imported nodes must be reachable and able
 to reach a terminal. Multiple processes, ambiguous entries, duplicate IDs or
@@ -68,7 +69,7 @@ reviewed model update. An overall design-review checkbox does not remove it.
 Source diagram geometry is ignored and recomputed by the shared OWG renderer.
 Exported BPMN includes portable geometry and remains `isExecutable=false`.
 The imported exclusive merge is exported as an exclusive gateway, preserving
-its routing role. Full business-policy validation, nested/conditional parallel semantics,
+its routing role. Full business-policy validation, conditional parallel semantics,
 interprocess messages and executable BPMN deployment are outside this increment.
 
 ## Bounds and API

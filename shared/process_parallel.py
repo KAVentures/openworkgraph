@@ -13,57 +13,86 @@ MAX_FIRING_REPLAY_WORK = 100_000
 
 
 def parallel_regions(model):
-    """Require disjoint linear branches between explicit paired gateways.
+    """Require properly nested paired blocks with disjoint unconditional branches.
 
-    Nested, conditional, escaping and partially joined regions are unsupported;
-    none may be silently interpreted as exclusive routing.
+    A branch is a linear chain of activities/routing or complete nested blocks.
+    Branch macros retain each nested split, all its branches and its join. No
+    conditional, crossing, escaping or partially joined region is flattened.
     """
     nodes = {node.id: node for node in model.activities}
     outgoing, incoming = defaultdict(list), defaultdict(list)
+    conditional_sources = set()
     for edge in model.transitions:
         outgoing[edge.source].append(edge.target);incoming[edge.target].append(edge.source)
-        if nodes[edge.source].kind in PARALLEL_KINDS and edge.rule_id:
-            raise ValueError('Parallel gateway transitions cannot have conditional rules')
-    regions, paired, used = [], set(), set()
-    for node in model.activities:
-        if node.kind != 'parallel_split':continue
-        if node.id==model.entry_activity_id and incoming[node.id]:
+        if edge.rule_id:
+            conditional_sources.add(edge.source)
+            if nodes[edge.source].kind in PARALLEL_KINDS:
+                raise ValueError('Parallel gateway transitions cannot have conditional rules')
+    regions, paired, visiting = {}, {}, set()
+
+    def parse(split):
+        if split in visiting:
+            raise ValueError('Parallel regions cannot contain cycles or enter themselves')
+        if split in regions:
+            return regions[split]
+        if split == model.entry_activity_id and incoming[split]:
             raise ValueError('A parallel entry split requires no incoming transition; declare a separate process entry for loops')
-        if len(incoming[node.id]) > 1:
+        if len(incoming[split]) > 1:
             raise ValueError('Parallel splits require a single entry; merge exclusive arrivals explicitly first')
-        if not 2 <= len(outgoing[node.id]) <= 8:
+        if not 2 <= len(outgoing[split]) <= 8:
             raise ValueError('Parallel splits require 2–8 unconditional branches')
+        visiting.add(split)
         paths, joins = [], []
-        for first in outgoing[node.id]:
+        for first in outgoing[split]:
             path=[];cursor=first
             while nodes[cursor].kind != 'parallel_join':
-                if (cursor in path or cursor in used or nodes[cursor].kind not in {'activity','routing'}
-                        or len(outgoing[cursor]) != 1 or len(incoming[cursor]) != 1):
-                    raise ValueError('Parallel branches must be disjoint linear paths without nested or escaping routing')
-                path.append(cursor);cursor=outgoing[cursor][0]
+                if cursor in path or cursor in conditional_sources or len(incoming[cursor]) != 1:
+                    raise ValueError('Parallel branches must be disjoint unconditional paths or complete nested blocks')
+                if nodes[cursor].kind == 'parallel_split':
+                    child = parse(cursor)
+                    block = [cursor] + [step for branch in child['branches'] for step in branch] + [child['join']]
+                    if set(block) & set(path):
+                        raise ValueError('Parallel branches cannot cross or re-enter a nested region')
+                    path.extend(block)
+                    cursor = child['join']
+                elif nodes[cursor].kind in {'activity', 'routing'}:
+                    path.append(cursor)
+                else:
+                    raise ValueError('Parallel branches require unconditional activities, routing or complete paired blocks')
+                if len(outgoing[cursor]) != 1:
+                    raise ValueError('Parallel branches cannot escape or terminate before the paired join')
+                cursor=outgoing[cursor][0]
             paths.append(path);joins.append(cursor)
         if len(set(joins)) != 1 or joins[0] in paired:
             raise ValueError('Every parallel split requires its own common join')
         join=joins[0]
-        ends={path[-1] if path else node.id for path in paths}
+        ends={path[-1] if path else split for path in paths}
         if set(incoming[join]) != ends or len(incoming[join]) != len(paths):
             raise ValueError('Parallel joins must consume exactly the paired branch arrivals')
         flattened=[identifier for path in paths for identifier in path]
         if model.entry_activity_id in flattened:
             raise ValueError('A parallel process cannot enter a branch before its paired split; declare a separate process entry')
-        if len(set(flattened)) != len(flattened):
-            raise ValueError('Parallel branches must not share activities before their join')
-        if any(edge.source in flattened and edge.rule_id for edge in model.transitions):
-            raise ValueError('Parallel branch transitions cannot carry conditional rules')
-        used.update(flattened);paired.add(join)
-        regions.append({'split':node.id,'join':join,'branches':paths})
+        if len(set(flattened)) != len(flattened) or split in flattened or join in flattened:
+            raise ValueError('Parallel branches must not share nodes before their join')
+        paired[join]=split
+        regions[split]={'split':split,'join':join,'branches':paths}
+        visiting.remove(split)
+        return regions[split]
+
+    for node in model.activities:
+        if node.kind == 'parallel_split':parse(node.id)
+    blocks = [{region['split'], region['join']} | {step for path in region['branches'] for step in path}
+              for region in regions.values()]
+    for index, block in enumerate(blocks):
+        if any(block & other and not (block < other or other < block) for other in blocks[index + 1:]):
+            raise ValueError('Parallel regions must be disjoint or completely nested; crossing blocks are unsupported')
     for node in model.activities:
         if node.kind == 'parallel_join' and (node.id not in paired or node.id==model.entry_activity_id or len(outgoing[node.id]) != 1
                                             or node.id in model.terminal_activity_ids):
             raise ValueError('Parallel joins require one paired split and one continuation')
         if node.kind == 'parallel_split' and node.id in model.terminal_activity_ids:
             raise ValueError('Parallel splits cannot be terminal')
-    return regions
+    return [regions[node.id] for node in model.activities if node.kind == 'parallel_split']
 
 
 class _BudgetReached(Exception):pass

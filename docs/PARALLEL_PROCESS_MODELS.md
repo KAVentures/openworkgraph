@@ -9,16 +9,18 @@ work, employee handoffs, active effort or successful outcomes.
 ## Supported design
 
 A split has 2–8 unconditional branches ending at one distinct paired join.
-Each branch is a disjoint linear sequence of activities or single-exit routing
-nodes. One direct split-to-join branch can be empty. The join consumes exactly
+Each branch is a disjoint chain of activities, single-exit routing nodes or
+complete nested paired blocks. One direct split-to-join branch can be empty.
+Every nested block keeps its own distinct join. The join consumes exactly
 those branch arrivals and has one continuation. A split accepts at most one
 incoming transition, and an entry split has none. A join cannot be the process
 entry or terminal. Use an explicit exclusive merge before a split when routes
 converge outside the region.
 
 Multiple regions can appear in sequence. An explicitly declared exclusive loop
-outside a region can repeat it after the previous join completes. Nested forks,
-conditional/decision branches inside regions, shared intermediate activities,
+outside a region can repeat it after the previous join completes. Properly
+nested regions are supported within the existing 40-node model limit.
+Conditional/decision branches inside regions, shared intermediate activities,
 escaping branches, unmatched joins and mixed join/split gateways are rejected.
 Existing serial/exclusive designs and their serialization remain unchanged.
 
@@ -90,8 +92,9 @@ Local project export uses the saved revision. Organization export still requires
 an active process and independent review of that exact revision. Export enables
 no business tool, permission, observation or deployment. Older linear projects
 still refuse a rehashed parallel specification without the new explicit contract;
-export and review a new project instead. Nested and conditional parallel regions
-remain unsupported.
+export and review a new project instead. Older copied validators may also refuse
+nested regions; export a new project rather than changing its pinned spec.
+Conditional parallel regions remain unsupported.
 
 ## Verification
 
@@ -100,6 +103,6 @@ edit costs against an independent finite-language oracle, preserve separate
 repeated-label tasks and empty branches, reject missing/early/escaped joins,
 exercise external loops and serial regions, and check per-path/batch budget
 exhaustion and unknown totals. API and shared-store checks preserve review,
-tenant isolation, descriptive exports and runtime refusal. Browser acceptance
+tenant isolation, descriptive exports and explicit runtime contracts. Browser acceptance
 covers import/review/save, keyboard/mobile use, actual accepted interleaving
 versus a missing branch, exact-revision analysis and unchanged canonical data.
