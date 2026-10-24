@@ -142,7 +142,7 @@ def build_pdd_package(request: Any, process_packet: dict[str, Any] | None = None
         if not isinstance(item, dict) or set(item) - {"step_id", "image_base64", "caption", "masked_regions"}:
             raise PddPackageError("each screenshot has a step_id, image_base64, caption and masked_regions")
         step_id = item.get("step_id")
-        if step_id not in {s["id"] for s in steps}:
+        if not isinstance(step_id, str) or step_id not in {s["id"] for s in steps}:
             raise PddPackageError("a screenshot refers to an unknown step")
         per_step[step_id] = per_step.get(step_id, 0) + 1
         if per_step[step_id] > MAX_PER_STEP:

@@ -105,6 +105,9 @@ with TestClient(app) as client:
  assert client.post(url,json=body,headers={'Authorization':'Bearer '+local_auth.ensure_api_token()}).status_code==403
  bad=client.post(url,json={**body,'process_reference':{**ref,'content_sha256':'0'*64}},headers=h)
  assert bad.status_code==409,bad.text
+ for invalid_id in ([], {}):
+  malformed=client.post(url,json={**body,'screenshots':[{'step_id':invalid_id,'image_base64':'AA'}],'screenshots_reviewed_and_redacted_by_user':True},headers=h)
+  assert malformed.status_code==422,malformed.text
  # A newer revision does not retarget this explicit historical reference.
  newer=_catalog.save(CatalogWrite(workflow_id=ref['workflow_id'],expected_revision=1,title='Revision two',process_model=parallel_model(),user_confirmed=True))
  ok=client.post(url,json=body,headers=h)
