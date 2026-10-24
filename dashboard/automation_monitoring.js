@@ -121,8 +121,17 @@
         table(['Recent minus baseline','Change (95% CI)'],[['Success rate',change(m.drift.success_rate)],['Handoff rate',change(m.drift.handoff_rate)],['Failure rate',change(m.drift.failure_rate)]]));
       if(m.steps.length)parts.push(el('h3','Steps'),table(['Step','Attempts','Failed','Handed to a person','Median time since previous step'],m.steps.slice(0,20).map(s=>[s.step_id+' '+s.activity,Number(s.attempts).toLocaleString(),pct(s.failure_rate),pct(s.handoff_rate),s.median_seconds_since_previous_step===null?'—':Math.round(s.median_seconds_since_previous_step)+' s'])));
       const c=m.design_conformance;
-      if(c)parts.push(el('h3','Compared with the reviewed design'),table(['Runs with steps','Completed every step in order','Mean fitness','Design steps never completed','Unexpected steps'],[[Number(c.runs_with_steps).toLocaleString(),Number(c.runs_completing_every_design_step_in_order).toLocaleString(),c.mean_fitness===null?'—':Number(c.mean_fitness).toFixed(3),c.design_steps_never_completed.map(s=>s.id).join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]));
-      else parts.push(el('div','Attach the starter\'s workflow.spec.json to compare executed steps with the reviewed design.','muted'));
+      if(c&&c.kind==='runtime_graph')parts.push(el('h3','Reported activity structure against the saved graph'),
+        table(['Runs compared / total','Exact structural matches','Mean minimum activity edits among compared runs','Activities never reported completed','Unexpected step IDs'],[[
+          Number(c.runs_compared).toLocaleString()+' / '+Number(c.total_runs).toLocaleString(),Number(c.runs_exact_structural_match).toLocaleString(),
+          c.mean_minimum_activity_edits_among_compared_runs===null?'—':Number(c.mean_minimum_activity_edits_among_compared_runs).toFixed(3),
+          c.activity_ids_never_reported_completed.join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]),
+        el('div','Comparison coverage: '+pct(c.covered_run_share)+'. Not compared: '+Number(c.runs_not_compared).toLocaleString()+
+          ' (no completed steps: '+c.not_compared_by_reason.no_completed_steps+', distinct-path limit: '+c.not_compared_by_reason.distinct_path_limit+
+          ', alignment-state limit: '+c.not_compared_by_reason.alignment_state_limit+'). Missing activities mean missing reported evidence, not proven process deviations. '+
+          'Rules, human work, current catalog approval and business outcomes are not verified.','muted'));
+      else if(c)parts.push(el('h3','Compared with the reviewed design'),table(['Runs with steps','Completed every step in order','Mean fitness','Design steps never completed','Unexpected steps'],[[Number(c.runs_with_steps).toLocaleString(),Number(c.runs_completing_every_design_step_in_order).toLocaleString(),c.mean_fitness===null?'—':Number(c.mean_fitness).toFixed(3),c.design_steps_never_completed.map(s=>s.id).join(', ')||'none',c.unexpected_step_ids.map(s=>s.step_id+' ('+s.runs+')').join(', ')||'none']]));
+      else parts.push(el('div','Attach the starter\'s or SDK project\'s workflow.spec.json to compare reported steps with its design.','muted'));
       if(m.weekly.length)parts.push(el('h3','Runs per week'),table(['Week','Succeeded','Handed to a person','Failed','Cancelled','Running'],m.weekly.slice(-12).map(w=>[w.week,w.succeeded,w.handed_to_human,w.failed,w.cancelled,w.running])));
       results.replaceChildren(...parts);
     }

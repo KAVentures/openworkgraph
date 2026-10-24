@@ -28,6 +28,8 @@ from .event_log_cohorts import median_difference
 
 FORMAT = "openworkgraph.automation-run-report.v1"
 SPEC_FORMAT = "openworkgraph.agent-starter.v1"
+RUNTIME_SPEC_FORMAT = "openworkgraph.agent-runtime-project.v1"
+MAX_GRAPH_PATHS = 128
 RUN_STATUSES = ("succeeded", "failed", "handed_to_human", "cancelled", "running")
 STEP_STATUSES = ("completed", "failed", "skipped", "handed_to_human")
 RUNTIMES = ("n8n", "ai-sdk", "openai-agents", "claude-agent-sdk", "other")
@@ -42,7 +44,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS deployments (
   deployment_id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, runtime VARCHAR NOT NULL,
   created_at TIMESTAMP NOT NULL, design_sha256 VARCHAR, design_steps VARCHAR,
-  reported_spec_sha256 VARCHAR
+  reported_spec_sha256 VARCHAR, design_graph VARCHAR
 );
 CREATE TABLE IF NOT EXISTS runs (
   deployment_id VARCHAR NOT NULL, run_id VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL,
@@ -79,6 +81,7 @@ def _connect():
     conn.execute(_SCHEMA)
     # Older reports did not retain their declared spec hash; leave those unknown.
     conn.execute('ALTER TABLE deployments ADD COLUMN IF NOT EXISTS reported_spec_sha256 VARCHAR')
+    conn.execute('ALTER TABLE deployments ADD COLUMN IF NOT EXISTS design_graph VARCHAR')
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -181,10 +184,31 @@ def spec_digest(spec: Any) -> str:
         raise MonitoringError("workflow specification must be finite JSON") from None
 
 
+def parse_runtime_design(spec: Any) -> dict[str, Any]:
+    """Validate a portable snapshot without asserting current catalog approval."""
+    from shared.process_agent_project import build_runtime_spec
+    try:
+        packet = {key: spec[key] for key in ('workflow_id', 'revision', 'content_sha256', 'process_model',
+                                            'execution_authorization')}
+        packet['format'] = 'openworkgraph.versioned-process-export.v1'
+        if 'organization_catalog_reference' in spec:
+            packet['organization_catalog_reference'] = spec['organization_catalog_reference']
+        normalized = build_runtime_spec(packet)
+        if spec.get('live_business_tools') != [] or any(spec.get(key) != normalized.get(key) for key in
+                ('process_model_sha256', 'control_flow_contract', 'execution_schedule')):
+            raise ValueError()
+        return {'process_model': normalized['process_model'],
+                'process_reference': {key: normalized[key] for key in ('workflow_id', 'revision', 'content_sha256')},
+                'organization_catalog_reference': normalized.get('organization_catalog_reference')}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise MonitoringError('attach an intact, non-authorizing exported SDK workflow specification') from None
+
+
 def parse_design(spec: Any) -> tuple[str, list[dict[str, str]]]:
     if not isinstance(spec, dict) or spec.get("format") != SPEC_FORMAT:
         raise MonitoringError(f"attach the workflow.spec.json from an agent starter ({SPEC_FORMAT})")
-    steps = (spec.get("to_be") or {}).get("steps")
+    proposed = spec.get('to_be')
+    steps = proposed.get('steps') if isinstance(proposed, dict) else None
     if not isinstance(steps, list) or not 0 < len(steps) <= 40 or not all(
             isinstance(s, dict) and isinstance(s.get("id"), str) and isinstance(s.get("activity"), str) for s in steps):
         raise MonitoringError("the workflow spec has no reviewed steps")
@@ -197,14 +221,14 @@ def _check(conn, deployment_id: str) -> dict[str, Any]:
     if not isinstance(deployment_id, str) or not _DEPLOYMENT.fullmatch(deployment_id):
         raise MonitoringError("unknown deployment")
     row = conn.execute("""SELECT deployment_id, name, runtime, created_at, design_sha256, design_steps,
-          (SELECT count(*) FROM runs r WHERE r.deployment_id = d.deployment_id), reported_spec_sha256
+          (SELECT count(*) FROM runs r WHERE r.deployment_id = d.deployment_id), reported_spec_sha256, design_graph
         FROM deployments d WHERE deployment_id = ?""", [deployment_id]).fetchone()
     if row is None:
         raise MonitoringError("unknown deployment")
     return {"deployment_id": row[0], "name": row[1], "runtime": row[2], "created_at": _iso(row[3]),
             "design_attached": row[4] is not None, "design_sha256": row[4],
             "design_steps": json.loads(row[5]) if row[5] else None, "runs": row[6],
-            "reported_spec_sha256": row[7]}
+            "reported_spec_sha256": row[7], "design_graph": json.loads(row[8]) if row[8] else None}
 
 
 def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]]) -> int:
@@ -276,15 +300,16 @@ def import_report(document: Any, deployment_id: str | None = None) -> dict[str, 
 
 
 def attach_design(deployment_id: str, spec: Any) -> dict[str, Any]:
-    digest, steps = parse_design(spec)
+    graph = parse_runtime_design(spec) if isinstance(spec, dict) and spec.get('format') == RUNTIME_SPEC_FORMAT else None
+    digest, steps = (spec_digest(spec), None) if graph else parse_design(spec)
     with _LOCK:
         conn = _connect()
         try:
             info = _check(conn, deployment_id)
             if info['reported_spec_sha256'] and digest != info['reported_spec_sha256']:
                 raise MonitoringError('this design does not match the workflow spec named by retained reports')
-            conn.execute("UPDATE deployments SET design_sha256 = ?, design_steps = ? WHERE deployment_id = ?",
-                         [digest, json.dumps(steps), deployment_id])
+            conn.execute("UPDATE deployments SET design_sha256 = ?, design_steps = ?, design_graph = ? WHERE deployment_id = ?",
+                         [digest, json.dumps(steps) if steps else None, json.dumps(graph) if graph else None, deployment_id])
             return _check(conn, deployment_id)
         finally:
             conn.close()
@@ -315,6 +340,55 @@ def delete_deployment(deployment_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- monitoring
+
+def _graph_comparison(graph: dict, per_run: dict, run_count: int) -> dict[str, Any]:
+    """Bounded alignment of reported completed IDs, retaining the saved graph."""
+    from collections import Counter
+    from shared.process_conformance import compare_paths
+    from shared.process_model import ProcessModel
+
+    model = ProcessModel.model_validate(graph['process_model'])
+    visible = {node.id for node in model.activities if node.kind == 'activity'}
+    # Stable IDs, not potentially repeated display labels, identify observations.
+    matching_model = model.model_copy(update={'activities': [node.model_copy(update={'label': node.id})
+                                                            for node in model.activities]})
+    paths = Counter(tuple(step_id for _, step_id, _, status, _ in items if status == 'completed')
+                    for items in per_run.values())
+    without_completed = run_count - sum(n for path, n in paths.items() if path)
+    paths.pop((), None)
+    selected = sorted(paths, key=lambda path: (-paths[path], path))[:MAX_GRAPH_PATHS]
+    results = compare_paths(selected, matching_model)
+    compared = matched = edits = 0
+    unknown = {'no_completed_steps': without_completed,
+               'distinct_path_limit': sum(n for path, n in paths.items() if path not in results),
+               'alignment_state_limit': 0}
+    for path, result in results.items():
+        count = paths[path]
+        if result.get('comparison_complete', True) is not True:
+            unknown['alignment_state_limit'] += count
+            continue
+        compared += count
+        matched += count * (result['exact_structural_match'] is True)
+        edits += count * result['minimum_activity_edit_count']
+    reached = {step_id for path in paths for step_id in path}
+    unexpected = Counter()
+    for items in per_run.values():
+        unexpected.update({step_id for _, step_id, _, _, _ in items if step_id not in visible})
+    return {'kind': 'runtime_graph', 'process_reference': graph['process_reference'],
+            'runs_with_steps': len(per_run), 'total_runs': run_count, 'runs_compared': compared,
+            'runs_not_compared': run_count - compared, 'runs_exact_structural_match': matched,
+            'covered_run_share': round(compared / run_count, 6) if run_count else None,
+            'mean_minimum_activity_edits_among_compared_runs': round(edits / compared, 6) if compared else None,
+            'not_compared_by_reason': unknown, 'distinct_path_limit': MAX_GRAPH_PATHS,
+            'activity_ids_never_reported_completed': sorted(visible - reached),
+            'human_activity_ids_never_reported_completed': sorted(node.id for node in model.activities
+                if node.kind == 'activity' and node.implementation == 'human' and node.id not in reached),
+            'unexpected_step_ids': [{'step_id': key, 'runs': value} for key, value in
+                                    sorted(unexpected.items(), key=lambda item: (-item[1], item[0]))[:25]],
+            'method': 'minimum insert/delete alignment of reported completed activity IDs against the saved graph',
+            'missing_activity_is_missing_reported_evidence_not_proven_process_deviation': True,
+            'business_rules_evaluated': False, 'policy_compliance_verified': False,
+            'business_outcome_verified': False, 'current_catalog_review_verified': False}
 
 def _rate(successes: int, total: int) -> dict[str, Any] | None:
     if not total:
@@ -415,7 +489,9 @@ def monitor(deployment_id: str, *, recent_days: int = 7, baseline_days: int = 28
     hotspots.sort(key=lambda e: (-(e["failed"] + e["handed_to_human"]), e["step_id"]))
 
     conformance = None
-    if info["design_steps"]:
+    if info.get('design_graph'):
+        conformance = _graph_comparison(info['design_graph'], per_run, len(runs))
+    elif info["design_steps"]:
         design = [s["id"] for s in info["design_steps"]]
         known = set(design)
         fitting, fitness_sum, unexpected, reached = 0, 0.0, {}, set()
