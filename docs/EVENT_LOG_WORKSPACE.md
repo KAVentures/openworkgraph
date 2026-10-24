@@ -89,6 +89,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
+| `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
@@ -620,3 +621,22 @@ colour-blind-checked palette and the rest share "Other". The dashboard section d
 with a hover tooltip (case, activity, time), a legend with event counts and a table view of the
 same cases. One million events take well under a second to sample
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_dotted_chart.py`).
+
+## Process map comparison
+
+`POST /v1/event-logs/{log_id}/map-comparison` with `{"cohorts": [first, second]}` (the same cohort
+objects as the benchmark) compares the two cohorts' directly-follows maps, like Apromore's log
+comparison:
+
+- For every path (A → B) in either cohort: the share of each cohort's cases that contain it, the
+  difference with a 95% interval, and whether it appears in only one cohort. Paths whose interval
+  excludes zero come first.
+- The median gap between A and B in each cohort. For the 25 most frequent paths shared by both
+  cohorts, it also gives a percentile-bootstrap interval on the difference of medians (300 rounds,
+  up to 1,000 sampled gaps per cohort).
+- Both maps (up to 64 activities each), so the dashboard can draw them side by side under
+  "Compare cohorts" → "Compare maps".
+
+When the cohorts share cases, `note` says the intervals overstate certainty. One million events
+compare in about a second (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_map_comparison.py`).
+Differences describe the two cohorts; they are not explained or caused by how the cohorts were chosen.
