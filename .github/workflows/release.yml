@@ -209,7 +209,9 @@ jobs:
               # Windows may report that a child vanished mid-taskkill even
               # though cleanup succeeded. Suppress that race, then verify the
               # service itself is no longer reachable before the next launch.
-              & cmd.exe /d /c "taskkill.exe /PID $rootProcessId /T /F >nul 2>&1" | Out-Null
+              # Start-Process keeps this deliberately ignored cleanup status
+              # out of LASTEXITCODE, which the CI PowerShell wrapper propagates.
+              $cleanup = Start-Process -FilePath $env:ComSpec -ArgumentList "/d", "/c", "taskkill.exe /PID $rootProcessId /T /F >nul 2>&1" -PassThru -Wait -WindowStyle Hidden
               for ($j=0; $j -lt 20; $j++) {
                 try {
                   $health = Invoke-RestMethod "http://127.0.0.1:8787/health" -TimeoutSec 1

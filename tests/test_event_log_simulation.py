@@ -163,3 +163,63 @@ def test_calibration_preserves_small_observed_variant_weights():
     weights={tuple(p['activities']):p['weight'] for p in sim.calibrate(log)['paths']}
     assert weights[('Rare',)]==1/1001
     assert weights[('Common',)]==1000/1001
+
+
+def test_calibration_excludes_long_cases_whole_and_measures_the_selected_population():
+    rows=['case,activity,time,who']
+    for case,hour in [('first',0),('second',1)]:
+        rows += [f'{case},A,2024-01-01T{hour:02}:00:00Z,person',
+                 f'{case},B,2024-01-01T{hour:02}:01:00Z,person']
+    rows += [f'long,A,2024-01-01T10:{n//60:02}:{n%60:02}Z,outsider{n}' for n in range(101)]
+    log=workspace.import_log(BytesIO('\n'.join(rows).encode()),name='complete paths',source_format='csv',mapping=MAPPING)['log_id']
+    cal=sim.calibrate(log)
+    assert cal['paths']==[{'activities':['A','B'],'weight':1}]
+    assert cal['observed_cases']==3 and cal['calibrated_cases']==2
+    assert cal['paths_cover_cases_share']==pytest.approx(2/3,abs=1e-6)
+    assert cal['excluded_case_reasons']=={'path_length_limit':1,'activity_limit':0,'variant_limit':0}
+    assert cal['arrival_rate_basis']=='selected_complete_cases' and cal['arrivals_per_hour']==1
+    assert cal['activities']['A']['resources']==1 and cal['activities']['B']['minutes']==1
+    result=sim.what_if(log,{'cases':10})
+    assert result['calibration']['calibrated_cases']==2
+    assert result['calibration']['excluded_case_reasons']==cal['excluded_case_reasons']
+
+
+def test_calibration_limits_partition_whole_cases_without_truncating_or_missing_parameters(monkeypatch):
+    monkeypatch.setattr(sim,'MAX_PATH_LENGTH',3)
+    monkeypatch.setattr(sim,'MAX_ACTIVITIES',2)
+    paths=[['A','B'],['A','B'],['A','A','B'],['A','C'],['A','A','A','B']]
+    rows=['case,activity,time,who']+[f'c{case},{a},2024-01-01T{case:02}:0{n}:00Z,person'
+        for case,path in enumerate(paths) for n,a in enumerate(path)]
+    log=workspace.import_log(BytesIO('\n'.join(rows).encode()),name='limits',source_format='csv',mapping=MAPPING)['log_id']
+    cal=sim.calibrate(log,max_paths=1)
+    assert cal['calibrated_cases']==2 and cal['observed_cases']==5
+    assert cal['excluded_case_reasons']=={'path_length_limit':1,'activity_limit':1,'variant_limit':1}
+    assert cal['paths']==[{'activities':['A','B'],'weight':1}] and set(cal['activities'])=={'A','B'}
+    both=sim.calibrate(log,max_paths=2)
+    assert both['calibrated_cases']==3
+    assert any(p['activities']==['A','A','B'] for p in both['paths'])
+    assert sum(both['excluded_case_reasons'].values())+both['calibrated_cases']==both['observed_cases']
+
+
+def test_no_supported_complete_cases_cannot_produce_a_baseline(monkeypatch):
+    monkeypatch.setattr(sim,'MAX_PATH_LENGTH',1)
+    log=_log()
+    cal=sim.calibrate(log)
+    assert cal['paths']==[] and cal['activities']=={} and cal['arrivals_per_hour'] is None
+    assert cal['calibrated_cases']==0 and cal['paths_cover_cases_share']==0
+    assert cal['excluded_case_reasons']['path_length_limit']==cal['observed_cases']==60
+    with pytest.raises(workspace.EventLogWorkspaceError,match='no complete case paths'):
+        sim.what_if(log,{'arrivals_per_hour':1,'paths':[{'activities':['A'],'weight':1}],
+                         'activities':{'A':{'minutes':1}},'cases':10})
+
+
+def test_single_selected_case_needs_an_explicit_disclosed_arrival_assumption():
+    rows=['case,activity,time,who','one,A,2024-01-01T00:00:00Z,person']
+    log=workspace.import_log(BytesIO('\n'.join(rows).encode()),name='single case',source_format='csv',mapping=MAPPING)['log_id']
+    with pytest.raises(workspace.EventLogWorkspaceError,match='too few cases'):
+        sim.what_if(log,{'cases':10})
+    result=sim.what_if(log,{'cases':10,'arrivals_per_hour':2})
+    assert result['calibration']['arrivals_per_hour'] is None
+    assert result['baseline_arrival_rate_source']=='user_assumption' and result['baseline_arrivals_per_hour']==2
+    assert result['baseline']['cases_measured']==result['result']['cases_measured']==9
+    assert any("user's explicit rate" in line for line in result['assumptions'])

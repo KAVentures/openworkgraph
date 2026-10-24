@@ -592,6 +592,9 @@
     load.onclick=async()=>{
       try{
         const cal=await getJSON(logPath('simulation/calibration'));
+        const coverage='Calibrated '+cal.calibrated_cases+' of '+cal.observed_cases+' complete cases ('+pct(cal.paths_cover_cases_share)+'). Omitted cases: '+
+          Object.entries(cal.excluded_case_reasons||{}).map(([reason,n])=>reason.replace(/_/g,' ')+': '+n).join(', ')+'. Arrivals and activity parameters use the selected complete cases only.';
+        if(!cal.paths?.length){form.replaceChildren(el('div',coverage+' No complete paths fit the simulation limits.','muted'));return;}
         const arrivals=input('owgEventLogSimArrivals','number');arrivals.min='0';arrivals.step='any';arrivals.value=cal.arrivals_per_hour===null?'':String(cal.arrivals_per_hour);
         const cases=input('owgEventLogSimCases','number');cases.min='10';cases.max='20000';cases.value='2000';
         const dist=select('owgEventLogSimDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
@@ -617,7 +620,7 @@
         const addRowNode=el('div',null,'row');addRowNode.style.alignItems='end';addRowNode.append(field('Activity not in the log',newName),add);
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
         form.replaceChildren(top,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,
-          el('div','Measured times are median gaps before each activity and include waiting. '+(cal.paths_cover_cases_share<1?'Listed paths cover '+pct(cal.paths_cover_cases_share)+' of cases.':''),'muted'),run);
+          el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
             const activities=Object.create(null);
@@ -630,7 +633,7 @@
             const change=r.median_cycle_time_change_seconds;
             out.replaceChildren(
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
-              table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Measured baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
+              table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity,a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
               (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());

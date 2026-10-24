@@ -160,7 +160,7 @@ activity has a pool of interchangeable resources that serve one case at a
 time, first come, first served. **Load measured values** fills in, from the
 log:
 
-- arrivals per hour (cases started, over the span of case starts);
+- arrivals per hour (selected complete cases started, over their span of case starts);
 - routing: the most frequent variants with their shares;
 - minutes per activity: the median gap before the activity, which includes
   any waiting, so the baseline can overstate processing time;
@@ -185,6 +185,23 @@ utilization, offered load and waiting per activity, and flags activities
 whose offered load is 1 or more (the queue grows without bound). The first
 10% of cases are a warm-up and are not measured. At most 20,000 cases, 20
 paths and 100 activities.
+
+Calibration selects complete paths of at most 100 events. It first counts case
+lengths, excludes longer cases whole, then keeps cases whose activities fit
+the 100 most frequent activities among the remaining complete cases. The most
+frequent paths (10 by default) form the calibration population. No path is
+shortened to fit a limit. Counts disclose exclusions by path length, activity
+limit and variant limit; these disjoint counts plus calibrated cases equal all
+observed cases. Routing weights, arrivals, resource counts and median gaps all
+use this same selected population. They do not describe omitted cases.
+Complete means all supplied events for a case key in this import; it does not
+verify that the source captured an entire business case or its completion.
+
+If fewer than two selected cases have distinct start times, enter an arrival
+rate explicitly; both runs use that rate as a disclosed user assumption while
+the measured rate remains unknown. With no supported complete paths, the dashboard reports the
+coverage and no baseline simulation can run. Responses include the population
+counts and limits alongside the calibration, including in what-if results.
 
 The engine is checked against queueing theory in the test suite (M/M/1,
 M/D/1 and M/M/2 waiting times within 8%). It models no calendars, breaks,
