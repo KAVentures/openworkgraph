@@ -96,7 +96,10 @@
     const consent=input('owgEventLogConsent','checkbox');consentLabel.append(consent,document.createTextNode(' Store this log on this computer until I delete it'));
     const importButton=button('Import log');importButton.id='owgEventLogImport';importButton.disabled=true;
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
-    card.append(row,mapping,consentLabel,importButton,statusLine);
+    const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
+    appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
+    const importRow=el('div',null,'row');importRow.append(importButton,appendButton);
+    card.append(row,mapping,consentLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
@@ -111,7 +114,7 @@
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    const refreshImport=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked&&name.value.trim());show(mapping,format.value==='csv');};
+    const refreshImport=()=>{const ready=file.files&&file.files[0]&&consent.checked;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,format.value==='csv');};
     async function readColumns(){
       const chosen=file.files&&file.files[0];if(!chosen||format.value!=='csv')return;
       const sep=delimiter.value==='t'?'\t':delimiter.value;
@@ -139,7 +142,19 @@
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
     };
-    pick.onchange=()=>selectLog(pick.value);
+    appendButton.onclick=async()=>{
+      const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
+      const q=new URLSearchParams({format:format.value});
+      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);q.set('delimiter',delimiter.value);}
+      appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
+      try{
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        consent.checked=false;file.value='';
+        await refreshLogs(target.log_id);
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString():'')+'.');
+      }catch(error){status(error.message);}finally{refreshImport();}
+    };
+    pick.onchange=()=>{selectLog(pick.value);refreshImport();};
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     exportButton.onclick=async()=>{

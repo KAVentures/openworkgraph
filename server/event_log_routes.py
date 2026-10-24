@@ -88,6 +88,43 @@ async def import_event_log(
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
 
+@router.post("/v1/event-logs/{log_id}/append")
+async def append_event_log(
+    request: Request, log_id: str,
+    format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
+    case_column: str = Query(default="", max_length=200),
+    activity_column: str = Query(default="", max_length=200),
+    timestamp_column: str = Query(default="", max_length=200),
+    resource_column: str = Query(default="", max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+):
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > workspace.MAX_IMPORT_BYTES:
+                raise HTTPException(413, "event log is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        mapping = {"case_column": case_column, "activity_column": activity_column,
+                   "timestamp_column": timestamp_column, "resource_column": resource_column,
+                   "delimiter": "\t" if delimiter == "t" else delimiter}
+        try:
+            result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
+        except workspace.EventLogWorkspaceError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/appends")
+def event_log_appends(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(workspace.append_history, log_id)
+
+
 @router.post("/v1/event-logs/{log_id}/delete")
 def delete_event_log(request: Request, log_id: str):
     _require_dashboard(request)

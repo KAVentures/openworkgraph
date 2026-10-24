@@ -344,3 +344,23 @@ many matching cases are new (up to 10,000 remembered case IDs per rule).
 
 A signal never sends messages, calls source systems or runs automations. It describes the
 saved log; it is not a verified business problem, a cause or an instruction to act.
+
+## Appending newer exports
+
+`POST /v1/event-logs/{log_id}/append?format=…` (dashboard session plus the
+`X-OWG-Local-Storage-Confirmed: true` header; same CSV mapping parameters as import) adds a
+newer export to a saved log, so trends, KPIs and signals update without rebuilding the log.
+In the dashboard, choose the file, confirm local storage and press "Add file to selected log".
+
+- An event the log already holds (same activity, time, resource and linked objects) is skipped
+  and counted in `duplicate_events_skipped`, so overlapping exports can be appended repeatedly.
+- Appended events get a batch prefix on their identifier (`a1:`, `a2:`, …). Objects the log
+  already holds keep their attributes; new objects are added.
+- The whole append is one transaction. Malformed files, files without valid events, and
+  identifier conflicts (for example an object ID reused with another type) leave the log
+  unchanged.
+- `GET /v1/event-logs/{log_id}/appends` lists each append's counts. The history is deleted with
+  the log.
+
+Appending one million events, half of them already in the log, takes about 12 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_append.py`).

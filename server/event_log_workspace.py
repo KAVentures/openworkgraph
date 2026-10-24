@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS event_objects (
   log_id VARCHAR NOT NULL, event_id VARCHAR NOT NULL, object_id VARCHAR NOT NULL,
   qualifier VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS log_appends (
+  log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, appended_at TIMESTAMP NOT NULL, source_format VARCHAR NOT NULL,
+  added_events BIGINT NOT NULL, duplicate_events BIGINT NOT NULL, rejected_events BIGINT NOT NULL,
+  added_objects BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS signal_rules (
   log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL, last_evaluated_at TIMESTAMP, last_state VARCHAR
@@ -194,6 +199,31 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     return ReadStats(events=kept, rejected_events=total - kept, objects=objects)
 
 
+def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: Path, source_format: str,
+            mapping: dict[str, Any] | None) -> ReadStats:
+    if source_format == "csv":
+        return _load_csv_fast(conn, log_id, upload, mapping or {})
+    stats = ReadStats()
+    with upload.open("rb") as raw:
+        reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
+        paths = _stage(reader, folder)
+    _load(conn, log_id, paths)
+    return stats
+
+
+def _receive(source: IO[bytes], folder: Path) -> Path:
+    os.chmod(folder, 0o700)
+    upload = folder / "upload"
+    size = 0
+    with upload.open("wb") as handle:
+        while chunk := source.read(1 << 20):
+            size += len(chunk)
+            if size > MAX_IMPORT_BYTES:
+                raise EventLogWorkspaceError("event log is larger than the supported limit")
+            handle.write(chunk)
+    return upload
+
+
 def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None) -> dict[str, Any]:
     """Import an explicitly chosen local file. The source stream is read once."""
     if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
@@ -203,30 +233,14 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
     log_id = "log_" + secrets.token_hex(8)
     with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(DATA_DIR)) as tmp:
         folder = Path(tmp)
-        os.chmod(folder, 0o700)
-        upload = folder / "upload"
-        size = 0
-        with upload.open("wb") as handle:
-            while chunk := source.read(1 << 20):
-                size += len(chunk)
-                if size > MAX_IMPORT_BYTES:
-                    raise EventLogWorkspaceError("event log is larger than the supported limit")
-                handle.write(chunk)
+        upload = _receive(source, folder)
         conn = _connect()
         try:
             if conn.execute("SELECT count(*) FROM logs").fetchone()[0] >= MAX_LOGS:
                 raise EventLogWorkspaceError("delete an event log before importing another")
             conn.execute("BEGIN")
             try:
-                if source_format == "csv":
-                    stats = _load_csv_fast(conn, log_id, upload, mapping or {})
-                else:
-                    stats = ReadStats()
-                    with upload.open("rb") as raw:
-                        reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](
-                            raw, stats=stats)
-                        paths = _stage(reader, folder)
-                    _load(conn, log_id, paths)
+                stats = _ingest(conn, log_id, upload, folder, source_format, mapping)
                 if stats.events == 0:
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -241,6 +255,98 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
             conn.close()
+
+
+_FINGERPRINT = """SELECT e.event_id, e.activity, e.ts, e.resource,
+      list(eo.object_id ORDER BY eo.object_id) FILTER (WHERE eo.object_id IS NOT NULL) AS objs
+    FROM events e LEFT JOIN event_objects eo ON eo.log_id = e.log_id AND eo.event_id = e.event_id
+    WHERE e.log_id = ? {window} GROUP BY e.event_id, e.activity, e.ts, e.resource"""
+
+
+def append_log(log_id: str, source: IO[bytes], *, source_format: str,
+               mapping: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Add a newer export to a saved log, skipping events it already holds.
+
+    An event already in the log (same activity, time, resource and linked
+    objects) is counted as a duplicate, so overlapping exports can be appended
+    repeatedly. Appended events get a batch prefix on their identifier. Objects
+    already in the log keep their attributes. Everything happens in one
+    transaction: a conflict leaves the log unchanged.
+    """
+    if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
+        raise EventLogWorkspaceError("format must be csv, xes, ocel or ocelxml")
+    staging = "stg_" + secrets.token_hex(8)
+    with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(DATA_DIR)) as tmp:
+        folder = Path(tmp)
+        conn = _connect()
+        try:
+            _check_log(conn, log_id)
+            upload = _receive(source, folder)
+            conn.execute("BEGIN")
+            try:
+                stats = _ingest(conn, staging, upload, folder, source_format, mapping)
+                if stats.events == 0:
+                    raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
+                batch = conn.execute("SELECT coalesce(max(batch), 0) + 1 FROM log_appends WHERE log_id = ?",
+                                     [log_id]).fetchone()[0]
+                prefix = f"a{batch}:"
+                low, high = conn.execute("SELECT min(ts), max(ts) FROM events WHERE log_id = ?", [staging]).fetchone()
+                conn.execute(f"CREATE OR REPLACE TEMP TABLE new_fp AS {_FINGERPRINT.format(window='')}", [staging])
+                conn.execute(f"CREATE OR REPLACE TEMP TABLE old_fp AS {_FINGERPRINT.format(window='AND e.ts BETWEEN ? AND ?')}",
+                             [log_id, low, high])
+                conn.execute("""CREATE OR REPLACE TEMP TABLE keep AS SELECT n.event_id FROM new_fp n
+                    WHERE NOT EXISTS (SELECT 1 FROM old_fp o WHERE o.activity = n.activity AND o.ts = n.ts
+                      AND o.resource = n.resource AND o.objs IS NOT DISTINCT FROM n.objs)""")
+                added = conn.execute("SELECT count(*) FROM keep").fetchone()[0]
+                conn.execute("""INSERT INTO events SELECT ?, ? || e.event_id, e.activity, e.ts, e.resource, e.attributes
+                    FROM events e JOIN keep k ON k.event_id = e.event_id WHERE e.log_id = ?""", [log_id, prefix, staging])
+                conn.execute("""INSERT INTO event_objects SELECT ?, ? || l.event_id, l.object_id, l.qualifier
+                    FROM event_objects l JOIN keep k ON k.event_id = l.event_id WHERE l.log_id = ?""",
+                             [log_id, prefix, staging])
+                new_objects = conn.execute("""INSERT INTO objects SELECT ?, s.object_id, s.object_type, s.attributes
+                    FROM objects s WHERE s.log_id = ? AND NOT EXISTS (SELECT 1 FROM objects t WHERE t.log_id = ?
+                      AND t.object_id = s.object_id AND t.object_type = s.object_type)""",
+                                           [log_id, staging, log_id]).fetchone()[0]
+                for table, column in (("events", "event_id"), ("objects", "object_id")):
+                    if conn.execute(f"SELECT 1 FROM {table} WHERE log_id = ? GROUP BY {column} HAVING count(*) > 1 LIMIT 1",
+                                    [log_id]).fetchone():
+                        raise EventLogWorkspaceError(
+                            "appended identifiers conflict with the saved log (for example an object with another type)")
+                for table in ("event_objects", "events", "objects"):
+                    conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
+                duplicates = stats.events - added
+                conn.execute("INSERT INTO log_appends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), source_format,
+                              added, duplicates, stats.rejected_events, new_objects])
+                conn.execute("""UPDATE logs SET events = (SELECT count(*) FROM events WHERE log_id = ?),
+                    objects = (SELECT count(*) FROM objects WHERE log_id = ?), rejected_events = rejected_events + ?
+                    WHERE log_id = ?""", [log_id, log_id, stats.rejected_events, log_id])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
+                    "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
+                    "added_objects": new_objects, "existing_object_attributes_kept": True,
+                    "appended_event_id_prefix": prefix}
+        except EventLogFormatError as exc:
+            raise EventLogWorkspaceError(str(exc)) from None
+        finally:
+            conn.close()
+
+
+def append_history(log_id: str) -> dict[str, Any]:
+    with _LOCK:
+        conn = _connect()
+        try:
+            _check_log(conn, log_id)
+            rows = conn.execute("""SELECT batch, appended_at, source_format, added_events, duplicate_events,
+                rejected_events, added_objects FROM log_appends WHERE log_id = ? ORDER BY batch""", [log_id]).fetchall()
+        finally:
+            conn.close()
+    return {"appends": [{"batch": b, "appended_at": t.isoformat() + "Z", "source_format": f, "added_events": a,
+                         "duplicate_events_skipped": d, "rejected_events": r, "added_objects": o}
+                        for b, t, f, a, d, r, o in rows]}
 
 
 def list_logs() -> dict[str, Any]:
@@ -259,7 +365,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("signal_rules", "event_objects", "events", "objects", "logs"):
+            for table in ("log_appends", "signal_rules", "event_objects", "events", "objects", "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
             return {"deleted": True, "log_id": log_id}
