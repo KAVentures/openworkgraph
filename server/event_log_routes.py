@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
+from . import event_log_compliance as compliance
 from . import event_log_objects as objects
 from . import event_log_organization as organization
 from . import event_log_query as analysis
@@ -216,6 +217,17 @@ async def _json_body(request: Request, what: str) -> Any:
         return json.loads(body)
     except ValueError:
         raise HTTPException(422, f"{what} is not valid JSON") from None
+
+
+@router.post("/v1/event-logs/{log_id}/compliance")
+async def event_log_compliance(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "compliance rules")
+    try:
+        result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/{log_id}/analysis")

@@ -219,6 +219,21 @@ const path=require('node:path');
    const badSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.analysisSpec({level:'cases',dim1:'attribute',attr1:' ',measure1:'count'});return 'accepted';}catch(e){return e.message;}});
    assert.equal(badSpec,'Enter the attribute name.');
 
+   await page.locator('#owgComplianceTemplate').selectOption('response');
+   await page.locator('#owgComplianceA').selectOption('Receive');await page.locator('#owgComplianceB').selectOption('Approve');
+   await page.locator('#owgComplianceAdd').click();
+   await page.locator('#owgComplianceTemplate').selectOption('segregation_of_duties');
+   await page.locator('#owgComplianceA').selectOption('Check');await page.locator('#owgComplianceB').selectOption('Approve');
+   await page.locator('#owgComplianceAdd').click();
+   await page.locator('#owgComplianceRun').click();
+   await page.locator('#owgComplianceResults table').waitFor();
+   const complianceText=await page.locator('#owgComplianceResults').textContent();
+   assert.match(complianceText,/1 of 2 rules have violations/);
+   assert.match(complianceText,/every Receive is eventually followed by Approve606/,'60 cases apply, 6 skip Approve');
+   assert.doesNotMatch(complianceText,/\bann\b|\bbob\b/);
+   await page.getByRole('button',{name:'Save as signal: every Receive is eventually followed by Approve'}).click();
+   await page.locator('#owgComplianceStatus').filter({hasText:'Saved as a signal.'}).waitFor();
+
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
@@ -423,7 +438,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
