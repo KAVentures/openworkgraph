@@ -279,6 +279,21 @@ print(json.dumps(report))
             assert observed['source_reads']==2
             assert observed['source_rule_reads']==(6 if source_invariant else 0)
             assert report['source_rules_matched_at_completion'] is True
+            exported=run('monitor.py','--journal',f"execution-journal/{report['execution_id']}.jsonl",
+                         '--deployment-name','Synthetic SDK implementation','--output','monitoring.json')
+            assert exported.returncode==0,exported.stderr
+            monitoring=json.loads((project/'monitoring.json').read_text())
+            from server.automation_monitoring import parse_report
+            parsed=parse_report(monitoring)
+            assert parsed['runtime']=='openai-agents'
+            assert parsed['runs'][0]['status']=='succeeded'
+            assert parsed['runs'][0]['verified'] is None
+            assert [step[0] for step in parsed['runs'][0]['steps']]==['resolve','readback']
+            assert stats()==observed  # Offline projection cannot re-read or execute anything.
+            overwrite=run('monitor.py','--journal',f"execution-journal/{report['execution_id']}.jsonl",
+                          '--deployment-name','Synthetic SDK implementation','--output','monitoring.json')
+            assert overwrite.returncode!=0
+            assert json.loads((project/'monitoring.json').read_text())==monitoring
             repeated=run(*args,'--intent','intent.json','--execute-approved')
             assert repeated.returncode!=0
             assert stats()==observed
@@ -298,6 +313,7 @@ print(json.dumps(report))
                 assert after['source_rule_reads']==observed['source_rule_reads']
             for private in ('SYNTHETIC_TOOL_SECRET','SYNTHETIC_SOURCE_SECRET','SYNTHETIC_CATALOG_SECRET','SYNTHETIC_PRIVATE_RECORD'):
                 assert private not in execute.stdout+execute.stderr
+                assert private not in json.dumps(monitoring)+exported.stdout+exported.stderr
         finally:
             server.terminate()
             try:server.wait(timeout=10)

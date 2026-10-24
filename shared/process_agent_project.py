@@ -101,7 +101,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     if spec.get('control_flow_contract'):
@@ -298,6 +298,22 @@ def build_runtime_project(packet: dict) -> bytes:
         'state before any newly authorized attempt. Repeated write activities\n'
         'need a workflow-specific implementation. It does not provide distributed\n'
         'exactly-once execution, rollback or a production deployment service.\n\n'
+        '## Import a customer-reported run into OWG monitoring\n\n'
+        'Run `python monitor.py --journal execution-journal/INTENT_DIGEST.jsonl '\
+        '--deployment-name "My implementation" --output new-run-report.json`.\n'
+        'This offline command writes a new local file; import it explicitly in\n'
+        'OWG Automation monitoring. It makes no model, tool or OWG calls. It\n'
+        'requires this exact exported specification and a newly generated journal\n'
+        'with its spec hash. Older journals without that binding are refused.\n'
+        'Only actual tool attempt IDs, statuses, timestamps and the opaque intent\n'
+        'digest are exported. Case inputs, arguments, results, source references\n'
+        'and credentials are excluded; no planned human or gateway steps are invented.\n'
+        'An unfinished journal remains running; uncertain effects need human\n'
+        'reconciliation. Succeeded means the runner reported its declared route\n'
+        'checks matched. Imported source claims do not independently verify a\n'
+        'business outcome: outcome.verified stays unknown. Inspect the report\n'
+        'before importing. The existing design comparison accepts linear starter\n'
+        'designs; this SDK graph must not be flattened into one for attachment.\n\n'
         'Source checks use only exact customer-selected observed owg:r: references\n'
         'and the existing separately enabled local OWG source adapters. A fresh\n'
         'matching operational receipt does not establish case association, agent\n'

@@ -63,7 +63,23 @@ that value unknown rather than reconstructing it from an attached design.
 - **n8n**: add a Code node at the end of the workflow (and in the error
   workflow) that emits one run object built from `$execution` and the
   executed nodes; collect them with your usual export.
-- **Agents SDK**: write a run object from your run result and tool-call trace.
+- **Generated OpenAI Agents SDK project**: after a separately authorized
+  customer execution, run `python monitor.py --journal
+  execution-journal/INTENT_DIGEST.jsonl --deployment-name "My implementation"
+  --output new-run-report.json` in that project. Import the resulting file here.
+  The offline command makes no provider, tool or OWG calls and never overwrites
+  an existing output. The journal must include the exact specification digest;
+  older journals without it cannot be retroactively attributed to a spec.
+  Only actual tool attempt IDs, timestamps, statuses and the opaque intent digest
+  are exported. Case data, arguments, results, credentials and source references
+  are excluded. Planned human steps and routing nodes are not invented.
+  An unfinished journal remains running; uncertain effects require reconciliation.
+  A reported success means the runner's declared route checks matched, not that
+  the business objective was achieved. `outcome.verified` remains unknown, even
+  if the journal reports successful source checks. These SDK process graphs are
+  not the linear starter format accepted by the design attachment screen.
+- **Other Agents SDK implementations**: write a run object from your run result
+  and tool-call trace.
 
 ## What you see
 

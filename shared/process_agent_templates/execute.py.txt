@@ -488,7 +488,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         def record(phase, **details):
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
-        record('started', execution_id=execution_id, process_reference=reference(spec))
+        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec))
         async def check_catalog():
             if not spec.get('organization_catalog_reference'):
                 return

@@ -1,0 +1,165 @@
+"""Offline projection of one exact-spec customer journal into an OWG run report.
+
+Imported journals remain customer reports, including their source-check claims.
+This module never connects to OWG, a model provider or a business tool.
+"""
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+
+from execute import ImplementationError, _pairs, _constant, digest, load_object, reference
+from runtime import validate_spec
+
+MAX_BYTES = 8 * 1024 * 1024
+MAX_RECORDS = 10000
+_PHASES = {
+    'started', 'catalog_checked', 'source_rule_checked', 'stopped_before_tools',
+    'source_preflight', 'precondition_pending', 'precondition_not_established',
+    'attempt_pending', 'tool_returned_expected_structure', 'tool_reported_failure',
+    'uncertain', 'implementation_contract_or_intent_not_established',
+    'transport_or_tool_inventory_unavailable', 'source_rules_not_established_at_completion',
+    'source_checked', 'finished',
+}
+_STOPS = {'implementation_contract_or_intent_not_established',
+          'transport_or_tool_inventory_unavailable', 'source_rules_not_established_at_completion',
+          'precondition_not_established'}
+
+
+def _fail():
+    raise ImplementationError('Select a complete, bounded journal for this exact exported specification')
+
+
+def _stamp(value):
+    if not isinstance(value, str) or len(value) > 64:
+        _fail()
+    try:
+        stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            _fail()
+        return stamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        _fail()
+
+
+def read_journal(path):
+    with Path(path).open('rb') as stream:
+        content = stream.read(MAX_BYTES + 1)
+    if not content or len(content) > MAX_BYTES or not content.endswith(b'\n'):
+        _fail()  # A torn trailing record must not become a completed run.
+    lines = content.splitlines()
+    if not 1 <= len(lines) <= MAX_RECORDS:
+        _fail()
+    try:
+        return [json.loads(line, object_pairs_hook=_pairs, parse_constant=_constant) for line in lines]
+    except (ValueError, UnicodeError, RecursionError):
+        _fail()
+
+
+def report(spec, records, deployment_name):
+    validate_spec(spec)
+    if (not isinstance(deployment_name, str) or not 1 <= len(deployment_name.strip()) <= 120
+            or any(ord(c) < 32 for c in deployment_name)):
+        raise ImplementationError('Use a short deployment label without control characters')
+    if not isinstance(records, list) or not 1 <= len(records) <= MAX_RECORDS:
+        _fail()
+    first = records[0]
+    if (not isinstance(first, dict) or first.get('phase') != 'started'
+            or first.get('spec_sha256') != digest(spec)
+            or first.get('process_reference') != reference(spec)
+            or not isinstance(first.get('execution_id'), str)
+            or not re.fullmatch(r'[0-9a-f]{64}', first['execution_id'])):
+        _fail()
+    nodes = {node['id'] for node in spec['process_model']['activities']
+             if node['kind'] == 'activity' and node.get('implementation') != 'human'}
+    started = previous = _stamp(first.get('at'))
+    steps, pending, ended, blocked = [], None, None, False
+    attempts = 0
+    for index, row in enumerate(records[1:], 1):
+        if (not isinstance(row, dict) or not isinstance(row.get('phase'), str)
+                or row['phase'] not in _PHASES or row['phase'] == 'started' or ended):
+            _fail()
+        stamp = _stamp(row.get('at'))
+        if stamp < previous:
+            _fail()
+        previous = stamp
+        phase = row['phase']
+        if phase == 'attempt_pending':
+            if (blocked or pending is not None or not isinstance(row.get('activity_id'), str) or row['activity_id'] not in nodes
+                    or type(row.get('attempt')) is not int or row['attempt'] != attempts + 1
+                    or attempts >= 80):
+                _fail()
+            attempts += 1
+            pending = (row['activity_id'], row['attempt'], stamp)
+        elif phase in {'tool_returned_expected_structure', 'tool_reported_failure', 'uncertain'}:
+            if (pending is None or type(row.get('attempt')) is not int
+                    or (row.get('activity_id'), row.get('attempt')) != pending[:2]):
+                _fail()
+            status = {'tool_returned_expected_structure': 'completed', 'tool_reported_failure': 'failed',
+                      'uncertain': 'handed_to_human'}[phase]
+            steps.append({'step_id': pending[0], 'activity': pending[0], 'status': status, 'at': stamp.isoformat()})
+            blocked = blocked or status != 'completed'
+            pending = None
+        elif phase == 'precondition_not_established':
+            if (not isinstance(row.get('activity_id'), str) or row['activity_id'] not in nodes
+                    or type(row.get('attempt')) is not int or row['attempt'] != attempts + 1 or pending):
+                _fail()
+        if phase in _STOPS or (phase == 'source_rule_checked' and row.get('status') != 'matched'):
+            blocked = True
+        if phase == 'catalog_checked' and row.get('current_independent_design_review') is not True:
+            blocked = True
+        if phase == 'stopped_before_tools':
+            if attempts or steps or pending:
+                _fail()
+            ended = ('handed_to_human', stamp)
+        elif phase == 'finished':
+            if any(type(row.get(key)) is not bool for key in
+                   ('declared_route_checks_satisfied', 'all_tool_results_matched', 'all_declared_operations_verified')):
+                _fail()
+            succeeded = row['declared_route_checks_satisfied']
+            if (row['all_tool_results_matched'] and (pending or any(s['status'] != 'completed' for s in steps))
+                    or succeeded and (blocked or not row['all_tool_results_matched'])):
+                _fail()
+            # An explicit uncertain attempt always needs reconciliation, even if
+            # another tool reported failure. No result means no invented failure.
+            uncertain = pending or any(s['status'] == 'handed_to_human' for s in steps)
+            status = 'succeeded' if succeeded else ('failed' if not uncertain and any(
+                s['status'] == 'failed' for s in steps) else 'handed_to_human')
+            ended = (status, stamp)
+        if ended and index != len(records) - 1:
+            _fail()
+    if pending:
+        steps.append({'step_id': pending[0], 'activity': pending[0], 'status': 'handed_to_human',
+                      'at': pending[2].isoformat()})
+    if len(steps) > 100:
+        _fail()
+    return {'format': 'openworkgraph.automation-run-report.v1',
+            'deployment': {'name': deployment_name.strip(), 'runtime': 'openai-agents',
+                           'workflow_spec_sha256': digest(spec)},
+            'runs': [{'run_id': first['execution_id'], 'started_at': started.isoformat(),
+                      'finished_at': ended[1].isoformat() if ended else None,
+                      'status': ended[0] if ended else 'running', 'steps': steps,
+                      'outcome': {'verified': None, 'source': 'customer_execution_journal'}}]}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--journal', required=True)
+    parser.add_argument('--deployment-name', required=True)
+    parser.add_argument('--output', required=True, help='New local JSON file; existing files are never overwritten')
+    args = parser.parse_args()
+    spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=512 * 1024)
+    document = report(spec, read_journal(args.journal), args.deployment_name)
+    # Exclusive creation also protects the input journal/spec from accidental overwrite.
+    descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+        stream.write(json.dumps(document, indent=2, allow_nan=False) + '\n')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ImplementationError, OSError, ValueError, KeyError, TypeError, AttributeError, ImportError, RecursionError):
+        raise SystemExit('Report not exported. Select a valid exact-spec journal and a new local output file.') from None
