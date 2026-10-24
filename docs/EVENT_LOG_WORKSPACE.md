@@ -412,6 +412,46 @@ In the dashboard, choose the file, confirm local storage and press "Add file to 
 Appending one million events, half of them already in the log, takes about 12 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_append.py`).
 
+## Compliance rules
+
+`POST /v1/event-logs/{log_id}/compliance` (dashboard session only) checks cases against up to 20
+declarative rules. These are Declare-style templates, as in ProM Declare, ABBYY Timeline or
+Signavio process adherence:
+
+| Template | Holds when | Applies to |
+|---|---|---|
+| `response` (`a`, `b`) | every A is eventually followed by B | cases containing A |
+| `precedence` (`a`, `b`) | every B has an earlier A | cases containing B |
+| `response_within` (`a`, `b`, `seconds`) | every A is followed by B within the limit | cases containing A |
+| `existence` (`a`, `min`, `max`) | A occurs between min and max times | every case |
+| `not_coexistence` (`a`, `b`) | A and B never occur in the same case | cases containing A or B |
+| `segregation_of_duties` (`a`, `b`) | no single resource performs both (four eyes) | cases containing both |
+
+```json
+{"rules": [{"template": "segregation_of_duties", "a": "Create PO", "b": "Approve PO"},
+           {"template": "response_within", "a": "Create PO", "b": "Approve PO", "seconds": 7200}],
+ "cohort": {"started_from": "2024-01-01T00:00:00Z"}}
+```
+
+- Event order is time, then event ID.
+- For each rule the result gives:
+  - the cases the rule applies to (other cases satisfy it vacuously);
+  - violating and satisfied cases;
+  - the violation rate with a Wilson 95% interval;
+  - up to 50 example cases with a short reason.
+- Segregation of duties counts a case as `unknown`, never as satisfied, when either step has no
+  recorded resource. No resource names are returned.
+
+A rule can also be saved as a signal with `{"kind": "compliance", "rule": {…}}`. That signal
+triggers on violating cases and reports new violations since the previous check, for example
+after appending a newer export. In the dashboard, "Compliance rules" builds the rule list,
+checks it and offers "Save as signal" for each rule.
+
+Six rules over one million events take about 7 seconds locally
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_compliance.py`). These checks describe the
+imported log against rules you entered. They are not verified policy, audit evidence or legal
+compliance, and a violation may reflect missing events.
+
 ## Predicting open cases
 
 `POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,
