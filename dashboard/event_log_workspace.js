@@ -215,6 +215,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
+    results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     status('');
   }
 
@@ -733,5 +734,85 @@
   }
 
   window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  // Builds a signal rule body from the form values; throws a readable error.
+  function signalRule(values){
+    const name=String(values.name||'').trim();if(!name)throw new Error('Name the signal.');
+    const hours=Number(values.hours);
+    if(values.kind==='kpi'){
+      const rate=values.metric.endsWith('_rate');const raw=Number(values.threshold);
+      if(!(raw>=0))throw new Error('Enter a threshold.');
+      const when={kind:'kpi',metric:values.metric,operator:values.operator,threshold:rate?raw/100:values.metric==='case_count'?raw:Math.round(raw*3600)};
+      if(values.metric==='sla_breach_rate'){if(!(hours>0))throw new Error('Enter the SLA in hours.');when.sla_seconds=Math.round(hours*3600);}
+      return {name,when};
+    }
+    const when={kind:'cases',condition:values.condition};
+    if(['duration_over','open_longer_than'].includes(values.condition)){if(!(hours>0))throw new Error('Enter the number of hours.');when.seconds=Math.round(hours*3600);}
+    if(['contains_activity','lacks_activity'].includes(values.condition))when.activity=values.activity;
+    if(values.condition==='open_longer_than'){when.end_activities=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);if(!when.end_activities.length)throw new Error('List the activities that end a case.');}
+    return {name,when};
+  }
+
+  function signalSection(activityNames){
+    const box=section('Signals');box.id='owgEventLogSignals';
+    box.appendChild(el('div','Save conditions to check this log against, such as a slow median or cases left open. Checking shows which signals hold now and which cases are new since the last check. Signals never send messages or change anything.','muted'));
+    const name=input('owgSignalName','text','Signal name');name.maxLength=120;
+    const kind=select('owgSignalKind',[['cases','Cases that…'],['kpi','A KPI that…']]);
+    const condition=select('owgSignalCondition',[['open_longer_than','are open longer than'],['duration_over','take longer than'],['lacks_activity','never reach activity'],['contains_activity','contain activity'],['has_rework','have rework']]);
+    const metric=select('owgSignalMetric',[['median_throughput_seconds','Median case time (hours)'],['p90_throughput_seconds','90th percentile case time (hours)'],['rework_rate','Share of cases with rework (%)'],['sla_breach_rate','Share of cases over an SLA (%)'],['case_count','Number of cases']]);
+    const operator=select('owgSignalOperator',[['above','is above'],['below','is below']]);
+    const threshold=input('owgSignalThreshold','number');threshold.min='0';threshold.step='any';
+    const hours=input('owgSignalHours','number');hours.min='0';hours.step='any';
+    const activity=select('owgSignalActivity',activityNames.slice(0,500).map(a=>[a,a]));
+    const ends=input('owgSignalEnds','text','Close, Cancel');
+    const add=button('Save signal','secondary');add.id='owgSignalAdd';
+    const evaluate=button('Check signals');evaluate.id='owgSignalEvaluate';
+    const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activities that end a case',ends)};
+    const sync=()=>{const k=kind.value==='kpi';show(fields.condition,!k);show(fields.metric,k);show(fields.operator,k);show(fields.threshold,k);
+      show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
+      show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
+    kind.onchange=condition.onchange=metric.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),field('Watch',kind),...Object.values(fields),add);
+    const rules=el('div');rules.id='owgSignalRules';
+    const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
+    const out=el('div');out.id='owgSignalResults';
+    box.append(row,message,rules,evaluate,out);
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
+    const generation=state.generation;
+    async function refresh(){
+      const r=await getJSON(base());if(generation!==state.generation)return;
+      rules.replaceChildren(r.rules.length?table(['Signal','Rule',''],r.rules.map(rule=>{
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete signal '+rule.name);
+        del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(rule.rule_id)+'/delete',{method:'POST'});message.textContent='Signal deleted.';await refresh();}catch(error){message.textContent=error.message;}};
+        const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold:w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
+        return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
+      evaluate.disabled=!r.rules.length;
+    }
+    add.onclick=async()=>{
+      try{
+        const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:ends.value};
+        const body=signalRule(values);if(state.caseType)body.case_type=state.caseType;
+        await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        message.textContent='Signal saved.';name.value='';await refresh();
+      }catch(error){message.textContent=error.message;}
+    };
+    evaluate.onclick=async()=>{
+      try{
+        const r=await (await api(base()+'/evaluate',{method:'POST'})).json();if(generation!==state.generation)return;
+        out.replaceChildren(
+          el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
+          table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
+            sig.name,sig.triggered?'yes':'no',
+            sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
+            sig.when.kind==='kpi'?(sig.changed_since_last_evaluation?'changed':'—'):(sig.new_cases_since_last_evaluation===null?'first check':Number(sig.new_cases_since_last_evaluation).toLocaleString()),
+            (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id).join(', ')])),
+          el('div',r.interpretation,'muted'));
+        await refresh();
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    refresh().catch(error=>{message.textContent=error.message;});
+    return box;
+  }
+
+  window.__owgEventLogModel={signalRule,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
