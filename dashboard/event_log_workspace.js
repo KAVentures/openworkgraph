@@ -473,7 +473,16 @@
     const reasons={precision_work_budget:'Precision replay reached its work limit.',no_exact_matching_cases:'No exact matching cases are available for precision.',prefix_replay_mismatch:'Precision replay did not establish the complete prefixes.',no_enabled_visible_activities:'There are no visible enabled activities to measure.'};
     const summary=table(['Structural fitness','Full-population fitness range','Analyzed cases fitness','Visible-label precision'],[[fitness.score===null?'Unknown':pct(fitness.score),fitness.lower_bound===null?'—':pct(fitness.lower_bound)+' – '+pct(fitness.upper_bound),pct(fitness.analyzed_score),precision.score===null?'Unknown':pct(precision.score)]]);
     summary.id='owgEventLogGraphMetrics';
-    return [summary,el('div','Fitness normalizes activity-edit cost. Unknown cases give a range. Precision uses '+precision.matching_cases+' exact matching cases ('+pct(precision.case_population_coverage)+' of selected cases) and measures unused next activity labels, not individual node identity or business rules. '+(reasons[precision.unknown_reason]||''),'muted')];
+    const parts=[summary,el('div','Fitness normalizes activity-edit cost. Unknown cases give a range. Precision uses '+precision.matching_cases+' exact matching cases ('+pct(precision.case_population_coverage)+' of selected cases) and measures unused next activity labels, not individual node identity or business rules. '+(reasons[precision.unknown_reason]||''),'muted')];
+    const replay=result.token_replay;
+    if(replay&&replay.replayed_cases){
+      const top=counts=>Object.entries(counts||{}).slice(0,3).map(([label,n])=>label+' ('+Number(n).toLocaleString()+')').join(', ')||'—';
+      const tokens=table(['Token-replay fitness','Fitting cases','Missing tokens (activity ran without being enabled)','Remaining tokens (expected but not done)'],
+        [[pct(replay.token_fitness),Number(replay.fitting_cases).toLocaleString()+' of '+Number(replay.replayed_cases).toLocaleString(),top(replay.missing_tokens_by_activity),top(replay.remaining_tokens_by_activity)]]);
+      tokens.id='owgEventLogGraphTokenReplay';
+      parts.push(tokens,el('div','Classic token replay counts where cases depart from the graph. It is greedy, so it can count more deviations than the minimum-edit alignment above. '+(replay.replay_truncated?'Only '+pct(replay.case_population_coverage)+' of cases were replayed within the work limit.':''),'muted'));
+    }
+    return parts;
   }
 
   function savedGraphSection(activityNames,inspection){
