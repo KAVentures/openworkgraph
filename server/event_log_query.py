@@ -135,7 +135,8 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
                   SELECT case_id, min(ts) AS started, max(ts) AS ended,
                     date_diff('second', min(ts), max(ts)) AS duration, count(*) AS events,
                     count(DISTINCT activity) AS distinct_activities, count(*) > count(DISTINCT activity) AS rework,
-                    arg_min(activity, ts) AS first_activity, arg_max(activity, ts) AS last_activity,
+                    arg_min(activity, struct_pack(at := ts, event_order := event_id)) AS first_activity,
+                    arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
                     string_agg(activity, ' > ' ORDER BY ts, event_id) AS variant
                   FROM ce GROUP BY case_id) c
                 LEFT JOIN (SELECT object_id, any_value(attributes) AS attributes FROM objects

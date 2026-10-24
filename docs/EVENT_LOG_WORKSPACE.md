@@ -341,6 +341,7 @@ Rule kinds:
 cases with recent activity. It does not measure idle time since the last event.
 A case matches only if its last reported activity is outside the selected ending
 activities; tied timestamps follow retained event-ID order, as in the timeline.
+First/last-activity analyses use that same order.
 This describes supplied log order and the retained observation window, not an
 independently verified business opening, closure or reopening time. Evidence
 shows the first/last event, age since the first event and idle time separately.

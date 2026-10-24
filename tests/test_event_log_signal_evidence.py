@@ -47,6 +47,18 @@ def test_open_age_threshold_uses_elapsed_time_including_fractional_seconds():
     assert result['evidence_cases'][0]['age_since_first_event_seconds']==48*3600+0.5
 
 
+def test_tied_activity_order_agrees_between_signals_and_typed_analyses():
+    from server import event_log_query as query
+    log=_log({'closed':[('ClosedStart',0),('Check',99),('Close',99)],
+              'open':[('OpenStart',0),('Close',99),('Check',99)],'clock':[('Receive',100)]})
+    open_rule(log)
+    assert [row['case_id'] for row in signals.evaluate(log)['signals'][0]['evidence_cases']]==['open']
+    for activity,last in [('ClosedStart','Close'),('OpenStart','Check')]:
+        result=query.run(log,{'level':'cases','dimensions':['first_activity','last_activity'],
+                             'cohort':{'activity':activity},'measures':[{'fn':'count'}]})
+        assert result['rows']==[[activity,last,1]]
+
+
 def test_sample_rank_changes_do_not_report_previously_unretained_cases_as_new(monkeypatch):
     monkeypatch.setattr(signals,'MAX_REMEMBERED_CASES',2)
     log=_log({'A':[('Start',0),('Match',3)],'B':[('Start',0),('Match',2)],'C':[('Start',0),('Match',1)]})
