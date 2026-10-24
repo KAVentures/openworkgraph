@@ -1,7 +1,7 @@
 """Bounded descriptive BPMN import. XML is data, never an execution policy.
 
-Support serial/exclusive choice and explicit disjoint linear parallel regions.
-Nested parallel, inclusive, subprocess and event-driven semantics must not be
+Support serial/exclusive choice and properly nested paired parallel regions.
+Conditional parallel, inclusive, subprocess and event-driven semantics must not be
 flattened into an incorrect sequential model. No XML resolution, provider calls or persistence.
 """
 from __future__ import annotations

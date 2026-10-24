@@ -87,11 +87,68 @@ assert json.loads(z.read('tool-bindings.example.json'))['enabled'] is False
   await page.setViewportSize({width:1280,height:900});page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Delete all revisions',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Process revisions deleted locally.'}).waitFor();
+  const nestedXml=xml.replace('<task id="a2" name="A2"/>',
+    '<parallelGateway id="innerFork" name="Inner checks" gatewayDirection="Diverging"/>'+
+    '<task id="c1" name="C1"/><task id="d1" name="D1"/>'+
+    '<parallelGateway id="innerJoin" name="Inner complete" gatewayDirection="Converging"/><task id="a2" name="A2"/>')
+    .replace('<sequenceFlow id="f3" sourceRef="a1" targetRef="a2"/>',
+      [['a1','innerFork'],['innerFork','c1'],['innerFork','d1'],['c1','innerJoin'],['d1','innerJoin'],['innerJoin','a2']]
+        .map(([source,target],i)=>'<sequenceFlow id="nested'+i+'" sourceRef="'+source+'" targetRef="'+target+'"/>').join(''));
+  await page.getByLabel('Choose BPMN process design',{exact:true}).setInputFiles({name:'nested.bpmn',mimeType:'application/bpmn+xml',buffer:Buffer.from(nestedXml)});
+  const nestedPreview=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-catalog/import-bpmn');
+  await page.getByRole('button',{name:'Preview selected BPMN',exact:true}).click();
+  const nestedDraft=await(await nestedPreview).json();
+  assert.equal(nestedDraft.process_model.activities.filter(n=>n.kind.startsWith('parallel_')).length,4);
+  await page.getByRole('button',{name:'Open imported draft in editor',exact:true}).click();
+  await editor.getByLabel('Business goal',{exact:true}).fill('Complete all inner and outer checks');
+  await page.locator('#owgCatalogReviewed').check();
+  const nestedSaving=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/v1/process-catalog');
+  await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  const nestedSaved=await(await nestedSaving).json();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 1.'}).waitFor();
+  const innerIndex=nestedDraft.process_model.activities.findIndex(n=>n.kind==='parallel_split'&&n.label==='Inner checks');
+  assert(innerIndex>=0);
+  await editor.getByRole('button',{name:'Select activity '+nestedDraft.process_model.activities[innerIndex].id,exact:true}).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'owgCatalogActivity'+innerIndex);
+  const [nestedBpmn]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Export saved BPMN',exact:true}).click()]);
+  const nestedBpmnPath=path.join(scratch,'nested.bpmn');await nestedBpmn.saveAs(nestedBpmnPath);
+  assert.equal(((await fs.readFile(nestedBpmnPath,'utf8')).match(/<bpmn:parallelGateway/g)||[]).length,4);
+  const [nestedDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).click()]);
+  const nestedZip=path.join(scratch,'nested-sdk.zip');await nestedDownload.saveAs(nestedZip);
+  const nestedCheck=spawnSync(python,['-c',`import json,sys,zipfile
+z=zipfile.ZipFile(sys.argv[1]);s=json.loads(z.read('workflow.spec.json'))
+assert len([n for n in s['process_model']['activities'] if n['kind'].startswith('parallel_')])==4
+assert not s['execution_authorization'] and not json.loads(z.read('tool-bindings.example.json'))['enabled']
+z.extractall(sys.argv[2]);sys.path.insert(0,sys.argv[2])
+from runtime import check_plan
+for c in json.loads(z.read('synthetic-cases.json'))['cases']:
+ assert check_plan(dict(revision=s['revision'],content_sha256=s['content_sha256'],activity_ids=c['activity_ids']),s)['all_produced_branch_tokens_consumed']
+`,nestedZip,path.join(scratch,'nested-sdk')],{encoding:'utf8'});
+  assert.equal(nestedCheck.status,0,nestedCheck.stderr);
+  await page.getByRole('button',{name:'Compare next CSV with this saved revision',exact:true}).click();
+  const nestedRows=['case_id,activity,timestamp'];
+  for(const [id,activities] of [['PRIVATE_NESTED',['B1','A1','D1','B2','C1','A2','Close']],['PRIVATE_INNER_MISSING',['A1','C1','A2','B1','B2','Close']]])
+    activities.forEach((activity,i)=>nestedRows.push(id+','+activity+',2026-10-20T00:0'+i+':00Z'));
+  await page.getByLabel('Choose business event log CSV',{exact:true}).setInputFiles({name:'nested.csv',mimeType:'text/csv',buffer:Buffer.from(nestedRows.join('\n'))});
+  const nestedAnalysis=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-mining/preview');
+  await page.getByRole('button',{name:'Analyze selected CSV',exact:true}).click();
+  const nestedCompared=await(await nestedAnalysis).json();
+  assert.equal(nestedCompared.conformance.exact_structural_match_cases,1);
+  assert.equal(nestedCompared.conformance.structurally_deviating_cases,1);
+  assert.equal(nestedCompared.conformance.reference.content_sha256,nestedSaved.content_sha256);
+  assert(!JSON.stringify(nestedCompared).includes('PRIVATE_'));
+  await page.getByText('1 exact path matches · 1 differing cases',{exact:false}).waitFor();
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+  await page.setViewportSize({width:1280,height:900});page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Delete all revisions',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Process revisions deleted locally.'}).waitFor();
   const disk=spawnSync(python,['-c',`import sqlite3,sys
 c=sqlite3.connect(sys.argv[1]);assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 ` ,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(disk.status,0,disk.stderr);assert.deepEqual(errors,[]);
-  console.log('Parallel browser acceptance passed: reviewed paired gateways, keyboard/mobile, SDK token-schedule archive with disabled tool bindings, accepted interleaving versus missing branch, exact revision and no canonical capture.');
+  console.log('Parallel browser acceptance passed: reviewed flat and nested paired gateways, keyboard/mobile, BPMN and SDK token-schedule archives with disabled bindings, accepted interleavings versus missing inner/outer branches, exact revisions and no canonical capture.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
