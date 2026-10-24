@@ -94,6 +94,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
 | `GET /v1/event-logs/{log_id}/waiting-time?lifecycle_attribute=&end_attribute=` | Processing and waiting time per activity from lifecycle or end-time attributes (below). |
+| `GET /v1/event-logs/{log_id}/drift?window=month\|week\|cases&window_cases=&min_cases=` | Change points in how cases run over time (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -600,3 +601,26 @@ Only selected columns are stored, with the same bounds as XES attributes. One mi
 events take a few seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_waiting.py`).
 Waiting comes from recorded timestamps, so it includes nights, weekends and unrecorded work, and no
 time is attributed to a person.
+
+## Changes over time (concept drift)
+
+`GET /v1/event-logs/{log_id}/drift` finds when the way cases run changed, like Apromore's or ProM's
+drift detection. It takes the case filters and:
+
+- `window`: `month` (default), `week`, or `cases` with `window_cases` (20–100,000) cases per
+  window, grouped by when each case started.
+- `min_cases` (default 30): a boundary is only tested when both windows have at least this many cases.
+
+Each window's behaviour is its directly-follows profile: for every path A → B, how many of the
+window's cases contain it (up to 600 sampled cases per window). Adjacent windows are compared with
+the Jensen–Shannon distance (0 identical, 1 disjoint) and a permutation test (99 random splits of
+the same cases, keeping each side's size). When the observed distance beats every permutation,
+the p-value comes from a normal tail fitted to the permutation distances, so many boundaries can be
+tested; `p_value_method` says which was used. A boundary is a change point when its p-value is below
+0.05 divided by the number of boundaries tested (Bonferroni) and the distance is at least 0.05.
+
+For each change point the result lists the five paths whose case share moved most. Every window has
+its case count and median case duration. A change that starts mid-window usually shows up on both
+sides of that window. One million events take a few seconds
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_drift.py`). A change point does not say why
+behaviour changed, and a change in how events are recorded looks the same.

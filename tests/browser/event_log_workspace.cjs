@@ -101,6 +101,12 @@ const path=require('node:path');
    assert.match(discoveredBPMN,/exclusiveGateway/);
    await page.locator('#owgWaitingRun').click();
    await page.locator('#owgWaitingStatus').filter({hasText:'No start or complete values'}).waitFor();
+   await page.locator('#owgConceptDriftRun').click();
+   await page.locator('#owgConceptDriftStatus').filter({hasText:'among 0 window boundaries tested'}).waitFor();
+   await page.locator('#owgConceptDriftWindow').selectOption('cases');await page.locator('#owgConceptDriftCases').fill('20');
+   await page.locator('#owgConceptDriftRun').click();
+   await page.locator('#owgConceptDriftStatus').filter({hasText:'0 change points among 2 window boundaries tested.'}).waitFor();
+   assert.match(await page.locator('#owgConceptDriftResults').textContent(),/cases 1–20\s*20/);
    // Save a reviewed graph through the actual catalog and pin a historical revision.
    const saved=await page.evaluate(async()=>{
      const labels=['Receive','Check','Approve','Close'];
@@ -527,7 +533,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
