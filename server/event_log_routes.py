@@ -30,6 +30,7 @@ from . import event_log_predictions as predictions
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
+from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
@@ -74,6 +75,7 @@ async def import_event_log(
     activity_column: str = Query(default="", max_length=200),
     timestamp_column: str = Query(default="", max_length=200),
     resource_column: str = Query(default="", max_length=200),
+    attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
 ):
     _require_dashboard(request)
@@ -90,6 +92,7 @@ async def import_event_log(
         spool.seek(0)
         mapping = {"case_column": case_column, "activity_column": activity_column,
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
+                   "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter}
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -102,6 +105,7 @@ async def append_event_log(
     activity_column: str = Query(default="", max_length=200),
     timestamp_column: str = Query(default="", max_length=200),
     resource_column: str = Query(default="", max_length=200),
+    attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
 ):
     _require_dashboard(request)
@@ -117,6 +121,7 @@ async def append_event_log(
         spool.seek(0)
         mapping = {"case_column": case_column, "activity_column": activity_column,
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
+                   "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter}
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -206,6 +211,23 @@ def event_log_process_map(request: Request, log_id: str, case_type: str | None =
     cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
               "activity": activity, "attribute": attribute}
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/waiting-time")
+def event_log_waiting_time(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           mode: str = Query(default="auto", pattern="^(auto|lifecycle|end_attribute)$"),
+                           lifecycle_attribute: str = Query(default="lifecycle:transition", min_length=1, max_length=120),
+                           end_attribute: str = Query(default="", max_length=120),
+                           started_from: str = Query(default="", max_length=64),
+                           started_before: str = Query(default="", max_length=64),
+                           resource: str = Query(default="", max_length=200),
+                           activity: str = Query(default="", max_length=200),
+                           attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(waiting.waiting_time, log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute,
+                    end_attribute=end_attribute, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/drift")
