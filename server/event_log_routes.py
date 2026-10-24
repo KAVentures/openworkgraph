@@ -24,6 +24,7 @@ from . import event_log_compliance as compliance
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_predictions as predictions
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
@@ -226,6 +227,17 @@ async def event_log_compliance(request: Request, log_id: str):
     spec = await _json_body(request, "compliance rules")
     try:
         result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/predictions")
+async def event_log_predictions(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "prediction settings")
+    try:
+        result = await run_in_threadpool(predictions.predict, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
