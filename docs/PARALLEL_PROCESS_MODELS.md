@@ -71,14 +71,27 @@ legal compliance, policy authority or business outcomes.
 
 ## Agent handoff boundary
 
-BPMN/JSON/PDD handoff preserves the design. The current generated SDK planner and
-customer executor use a linear route contract and cannot execute a fork/join
-process correctly. Their project export is disabled in local/shared views and
-rejected by both APIs, even after independent organization design review. Core
-project generation and generated runtime validation also reject parallel models,
-including a manually rehashed specification. No branch is silently omitted or
-serialized into apparent parallel execution. A fork/join-capable runtime and its
-separate customer tool permissions remain future work.
+BPMN/JSON/PDD handoff preserves the design. Newly exported OpenAI Agents SDK
+projects use `openworkgraph.parallel-node-firing-plan.v1` for paired parallel
+models. A plan lists all node firings, including split and join gateways. Token
+replay requires every branch arrival before the join and no remaining tokens
+after terminal completion. It evaluates no business rule or execution permission.
+Replay is bounded to 80 firings and 100,000 candidate firing checks; an invalid,
+unfinished or exhausted replay cannot proceed to customer actions.
+
+The customer executor performs activities serially in the exact reviewed firing
+order. This supports valid branch interleavings without promising simultaneous
+tool calls. Every branch retains its required tool mapping, human/manual-review
+confirmations, fresh source checks and customer authorization. Existing source
+outcome and journal/duplicate-intent protections remain unchanged. The generated
+project bundles the same process validator and token semantics used by OWG.
+
+Local project export uses the saved revision. Organization export still requires
+an active process and independent review of that exact revision. Export enables
+no business tool, permission, observation or deployment. Older linear projects
+still refuse a rehashed parallel specification without the new explicit contract;
+export and review a new project instead. Nested and conditional parallel regions
+remain unsupported.
 
 ## Verification
 

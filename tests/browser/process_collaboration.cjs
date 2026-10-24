@@ -1,7 +1,7 @@
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { tmpdir } = require("node:os");
 const pathModule = require("node:path");
 (async () => {
@@ -805,8 +805,18 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     await parallelReviewer.locator("#reviewConfirm").check();
     await parallelReviewer.getByRole("button",{name:"Record design review",exact:true}).click();
     await parallelReviewer.locator("#reviewState").filter({hasText:"Design review: reviewed design."}).waitFor();
-    assert(await parallelReviewer.getByRole("button",{name:"Download SDK implementation project",exact:true}).isDisabled());
-    assert((await parallelReviewer.locator("#exports").textContent()).includes("cannot execute parallel fork/join"));
+    assert(await parallelReviewer.getByRole("button",{name:"Download SDK implementation project",exact:true}).isEnabled());
+    assert((await parallelReviewer.locator("#exports").textContent()).includes("preserve every parallel branch and join"));
+    const [parallelSDK]=await Promise.all([parallelReviewer.waitForEvent("download"),parallelReviewer.getByRole("button",{name:"Download SDK implementation project",exact:true}).click()]);
+    const parallelSDKPath=pathModule.join(scratch,"shared-parallel-sdk.zip");await parallelSDK.saveAs(parallelSDKPath);
+    const parallelSDKCheck=spawnSync(process.env.OWG_BROWSER_PYTHON||"python",['-c',`import json,sys,zipfile
+z=zipfile.ZipFile(sys.argv[1]);s=json.loads(z.read('workflow.spec.json'))
+assert s['control_flow_contract']=='openworkgraph.parallel-node-firing-plan.v1'
+assert s['execution_schedule']=='serial_token_valid_node_order' and not s['execution_authorization']
+assert s['organization_catalog_reference']['organization_id']
+assert len([n for n in s['process_model']['activities'] if n['kind'].startswith('parallel_')])==2
+assert json.loads(z.read('tool-bindings.example.json'))['enabled'] is False
+`,parallelSDKPath],{encoding:'utf8'});assert.equal(parallelSDKCheck.status,0,parallelSDKCheck.stdout+parallelSDKCheck.stderr);
     const parallelDownload=parallelReviewer.waitForEvent("download");
     await parallelReviewer.getByRole("button",{name:"Export saved BPMN",exact:true}).click();
     const parallelArtifact=await parallelDownload,parallelXMLPath=pathModule.join(scratch,"shared-parallel.bpmn");
@@ -816,7 +826,7 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     assert.equal(await parallelReviewer.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     assert.deepEqual(errors, []);
     console.log(
-      "Browser collaboration acceptance passed: explicit publication, independent review, revision invalidation, immediate revocation, exact historical export, tenant switch, reviewed parallel-model preservation with linear-runtime refusal, mobile and no persistent credentials.",
+      "Browser collaboration acceptance passed: explicit publication, independent review, revision invalidation, immediate revocation, exact historical export, tenant switch, reviewed parallel SDK archive with independent customer intent, mobile and no persistent credentials.",
     );
   } finally {
     if (browser) await browser.close();

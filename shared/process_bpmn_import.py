@@ -241,7 +241,7 @@ def import_bpmn(raw: bytes):
     warnings=['source_xml_is_untrusted_data','no_observed_execution_or_policy_imported',
               'rules_require_human_confirmation','task_implementations_and_permissions_not_imported']
     if any(kind in {'parallel_split','parallel_join'} for kind in source_kinds.values()):
-        warnings.append('parallel_semantics_preserved_linear_agent_runtime_unavailable')
+        warnings.append('parallel_semantics_preserved_sdk_uses_serial_token_valid_schedule')
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')

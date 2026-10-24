@@ -11,8 +11,14 @@ def load_spec():
 
 
 def validate_spec(spec):
-    if any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities']):
-        raise ValueError('This linear runtime cannot plan or execute parallel fork/join designs')
+    parallel = any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities'])
+    if parallel:
+        if (spec.get('control_flow_contract') != 'openworkgraph.parallel-node-firing-plan.v1'
+                or spec.get('execution_schedule') != 'serial_token_valid_node_order'):
+            raise ValueError('This linear runtime cannot plan or execute parallel fork/join designs without an exported token-flow contract')
+        from owg_model.process_model import ProcessModel
+        # Use the same complete graph validator as OWG, including every join.
+        ProcessModel.model_validate(spec['process_model'])
     digest = hashlib.sha256(json.dumps(spec['process_model'], sort_keys=True).encode()).hexdigest()
     if (digest != spec['process_model_sha256'] or spec.get('execution_authorization') is not False
             or spec.get('live_business_tools') != []):
@@ -33,10 +39,18 @@ def check_plan(plan, spec=None):
     nodes = {node['id']: node for node in model['activities']}
     edges = {(edge['source'], edge['target']): edge for edge in model['transitions']}
     if (any(node not in nodes for node in ids) or ids[0] != model['entry_activity_id']
-            or ids[-1] not in model['terminal_activity_ids']
-            or any(pair not in edges for pair in zip(ids, ids[1:]))):
+            or ids[-1] not in model['terminal_activity_ids']):
         raise ValueError('Proposed path does not fit the reviewed process graph')
-    used_rules = {edges[pair]['rule_id'] for pair in zip(ids, ids[1:]) if edges[pair].get('rule_id')}
+    token_checks = None
+    if spec.get('control_flow_contract') == 'openworkgraph.parallel-node-firing-plan.v1':
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import replay_node_ids
+        token_checks = replay_node_ids(ids, ProcessModel.model_validate(model))
+        used_rules = set(token_checks['rule_ids'])
+    else:
+        if any(pair not in edges for pair in zip(ids, ids[1:])):
+            raise ValueError('Proposed path does not fit the reviewed process graph')
+        used_rules = {edges[pair]['rule_id'] for pair in zip(ids, ids[1:]) if edges[pair].get('rule_id')}
     unconfirmed = sorted(rule['id'] for rule in model['business_rules']
                          if rule['id'] in used_rules and not rule['user_confirmed'])
     checks = {
@@ -61,4 +75,9 @@ def check_plan(plan, spec=None):
         # A declaration/data comparison cannot attest fresh source facts or
         # become permission for the customer executor to choose a branch.
         checks['unevaluated_structured_rule_ids'] = structured
+    if token_checks is not None:
+        checks.update(control_flow_contract=spec['control_flow_contract'],
+                      execution_schedule=spec['execution_schedule'],
+                      all_produced_branch_tokens_consumed=True,
+                      token_replay_work_count=token_checks['work_count'])
     return checks

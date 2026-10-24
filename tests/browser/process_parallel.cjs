@@ -55,9 +55,18 @@ const path=require('node:path');
   await page.getByRole('button',{name:'Save new revision',exact:true}).click();
   const saved=await(await saving).json();
   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 1.'}).waitFor();assert.equal(saves,1);
-  assert(await page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).isDisabled());
+  assert(await page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).isEnabled());
   const direct=await fetch(base+'/v1/process-catalog/agent-project?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:1}),{headers:{Authorization:'OWG-Session '+session}});
-  assert.equal(direct.status,422);assert((await direct.text()).includes('fork/join-capable'));
+  assert.equal(direct.status,200);
+  const [sdkDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).click()]);
+  const sdkPath=path.join(scratch,'parallel-sdk.zip');await sdkDownload.saveAs(sdkPath);
+  const sdkCheck=spawnSync(python,['-c',`import json,sys,zipfile
+z=zipfile.ZipFile(sys.argv[1]);s=json.loads(z.read('workflow.spec.json'))
+assert s['control_flow_contract']=='openworkgraph.parallel-node-firing-plan.v1'
+assert s['execution_schedule']=='serial_token_valid_node_order' and not s['execution_authorization']
+assert len([n for n in s['process_model']['activities'] if n['kind'].startswith('parallel_')])==2
+assert json.loads(z.read('tool-bindings.example.json'))['enabled'] is False
+`,sdkPath],{encoding:'utf8'});assert.equal(sdkCheck.status,0,sdkCheck.stdout+sdkCheck.stderr);
   const downloading=page.waitForEvent('download');await page.getByRole('button',{name:'Export saved BPMN',exact:true}).click();
   const download=await downloading,artifact=path.join(scratch,'parallel.bpmn');await download.saveAs(artifact);
   const exported=await fs.readFile(artifact,'utf8');assert.equal((exported.match(/<bpmn:parallelGateway/g)||[]).length,2);
@@ -82,7 +91,7 @@ const path=require('node:path');
 c=sqlite3.connect(sys.argv[1]);assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 ` ,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(disk.status,0,disk.stderr);assert.deepEqual(errors,[]);
-  console.log('Parallel browser acceptance passed: explicit BPMN preview and paired gateways, reviewed save, keyboard/mobile, nonexecuting export, linear-runtime refusal, accepted interleaving versus missing branch, exact revision and no canonical capture.');
+  console.log('Parallel browser acceptance passed: reviewed paired gateways, keyboard/mobile, SDK token-schedule archive with disabled tool bindings, accepted interleaving versus missing branch, exact revision and no canonical capture.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

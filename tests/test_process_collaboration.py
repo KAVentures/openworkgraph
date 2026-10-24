@@ -495,5 +495,8 @@ def test_shared_parallel_export_remains_descriptive_after_independent_review(tmp
             response=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':fmt})
             assert response.status_code==200,response.text
         response=client.get(url+'/export',headers=headers('reader'),params={'revision':1,'format':'agent-project'})
-        assert response.status_code==422 and 'fork/join-capable' in response.text
+        assert response.status_code==200,response.text
+        spec=json.loads(ZipFile(BytesIO(response.content)).read('workflow.spec.json'))
+        assert spec['control_flow_contract']=='openworkgraph.parallel-node-firing-plan.v1'
+        assert spec['process_model']==process['process_model'] and not spec['execution_authorization']
         assert client.get(url+'/export',headers=headers('foreign'),params={'revision':1,'format':'agent-project'}).status_code==404
