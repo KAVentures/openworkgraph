@@ -93,6 +93,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
+| `GET /v1/event-logs/{log_id}/dotted-chart?time=absolute\|relative&order=start\|duration&max_cases=` | Events over time per case for a dotted chart (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -573,3 +574,22 @@ Process Mining or Celonis predictive monitoring.
 Remaining time is measured to the last recorded event. Predictions are estimates from this log's
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
+
+## Dotted chart
+
+`GET /v1/event-logs/{log_id}/dotted-chart` returns every case as a row of events over time, as in
+Disco or ProM. It takes the case filters and:
+
+- `time`: `absolute` (calendar time from the first event, to see arrival waves, batches and
+  backlogs) or `relative` (time since each case's first event, to compare how cases unfold).
+- `order`: rows by case start, or longest cases first.
+- `max_cases` (1–1000, default 300): rows are sampled evenly across the ordered cases, so the
+  chart keeps its shape. At most 30,000 dots are returned, thinned evenly within long cases.
+  `coverage` says when either happens.
+
+Colours follow each activity's event count in the whole log, not in the filtered view, so filtering
+never repaints an activity. The seven most frequent activities get their own colour from a
+colour-blind-checked palette and the rest share "Other". The dashboard section draws the chart
+with a hover tooltip (case, activity, time), a legend with event counts and a table view of the
+same cases. One million events take well under a second to sample
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_dotted_chart.py`).
