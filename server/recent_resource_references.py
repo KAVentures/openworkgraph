@@ -23,13 +23,14 @@ def _date(value: Any) -> str | None:
         return None
 
 
-def reference_tail(
-    connection: Any, *,
-    lease: dict[str, Any],
-    run_started_at: str | None = None,
-    limit: int = 24,
-) -> dict[str, Any]:
-    """Retrieve only permitted resource pointers; fail closed on unknown grants."""
+def lease_window(
+    lease: dict[str, Any], run_started_at: str | None = None,
+) -> tuple[str, str | None, list[Any]]:
+    """Return (mode, SQL condition, args) for rows the AI-history grant permits.
+
+    The condition is None when nothing may be read. Malformed or unknown access
+    modes fail closed and never become all_saved.
+    """
     mode = str(lease.get("mode") or "off")
     allowed: list[str] = []
     args: list[Any] = []
@@ -38,53 +39,73 @@ def reference_tail(
         allowed.append("julianday(observed_at) >= julianday(?)")
         args.append(current)
     if mode == "all_saved":
-        allowed = ["1=1"]
-        args = []
-    elif mode == "selected_range":
+        return mode, "1=1", []
+    if mode == "selected_range":
         since, until = _date(lease.get("since")), _date(lease.get("until"))
         if since and until and since < until:
             allowed.append("(julianday(observed_at) >= julianday(?) AND julianday(observed_at) < julianday(?))")
             args.extend((since, until))
     elif mode != "off":
-        # Malformed/unknown access modes must never become all_saved.
         mode = "off"
     if not allowed:
+        return mode, None, []
+    return mode, " OR ".join(f"({part})" for part in allowed), args
+
+
+def sanitized_pointers(metadata_json: Any) -> dict[str, Any]:
+    """Project one row's metadata to opaque resource/file pointers only."""
+    try:
+        meta = json.loads(str(metadata_json or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(meta, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    reference = meta.get("resource_reference")
+    if isinstance(reference, dict):
+        ref = str(reference.get("resource_ref") or "")
+        if _RESOURCE.fullmatch(ref):
+            sanitized["resource_reference"] = {"resource_ref": ref}
+            for field in ("provider", "resource_kind", "host", "resolution"):
+                value = str(reference.get(field) or "")[:120]
+                # No path/query/credentials or arbitrary content enters the
+                # AI-visible pointer projection.
+                if value and re.fullmatch(r"[a-zA-Z0-9._:-]{1,120}", value):
+                    sanitized["resource_reference"][field] = value
+    file_ref = meta.get("file_reference")
+    if isinstance(file_ref, dict) and _FILE.fullmatch(str(file_ref.get("file_ref") or "")):
+        sanitized["file_reference"] = {"file_ref": str(file_ref["file_ref"])}
+    return sanitized
+
+
+POINTER_FILTER = (
+    "(metadata_json LIKE '%\"resource_reference\"%' "
+    "OR metadata_json LIKE '%\"file_reference\"%')"
+)
+
+
+def reference_tail(
+    connection: Any, *,
+    lease: dict[str, Any],
+    run_started_at: str | None = None,
+    limit: int = 24,
+) -> dict[str, Any]:
+    """Retrieve only permitted resource pointers; fail closed on unknown grants."""
+    mode, where, args = lease_window(lease, run_started_at)
+    if where is None:
         return {"recent_evidence": [], "returned": 0, "saved_history_access": mode,
                 "history_access_limited": True, "references_are_observed_only": True}
     bounded = max(1, min(100, int(limit)))
-    where = " OR ".join(f"({part})" for part in allowed)
     sql = (
         "SELECT event_id, observed_at, metadata_json FROM events "
-        "WHERE (metadata_json LIKE '%\"resource_reference\"%' "
-        "OR metadata_json LIKE '%\"file_reference\"%') "
-        f"AND ({where}) "
+        f"WHERE {POINTER_FILTER} AND ({where}) "
         "ORDER BY julianday(observed_at) DESC, id DESC LIMIT ?"
     )
     rows = connection.execute(sql, tuple(args + [bounded])).fetchall()
     evidence: list[dict[str, Any]] = []
     for row in rows:
-        try:
-            data = dict(row)
-            meta = json.loads(str(data.get("metadata_json") or "{}"))
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(meta, dict):
-            continue
-        sanitized: dict[str, Any] = {}
-        reference = meta.get("resource_reference")
-        if isinstance(reference, dict):
-            ref = str(reference.get("resource_ref") or "")
-            if _RESOURCE.fullmatch(ref):
-                sanitized["resource_reference"] = {"resource_ref": ref}
-                for field in ("provider", "resource_kind", "host", "resolution"):
-                    value = str(reference.get(field) or "")[:120]
-                    # No path/query/credentials or arbitrary content enters the
-                    # AI-visible pointer projection.
-                    if value and re.fullmatch(r"[a-zA-Z0-9._:-]{1,120}", value):
-                        sanitized["resource_reference"][field] = value
-        file_ref = meta.get("file_reference")
-        if isinstance(file_ref, dict) and _FILE.fullmatch(str(file_ref.get("file_ref") or "")):
-            sanitized["file_reference"] = {"file_ref": str(file_ref["file_ref"])}
+        data = dict(row)
+        sanitized = sanitized_pointers(data.get("metadata_json"))
         if sanitized:
             evidence.append({
                 "event_id": str(data.get("event_id") or "")[:120],
@@ -100,4 +121,4 @@ def reference_tail(
     }
 
 
-__all__ = ["reference_tail"]
+__all__ = ["POINTER_FILTER", "lease_window", "reference_tail", "sanitized_pointers"]
