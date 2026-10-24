@@ -118,6 +118,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Verify the local automation pipeline records decisions without authorizing execution
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_pipeline.cjs
+      - name: Verify interleaved opted-in records stay in separate exact-record lanes in a real browser
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/record_case_lanes.cjs
       - name: Install isolated generated-project SDK runtime
         run: |
           python -m venv "$RUNNER_TEMP/owg-agent-sdk"
