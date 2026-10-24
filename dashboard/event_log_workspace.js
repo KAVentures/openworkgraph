@@ -217,29 +217,35 @@
     status('');
   }
 
-  function caseInspector(activityNames){
-    const box=section('Case evidence');box.id='owgEventLogCases';
+  function caseInspector(activityNames,options={}){
+    const prefix=options.prefix||'owgEventLogCases';
+    const box=section('Case evidence');box.id=prefix;
     const generation=state.generation;
     const current=()=>box.isConnected&&generation===state.generation;
-    const filters=cohortFields('owgEventLogCasesFilter','Select complete cases',activityNames);
-    const browse=button('Browse cases','secondary');browse.id='owgEventLogCasesBrowse';
+    const queryPath=suffix=>{
+      const url=new URL(logPath(suffix),window.location.origin);
+      if(options.caseType!==undefined)url.searchParams.set('case_type',options.caseType);
+      return url.pathname+url.search;
+    };
+    const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames);
+    const browse=button('Browse cases','secondary');browse.id=prefix+'Browse';
     const first=button('First case page','secondary'),next=button('Next case page','secondary');
     first.disabled=true;next.disabled=true;
     const note=el('div','Case keys and labels are supplied by this log. They do not verify business identity, people or outcomes.','muted');
-    const chosen=el('div','All paths.','muted');chosen.id='owgEventLogCasesPath';
-    const reset=button('All paths','secondary');reset.onclick=()=>{path=null;chosen.textContent='All paths.';};
-    const message=el('div');message.id='owgEventLogCasesStatus';message.setAttribute('role','status');
-    const list=el('div');list.id='owgEventLogCasesList';
-    const detail=el('div');detail.id='owgEventLogCaseEvents';
+    const chosen=el('div','All paths.','muted');chosen.id=prefix+'Path';
+    const reset=button('All paths','secondary');reset.onclick=()=>{path=null;transition=null;chosen.textContent='All paths.';};
+    const message=el('div');message.id=prefix+'Status';message.setAttribute('role','status');
+    const list=el('div');list.id=prefix+'List';
+    const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
     box.append(note,filters.node,chosen,controls,message,list,detail);
-    let path=null,spec=null,nextAfter=null,listing=0,opening=0;
+    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
       message.textContent='Loading cases…';
       try{
         const payload={...spec};if(after!==null)payload.after=after;
-        const result=await (await api(logPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        const result=await (await api(queryPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!current()||ticket!==listing)return;
         nextAfter=result.next_after;
         message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.';
@@ -253,7 +259,7 @@
       finally{if(current()&&ticket===listing)browse.disabled=false;}
     }
     function start(){
-      try{spec={cohort:filters.read(),limit:30};if(path)spec.path=path;detail.replaceChildren();opening++;load(null);}
+      try{spec={cohort:filters.read(),limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
     browse.onclick=start;first.onclick=()=>load(null);next.onclick=()=>load(nextAfter);
@@ -261,13 +267,13 @@
       const ticket=++opening;
       const heading=el('h4','Case '+caseId);heading.tabIndex=-1;
       const progress=el('div','Loading events…');progress.setAttribute('role','status');
-      const rows=el('div'),more=button('More case events','secondary');more.id='owgEventLogCaseEventsMore';more.disabled=true;
+      const rows=el('div'),more=button('More case events','secondary');more.id=prefix==='owgEventLogCases'?'owgEventLogCaseEventsMore':prefix+'EventsMore';more.disabled=true;
       detail.replaceChildren(heading,progress,rows,more);
       heading.focus();let offset=0,shown=0;
       async function page(){
         more.disabled=true;
         try{
-          const result=await (await api(logPath('case-events/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
+          const result=await (await api(queryPath('case-events/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
           if(!current()||ticket!==opening)return;
           shown+=result.events.length;offset=result.next_offset;
           progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
@@ -279,8 +285,16 @@
     }
     return {node:box,path(value){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
-      path=value.slice();chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
-    },activity(value){path=null;chosen.textContent='All paths.';document.getElementById('owgEventLogCasesFilterActivity').value=value;start();box.scrollIntoView({block:'nearest'});}};
+      path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
+    },activity(value){
+      const picker=document.getElementById(prefix+'FilterActivity');
+      if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
+      path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+    },transition(value){
+      path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
+      chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
+      start();box.scrollIntoView({block:'nearest'});
+    }};
   }
 
   // Cohort fields; dates are whole UTC days on the case's first event.
@@ -328,39 +342,60 @@
 
   function objectMapSection(){
     const box=section('Object-centric map');
+    const generation=state.generation;
+    const current=()=>box.isConnected&&generation===state.generation;
     box.appendChild(el('div','Each object type has its own map: every object (an order, an item, a ticket…) is one lifecycle. Links count objects that share events; they are not verified relationships.','muted'));
     const pick=select('owgEventLogObjectType',[]);
-    const show=button('Show map','secondary');show.id='owgEventLogObjectShow';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Object type',pick),show);
+    const showMap=button('Show map','secondary');showMap.id='owgEventLogObjectShow';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Object type',pick),showMap);
     const out=el('div');out.id='owgEventLogObjectMap';
     const shared=el('div');
     box.append(row,out,shared);
     let graph=null;
     const render=()=>{
       const type=(graph.object_types||[]).find(t=>t.object_type===pick.value);if(!type)return;
+      const inspection=caseInspector(type.activities.map(a=>a.activity),{prefix:'owgEventLogObjectCases',caseType:type.object_type});
+      inspection.node.querySelector('h3').textContent='Map case evidence · '+type.object_type;
+      show(inspection.node,false);
+      const selection=el('div');selection.id='owgEventLogObjectSelection';selection.tabIndex=-1;
+      const chooseActivity=activity=>{
+        const item=type.activities.find(a=>a.activity===activity.label);if(!item)return;
+        const browse=button('Browse cases containing '+item.activity,'secondary');browse.onclick=()=>{show(inspection.node,true);inspection.activity(item.activity);};
+        selection.replaceChildren(el('h4',item.activity),el('p',item.event_count+' recorded events across '+item.case_count+' '+type.object_type+' objects in the complete log.'),browse);selection.focus();
+      };
+      const chooseEdge=edge=>{
+        const item=type.transitions.find(t=>t.from===edge.from&&t.to===edge.to);if(!item)return;
+        const browse=button('Browse cases for adjacent transition','secondary');browse.onclick=()=>{show(inspection.node,true);inspection.transition([item.from,item.to]);};
+        selection.replaceChildren(el('h4',item.from+' → '+item.to),el('p',item.transition_count+' recorded adjacent transitions across '+item.case_count+' '+type.object_type+' objects. Median elapsed gap '+duration(item.median_elapsed_gap_seconds)+'. Gaps are not measured labor or verified waiting.'),el('p',graph.ordering,'muted'),browse);selection.focus();
+      };
       const parts=[table(['Objects','Events','Median events per object','Starts with','Ends with'],[[Number(type.objects).toLocaleString(),Number(type.events).toLocaleString(),type.median_events_per_object,
         Object.entries(type.start_activities).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', '),Object.entries(type.end_activities).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', ')]])];
+      parts.push(el('p','Showing '+type.activities.length+' of '+type.activity_types+' activity types and '+type.transitions.length+' of '+type.transition_types+' transition types. Counts use the complete log for this object type; the map is bounded. A combined route may never occur in one case. '+graph.ordering,'muted'));
       const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
       if(draw&&type.activities.length){
         try{
           const start=Object.keys(type.start_activities)[0];
-          const drawing=draw({activities:type.activities,transitions:type.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{});
+          const drawing=draw({activities:type.activities,transitions:type.transitions,cases:start?[{path:[start]}]:[]},chooseActivity,chooseEdge);
           drawing.id='owgEventLogObjectGraph';parts.push(drawing);
         }catch(_){parts.push(el('div','Map unavailable for this object type; transitions are listed below.','muted'));}
       }
-      parts.push(table(['From','To','Transitions','Objects','Median gap'],type.transitions.slice(0,25).map(t=>[t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds)])));
+      parts.push(selection,table(['From','To','Transitions','Objects','Median gap','Evidence'],type.transitions.slice(0,25).map(t=>{
+        const inspect=button('Inspect transition','secondary');inspect.onclick=()=>chooseEdge(t);
+        return [t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds),inspect];
+      })));
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
       if(links.length)parts.push(table(['Linked to','Share of '+type.object_type+' objects','Mean linked per object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
-      out.replaceChildren(...parts);
+      parts.push(inspection.node);out.replaceChildren(...parts);
     };
-    show.onclick=render;pick.onchange=render;
+    showMap.onclick=render;pick.onchange=render;
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(g=>{
+      if(!current())return;
       graph=g;setOptions(pick,(g.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
-      shared.replaceChildren(...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]));
+      shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]));
       render();
-    }).catch(error=>out.replaceChildren(el('div',error.message,'muted')));
+    }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     return box;
   }
 

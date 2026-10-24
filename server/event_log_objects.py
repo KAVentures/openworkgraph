@@ -36,15 +36,21 @@ def object_graph(log_id: str) -> dict[str, Any]:
                   lead(activity) OVER w AS nxt, date_diff('second', ts, lead(ts) OVER w) AS gap,
                   row_number() OVER w AS position, count(*) OVER (PARTITION BY object_type, object_id) AS length
                 FROM te WINDOW w AS (PARTITION BY object_type, object_id ORDER BY ts, event_id)""")
+            conn.execute("""CREATE TEMP TABLE edge_counts AS
+                SELECT object_type, activity, nxt, count(*) AS occurrences,
+                    count(DISTINCT object_id) AS cases, quantile_cont(gap, 0.5) AS median_gap
+                FROM steps WHERE nxt IS NOT NULL GROUP BY 1, 2, 3""")
             result = []
             for object_type, objects, events in types:
-                activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT object_id) FROM steps
+                activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT object_id), count(*) OVER () FROM steps
                     WHERE object_type = ? GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ACTIVITIES_PER_TYPE}""",
                                           [object_type]).fetchall()
-                kept = [a for a, _, _ in activities]
-                edges = conn.execute(f"""SELECT activity, nxt, count(*), count(DISTINCT object_id), quantile_cont(gap, 0.5)
-                    FROM steps WHERE object_type = ? AND nxt IS NOT NULL AND list_contains(?, activity) AND list_contains(?, nxt)
-                    GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2 LIMIT {MAX_EDGES_PER_TYPE}""", [object_type, kept, kept]).fetchall()
+                kept = [a for a, _, _, _ in activities]
+                edges = conn.execute(f"""SELECT activity, nxt, occurrences, cases, median_gap
+                    FROM edge_counts WHERE object_type = ? AND list_contains(?, activity) AND list_contains(?, nxt)
+                    ORDER BY 3 DESC, 1, 2 LIMIT {MAX_EDGES_PER_TYPE}""", [object_type, kept, kept]).fetchall()
+                total_edges = conn.execute("SELECT count(*) FROM edge_counts WHERE object_type = ?", [object_type]).fetchone()[0]
+                total_activities = activities[0][3] if activities else 0
                 bounds = conn.execute("""SELECT kind, activity, count(*) FROM (
                       SELECT 'start' AS kind, activity FROM steps WHERE object_type = $t AND position = 1
                       UNION ALL SELECT 'end', activity FROM steps WHERE object_type = $t AND position = length)
@@ -54,8 +60,10 @@ def object_graph(log_id: str) -> dict[str, Any]:
                 result.append({
                     "object_type": object_type, "objects": objects, "events": events,
                     "median_events_per_object": lifecycle[0], "max_events_per_object": lifecycle[1],
-                    "activities": [{"activity": a, "event_count": n, "case_count": o} for a, n, o in activities],
-                    "activities_truncated": len(activities) == MAX_ACTIVITIES_PER_TYPE,
+                    "activities": [{"activity": a, "event_count": n, "case_count": o} for a, n, o, _ in activities],
+                    "activity_types": total_activities, "transition_types": total_edges,
+                    "activities_truncated": total_activities > len(activities),
+                    "transitions_truncated": total_edges > len(edges),
                     "transitions": [{"from": a, "to": b, "transition_count": n, "case_count": o,
                                      "median_elapsed_gap_seconds": g} for a, b, n, o, g in edges],
                     "start_activities": {a: n for kind, a, n in bounds if kind == "start"},
@@ -71,10 +79,13 @@ def object_graph(log_id: str) -> dict[str, Any]:
             counts = {t: n for t, n, _ in types}
             shared = conn.execute("""SELECT activity, list(DISTINCT object_type ORDER BY object_type), count(DISTINCT event_id)
                 FROM te GROUP BY activity HAVING count(DISTINCT object_type) > 1 ORDER BY 3 DESC, 1 LIMIT 50""").fetchall()
+            type_count = conn.execute("SELECT count(DISTINCT object_type) FROM te").fetchone()[0]
             return {
                 "log": info,
                 "object_types": result,
-                "object_types_truncated": len(types) == MAX_TYPES,
+                "object_type_count": type_count,
+                "object_types_truncated": type_count > len(types),
+                "ordering": "Timestamp, then event ID; equal timestamps do not verify business order.",
                 "relations": [{"from_type": a, "to_type": b, "objects_with_link": n,
                                "share_of_from_objects": round(n / counts[a], 6) if counts.get(a) else None,
                                "linked_objects_total": links, "mean_linked_per_object": round(mean, 4),

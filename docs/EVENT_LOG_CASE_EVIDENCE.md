@@ -56,6 +56,20 @@ All selectors are optional. `cohort` uses the existing cohort definition;
 `next_after` as `after` with the same selectors to read the next page; the case
 page maximum is 100. Timestamp ties and event counts describe each whole case.
 
+`transition: ["Review", "Close"]` selects cases containing that exact adjacent
+pair in timestamp/event-ID display order. It intersects with the cohort and
+exact path when supplied; merely containing both activities does not match.
+Repeated pairs count once for case selection, and the complete case remains
+available. Equal timestamps do not verify the displayed business order.
+
+The object-centric map opens this same case browser from a keyboard-accessible
+activity or edge. Map inspection keeps its own explicit object type, even when
+the main analysis uses another type. The supporting-case browser can further
+restrict that selection by a whole-case cohort. Counts in the map cover the
+complete log for the selected object type; the map discloses displayed versus
+total activity and transition types. Its combined routes are not inferred case
+histories, causal dependencies, approved rules or verified human handoffs.
+
 `POST /v1/event-logs/{log_id}/case-events/query?case_type=order`:
 
 ```json
