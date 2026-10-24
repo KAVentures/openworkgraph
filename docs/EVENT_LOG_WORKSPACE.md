@@ -79,7 +79,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | Route | Purpose |
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
-| `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column` and `delimiter` (`t` for tab). |
+| `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
@@ -93,6 +93,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
 | `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
+| `GET /v1/event-logs/{log_id}/waiting-time?lifecycle_attribute=&end_attribute=` | Processing and waiting time per activity from lifecycle or end-time attributes (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -573,3 +574,29 @@ Process Mining or Celonis predictive monitoring.
 Remaining time is measured to the last recorded event. Predictions are estimates from this log's
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
+
+## Processing and waiting time
+
+`GET /v1/event-logs/{log_id}/waiting-time` splits elapsed time into processing (an activity
+instance's recorded start to end) and waiting (from the end of the case's earlier work to the next
+start), like Disco, ProM or Celonis with start/complete data. It takes the case filters and:
+
+- `mode`: `auto` (default), `lifecycle` or `end_attribute`.
+- `lifecycle_attribute` (default `lifecycle:transition`, as in XES): per case and activity, the k-th
+  `start` is paired with the k-th `complete`. A `complete` without a start, or an event without a
+  lifecycle value, is an instant whose processing time is unknown. Other values (schedule,
+  suspend, …) are counted and ignored, and starts without a completion are reported as still open.
+- `end_attribute`: an attribute holding each event's end time with a UTC offset; the event time is
+  the start. Values without an offset, or before the start, are counted and not used.
+
+Overlapping work is never counted as waiting, and the case's busy time counts overlapping instances
+once. The result has, per activity, processing and waiting-before medians, 90th percentiles,
+totals and share of all waiting; the transitions with the most waiting; and flow efficiency (busy
+share of elapsed case time). In `auto` mode without lifecycle values or an end attribute it returns
+`available: false` and the attribute names found in the log.
+
+For CSV logs, choose the lifecycle or end-time column under "Extra columns to keep" when importing.
+Only selected columns are stored, with the same bounds as XES attributes. One million lifecycle
+events take a few seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_waiting.py`).
+Waiting comes from recorded timestamps, so it includes nights, weekends and unrecorded work, and no
+time is attributed to a person.
