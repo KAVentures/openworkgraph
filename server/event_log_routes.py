@@ -21,6 +21,7 @@ from . import event_log_analytics as analytics
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
+from . import event_log_dotted_chart as dotted
 from . import event_log_drift as drift
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
@@ -228,6 +229,22 @@ def event_log_waiting_time(request: Request, log_id: str, case_type: str | None 
               "activity": activity, "attribute": attribute}
     return _respond(waiting.waiting_time, log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute,
                     end_attribute=end_attribute, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/dotted-chart")
+def event_log_dotted_chart(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           time: str = Query(default="absolute", pattern="^(absolute|relative)$"),
+                           order: str = Query(default="start", pattern="^(start|duration)$"),
+                           max_cases: int = Query(default=300, ge=1, le=dotted.MAX_CASES),
+                           started_from: str = Query(default="", max_length=64),
+                           started_before: str = Query(default="", max_length=64),
+                           resource: str = Query(default="", max_length=200),
+                           activity: str = Query(default="", max_length=200),
+                           attribute: str = Query(default="", max_length=200)):
+    _require_dashboard(request)
+    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
+              "activity": activity, "attribute": attribute}
+    return _respond(dotted.dotted_chart, log_id, case_type, time=time, order=order, max_cases=max_cases, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/drift")
