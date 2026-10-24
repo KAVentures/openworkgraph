@@ -48,10 +48,17 @@ const path=require('node:path');
    await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'1 rejected'}).waitFor().catch(async error=>{throw new Error('import status: '+await page.locator('#owgEventLogStatus').textContent()+' '+error.message);});
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/Imported 274 events/);
+   assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected: 1 time without a UTC offset/);
 
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
+   await page.locator('#owgQuality summary').click();
+   await page.locator('#owgQualityResults table').first().waitFor();
+   const qualityText=await page.locator('#owgQualityResults').textContent();
+   assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
+   assert.match(qualityText,/Case columncase_id/);assert.match(qualityText,/not known to be complete/);
+   assert.doesNotMatch(qualityText,/C99/,'rejected rows are not shown');
 
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
    assert.equal(await page.locator('#owgMapDrawing').count(),1);
@@ -579,7 +586,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time and a counts-only quality report, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

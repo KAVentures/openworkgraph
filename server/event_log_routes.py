@@ -30,6 +30,7 @@ from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
+from . import event_log_quality as quality
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
@@ -148,6 +149,12 @@ async def append_event_log(
         except workspace.EventLogWorkspaceError as exc:
             raise HTTPException(422, str(exc)) from None
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/quality")
+def event_log_quality(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.quality, log_id)
 
 
 @router.get("/v1/event-logs/{log_id}/appends")

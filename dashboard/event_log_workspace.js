@@ -60,6 +60,15 @@
     return (s/86400).toFixed(1)+' d';
   }
   const pct=v=>v===null||v===undefined?'—':(Number(v)*100).toFixed(1)+'%';
+  const REASON_LABELS={missing_case:'missing case',missing_activity:'missing activity',missing_timestamp:'missing time',
+    timestamp_without_utc_offset:'time without a UTC offset',unparseable_timestamp:'unreadable time'};
+  // Plain-language rejection reasons from a quality report; reasons can overlap.
+  function reasonText(reasons){
+    if(!reasons)return 'missing case, activity or timezone-qualified time';
+    const parts=Object.entries(reasons).filter(([,n])=>n>0).map(([k,n])=>Number(n).toLocaleString()+' '+(REASON_LABELS[k]||k));
+    return parts.length?parts.join(', '):'reason not recorded';
+  }
+  const tieText=q=>q&&q.events_sharing_a_timestamp_in_a_case?' '+Number(q.events_sharing_a_timestamp_in_a_case).toLocaleString()+' events share a timestamp with another event of the same case; their order falls back to the event ID.':'';
 
   async function api(path,init){
     await window.__owgAuthReady;
@@ -142,7 +151,7 @@
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: missing case, activity or timezone-qualified time)':'')+'.');
+        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+tieText(log.quality));
         consent.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
@@ -156,7 +165,7 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         consent.checked=false;file.value='';
         await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString():'')+'.');
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+tieText(r.quality));
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
@@ -219,6 +228,7 @@
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
     results.appendChild(overview);
+    results.appendChild(qualitySection());
     results.appendChild(caseFilterSection(names));
 
     const variantBox=section('Most common variants');
@@ -1028,6 +1038,38 @@
     return box;
   }
 
+  function qualitySection(){
+    const box=section('Data quality');box.id='owgQuality';
+    const out=el('div');out.id='owgQualityResults';out.setAttribute('role','status');
+    const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
+    box.append(el('div','Counts only: rejected rows are not kept and no values are shown. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details);
+    const generation=state.generation;
+    getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality').then(r=>{
+      if(generation!==state.generation)return;
+      const d=r.current.diagnostics,short=h=>h?h.slice(0,12)+'…':'—';
+      const reports=r.reports.map(p=>[p.batch===0?'Import':'Append '+p.batch,p.transform.format,Number(p.rows.accepted).toLocaleString(),
+        Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
+        p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
+        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256))]);
+      const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
+      const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
+      out.replaceChildren(
+        table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content'],reports),
+        ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
+        table(['Mapping',''],mapRows),
+        table(['Diagnostic (whole log)','Events'],[
+          ['Duplicate events (same case, activity, time and resource)',Number(d.duplicate_events).toLocaleString()],
+          ['Events sharing a timestamp within a case',Number(d.events_sharing_a_timestamp_in_a_case).toLocaleString()+' in '+Number(d.cases_with_shared_timestamps).toLocaleString()+' cases; order falls back to the event ID'],
+          ['Events without a resource',Number(d.events_without_resource).toLocaleString()],
+          ['Events without a case',Number(d.events_without_case).toLocaleString()],
+          ['Events dated after the import',Number(d.events_dated_after_import).toLocaleString()],
+          ...d.case_notions.map(n=>['Single-event '+n.object_type+' cases',Number(n.single_event_cases).toLocaleString()+' of '+Number(n.cases).toLocaleString()])]),
+        ...(d.attribute_coverage.length?[table(['Attribute','Events with a value','Without'],d.attribute_coverage.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()]))]:[]),
+        el('div','Current content digest: '+r.current.content_sha256+'. '+r.current.completeness.note,'muted'));
+    }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
+    return box;
+  }
+
   function organizationSection(){
     const box=section('Who hands work to whom');box.id='owgEventLogOrganization';
     box.appendChild(el('div','Handovers and shared cases between the resources in this log. Resources are shown as Resource 01, 02… unless you choose to show names. No speed, waiting time or performance score is calculated for anyone.','muted'));
@@ -1472,6 +1514,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
