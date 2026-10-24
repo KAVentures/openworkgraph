@@ -194,6 +194,17 @@ const path=require('node:path');
    assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|Neither says/);
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
+   const ruleBody=await page.evaluate(()=>window.__owgEventLogModel.signalRule({name:'Rework',kind:'kpi',metric:'rework_rate',operator:'above',threshold:'25'}));
+   assert.deepEqual(ruleBody,{name:'Rework',when:{kind:'kpi',metric:'rework_rate',operator:'above',threshold:0.25}});
+   await page.locator('#owgSignalName').fill('Skipped approval');await page.locator('#owgSignalCondition').selectOption('lacks_activity');
+   await page.locator('#owgSignalActivity').selectOption('Approve');await page.locator('#owgSignalAdd').click();
+   await page.locator('#owgSignalStatus').filter({hasText:'Signal saved.'}).waitFor();
+   await page.locator('#owgSignalEvaluate').click();
+   await page.locator('#owgSignalResults').getByText('signals hold now').waitFor();
+   const signalText=await page.locator('#owgSignalResults').textContent();
+   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/C0\b/);assert.match(signalText,/first check/);
+   await page.locator('#owgSignalEvaluate').click();
+   await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
 
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});
@@ -348,7 +359,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

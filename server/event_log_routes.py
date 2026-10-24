@@ -22,6 +22,7 @@ from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_signals as signals
 from . import event_log_simulation as simulation
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
@@ -177,6 +178,30 @@ async def _json_body(request: Request, what: str) -> Any:
         return json.loads(body)
     except ValueError:
         raise HTTPException(422, f"{what} is not valid JSON") from None
+
+
+@router.get("/v1/event-logs/{log_id}/signals")
+def event_log_signal_rules(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(signals.list_rules, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/signals")
+async def event_log_add_signal_rule(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(signals.add_rule, log_id, await _json_body(request, "signal rule"))
+
+
+@router.post("/v1/event-logs/{log_id}/signals/evaluate")
+def event_log_evaluate_signals(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(signals.evaluate, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/signals/{rule_id}/delete")
+def event_log_delete_signal_rule(request: Request, log_id: str, rule_id: str):
+    _require_dashboard(request)
+    return _respond(signals.delete_rule, log_id, rule_id)
 
 
 @router.post("/v1/event-logs/{log_id}/benchmark")
