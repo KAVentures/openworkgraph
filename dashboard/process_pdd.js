@@ -3,6 +3,7 @@
   'use strict';
   const FORMAT='openworkgraph.pdd-package-request.v1';
   const DESIGN='openworkgraph.proposed-process-design.v1';
+  const SAVED='openworkgraph.versioned-process-export.v1';
   const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=String(text);if(cls)node.className=cls;return node;};
   const input=(id,type,placeholder)=>{const node=document.createElement('input');node.id=id;node.type=type||'text';if(placeholder)node.placeholder=placeholder;return node;};
   const field=(labelText,control)=>{const wrap=el('div');const label=el('label',labelText);label.htmlFor=control.id;wrap.append(label,control);return wrap;};
@@ -10,6 +11,11 @@
 
   // Pure helpers, exercised by tests.
   function stepsFromDesign(design){
+    if(design?.format===SAVED){
+      const nodes=design.process_model?.activities;
+      if(!Array.isArray(nodes)||!nodes.length||nodes.length>40||nodes.some(n=>!n||typeof n.label!=='string'||!n.label.length||n.label.length>64||typeof n.id!=='string'||!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(n.id)))throw new Error('Choose a bounded saved process revision.');
+      return nodes.map(n=>({id:n.id,activity:n.label}));
+    }
     if(!design||design.format!==DESIGN||!design.to_be||!Array.isArray(design.to_be.proposed_path))throw new Error('Choose a process design exported from the process designer.');
     const path=design.to_be.proposed_path;
     if(!path.length||path.length>40||!path.every(s=>typeof s==='string'&&s.length&&s.length<=64))throw new Error('The design needs 1 to 40 named steps.');
@@ -17,6 +23,14 @@
   }
   function aiPrompt(design){
     const steps=stepsFromDesign(design);
+    if(design.format===SAVED){
+      const model=design.process_model;
+      return ['Draft a plain-language description of this saved process design. It is not approved policy or verified observed behavior.',
+        'Node order is an index, not an execution sequence. Preserve decisions, loops, every parallel branch and join. Do not invent rules, people, tools, numbers or outcomes. Ask the process owner about missing facts.',
+        'Declared goal: '+model.goal,'Nodes:',...model.activities.map(n=>n.id+': '+n.label+' ('+n.kind+')'),
+        'Transitions:',...model.transitions.map(e=>e.source+' → '+e.target+(e.rule_id?' (declared rule '+e.rule_id+')':'')),
+        'Declared rules (not verified policy):',...(model.business_rules||[]).map(r=>r.id+': '+r.text)].join('\n');
+    }
     return ['Write a short, plain-language narrative for a Process Definition Document.',
       'Describe only the steps below in order. Do not invent systems, rules, people, approvals or numbers.',
       'Mark anything you are unsure about as a question for the process owner.','',
@@ -24,7 +38,8 @@
       'Steps:',...steps.map(s=>s.id+': '+s.activity)].join('\n');
   }
   function buildRequest(design,shots,narrative,reviewed){
-    return {format:FORMAT,design,screenshots:shots.map(s=>({step_id:s.step_id,image_base64:s.image_base64,caption:s.caption||'',masked_regions:s.masked_regions|0})),
+    const source=design.format===SAVED?{process_reference:{workflow_id:design.workflow_id,revision:design.revision,content_sha256:design.content_sha256}}:{design};
+    return {format:FORMAT,...source,screenshots:shots.map(s=>({step_id:s.step_id,image_base64:s.image_base64,caption:s.caption||'',masked_regions:s.masked_regions|0})),
       narrative:{text:String(narrative.text||''),ai_drafted:narrative.ai_drafted===true},screenshots_reviewed_and_redacted_by_user:reviewed===true};
   }
 
@@ -69,8 +84,9 @@
     const panel=document.getElementById('panel-evidence');
     if(!panel||document.getElementById('owgPddCard'))return;
     const card=el('div',null,'card');card.id='owgPddCard';
+    card.style.overflowWrap='anywhere';
     card.appendChild(el('h2','Process documentation with screenshots'));
-    card.appendChild(el('div','Create a Process Definition Document from a design exported by the process designer, with optional screenshots for each step. Screenshots you add are masked here, re-encoded without metadata, put into the ZIP you download, and not kept by OpenWorkGraph.','muted'));
+    card.appendChild(el('div','Use a saved process revision from the catalog or an exported proposed design, with optional screenshots for its nodes. Saved graphs keep their decisions, branches and joins. Screenshots are masked here, re-encoded without metadata, included in your download, and not kept by OpenWorkGraph.','muted'));
     const file=input('owgPddDesign','file');file.accept='.json,application/json';
     const status=el('div',null,'muted');status.id='owgPddStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const steps=el('div');steps.id='owgPddSteps';
@@ -86,7 +102,7 @@
     const anchor=document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let design=null;const shots=[];
+    let design=null,sourceTicket=0;const shots=[];
     const refresh=()=>{make.disabled=!design||(shots.length>0&&!reviewed.checked);};
     reviewed.onchange=refresh;
     const renderSteps=list=>{
@@ -105,28 +121,48 @@
           const chosen=pick.files&&pick.files[0];if(!chosen)return;pick.value='';
           if(shots.filter(s=>s.step_id===step.id).length>=3){status.textContent='At most 3 screenshots per step.';return;}
           const url=URL.createObjectURL(chosen);const image=new Image();
-          image.onload=()=>{URL.revokeObjectURL(url);host.replaceChildren(editor(image,shot=>{shots.push({...shot,step_id:step.id});host.replaceChildren();draw();reviewed.checked=false;refresh();},()=>host.replaceChildren()));};
+          image.onload=()=>{URL.revokeObjectURL(url);if(!host.isConnected)return;host.replaceChildren(editor(image,shot=>{shots.push({...shot,step_id:step.id});host.replaceChildren();draw();reviewed.checked=false;refresh();},()=>host.replaceChildren()));};
           image.onerror=()=>{URL.revokeObjectURL(url);status.textContent='That file could not be opened as an image.';};
           image.src=url;
         };
         row.append(thumbs,field('Add screenshot',pick),host);steps.appendChild(row);draw();
       }
     };
-    file.onchange=async()=>{
-      const chosen=file.files&&file.files[0];if(!chosen)return;
-      try{design=JSON.parse(await chosen.text());const list=stepsFromDesign(design);shots.length=0;renderSteps(list);extras.hidden=false;status.textContent=list.length+' steps loaded. Screenshots are optional.';}
-      catch(error){design=null;steps.replaceChildren();extras.hidden=true;status.textContent=error instanceof SyntaxError?'That file is not valid JSON.':error.message;}
+    const resetSource=()=>{sourceTicket++;design=null;shots.length=0;reviewed.checked=false;narrative.value='';aiFlag.checked=false;steps.replaceChildren();extras.hidden=true;refresh();return sourceTicket;};
+    const install=(value,ticket)=>{
+      if(ticket!==sourceTicket)return;
+      const list=stepsFromDesign(value);design=value;renderSteps(list);extras.hidden=false;
+      status.textContent=value.format===SAVED?'Saved revision '+value.revision+' loaded ('+list.length+' nodes). Node order is an attachment index, not an execution sequence.':list.length+' steps loaded. Screenshots are optional.';
       refresh();
     };
-    copy.onclick=async()=>{try{await navigator.clipboard.writeText(aiPrompt(design));status.textContent='Prompt copied. It contains the goal and step names only, no screenshots.';}catch(_){status.textContent='Copying is not available in this browser.';}};
+    const loadSaved=async(ref,ticket)=>{
+      const query=new URLSearchParams({workflow_id:ref.workflow_id,revision:String(ref.revision)});
+      const record=JSON.parse(await (await api('/v1/process-catalog/revision?'+query)).text());
+      if(record.workflow_id!==ref.workflow_id||record.revision!==ref.revision||record.content_sha256!==ref.content_sha256)throw new Error('Saved revision no longer matches this reference.');
+      install({...record,format:SAVED},ticket);
+    };
+    window.addEventListener('owg-process-pdd-source',async event=>{
+      const ticket=resetSource();status.textContent='Loading saved revision…';card.scrollIntoView({block:'start'});
+      try{await loadSaved(event.detail,ticket);}catch(error){if(ticket===sourceTicket)status.textContent=error.message;}
+    });
+    file.onchange=async()=>{
+      const chosen=file.files&&file.files[0];if(!chosen)return;
+      const ticket=resetSource();
+      try{const value=JSON.parse(await chosen.text());if(ticket!==sourceTicket)return;if(value.format===SAVED)await loadSaved(value,ticket);else install(value,ticket);}
+      catch(error){if(ticket===sourceTicket){design=null;steps.replaceChildren();extras.hidden=true;status.textContent=error instanceof SyntaxError?'That file is not valid JSON.':error.message;}}
+      refresh();
+    };
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(aiPrompt(design));status.textContent='Prompt copied. It contains declared process text only, no screenshots.';}catch(_){status.textContent='Copying is not available in this browser.';}};
     make.onclick=async()=>{
+      const ticket=sourceTicket;
       make.disabled=true;status.textContent='Building the document…';
       try{
         const blob=await api('/v1/process-design/pdd-package',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(buildRequest(design,shots,{text:narrative.value,ai_drafted:aiFlag.checked},reviewed.checked))});
+        if(ticket!==sourceTicket)return;
         const url=URL.createObjectURL(blob);const link=el('a');link.href=url;link.download='openworkgraph-pdd.zip';document.body.appendChild(link);link.click();link.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),1000);status.textContent='PDD package downloaded. Nothing was stored by OpenWorkGraph.';
-      }catch(error){status.textContent=error.message;}finally{refresh();}
+        setTimeout(()=>URL.revokeObjectURL(url),1000);status.textContent='PDD package downloaded. Nothing was stored by this export.';
+      }catch(error){if(ticket===sourceTicket)status.textContent=error.message;}finally{refresh();}
     };
   }
 

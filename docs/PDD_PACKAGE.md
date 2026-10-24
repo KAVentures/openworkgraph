@@ -1,22 +1,26 @@
 # Process documentation with screenshots
 
-**Process documentation with screenshots** (Evidence tab) turns a design you
-exported from the process designer (`openworkgraph-proposed-process.json`)
-into a Process Definition Document package you can share. It is the same
-human-reviewed contract as the agent starter: the design must be marked as
-reviewed and must not authorize actions or include source identifiers.
+**Process documentation with screenshots** (Evidence tab) packages a saved
+process revision or an exported proposed design with optional illustrations.
+Proposed-design files (`openworkgraph-proposed-process.json`) keep the existing
+agent-starter input contract: reviewed, non-executing, without source identifiers.
+Saved graphs use the existing catalog revision, rules and topology directly;
+their document export does not require a supported agent runtime.
 
 ## Steps
 
-1. Choose the exported design. The steps of the proposed (TO-BE) process
-   appear.
+1. In the local process catalog, open a saved revision and choose **Add
+   screenshots to saved PDD**. Alternatively select its exported JSON, or an
+   exported proposed design. Saved JSON identifies a local revision; OWG loads
+   that revision rather than trusting the model copy in the file.
 2. Optionally add up to three screenshots per step (PNG or JPEG). Each opens
    in a masking editor: drag over names, email addresses, numbers or anything
    else that should not appear, or mask the whole image. Masks are drawn into
    the pixels in the browser before the image leaves the page. Add a caption
    if it helps.
 3. Optionally add a narrative. **Copy a prompt for your AI** copies the goal
-   and step names (no screenshots) so you can ask the AI app you already use
+   and step names, or the saved graph's nodes, transitions and declared rules
+   (no screenshots or evidence pointers), so you can ask the AI app you already use
    to draft one. Tick **drafted with an AI tool** if it was; the document then
    labels the narrative as AI-drafted and not reviewed.
 4. If you added screenshots, confirm that you reviewed every one and masked
@@ -45,3 +49,27 @@ treated as data.
 "masked_regions": 2}], "narrative": {"text": "...", "ai_drafted": true},
 "screenshots_reviewed_and_redacted_by_user": true}` and needs the local
 dashboard session.
+
+## Exact saved revisions
+
+For a saved graph, the same endpoint takes `process_reference` instead of
+`design`: `{"workflow_id":"process_id","revision":1,"content_sha256":"..."}`.
+The reference must match the owner-scoped local catalog. A historical revision
+remains explicitly selectable after newer revisions are saved; unsaved editor
+changes are excluded. A missing/deleted revision or digest mismatch fails, and
+the reference is checked again after image processing. Changing sources clears
+old screenshots and narrative; delayed loads cannot replace the newer selection.
+
+The package also contains the existing catalog `process.json`, `process.bpmn`
+and `process.txt` exports. Decisions, loops, every parallel branch and join,
+declared rules and responsibilities remain intact. The node list is an
+attachment index, not an execution sequence. `images/NODE_ID_K.png` uses the
+actual saved node ID. The manifest pins the same revision/hash and explicitly
+grants no policy or execution authority and verifies no outcomes.
+
+These catalog files include the same declared model and evidence pointers as
+the regular catalog export; review them before sharing. Building a package
+retains no new images, narrative or documents. Previously saved process records
+remain in the catalog, and downloaded copies are separate from it. The route
+requires the local dashboard session; AI bearer tokens and MCP clients cannot
+build or read these packages.

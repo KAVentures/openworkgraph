@@ -81,10 +81,79 @@ print("zip ok")
 `,zipPath],{encoding:'utf8'});
    assert.equal(check.status,0,check.stderr+check.stdout);
 
+   const saved=await page.evaluate(async()=>{
+     const process_model={goal:'Review both declared checks',baseline_source:'user_declared',baseline_coverage:'user_declared_design',baseline_path:['Declared design'],
+       activities:[{id:'fork',label:'Both checks',kind:'parallel_split'},{id:'A',label:'Check account'},{id:'B',label:'Check invoice'},
+         {id:'join',label:'All checks',kind:'parallel_join'},{id:'close',label:'Close'}],
+       transitions:[['fork','A'],['fork','B'],['A','join'],['B','join'],['join','close']].map(([source,target])=>({source,target})),
+       entry_activity_id:'fork',terminal_activity_ids:['close']};
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'Parallel PDD',process_model,user_confirmed:true})});
+     if(!response.ok)throw new Error(await response.text());return response.json();
+   });
+   await page.locator('#owgProcessCatalog').getByRole('button',{name:'Load saved designs',exact:true}).click();
+   await page.locator('#owgCatalogList').getByRole('button',{name:/Parallel PDD/}).click();
+   await page.locator('#owgCatalogEditor').getByRole('button',{name:'Add screenshots to saved PDD',exact:true}).waitFor();
+   await page.evaluate(async saved=>{
+     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workflow_id:saved.workflow_id,expected_revision:1,title:'Parallel PDD v2',process_model:{...saved.process_model,goal:'Newer revision goal'},user_confirmed:true})});
+     if(!response.ok)throw new Error(await response.text());
+   },saved);
+   await page.locator('#owgCatalogEditor').getByRole('button',{name:'Add screenshots to saved PDD',exact:true}).click();
+   await page.locator('#owgPddStatus').filter({hasText:'Saved revision 1 loaded (5 nodes)'}).waitFor();
+   assert.equal(await page.locator('#owgPddNarrative').inputValue(),'','a different source clears the old narrative');
+   assert.equal(await page.locator('#owgPddCard figure').count(),0,'old screenshots cannot move to another graph');
+   await page.locator('#owgPddShot_B').setInputFiles({name:'check.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+   await page.locator('#owgPddCard').getByRole('button',{name:'Mask entire screenshot',exact:true}).click();
+   await page.locator('#owgPddUseShot').click();await page.locator('#owgPddReviewed').check();
+   await page.locator('#owgPddCopyPrompt').click();
+   await page.locator('#owgPddStatus').filter({hasText:'Prompt copied'}).waitFor();
+   const graphPrompt=await page.evaluate(()=>navigator.clipboard.readText());
+   assert.match(graphPrompt,/parallel_split/);assert.match(graphPrompt,/parallel_join/);assert.match(graphPrompt,/fork → B/);
+   assert.equal(graphPrompt.includes('Newer revision goal'),false,'the selected historical revision remains pinned');
+   const [savedDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPddBuild').click()]);
+   const savedZip=path.join(scratch,'saved-pdd.zip');await savedDownload.saveAs(savedZip);
+   const savedCheck=spawnSync(python,['-c',`
+import json, sys, zipfile, io
+from pathlib import Path
+from xml.etree import ElementTree as ET
+from PIL import Image
+z=zipfile.ZipFile(sys.argv[1]);packet=json.loads(z.read('process.json'));manifest=json.loads(z.read('manifest.json'))
+assert packet['revision']==manifest['process_reference']['revision']==1
+assert packet['process_model']['goal']=='Review both declared checks'
+assert manifest['stored_by_owg'] is False and manifest['execution_authorized'] is False
+xml=ET.fromstring(z.read('process.bpmn'));ns={'b':'http://www.omg.org/spec/BPMN/20100524/MODEL'}
+assert len(xml.findall('.//b:parallelGateway',ns))==2
+assert len(xml.findall('.//b:sequenceFlow',ns))==5
+image=Image.open(io.BytesIO(z.read('images/B_1.png'))).convert('RGB')
+assert image.getpixel((100,100))==(0,0,0) and image.getpixel((300,100))==(0,0,0)
+assert 'attachment index, not an execution sequence' in z.read('PDD.md').decode()
+Path(sys.argv[1]).with_suffix('.html').write_bytes(z.read('PDD.html'))
+`,savedZip],{encoding:'utf8'});
+   assert.equal(savedCheck.status,0,savedCheck.stderr+savedCheck.stdout);
+   const savedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPddCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(savedAudit.violations.map(v=>v.id+': '+v.nodes[0].target.join(' ')),[],'saved PDD WCAG violations');
+   await page.setViewportSize({width:390,height:844});
+   assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'saved PDD card fits phone width');
+   const artifact=await context.newPage();await artifact.setViewportSize({width:390,height:844});
+   await artifact.setContent(await fs.readFile(savedZip.replace(/\.zip$/,'.html'),'utf8'));
+   assert.equal(await artifact.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'self-contained saved PDD fits phone width');
+   await artifact.close();await page.setViewportSize({width:1280,height:720});
+   let releaseSource,seenSource;
+   const sourceGate=new Promise(resolve=>releaseSource=resolve),sourceFetched=new Promise(resolve=>seenSource=resolve);
+   await page.route('**/v1/process-catalog/revision*',async route=>{const response=await route.fetch();seenSource();await sourceGate;await route.fulfill({response});});
+   await page.locator('#owgCatalogEditor').getByRole('button',{name:'Add screenshots to saved PDD',exact:true}).click();await sourceFetched;
+   await page.locator('#owgPddDesign').setInputFiles({name:'proposed-process.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(design))});
+   await page.locator('#owgPddStatus').filter({hasText:'3 steps loaded'}).waitFor();
+   const oldSource=page.waitForResponse(r=>r.url().includes('/v1/process-catalog/revision?'));
+   releaseSource();await oldSource;await page.unrouteAll({behavior:'wait'});
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.match(await page.locator('#owgPddStatus').textContent(),/3 steps loaded/,'a delayed saved graph cannot replace a newly selected file');
+   assert.equal(await page.locator('#owgPddShot_B').count(),0);
+
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('PDD package acceptance passed: exported design → screenshot → drawn mask burned into pixels → review gate → AI-drafted narrative label → downloaded ZIP verified, WCAG audit, mobile width.');
+   console.log('PDD package acceptance passed: legacy design with burned masks, saved catalog → pinned historical parallel graph → cleared old attachments → reviewed screenshot → ZIP with preserved BPMN/JSON and pixel verification, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

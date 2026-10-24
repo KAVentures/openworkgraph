@@ -313,6 +313,9 @@
     if(project.disabled)project.title='This linear agent runtime does not support parallel fork/join execution.';
     actions.appendChild(project);
     ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
+    actions.appendChild(button('Add screenshots to saved PDD',()=>{
+      window.dispatchEvent(new CustomEvent('owg-process-pdd-source',{detail:{workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256}}));
+    }));
     actions.appendChild(button('Compare next CSV with this saved revision',()=>{
       window.owgProcessMining?.setReference({workflow_id:record.workflow_id,revision:record.revision});
       document.getElementById('owgProcessCSV')?.scrollIntoView({block:'start'});
