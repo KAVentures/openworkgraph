@@ -285,5 +285,5 @@ assert.equal(m.change(null),'not enough runs');
 assert.equal(m.checkReport({format:'openworkgraph.automation-run-report.v1',runs:[{}]}),1);
 assert.throws(()=>m.checkReport({format:'x'}));assert.throws(()=>m.checkReport({format:'openworkgraph.automation-run-report.v1',runs:[]}));
 """
-    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr

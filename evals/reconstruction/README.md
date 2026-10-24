@@ -151,6 +151,38 @@ holds regression floors on all and holdout cases and requires that lanes never
 merge different records, fail closed when references are missing, and never
 republish deleted evidence.
 
+### Multi-signal linked items
+
+`server/work_item_links.py` (roadmap #326 A1) extends exact-record lanes. Observations
+are merged only by evidence that names the same thing:
+
+- `same_record`: the same valid resource reference;
+- `clipboard_transfer`: the same observed transfer id, which may join two records;
+- `same_tab_single_record`: an unreferenced observation in a tab that showed exactly one record.
+
+Weaker signals are returned only as `ambiguous` candidate links and are never merged:
+`same_tab_multiplexed`, `same_tab_unreferenced` and `surface_continuity`. Time alone never
+links anything, and labels, titles, URLs and clipboard contents are not read. The result is
+returned as `linked_work_items` in workflow-evidence discovery.
+
+    python -m evals.reconstruction.owg_native --split holdout --grouping linked_items
+    python -m evals.reconstruction.owg_native --split holdout --grouping linked_items_accepting_candidates
+
+Identifiable-membership family macro on the committed corpus:
+
+| Grouping | All F1 | All contamination | Holdout F1 | Holdout contamination |
+|---|---:|---:|---:|---:|
+| Record lanes | 0.541 | 0.000 | 0.476 | 0.000 |
+| Linked items | 0.574 | 0.000 | 0.524 | 0.000 |
+| Linked items + accepting every candidate (diagnostic only) | 0.708 | 0.050 | 0.649 | 0.125 |
+
+Accepting the ambiguous candidates raises F1 but breaks the contamination gate on the
+holdout, which is why OWG leaves them to the reader. Interruption rejection stays at 1.0.
+The remaining gap to 0.90 comes from workflows whose records are related only by meaning
+(for example a renewal email, an account and a price sheet). Deterministic structural
+signals cannot see that, so closing it needs a model-graded run (A2).
+`tests/test_work_item_links.py` holds these floors.
+
 ## Ablations
 
 After a baseline model run, remove one evidence signal at a time:

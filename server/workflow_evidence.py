@@ -22,6 +22,7 @@ from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
 from .record_evidence import record_linked_activity
 from .record_case_lanes import record_case_lanes
+from .work_item_links import linked_work_items
 
 FORMAT = "openworkgraph.workflow-evidence.v1"
 LOW_SPECIFICITY_QUALITY_FLOOR = 0.45
@@ -1040,6 +1041,7 @@ def list_workflow_evidence_candidates(
         "candidate_clusters": candidate_clusters[:bounded],
         "record_linked_activity": record_linked_activity(raw, max_groups=bounded),
         "record_case_lanes": record_case_lanes(raw, max_lanes=bounded),
+        "linked_work_items": linked_work_items(raw, max_items=bounded),
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": sum(

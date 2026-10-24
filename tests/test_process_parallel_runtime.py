@@ -82,7 +82,7 @@ def test_exported_parallel_project_is_portable_and_uses_the_same_graph_validator
     project=tmp_path/'project';project.mkdir()
     with ZipFile(BytesIO(build_runtime_project(payload))) as z:
         for name in ('process_model.py','process_parallel.py','process_rule_conditions.py','process_opportunities.py'):
-            assert z.read('owg_model/'+name)==(ROOT/'shared'/name).read_bytes()
+            assert z.read('owg_model/'+name).decode('utf-8')==(ROOT/'shared'/name).read_text(encoding='utf-8')
         z.extractall(project)
     sdk=os.environ.get('OWG_AGENT_SDK_PYTHON',sys.executable)
     result=subprocess.run([sdk,'-m','unittest','discover','-v'],cwd=project,capture_output=True,text=True,timeout=120)

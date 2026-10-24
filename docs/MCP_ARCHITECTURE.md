@@ -178,6 +178,12 @@ non-transitive candidate associations, observed provenance and explicit coverage
 limits. These are **not** inferred task identities; the module never promotes
 same-time or same-tab occurrence into a confirmed shared task.
 
+`continuity_context.resumption` (from `GET /v1/work-resumption`, AI context
+only) lists earlier sessions that share stable resource or file pointers with
+the latest session, including previous days, but only inside the current
+saved-history grant: with access off, only the current run is compared. See
+[WORK_RESUMPTION.md](WORK_RESUMPTION.md).
+
 **Raw-evidence fallback is mandatory when relevance matters.**
 - `search_work` is lexical and misses events that have no matching words.
 - `find_repeated_workflows` can miss real workflows, and a candidate can be wrong.

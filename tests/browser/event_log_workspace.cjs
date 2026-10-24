@@ -98,6 +98,8 @@ const path=require('node:path');
    assert.equal(comparison.visible_prefix_precision.matching_cases,36);
    assert.equal(comparison.visible_prefix_precision.case_population_coverage,0.6);
    assert.match(await page.locator('#owgEventLogGraphMetrics').textContent(),/100\.0%/);
+   assert.equal(comparison.token_replay.replayed_cases,60);assert.equal(comparison.token_replay.fitting_cases,36);
+   assert.match(await page.locator('#owgEventLogGraphTokenReplay').textContent(),/36 of 60/);
    const [metricCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogGraphCsv').click()]);
    const metricText=await fs.readFile(await metricCsv.path(),'utf8');
    assert.match(metricText,/fitness_lower_bound,fitness_upper_bound,analyzed_fitness,visible_label_precision,precision_matching_cases,precision_case_coverage/);
