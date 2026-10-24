@@ -99,6 +99,19 @@ const path=require('node:path');
      return fetch('/v1/process-catalog/export?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:String(saved.revision),format:'bpmn'})).then(r=>r.text());
    });
    assert.match(discoveredBPMN,/exclusiveGateway/);
+   await page.locator('#owgDotsRun').click();
+   await page.locator('#owgDotsStatus').filter({hasText:'60 of 60 cases with 274 events.'}).waitFor();
+   assert.match(await page.locator('#owgDotsLegend').textContent(),/^Check · 80/);
+   await page.locator('#owgDotsCanvas').scrollIntoViewIfNeeded();
+   const dot=await page.locator('#owgDotsCanvas').evaluate(canvas=>{const p=canvas.__owgPoints[0],r=canvas.getBoundingClientRect();return {x:r.left+p.x,y:r.top+p.y};});
+   await page.mouse.move(dot.x,dot.y);
+   await page.locator('#owgDotsTip').filter({hasText:'Case C20 · Receive · 2024-01-01 08:15'}).waitFor().catch(async error=>{
+     throw new Error('tooltip: '+await page.locator('#owgDotsTip').textContent()+' '+JSON.stringify(dot)+' '+error.message);});
+   await page.locator('#owgDotsTime').selectOption('relative');await page.locator('#owgDotsOrder').selectOption('duration');
+   await page.locator('#owgDotsRun').click();
+   await page.locator('#owgDotsResults summary').waitFor();
+   const firstRow=await page.locator('#owgDotsResults tbody tr').first().textContent();
+   assert.match(firstRow,/^C\d+/);assert.match(firstRow,/15\.0 h/,'longest case first');
    // Save a reviewed graph through the actual catalog and pin a historical revision.
    const saved=await page.evaluate(async()=>{
      const labels=['Receive','Check','Approve','Close'];
@@ -478,7 +491,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, a dotted chart with hover, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

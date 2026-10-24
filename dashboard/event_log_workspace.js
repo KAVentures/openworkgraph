@@ -230,6 +230,7 @@
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(discoverySection());
+    results.appendChild(dottedSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
     results.appendChild(analysisSection());
@@ -783,6 +784,89 @@
     return box;
   }
 
+  // Reference categorical palette (validated light-mode slots 1–7) plus a neutral "Other".
+  const DOT_COLOURS=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#6250d6','#8a8984'];
+  // Pure layout for the dotted chart: pixel positions and axis ticks.
+  function dotLayout(result,width,rowHeight){
+    const left=8,right=8,top=8,bottom=28,rows=Math.max(1,result.cases.length);
+    const height=top+bottom+rows*rowHeight,span=Math.max(1,result.span_seconds),plot=Math.max(1,width-left-right);
+    const x=t=>left+t/span*plot;
+    const points=[];
+    result.cases.forEach((c,row)=>c.points.forEach(([t,slot])=>points.push({x:x(t),y:top+row*rowHeight+rowHeight/2,slot,t,row})));
+    const ticks=(width<520?[0,0.5,1]:[0,0.25,0.5,0.75,1]).map(f=>({x:x(f*span),seconds:f*span}));
+    return {width,height,points,ticks,top,bottom,left};
+  }
+
+  function dottedSection(){
+    const box=section('Events over time');box.id='owgDots';
+    box.appendChild(el('div','A dotted chart: each row is a case and each dot an event at its recorded time, coloured by activity. Use calendar time to see waves, batches and backlogs, or time since each case started to compare how cases unfold.','muted'));
+    const time=select('owgDotsTime',[['absolute','Calendar time'],['relative','Time since case start']]);
+    const order=select('owgDotsOrder',[['start','Case start'],['duration','Longest cases first']]);
+    const run=button('Draw dotted chart','secondary');run.id='owgDotsRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Time',time),field('Order rows by',order),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgDotsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgDotsResults';out.style.position='relative';
+    box.append(row,statusLine,out);
+    const stamp=(r,seconds)=>r.time_origin?new Date(Date.parse(r.time_origin)+seconds*1000).toISOString().slice(0,16).replace('T',' '):duration(seconds);
+    run.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
+        const r=await getJSON(logPath('dotted-chart',{time:time.value,order:order.value,max_cases:'300'}));
+        if(generation!==state.generation)return;
+        const c=r.coverage;
+        statusLine.textContent=Number(c.cases_shown).toLocaleString()+' of '+Number(c.cases).toLocaleString()+' cases'+(c.cases_sampled?' (evenly sampled)':'')+' with '+Number(c.points_shown).toLocaleString()+' events'+(c.points_thinned?' (thinned within long cases)':'')+'.';
+        const legend=el('ul');legend.id='owgDotsLegend';legend.style.cssText='list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0';
+        const label=a=>a.activity===null?'Other ('+a.activities+' activities)':a.activity;
+        r.activities.forEach(a=>{const item=el('li');const swatch=el('span');swatch.setAttribute('aria-hidden','true');
+          swatch.style.cssText='display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:'+DOT_COLOURS[a.slot];
+          item.append(swatch,document.createTextNode(label(a)+' · '+Number(a.events).toLocaleString()));legend.appendChild(item);});
+        const plotHost=el('div');plotHost.style.position='relative';
+        const tip=el('div');tip.id='owgDotsTip';tip.setAttribute('role','tooltip');
+        tip.style.cssText='position:absolute;pointer-events:none;background:#fcfcfb;color:#0b0b0b;border:1px solid #c3c2b7;border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:nowrap;z-index:1';
+        const names=Object.fromEntries(r.activities.map(a=>[a.slot,label(a)]));
+        let drawnWidth=0;
+        const draw=()=>{
+          const width=Math.max(260,Math.min(1100,plotHost.clientWidth||out.clientWidth||600));
+          if(Math.abs(width-drawnWidth)<4)return;drawnWidth=width;
+          const rowHeight=Math.max(2,Math.min(12,Math.floor(480/Math.max(1,r.cases.length))));
+          const layout=dotLayout(r,width,rowHeight);
+          const canvas=document.createElement('canvas');canvas.id='owgDotsCanvas';
+          const ratio=window.devicePixelRatio||1;canvas.width=layout.width*ratio;canvas.height=layout.height*ratio;
+          canvas.style.cssText='width:'+layout.width+'px;height:'+layout.height+'px;display:block';
+          canvas.setAttribute('role','img');
+          canvas.setAttribute('aria-label','Dotted chart of '+r.cases.length+' cases over '+(r.time_origin?'calendar time':'time since case start')+'. The table below lists the same cases.');
+          const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);
+          const ink=getComputedStyle(box).color||'#52514e';
+          ctx.strokeStyle='rgba(128,128,128,0.35)';ctx.fillStyle=ink;ctx.font='11px system-ui,sans-serif';
+          layout.ticks.forEach((t,i)=>{ctx.beginPath();ctx.moveTo(t.x,layout.top);ctx.lineTo(t.x,layout.height-layout.bottom);ctx.stroke();
+            ctx.textAlign=i===0?'left':i===layout.ticks.length-1?'right':'center';ctx.fillText(stamp(r,t.seconds),t.x,layout.height-10);});
+          const radius=Math.max(1.5,Math.min(4,rowHeight/2));
+          layout.points.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);ctx.fillStyle=DOT_COLOURS[p.slot];ctx.fill();});
+          canvas.__owgPoints=layout.points;
+          canvas.addEventListener('mousemove',event=>{
+            const rect=canvas.getBoundingClientRect();
+            const mx=event.clientX-rect.left,my=event.clientY-rect.top;
+            let best=null,dist=64;
+            for(const p of layout.points){const d=(p.x-mx)**2+(p.y-my)**2;if(d<dist){dist=d;best=p;}}
+            if(!best){tip.style.display='none';return;}
+            tip.textContent='Case '+r.cases[best.row].case_id+' · '+names[best.slot]+' · '+stamp(r,best.t);
+            tip.style.left=Math.max(0,Math.min(layout.width-200,best.x+12))+'px';tip.style.top=(best.y+8)+'px';tip.style.display='block';
+          });
+          canvas.addEventListener('mouseleave',()=>{tip.style.display='none';});
+          plotHost.replaceChildren(canvas,tip);
+        };
+        const details=el('details');details.appendChild(el('summary','Table view of these cases'));
+        details.appendChild(table(['Case','Started','Duration','Events'],r.cases.slice(0,300).map(k=>[k.case_id,k.start.slice(0,16).replace('T',' '),duration(k.duration_seconds),Number(k.events).toLocaleString()])));
+        out.append(legend,plotHost,details,el('div',r.interpretation,'muted'));
+        draw();
+        if(window.ResizeObserver){const watcher=new ResizeObserver(()=>{if(!plotHost.isConnected){watcher.disconnect();return;}draw();});watcher.observe(plotHost);}
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function organizationSection(){
     const box=section('Who hands work to whom');box.id='owgEventLogOrganization';
     box.appendChild(el('div','Handovers and shared cases between the resources in this log. Resources are shown as Resource 01, 02… unless you choose to show names. No speed, waiting time or performance score is calculated for anyone.','muted'));
@@ -1125,6 +1209,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
