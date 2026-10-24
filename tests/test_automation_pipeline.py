@@ -39,8 +39,8 @@ def test_full_lifecycle_records_history_and_never_authorizes_execution():
                              "hours_are_modeled_from_entered_assumptions": True, "savings_claimed": False}
     idea = pipeline.transition(idea["idea_id"], {"to": "approved", "note": "Owner agreed", "expected_revision": idea["revision"]})
     idea = pipeline.transition(idea["idea_id"], {"to": "implemented", "expected_revision": idea["revision"]})
-    assert [h["state"] for h in idea["history"]] == ["idea", "assessing", "approved", "implemented"]
-    assert idea["history"][2]["note"] == "Owner agreed" and idea["allowed_transitions"] == []
+    assert [h["state"] for h in idea["history"] if h.get("action") != "assessment_saved"] == ["idea", "assessing", "approved", "implemented"]
+    assert idea["history"][3]["note"] == "Owner agreed" and idea["allowed_transitions"] == []
     with pytest.raises(pipeline.PipelineError, match="cannot be reassessed"):
         pipeline.assess(idea["idea_id"], _assessment(idea["revision"]))
     listing = pipeline.pipeline()
@@ -150,6 +150,16 @@ with TestClient(app) as client:
     assert moved.status_code == 200
     stale = client.post(f"/v1/automation-pipeline/{idea}/transition", json={"to": "on_hold", "expected_revision": 1}, headers=headers)
     assert stale.status_code == 409
+    assessment = {"ease": {q: 4 for q in ("rules_based", "structured_inputs", "process_stability", "digital_inputs", "low_exception_rate")},
+                  "cases_per_month": 300, "minutes_per_case": 10, "eligible_share": .5, "expected_revision": 2}
+    assessed = client.post(f"/v1/automation-pipeline/{idea}/assess", json=assessment, headers=headers).json()
+    approved = client.post(f"/v1/automation-pipeline/{idea}/transition", json={"to": "approved", "expected_revision": assessed["revision"]}, headers=headers).json()
+    reassessed = client.post(f"/v1/automation-pipeline/{idea}/assess", json={**assessment, "minutes_per_case": 1, "expected_revision": approved["revision"]}, headers=headers)
+    assert reassessed.status_code == 200 and reassessed.json()["state"] == "assessing"
+    assert reassessed.headers["cache-control"] == "no-store"
+    cannot_implement = client.post(f"/v1/automation-pipeline/{idea}/transition", json={"to": "implemented", "expected_revision": reassessed.json()["revision"]}, headers=headers)
+    assert cannot_implement.status_code == 422
+    assert client.post(f"/v1/automation-pipeline/{idea}/assess", json=assessment, headers=bearer).status_code in (401, 403)
     assert client.get("/v1/automation-pipeline/idea_nope", headers=headers).status_code == 404
     assert client.post("/v1/automation-pipeline", content=b"{", headers={**headers, "content-type": "application/json"}).status_code == 422
     exported = client.get("/v1/automation-pipeline/export.csv", headers=headers)
@@ -176,3 +186,75 @@ assert.throws(()=>m.assessmentBody({...all,cases:'1',minutes:'1',share:'150'},1)
 """
     result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
+
+
+def test_reassessing_approved_idea_requires_fresh_review_and_keeps_assessment_basis():
+    idea = pipeline.create({"title": "Review renewals"})
+    idea = pipeline.transition(idea["idea_id"], {"to": "assessing", "expected_revision": idea["revision"]})
+    idea = pipeline.assess(idea["idea_id"], _assessment(idea["revision"]))
+    first_assessment = idea["assessment"]
+    idea = pipeline.transition(idea["idea_id"], {"to": "approved", "expected_revision": idea["revision"]})
+    approved_revision = idea["revision"]
+    revised = pipeline.assess(idea["idea_id"], _assessment(approved_revision, minutes_per_case=1))
+    assert revised["state"] == "assessing"
+    assert revised["revision"] == approved_revision + 1
+    assert revised["assessment"]["minutes_per_case"] == 1
+    assert revised["score"]["modeled_hours_per_month"] == 2.5
+    assert "implemented" not in revised["allowed_transitions"]
+    event = revised["history"][-1]
+    assert event["action"] == "assessment_saved" and event["approval_invalidated"] is True
+    assert event["previous_assessment"] == first_assessment
+    assert event["assessment"] == revised["assessment"]
+    assert event["revision"] == revised["revision"]
+    with pytest.raises(pipeline.PipelineError, match="changed"):
+        pipeline.transition(idea["idea_id"], {"to": "implemented", "expected_revision": approved_revision})
+    with pytest.raises(pipeline.PipelineError, match="cannot move"):
+        pipeline.transition(idea["idea_id"], {"to": "implemented", "expected_revision": revised["revision"]})
+    assert pipeline.get(idea["idea_id"]) == revised
+    reapproved = pipeline.transition(idea["idea_id"], {"to": "approved", "expected_revision": revised["revision"]})
+    assert reapproved["history"][-1]["assessment"] == revised["assessment"]
+    assert reapproved["execution_authorized"] is False
+
+
+def test_reassessment_failure_rolls_back_history_and_approval(monkeypatch):
+    idea = pipeline.create({"title": "Invoices"})
+    idea = pipeline.transition(idea["idea_id"], {"to": "assessing", "expected_revision": 1})
+    idea = pipeline.assess(idea["idea_id"], _assessment(idea["revision"]))
+    idea = pipeline.transition(idea["idea_id"], {"to": "approved", "expected_revision": idea["revision"]})
+    real_public = pipeline._public
+    def fail_response(row):
+        raise RuntimeError("synthetic response failure")
+    monkeypatch.setattr(pipeline, "_public", fail_response)
+    with pytest.raises(RuntimeError, match="synthetic response failure"):
+        pipeline.assess(idea["idea_id"], _assessment(idea["revision"], minutes_per_case=1))
+    monkeypatch.setattr(pipeline, "_public", real_public)
+    assert pipeline.get(idea["idea_id"]) == idea
+
+
+def test_legacy_approved_assessment_is_preserved_on_resubmission():
+    import json
+    idea = pipeline.create({"title": "Legacy opportunity"})
+    original = _assessment(1)
+    original.pop("expected_revision")
+    # Old rows recorded state transitions but no historical assessment basis.
+    with pipeline._connect() as conn:
+        conn.execute("UPDATE ideas SET state = 'approved', assessment = ? WHERE idea_id = ?",
+                     [json.dumps(original), idea["idea_id"]])
+    current = pipeline.get(idea["idea_id"])
+    assert current["state"] == "approved" and "assessment" not in current["history"][0]
+    revised = pipeline.assess(idea["idea_id"], _assessment(1, eligible_share=0.1))
+    assert revised["state"] == "assessing"
+    assert revised["history"][-1]["previous_assessment"] == original
+    assert "assessment" not in revised["history"][0]  # no fabricated old approval basis
+
+
+def test_assessment_history_remains_bounded_and_survives_reopen():
+    idea = pipeline.create({"title": "Frequently revised"})
+    for i in range(105):
+        idea = pipeline.assess(idea["idea_id"], _assessment(idea["revision"], cases_per_month=i))
+    reopened = pipeline.get(idea["idea_id"])
+    assert len(reopened["history"]) == 100
+    assert reopened["history"][0]["assessment"]["cases_per_month"] == 5
+    assert reopened["history"][-1]["assessment"]["cases_per_month"] == 104
+    assert reopened["history"][-1]["approval_invalidated"] is False
+    assert reopened["state"] == "idea" and reopened["revision"] == 106

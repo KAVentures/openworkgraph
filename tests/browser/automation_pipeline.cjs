@@ -67,6 +67,28 @@ const path=require('node:path');
    const text=await fs.readFile(await csv.path(),'utf8');
    assert.match(text,/^idea_id,title,state,/);assert.match(text,/Copy approved prices into renewals,approved,process_catalog,Renewals r3,75,25\.0,quick_win/);
 
+   // Reassessment must invalidate the old approval and prevent implementation
+   // until the new assumptions have been reviewed. Inspect both saved bases.
+   assert.match(await page.locator('#owgPipelineDetail').textContent(),/Saving an assessment clears this approval/);
+   await page.locator('#owgPipelineMinutes').fill('1');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Approval cleared; review the new assessment.'}).waitFor();
+   assert.match(await page.locator('#owgPipelineDetail').textContent(),/State: Assessing/);
+   assert.equal(await page.getByRole('button',{name:'Move to Implemented'}).count(),0);
+   const bases=page.locator('#owgPipelineDetail ol details');
+   await bases.last().locator('summary').click();
+   assert.match(await bases.last().textContent(),/Saved assessment: 300 cases\/month × 1 minutes × 50% eligible/);
+   assert.match(await bases.last().textContent(),/Previous assessment: 300 cases\/month × 10 minutes × 50% eligible/);
+   await page.locator('#owgPipelineNote').fill('Re-reviewed lower estimate');
+   await page.getByRole('button',{name:'Move to Approved'}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Implemented'}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Implemented.'}).waitFor();
+   assert.equal(await page.locator('#owgPipelineAssess').count(),0);
+   const implemented=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),ideaId);
+   assert.equal(implemented.execution_authorized,false);
+   assert.equal(implemented.history.filter(h=>h.state==='approved').at(-1).assessment.minutes_per_case,1);
+
    await page.locator('#owgPipelineFilter').selectOption('rejected');
    await page.locator('#owgPipelineList').getByText('No ideas in this view.').waitFor();
    await page.locator('#owgPipelineFilter').selectOption('');
@@ -83,7 +105,7 @@ const path=require('node:path');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval with note and history, CSV export, filters, deletion, WCAG and mobile.');
+   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, deletion, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
