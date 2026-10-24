@@ -337,10 +337,58 @@ Rule kinds:
   against the log's latest event, not the wall clock). `minimum_cases` sets how many matches
   trigger the signal.
 
+`open_longer_than` measures age since the **first retained event**, including
+cases with recent activity. It does not measure idle time since the last event.
+A case matches only if its last reported activity is outside the selected ending
+activities; tied timestamps follow retained event-ID order, as in the timeline.
+First/last-activity analyses use that same order.
+This describes supplied log order and the retained observation window, not an
+independently verified business opening, closure or reopening time. Evidence
+shows the first/last event, age since the first event and idle time separately.
+
 Each rule can also carry the KPI case filters (`cohort`) and a `case_type`. Checking returns
 whether each signal holds, its value or matching-case count, up to 50 evidence cases, and what
 changed since the previous check. KPI rules report whether they flipped. Case rules report how
-many matching cases are new (up to 10,000 remembered case IDs per rule).
+many matching cases are new. Up to 10,000 matching IDs per rule are remembered,
+alongside the exact matching-case count. When either comparison population is
+partially retained, `new_cases_since_last_evaluation` stays null unless an exact
+count follows from the available evidence. `new_cases_comparison` returns lower
+and upper bounds, population/retained counts and a reason; the screen shows the
+range as bounded history. Cases moving into a retained sample are not presumed
+new. A first check has no prior comparison. Older stored states lack the prior
+population count and remain explicitly unknown until a subsequent complete
+comparison is possible. Triggered status and total matching cases still use
+the full selected population, independently of the history cap.
 
 A signal never sends messages, calls source systems or runs automations. It describes the
 saved log; it is not a verified business problem, a cause or an instruction to act.
+
+## Ad-hoc analyses
+
+`POST /v1/event-logs/{log_id}/analysis` runs a typed analysis: a bounded, no-SQL counterpart
+to Celonis PQL-style custom analyses. You choose the parts from fixed lists; nothing you type
+is executed as a query. Attribute names and values are passed as parameters.
+
+```json
+{"level": "cases", "dimensions": ["attribute:region", "start_month"],
+ "measures": [{"fn": "count"}, {"fn": "median", "of": "duration_seconds"}],
+ "where": {"ends_with": "Close", "duration_over_seconds": 3600},
+ "cohort": {"activity": "Approve"}, "order": "first_measure_desc", "limit": 100}
+```
+
+- `level`: `cases` or `events`.
+- Case dimensions: `start_month`, `start_week`, `end_week`, `first_activity`, `last_activity`,
+  `variant`, `has_rework`, `attribute:<case attribute>`.
+- Event dimensions: `activity`, `resource`, `month`, `week`, `weekday`, `hour`,
+  `attribute:<event attribute>`. Use up to two dimensions.
+- Measures (up to four): `count`, `cases`, `share`, and for cases `median`, `p90`, `avg`, `min`,
+  `max` or `sum` of `duration_seconds`, `events` or `distinct_activities`.
+- Case filters (`where`): `duration_over_seconds`, `duration_under_seconds`, `min_events`,
+  `ends_with`, `lacks_activity`. Also available: `activity_in`, the KPI `cohort` filters and
+  `case_type`.
+- Results return at most 500 rows, with `rows_truncated` when there are more.
+
+Saved analyses are stored with the log and deleted with it, at most 50 per log:
+`GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
+The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
+them.
