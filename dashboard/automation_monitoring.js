@@ -61,25 +61,32 @@
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[];
+    let deployments=[],renderVersion=0,loadVersion=0;
+    const clearResults=()=>{renderVersion++;results.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
-      deployments=(await api('/v1/automation-monitoring/deployments')).deployments||[];
+      const version=++loadVersion;
+      const loaded=(await api('/v1/automation-monitoring/deployments')).deployments||[];
+      if(version!==loadVersion)return;
+      const previous=pick.value;
+      clearResults();deployments=loaded;
       const options=deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime+' · '+Number(d.runs).toLocaleString()+' runs']);
       setOptions(pick,options);setOptions(target,[['','New deployment'],...options]);
       show(manage,deployments.length>0);
       if(select&&deployments.some(d=>d.deployment_id===select))pick.value=select;
+      else if(deployments.some(d=>d.deployment_id===previous))pick.value=previous;
       if(!deployments.length)results.replaceChildren();
     }
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
+      const selectedTarget=target.value;
       importButton.disabled=true;status.textContent='Importing '+chosen.name+'…';
       try{
         const text=await chosen.text();let doc;
         try{doc=JSON.parse(text);}catch(_){throw new Error('That file is not valid JSON.');}
         checkReport(doc);
-        const q=target.value?'?deployment_id='+encodeURIComponent(target.value):'';
+        const q=selectedTarget?'?deployment_id='+encodeURIComponent(selectedTarget):'';
         const r=await api('/v1/automation-monitoring/reports'+q,{method:'POST',body:text,headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'}});
         status.textContent='Imported '+Number(r.runs_imported).toLocaleString()+' runs ('+Number(r.steps_imported).toLocaleString()+' steps) into '+r.deployment.name+'.';
         file.value='';consent.checked=false;await load(r.deployment.deployment_id);await render();
@@ -87,12 +94,14 @@
     };
     design.onchange=async()=>{
       const chosen=design.files&&design.files[0];if(!chosen||!pick.value)return;design.value='';
-      try{await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/design',{method:'PUT',headers:{'Content-Type':'application/json'},body:await chosen.text()});
-        status.textContent='Reviewed design attached.';await load(pick.value);await render();}
-      catch(error){status.textContent=error.message;}
+      const selected=pick.value;
+      try{await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/design',{method:'PUT',headers:{'Content-Type':'application/json'},body:await chosen.text()});
+        if(pick.value!==selected)return;
+        status.textContent='Reviewed design attached.';await load(selected);await render();}
+      catch(error){if(pick.value===selected)status.textContent=error.message;}
     };
     view.onclick=()=>render().catch(error=>{status.textContent=error.message;});
-    pick.onchange=()=>results.replaceChildren();
+    pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
     toLog.onclick=async()=>{
       if(!window.confirm('Store this deployment\'s reported steps as an event log on this computer?'))return;
       try{const log=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/event-log',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}});
@@ -107,7 +116,11 @@
     };
     async function render(){
       if(!pick.value)return;
-      const m=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(pick.value)+'/monitor?recent_days='+encodeURIComponent(recent.value||7)+'&baseline_days='+encodeURIComponent(baseline.value||28));
+      const selected=pick.value,version=++renderVersion;
+      let m;
+      try{m=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/monitor?recent_days='+encodeURIComponent(recent.value||7)+'&baseline_days='+encodeURIComponent(baseline.value||28));}
+      catch(error){if(version!==renderVersion||pick.value!==selected)return;throw error;}
+      if(version!==renderVersion||pick.value!==selected)return;
       const parts=[];
       if(m.alerts.length){const box=el('div',null,'note');box.setAttribute('role','alert');box.appendChild(el('strong','Changes in the recent window'));
         const list=el('ul');m.alerts.forEach(a=>list.appendChild(el('li',a.message+(a.code==='duration_up'?'':' ('+change(a)+')'))));box.appendChild(list);parts.push(box);}

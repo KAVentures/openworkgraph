@@ -108,6 +108,35 @@ print(json.dumps(dict(spec=s,sha=hashlib.sha256(json.dumps(s,sort_keys=True,allo
      return (await(await fetch('/v1/automation-monitoring/deployments/'+ds[0].deployment_id+'/monitor')).json()).design_conformance;});
    assert.equal(compared.runs_exact_structural_match,2);assert.equal(compared.runs_compared,3);
    assert.equal(compared.business_outcome_verified,false);
+   // A late result must not replace the currently selected deployment/window.
+   const graphId=await page.locator('#owgMonitorPick').inputValue();
+   const otherReport={...graphReport,deployment:{...graphReport.deployment,name:'Other implementation'},runs:[graphReport.runs[0]]};
+   await page.locator('#owgMonitorTarget').selectOption('');
+   await page.locator('#owgMonitorReport').setInputFiles({name:'other-runs.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(otherReport))});
+   await page.locator('#owgMonitorConsent').check();await page.locator('#owgMonitorImport').click();
+   await page.locator('#owgMonitorStatus').filter({hasText:'Imported 1 runs (3 steps) into Other implementation'}).waitFor();
+   await page.waitForFunction(()=>document.querySelector('#owgMonitorPick').selectedOptions[0]?.textContent.includes('Other implementation'));
+   await page.locator('#owgMonitorDesign').setInputFiles({name:'workflow.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(graph.spec))});
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const otherId=await page.locator('#owgMonitorPick').inputValue();
+   let release,responseReady;const hold=new Promise(resolve=>{release=resolve;}),held=new Promise(resolve=>{responseReady=resolve;});
+   const pattern='**/v1/automation-monitoring/deployments/'+graphId+'/monitor?*';
+   await page.route(pattern,async route=>{const response=await route.fetch();responseReady();await hold;await route.fulfill({response});});
+   await page.locator('#owgMonitorPick').selectOption(graphId);await page.locator('#owgMonitorShow').click();
+   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Delayed monitoring response was not intercepted')),15000);
+     held.then(()=>{clearTimeout(timer);resolve();});});
+   await page.locator('#owgMonitorPick').selectOption(otherId);await page.locator('#owgMonitorShow').click();
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
+   const completed=page.waitForEvent('requestfinished',{predicate:r=>r.url().includes('/'+graphId+'/monitor?')});
+   release();await completed;
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.match(await page.locator('#owgMonitorResults').textContent(),/1 \/ 1/,'late response cannot replace the selected deployment');
+   assert.doesNotMatch(await page.locator('#owgMonitorResults').textContent(),/3 \/ 3/);
+   await page.unroute(pattern);
+   await page.locator('#owgMonitorRecent').fill('14');
+   assert.equal(await page.locator('#owgMonitorResults').textContent(),'','window edits invalidate old results');
+   await page.locator('#owgMonitorShow').click();
+   await page.locator('#owgMonitorResults h3',{hasText:'Reported activity structure against the saved graph'}).waitFor();
    const graphAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(graphAudit.violations.map(v=>v.id),[]);
@@ -115,6 +144,9 @@ print(json.dumps(dict(spec=s,sha=hashlib.sha256(json.dumps(s,sort_keys=True,allo
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgMonitorDelete').click();
    await page.locator('#owgMonitorStatus').filter({hasText:'Deployment deleted.'}).waitFor();
+   assert.equal(await page.locator('#owgMonitorPick').inputValue(),graphId);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgMonitorDelete').click();
+   await page.locator('#owgMonitorManage').waitFor({state:'hidden'});
    assert.deepEqual(errors,[]);
    console.log('Automation monitoring acceptance passed: consented run-report import, reported rates with intervals, drift alerts, reviewed-design comparison, WCAG audit, mobile width, event-log export, verified deletion.');
  }finally{
