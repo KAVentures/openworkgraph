@@ -97,6 +97,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/waiting-time?lifecycle_attribute=&end_attribute=` | Processing and waiting time per activity from lifecycle or end-time attributes (below). |
 | `GET /v1/event-logs/{log_id}/dotted-chart?time=absolute\|relative&order=start\|duration&max_cases=` | Events over time per case for a dotted chart (below). |
 | `GET /v1/event-logs/{log_id}/drift?window=month\|week\|cases&window_cases=&min_cases=` | Change points in how cases run over time (below). |
+| `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -664,3 +665,32 @@ its case count and median case duration. A change that starts mid-window usually
 sides of that window. One million events take a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_drift.py`). A change point does not say why
 behaviour changed, and a change in how events are recorded looks the same.
+
+## Case filter and playback
+
+The **Case filter** keeps only cases whose recorded order matches every rule, like Disco's follower
+filter or Celonis' process-flow selection. A rule names two activities and one of four orders:
+*is directly followed by*, *is eventually followed by*, *is never directly followed by* and *is never
+eventually followed by*. "Eventually" means some occurrence of the first activity comes before some
+later occurrence of the second. Events that share a timestamp are ordered by event identifier, as
+everywhere else. Up to five rules can be combined.
+
+The filter is the `follows` query parameter, a JSON list of
+`{"from": "A", "to": "B", "mode": "direct" | "eventual", "negate": false}` rules. It is accepted
+alongside the other case filters (`started_from`, `started_before`, `resource`, `activity`,
+`attribute`) by `summary`, `variants`, `activities`, `kpis`, `process-map`, `playback`,
+`dotted-chart`, `waiting-time`, `drift`, `model-discovery` and `organization`. Filtered responses say
+which filter was applied and how many cases the log had before filtering. In the dashboard the
+overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
+filter note says so.
+
+**Case playback** animates cases over the process map. `GET /v1/event-logs/{log_id}/playback` returns
+each case's events as seconds from the log's first event, restricted to the same most frequent
+activities that the map shows for the same `activities` share. At most `max_cases` (default 200, up
+to 500) cases are returned, sampled evenly by start time, and at most 30,000 events in total. The
+dashboard moves one token per case along the drawn arrow between consecutive events. A step whose
+arrow the paths slider hid moves in a straight line, and steps that share a timestamp jump instantly;
+the status line counts both. Play, pause and the position slider work from the keyboard. With reduced
+motion the playback advances in steps once per second. Tokens show recorded timestamps, not work
+being done, and nothing is executed. A million events filter and play back in a few seconds
+(`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_playback_filters.py`).

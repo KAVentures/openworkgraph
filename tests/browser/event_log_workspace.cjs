@@ -62,6 +62,33 @@ const path=require('node:path');
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
    assert.match(await page.locator('#owgMapSlowest').textContent(),/Slowest paths/);
 
+   // Case playback along the drawn map, then a follower case filter shared by the analysis views.
+   await page.locator('#owgPlaybackStatus').filter({hasText:'Playing 60 of 60 cases'}).waitFor();
+   assert.equal(await page.locator('#owgMapDrawing circle[data-owg-token]').count(),60);
+   await page.locator('#owgPlaybackPosition').evaluate(node=>{node.value='0';node.dispatchEvent(new Event('input',{bubbles:true}));});
+   assert.match(await page.locator('#owgPlaybackTime').textContent(),/^2024-01-\d\d \d\d:\d\d UTC · [1-9]\d* cases in progress$/);
+   const visibleTokens=()=>page.locator('#owgMapDrawing circle[data-owg-token][visibility=visible]').count();
+   assert.ok(await visibleTokens()>0,'tokens are placed on the map');
+   await page.locator('#owgPlaybackPlay').click();
+   assert.equal(await page.locator('#owgPlaybackPlay').getAttribute('aria-pressed'),'true');
+   await page.waitForFunction(()=>Number(document.querySelector('#owgPlaybackPosition').value)>5);
+   await page.locator('#owgPlaybackPlay').click();
+   assert.equal(await page.locator('#owgPlaybackPlay').getAttribute('aria-pressed'),'false');
+   await page.locator('#owgCaseFilterAdd').click();
+   await page.locator('#owgCaseFilterFrom1').selectOption('Check');await page.locator('#owgCaseFilterMode1').selectOption('direct');await page.locator('#owgCaseFilterTo1').selectOption('Fix');
+   await page.locator('#owgCaseFilterAdd').click();
+   await page.locator('#owgCaseFilterFrom2').selectOption('Fix');await page.locator('#owgCaseFilterMode2').selectOption('not-eventual');await page.locator('#owgCaseFilterTo2').selectOption('Approve');
+   await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 2 of 60 cases'}).waitFor();
+   assert.match(await page.locator('#owgCaseFilterStatus').textContent(),/Check is directly followed by Fix; Fix is never eventually followed by Approve/);
+   assert.equal(await page.locator('#owgCaseFilterFrom2').inputValue(),'Fix','rules stay editable after applying');
+   assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Fix → Check → Close/);
+   await page.locator('#owgPlaybackStatus').filter({hasText:'Playing 2 of 2 cases'}).waitFor();
+   await page.locator('#owgCaseFilterClear').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
+   assert.equal(await page.locator('#owgCaseFilterCount').count(),0);
+   await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
+
    await page.locator('#owgEventLogCasesBrowse').click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'60 matching cases. Showing 30'}).waitFor();
    await page.getByRole('button',{name:'Next case page',exact:true}).click();
@@ -552,7 +579,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

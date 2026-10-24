@@ -17,7 +17,8 @@ from .event_log_analytics import risk_difference
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
-_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute"}
+_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "follows"}
+MAX_FOLLOW_RULES = 5
 BOOTSTRAP_SAMPLE = 5000
 BOOTSTRAP_ROUNDS = 400
 
@@ -33,7 +34,8 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if spec is None:
         return {}
     if not isinstance(spec, dict) or set(spec) - _KEYS:
-        raise EventLogWorkspaceError("cohort accepts label, started_from, started_before, resource, activity, attribute")
+        raise EventLogWorkspaceError(
+            "cohort accepts label, started_from, started_before, resource, activity, attribute, follows")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -52,9 +54,27 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         if not sep or not name.strip():
             raise EventLogWorkspaceError("cohort attribute must look like name=value")
         cohort["attribute"] = (name.strip(), value.strip())
+    if spec.get("follows") not in (None, [], ""):
+        cohort["follows"] = _parse_follows(spec["follows"])
     if "started_from" in cohort and "started_before" in cohort and cohort["started_from"] >= cohort["started_before"]:
         raise EventLogWorkspaceError("cohort period is empty")
     return cohort
+
+
+def _parse_follows(rules: Any) -> list[dict[str, Any]]:
+    """Directly/eventually-follows case rules (Disco-style follower filters), all of which must hold."""
+    if not isinstance(rules, list) or not 0 < len(rules) <= MAX_FOLLOW_RULES:
+        raise EventLogWorkspaceError(f"cohort follows must be a list of 1–{MAX_FOLLOW_RULES} rules")
+    parsed = []
+    for rule in rules:
+        if not isinstance(rule, dict) or set(rule) - {"from", "to", "mode", "negate"}:
+            raise EventLogWorkspaceError("a follows rule has from, to, mode (direct or eventual) and negate")
+        mode = rule.get("mode", "eventual")
+        if mode not in ("direct", "eventual") or not isinstance(rule.get("negate", False), bool):
+            raise EventLogWorkspaceError("a follows rule's mode is direct or eventual and negate is true or false")
+        parsed.append({"from": _short(rule.get("from"), "follows activity"), "to": _short(rule.get("to"), "follows activity"),
+                       "mode": mode, "negate": rule.get("negate", False)})
+    return parsed
 
 
 def describe(cohort: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +107,17 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append("""case_id IN (SELECT object_id FROM objects WHERE log_id = ?
             AND list_contains(map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?), ?))""")
         params += [log_id, *cohort["attribute"]]
+    for rule in cohort.get("follows", []):
+        # Order within a case is time, then event identifier, as everywhere in the workspace.
+        if rule["mode"] == "direct":
+            cases = """SELECT case_id FROM (SELECT case_id, activity, lead(activity) OVER (
+                PARTITION BY case_id ORDER BY ts, event_id) AS nxt FROM ce) WHERE activity = ? AND nxt = ?"""
+        else:
+            cases = """SELECT case_id FROM (SELECT case_id, activity, row_number() OVER (
+                PARTITION BY case_id ORDER BY ts, event_id) AS k FROM ce) GROUP BY case_id
+                HAVING min(k) FILTER (WHERE activity = ?) < max(k) FILTER (WHERE activity = ?)"""
+        clauses.append(f"case_id {'NOT IN' if rule['negate'] else 'IN'} ({cases})")
+        params += [rule["from"], rule["to"]]
     return (" AND ".join(clauses) or "TRUE"), params
 
 

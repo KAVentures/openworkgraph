@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -27,6 +27,7 @@ from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
 from . import event_log_query as analysis
@@ -54,6 +55,23 @@ def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> JSONRe
         return JSONResponse(operation(*args, **kwargs), headers={"Cache-Control": "no-store"})
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+def _case_filter(started_from: str = Query(default="", max_length=64),
+                 started_before: str = Query(default="", max_length=64),
+                 resource: str = Query(default="", max_length=200),
+                 activity: str = Query(default="", max_length=200),
+                 attribute: str = Query(default="", max_length=200),
+                 follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
+    """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
+    cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
+                              "activity": activity, "attribute": attribute}
+    if follows:
+        try:
+            cohort["follows"] = json.loads(follows)
+        except ValueError:
+            raise HTTPException(422, "follows must be a JSON list of rules") from None
+    return cohort
 
 
 @router.get("/event-log-workspace.js")
@@ -145,9 +163,10 @@ def delete_event_log(request: Request, log_id: str):
 
 
 @router.get("/v1/event-logs/{log_id}/summary")
-def event_log_summary(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+def event_log_summary(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                      cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    return _respond(workspace.summary, log_id, case_type)
+    return _respond(workspace.summary, log_id, case_type, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/object-types")
@@ -164,9 +183,9 @@ def event_log_object_map(request: Request, log_id: str):
 
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                       limit: int = Query(default=20, ge=1, le=200)):
+                       limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    return _respond(workspace.variants, log_id, case_type, limit)
+    return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/directly-follows")
@@ -178,9 +197,10 @@ def event_log_directly_follows(request: Request, log_id: str,
 
 
 @router.get("/v1/event-logs/{log_id}/activities")
-def event_log_activities(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+def event_log_activities(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    return _respond(workspace.activities, log_id, case_type)
+    return _respond(workspace.activities, log_id, case_type, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/kpis")
@@ -188,31 +208,28 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
                    sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
                    automation_resources: str = Query(default="", max_length=10000),
                    automation_resource: list[str] | None = Query(default=None, max_length=50),
-                   started_from: str = Query(default="", max_length=64),
-                   started_before: str = Query(default="", max_length=64),
-                   resource: str = Query(default="", max_length=200),
-                   activity: str = Query(default="", max_length=200),
-                   attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     resources = (automation_resource if automation_resource is not None else
                  [item.strip() for item in automation_resources.split(",") if item.strip()])
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/process-map")
 def event_log_process_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                           activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
-                          started_from: str = Query(default="", max_length=64),
-                          started_before: str = Query(default="", max_length=64),
-                          resource: str = Query(default="", max_length=200),
-                          activity: str = Query(default="", max_length=200),
-                          attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/playback")
+def event_log_playback(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                       activities: float = Query(default=1.0, gt=0, le=1),
+                       max_cases: int = Query(default=200, ge=1, le=playback.MAX_CASES),
+                       cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    return _respond(playback.playback, log_id, case_type, activities=activities, max_cases=max_cases, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/waiting-time")
@@ -220,14 +237,8 @@ def event_log_waiting_time(request: Request, log_id: str, case_type: str | None 
                            mode: str = Query(default="auto", pattern="^(auto|lifecycle|end_attribute)$"),
                            lifecycle_attribute: str = Query(default="lifecycle:transition", min_length=1, max_length=120),
                            end_attribute: str = Query(default="", max_length=120),
-                           started_from: str = Query(default="", max_length=64),
-                           started_before: str = Query(default="", max_length=64),
-                           resource: str = Query(default="", max_length=200),
-                           activity: str = Query(default="", max_length=200),
-                           attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(waiting.waiting_time, log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute,
                     end_attribute=end_attribute, cohort=cohort)
 
@@ -237,14 +248,8 @@ def event_log_dotted_chart(request: Request, log_id: str, case_type: str | None 
                            time: str = Query(default="absolute", pattern="^(absolute|relative)$"),
                            order: str = Query(default="start", pattern="^(start|duration)$"),
                            max_cases: int = Query(default=300, ge=1, le=dotted.MAX_CASES),
-                           started_from: str = Query(default="", max_length=64),
-                           started_before: str = Query(default="", max_length=64),
-                           resource: str = Query(default="", max_length=200),
-                           activity: str = Query(default="", max_length=200),
-                           attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(dotted.dotted_chart, log_id, case_type, time=time, order=order, max_cases=max_cases, cohort=cohort)
 
 
@@ -253,14 +258,8 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
                     window: str = Query(default="month", pattern="^(week|month|cases)$"),
                     window_cases: int = Query(default=500, ge=20, le=100_000),
                     min_cases: int = Query(default=30, ge=10, le=10_000),
-                    started_from: str = Query(default="", max_length=64),
-                    started_before: str = Query(default="", max_length=64),
-                    resource: str = Query(default="", max_length=200),
-                    activity: str = Query(default="", max_length=200),
-                    attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(drift.drift, log_id, case_type, window=window, window_cases=window_cases, min_cases=min_cases,
                     cohort=cohort)
 
@@ -269,15 +268,9 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
 def event_log_organization(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            names: str = Query(default="pseudonymous", max_length=20),
                            automation_resource: list[str] | None = Query(default=None, max_length=50),
-                           started_from: str = Query(default="", max_length=64),
-                           started_before: str = Query(default="", max_length=64),
-                           resource: str = Query(default="", max_length=200),
-                           activity: str = Query(default="", max_length=200),
-                           attribute: str = Query(default="", max_length=200),
-                           limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES)):
+                           limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES),
+                           cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(organization.organization, log_id, case_type, names=names, cohort=cohort,
                     automation_resources=automation_resource, limit=limit)
 
@@ -406,14 +399,8 @@ async def event_log_conformance(request: Request, log_id: str,
 def event_log_model_discovery(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                               noise: float = Query(default=0.2, ge=0, lt=1),
                               activities: float = Query(default=1.0, gt=0, le=1),
-                              started_from: str = Query(default="", max_length=64),
-                              started_before: str = Query(default="", max_length=64),
-                              resource: str = Query(default="", max_length=200),
-                              activity: str = Query(default="", max_length=200),
-                              attribute: str = Query(default="", max_length=200)):
+        cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    cohort = {"started_from": started_from, "started_before": started_before, "resource": resource,
-              "activity": activity, "attribute": attribute}
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 

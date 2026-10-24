@@ -431,7 +431,20 @@ def _query(log_id: str, case_type: str | None, fn) -> dict[str, Any]:
             conn.close()
 
 
-def summary(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+def _query_filtered(log_id: str, case_type: str | None, cohort: dict[str, Any] | None, fn) -> dict[str, Any]:
+    """``_query`` restricted to a case filter; a filtered result says how many cases there were before it."""
+    from . import event_log_cohorts as cohorts
+    chosen = cohorts.parse_cohort(cohort)
+
+    def run(conn):
+        before = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0] if chosen else None
+        cohorts.restrict(conn, chosen, log_id)
+        result = fn(conn)
+        return {**result, "cohort": cohorts.describe(chosen), "cases_before_filter": before} if chosen else result
+    return _query(log_id, case_type, run)
+
+
+def summary(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     def run(conn):
         events, cases, activities, first, last = conn.execute(
             "SELECT count(*), count(DISTINCT case_id), count(DISTINCT activity), min(ts), max(ts) FROM ce").fetchone()
@@ -441,7 +454,7 @@ def summary(log_id: str, case_type: str | None = None) -> dict[str, Any]:
                 "first_event_at": first.isoformat() + "Z" if first else None,
                 "last_event_at": last.isoformat() + "Z" if last else None,
                 "case_duration_seconds": {"median": durations[0], "p90": durations[1], "mean": durations[2]}}
-    return _query(log_id, case_type, run)
+    return _query_filtered(log_id, case_type, cohort, run)
 
 
 def object_types(log_id: str) -> dict[str, Any]:
@@ -467,7 +480,8 @@ def object_types(log_id: str) -> dict[str, Any]:
             conn.close()
 
 
-def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
+def variants(log_id: str, case_type: str | None = None, limit: int = 20,
+             cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     limit = max(1, min(int(limit), 200))
     def run(conn):
         rows = conn.execute(f"""WITH v AS (
@@ -481,7 +495,7 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict
         return {"cases": total, "distinct_variants": distinct, "variants": [
             {"path": path.split(_SEP), "cases": n, "share": round(n / total, 6) if total else 0,
              "median_duration_seconds": d} for path, n, d in rows]}
-    return _query(log_id, case_type, run)
+    return _query_filtered(log_id, case_type, cohort, run)
 
 
 def directly_follows(log_id: str, case_type: str | None = None, limit: int = 200) -> dict[str, Any]:
@@ -506,7 +520,7 @@ def directly_follows(log_id: str, case_type: str | None = None, limit: int = 200
     return _query(log_id, case_type, run)
 
 
-def activities(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+def activities(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     def run(conn):
         rows = conn.execute("""SELECT activity, count(*) AS events, count(DISTINCT case_id) AS cases,
               count(DISTINCT CASE WHEN per_case > 1 THEN case_id END) AS repeated_in_cases,
@@ -515,7 +529,7 @@ def activities(log_id: str, case_type: str | None = None) -> dict[str, Any]:
             GROUP BY 1 ORDER BY events DESC, 1 LIMIT 500""").fetchall()
         return {"activities": [{"activity": a, "events": e, "cases": c, "repeated_in_cases": r, "resources": res,
                                 "repetition_is_not_verified_rework": True} for a, e, c, r, res in rows]}
-    return _query(log_id, case_type, run)
+    return _query_filtered(log_id, case_type, cohort, run)
 
 
 def case_events(log_id: str, case_type: str | None = None) -> Iterator[tuple[str, list[dict[str, Any]]]]:
