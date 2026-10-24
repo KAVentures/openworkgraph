@@ -219,6 +219,14 @@ const path=require('node:path');
    const badSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.analysisSpec({level:'cases',dim1:'attribute',attr1:' ',measure1:'count'});return 'accepted';}catch(e){return e.message;}});
    assert.equal(badSpec,'Enter the attribute name.');
 
+   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictOutcome').selectOption('duration_over');
+   await page.locator('#owgPredictHours').fill('5');await page.locator('#owgPredictRun').click();
+   await page.locator('#owgPredictResults').getByText('open cases;').waitFor();
+   const predictText=await page.locator('#owgPredictResults').textContent();
+   assert.match(predictText,/0 open cases/);assert.match(predictText,/Backtest on \d+ later steps/);assert.match(predictText,/Brier score/);
+   const predictSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:' , ',outcome:''});return 'accepted';}catch(e){return e.message;}});
+   assert.equal(predictSpec,'List the activities that end a case.');
+
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
@@ -423,7 +431,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
