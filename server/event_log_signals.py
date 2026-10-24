@@ -29,7 +29,7 @@ Label = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class KpiCondition(_Strict):
@@ -138,7 +138,8 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
 
 _PER_CASE = """CREATE OR REPLACE TEMP TABLE sc AS SELECT case_id, count(*) AS events,
     date_diff('second', min(ts), max(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
-    arg_max(activity, ts) AS last_activity, max(ts) AS last_ts, list(DISTINCT activity) AS acts
+    arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
+    min(ts) AS first_ts, max(ts) AS last_ts, list(DISTINCT activity) AS acts
   FROM rc GROUP BY case_id"""
 
 
@@ -161,18 +162,44 @@ def _matching(conn, when: CaseCondition, as_of: datetime) -> tuple[int, list[dic
         "contains_activity": ("list_contains(acts, ?)", [when.activity]),
         "lacks_activity": ("NOT list_contains(acts, ?)", [when.activity]),
         "has_rework": ("rework", []),
-        "open_longer_than": ("NOT list_contains(?, last_activity) AND date_diff('second', last_ts, ?) > ?",
+        "open_longer_than": ("NOT list_contains(?, last_activity) AND epoch(CAST(? AS TIMESTAMP) - first_ts) > ?",
                              [when.end_activities, as_of, when.seconds]),
     }[when.condition]
     total = conn.execute(f"SELECT count(*) FROM sc WHERE {predicate}", params).fetchone()[0]
+    order = 'first_ts, case_id' if when.condition == 'open_longer_than' else 'duration DESC, case_id'
     ids = [row[0] for row in conn.execute(
-        f"SELECT case_id FROM sc WHERE {predicate} ORDER BY duration DESC, case_id LIMIT ?",
+        f"SELECT case_id FROM sc WHERE {predicate} ORDER BY {order} LIMIT ?",
         params + [MAX_REMEMBERED_CASES]).fetchall()]
     evidence = [{"case_id": c, "events": e, "duration_seconds": d, "last_activity": a,
-                 "last_event_at": t.isoformat() + "Z"} for c, e, d, a, t in conn.execute(
-        f"SELECT case_id, events, duration, last_activity, last_ts FROM sc WHERE {predicate} "
-        "ORDER BY duration DESC, case_id LIMIT ?", params + [MAX_EVIDENCE_CASES]).fetchall()]
+                 "first_event_at": first.isoformat() + "Z", "last_event_at": t.isoformat() + "Z",
+                 "age_since_first_event_seconds": (as_of-first).total_seconds(),
+                 "idle_since_last_event_seconds": (as_of-t).total_seconds()}
+                for c, e, d, a, first, t in conn.execute(
+        f"SELECT case_id, events, duration, last_activity, first_ts, last_ts FROM sc WHERE {predicate} "
+        f"ORDER BY {order} LIMIT ?", params + [MAX_EVIDENCE_CASES]).fetchall()]
     return total, evidence, ids
+
+
+def _new_case_comparison(total: int, ids: list[str], previous: dict | None) -> dict[str, Any]:
+    """Set-difference bounds; retained samples are never treated as full history."""
+    if previous is None:
+        return {'count': None, 'lower_bound': None, 'upper_bound': None,
+                'comparison_complete': False, 'reason': 'first_check',
+                'current_matching_cases': total, 'current_retained_cases': len(ids)}
+    before = set(previous.get('case_ids') or [])
+    candidate = len(set(ids) - before)
+    old_total = previous.get('matching_cases')
+    known_total = type(old_total) is int and old_total >= len(before)
+    unretained = total - len(ids)
+    low = max(0, candidate - (old_total-len(before))) if known_total else 0
+    high = candidate + unretained
+    complete = low == high
+    return {'count': low if complete else None, 'lower_bound': low, 'upper_bound': high,
+            'comparison_complete': complete,
+            'reason': None if complete else ('retained_case_limit' if known_total else 'previous_population_unknown'),
+            'current_matching_cases': total, 'current_retained_cases': len(ids),
+            'previous_matching_cases': old_total if known_total else None,
+            'previous_retained_cases': len(before)}
 
 
 def evaluate(log_id: str) -> dict[str, Any]:
@@ -206,13 +233,13 @@ def evaluate(log_id: str) -> dict[str, Any]:
                 else:
                     total, evidence, ids = _matching(conn, rule.when, as_of)
                     triggered = total >= rule.when.minimum_cases
-                    before = set(previous.get("case_ids") or []) if previous else None
+                    comparison = _new_case_comparison(total, ids, previous)
                     result.update(matching_cases=total, triggered=triggered, evidence_cases=evidence,
                                   evidence_truncated=total > len(evidence),
-                                  new_cases_since_last_evaluation=None if before is None
-                                  else sum(1 for case in ids if case not in before),
+                                  new_cases_since_last_evaluation=comparison['count'],
+                                  new_cases_comparison=comparison,
                                   as_of=as_of.isoformat() + "Z" if as_of else None)
-                    state = {"triggered": triggered, "case_ids": ids}
+                    state = {"triggered": triggered, "case_ids": ids, "matching_cases": total}
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
                              [now, json.dumps(state), log_id, rule_id])
                 signals.append(result)

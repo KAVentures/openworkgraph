@@ -358,6 +358,44 @@ const path=require('node:path');
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
+   // Use the real 10,000-case history cap, without a server-side test override.
+   const ageRows=['case_id,activity,time','ARecent,Receive,2024-01-01T00:00:00Z','ARecent,Check,2024-01-05T03:00:00Z'];
+   for(let i=0;i<10000;i++)ageRows.push('B'+String(i).padStart(5,'0')+',Receive,2024-01-01T00:00:00Z');
+   ageRows.push('ZClock,Receive,2024-01-05T04:00:00Z');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'open-age.csv',mimeType:'text/csv',buffer:Buffer.from(ageRows.join('\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
+   await page.locator('#owgEventLogCase').selectOption('case_id');
+   await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:/Imported 10,?003 events/}).waitFor().catch(async error=>{
+     throw new Error('Open-age import status: '+await page.locator('#owgEventLogStatus').textContent()+' '+error.message);});
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgSignalName').fill('Open age, not idle time');
+   await page.locator('#owgSignalCondition').selectOption('open_longer_than');
+   await page.locator('#owgSignalHours').fill('48');await page.locator('#owgSignalEnds').fill('Close');
+   await page.locator('#owgSignalAdd').click();
+   await page.locator('#owgSignalStatus').filter({hasText:'Signal saved.'}).waitFor();
+   const firstAgeResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/signals/evaluate'));
+   await page.locator('#owgSignalEvaluate').click();const ageResult=await(await firstAgeResponse).json();
+   assert.equal(ageResult.signals[0].matching_cases,10001);
+   const recentCase=ageResult.signals[0].evidence_cases.find(c=>c.case_id==='ARecent');
+   assert.equal(recentCase.age_since_first_event_seconds,100*3600);
+   assert.equal(recentCase.idle_since_last_event_seconds,3600);
+   await page.locator('#owgSignalResults').getByText('first check').waitFor();
+   const secondAgeResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/signals/evaluate'));
+   await page.locator('#owgSignalEvaluate').click();const checkedAge=await(await secondAgeResponse).json();
+   assert.equal(checkedAge.signals[0].new_cases_since_last_evaluation,null);
+   assert.deepEqual([checkedAge.signals[0].new_cases_comparison.lower_bound,checkedAge.signals[0].new_cases_comparison.upper_bound],[0,1]);
+   await page.locator('#owgSignalResults').getByText('0–1 (bounded history)',{exact:true}).waitFor();
+   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent \(age .*idle /);
+   const ageAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(ageAudit.violations.map(v=>v.id),[]);
+   await page.setViewportSize({width:390,height:844});
+   assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
    console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
