@@ -106,8 +106,13 @@ def test_bpmn_round_trip_preserves_parallel_gateways_geometry_and_unconditional_
     assert restored.business_rules==[]
     assert compare_path(('B1','A1','B2','A2','Close'),restored)['exact_structural_match']
     assert 'parallel_split' in process_document(packet)
-    for operation in (lambda:build_runtime_project(packet),lambda:synthetic_routes(model)):
-        with pytest.raises(ValueError,match='fork/join-capable'):operation()
+    from io import BytesIO
+    import json
+    from zipfile import ZipFile
+    with ZipFile(BytesIO(build_runtime_project(packet))) as project:
+        spec=json.loads(project.read('workflow.spec.json'))
+    assert spec['control_flow_contract']=='openworkgraph.parallel-node-firing-plan.v1'
+    assert not spec['execution_authorization'] and synthetic_routes(model)['all_transitions_covered']
     invalid=xml.replace('gatewayDirection="Diverging"','gatewayDirection="Converging"')
     with pytest.raises(BPMNImportError,match='direction'):import_bpmn(invalid.encode())
     invalid=xml.replace('sourceRef="Activity_fork" targetRef="Activity_A1" />',
@@ -187,7 +192,7 @@ def test_exported_linear_runtime_rejects_a_rehashed_parallel_spec():
     with pytest.raises(ValueError,match='cannot plan or execute parallel'):scope['validate_spec'](forged)
 
 
-def test_dashboard_save_export_analysis_and_runtime_refusal_preserve_one_reviewed_model(tmp_path):
+def test_dashboard_save_export_analysis_and_runtime_contract_preserve_one_reviewed_model(tmp_path):
     import os,json,subprocess,sys
     from pathlib import Path
     path=tmp_path/'model.json';path.write_text(json.dumps(parallel_model().model_dump()))
@@ -209,7 +214,12 @@ with TestClient(app) as client:
   assert response.status_code==200,response.text
   assert response.headers['cache-control']=='no-store'
  project=client.get('/v1/process-catalog/agent-project',params=query,headers=headers)
- assert project.status_code==422 and 'fork/join-capable' in project.text
+ assert project.status_code==200,project.text
+ from io import BytesIO
+ from zipfile import ZipFile
+ spec=json.loads(ZipFile(BytesIO(project.content)).read('workflow.spec.json'))
+ assert spec['control_flow_contract']=='openworkgraph.parallel-node-firing-plan.v1'
+ assert spec['process_model']==record['process_model'] and not spec['execution_authorization']
  raw=b'case_id,activity,timestamp\nprivate_case,A1,2026-10-20T00:00:00Z\nprivate_case,B1,2026-10-20T00:01:00Z\nprivate_case,B2,2026-10-20T00:02:00Z\nprivate_case,A2,2026-10-20T00:03:00Z\nprivate_case,Close,2026-10-20T00:04:00Z\n'
  response=client.post('/v1/process-mining/preview',params=query,content=raw,headers={**headers,'Content-Type':'text/csv'})
  assert response.status_code==200,response.text

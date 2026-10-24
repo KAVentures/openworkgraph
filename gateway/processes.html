@@ -1705,17 +1705,16 @@
           );
           const parallel = data.process.process_model.activities.some(node =>
             ["parallel_split", "parallel_join"].includes(node.kind));
-          project.disabled = parallel ||
-            data.archived || data.review.status !== "reviewed_design";
+          project.disabled = data.archived || data.review.status !== "reviewed_design";
           $("exports").appendChild(project);
           if (project.disabled)
             $("exports").appendChild(
               el(
                 "p",
-                parallel ? "This linear agent runtime cannot execute parallel fork/join designs. BPMN, JSON and PDD exports preserve the model." :
                 "Implementation export requires an active process and independent review of this exact revision. Customer tool permissions remain separate.",
               ),
             );
+          if (parallel) $("exports").appendChild(el("p", "SDK schedules preserve every parallel branch and join, with one customer-authorized activity executed at a time."));
           renderMembers();
         }
         $("ruleFactsFile").addEventListener("change", () => {

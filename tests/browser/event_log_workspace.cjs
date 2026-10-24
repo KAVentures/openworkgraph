@@ -188,6 +188,12 @@ const path=require('node:path');
    const cause=await page.locator('#owgEventLogRootCauseRun').locator('xpath=../..').textContent();
    assert.match(cause,/activity: Fix/);assert.match(cause,/not causes/);
 
+   await page.locator('#owgEventLogOrgRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('Handovers').first().waitFor();
+   let org=await page.locator('#owgEventLogOrgResults').textContent();
+   assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|Neither says/);
+   await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
    const ruleBody=await page.evaluate(()=>window.__owgEventLogModel.signalRule({name:'Rework',kind:'kpi',metric:'rework_rate',operator:'above',threshold:'25'}));
    assert.deepEqual(ruleBody,{name:'Rework',when:{kind:'kpi',metric:'rework_rate',operator:'above',threshold:0.25}});
    await page.locator('#owgSignalName').fill('Skipped approval');await page.locator('#owgSignalCondition').selectOption('lacks_activity');
@@ -353,7 +359,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, saved signals, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

@@ -68,7 +68,7 @@ reviewed model update. An overall design-review checkbox does not remove it.
 Source diagram geometry is ignored and recomputed by the shared OWG renderer.
 Exported BPMN includes portable geometry and remains `isExecutable=false`.
 The imported exclusive merge is exported as an exclusive gateway, preserving
-its routing role. Full business-policy validation, parallel process semantics,
+its routing role. Full business-policy validation, nested/conditional parallel semantics,
 interprocess messages and executable BPMN deployment are outside this increment.
 
 ## Bounds and API

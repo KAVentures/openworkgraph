@@ -24,7 +24,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 @pytest.mark.skipif(not os.getenv('OWG_AGENT_SDK_PYTHON'),reason='Set an isolated Agents SDK interpreter for the real MCP implementation check')
 @pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True)])
-def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,shared_catalog,source_invariant):
+@pytest.mark.parametrize('parallel_schedule',[False,True])
+def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,shared_catalog,source_invariant,parallel_schedule):
     sdk=os.environ['OWG_AGENT_SDK_PYTHON']
     model=ProcessModel(goal='Resolve a selected synthetic case',baseline_source='user_declared',
         baseline_path=['Resolve','Read case','Done'],activities=[
@@ -34,11 +35,26 @@ def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source
         transitions=[{'source':'resolve','target':'readback'},{'source':'readback','target':'done'}],
         entry_activity_id='resolve',terminal_activity_ids=['done'],outcome_expectations=[
             {'terminal_activity_id':'done','operation':'jira_issue_resolved','user_confirmed':True}])
+    if parallel_schedule:
+        raw=model.model_dump()
+        raw['activities']=[{'id':'fork','label':'Both activities','kind':'parallel_split'},
+            *raw['activities'][:-1],{'id':'join','label':'Both completed','kind':'parallel_join'},raw['activities'][-1]]
+        raw['transitions']=[{'source':a,'target':b} for a,b in
+            [('fork','resolve'),('fork','readback'),('resolve','join'),('readback','join'),('join','done')]]
+        raw['entry_activity_id']='fork';model=ProcessModel.model_validate(raw)
     if source_invariant:
         raw=model.model_dump()
         raw['business_rules']=[{'id':'approved_source','text':'Reviewed current source invariant','user_confirmed':True,
             'predicate':{'match':'all','conditions':[{'path':'/source/state','operator':'eq','expected':'merged'}]}}]
-        raw['transitions'][0]['rule_id']='approved_source'
+        if parallel_schedule:
+            raw['activities'] += [{'id':'choose','label':'Choose completion','kind':'decision'},
+                                  {'id':'reject','label':'Needs review','kind':'end'}]
+            raw['transitions']=[e for e in raw['transitions'] if e['source']!='join']+[
+                {'source':'join','target':'choose'}, {'source':'choose','target':'done','rule_id':'approved_source'},
+                {'source':'choose','target':'reject','rule_id':'needs_review'}]
+            raw['business_rules'].append({'id':'needs_review','text':'Alternative needs owner clarification','user_confirmed':False})
+            raw['terminal_activity_ids'].append('reject')
+        else:raw['transitions'][0]['rule_id']='approved_source'
         model=ProcessModel.model_validate(raw)
     packet={'format':'openworkgraph.versioned-process-export.v1','workflow_id':'synthetic','revision':1,
         'content_sha256':'a'*64,'process_model':model.model_dump(),'execution_authorization':False}
@@ -140,7 +156,8 @@ app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,met
         OWG_EXECUTION_MCP_TOKEN='SYNTHETIC_TOOL_SECRET',OWG_EXECUTION_SOURCE_READ_TOKEN='SYNTHETIC_SOURCE_SECRET',
         OWG_EXECUTION_CATALOG_READ_TOKEN='SYNTHETIC_CATALOG_SECRET',
         OWG_TEST_MODEL_DIGEST=json.loads((project/'workflow.spec.json').read_text())['process_model_sha256'],
-        OWG_TEST_SOURCE_INVARIANT='1' if source_invariant else '0')
+        OWG_TEST_SOURCE_INVARIANT='1' if source_invariant else '0',
+        OWG_TEST_PARALLEL_SCHEDULE='1' if parallel_schedule else '0')
     env['NO_PROXY']=','.join(filter(None,[env.get('NO_PROXY',''),'127.0.0.1','localhost','::1']))
     def stats():
         with urlopen(Request(base+'/test-state',headers={'Authorization':'Bearer SYNTHETIC_SOURCE_SECRET'}),timeout=2) as response:
@@ -162,6 +179,8 @@ app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,met
 import json,os
 from test_execution import fixture
 _,plan,case,bindings,_=fixture()
+if os.environ['OWG_TEST_PARALLEL_SCHEDULE']=='1':
+    plan['activity_ids']=['fork','resolve','readback','join']+(['choose'] if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1' else [])+['done']
 if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1':
     case['approved_record']='owg:r:'+'c'*32
     bindings['source_rule_checks']=[{'rule_id':'approved_source','source_type':'github_pull_request',

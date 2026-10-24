@@ -185,7 +185,7 @@
     host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
     host.appendChild(el('p','Responsibility labels describe who should handle a step. They are user declarations and grant no access, review or execution permissions.'));
     if(model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind)))host.appendChild(el('p',
-      'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint linear branches; nested or conditional parallel regions are unsupported. Structural analysis and BPMN/PDD exports preserve joins. Linear agent-project export is unavailable for parallel designs.'));
+      'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint linear branches; nested or conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
@@ -309,8 +309,6 @@
     if(record.revision){
     actions.appendChild(button('Load revision history',()=>history()));
     const project=button('Download OpenAI Agents project',()=>download('agent-project'));
-    project.disabled=record.process_model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind));
-    if(project.disabled)project.title='This linear agent runtime does not support parallel fork/join execution.';
     actions.appendChild(project);
     ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
     actions.appendChild(button('Add screenshots to saved PDD',()=>{

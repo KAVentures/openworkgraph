@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 // Real-browser acceptance: consented run-report import → reported rates and drift alerts → design comparison → event log → deletion.
@@ -22,6 +22,8 @@ const path=require('node:path');
  const report={format:'openworkgraph.automation-run-report.v1',deployment:{name:'Refund agent',runtime:'ai-sdk'},runs};
  const spec={format:'openworkgraph.agent-starter.v1',to_be:{steps:[{id:'step_001',activity:'Receive'},{id:'step_002',activity:'Validate'},{id:'step_003',activity:'Close'}]}};
  try{
+   const hash=spawnSync(python,['-c','import hashlib,json,sys;print(hashlib.sha256(json.dumps(json.loads(sys.argv[1]),sort_keys=True,allow_nan=False).encode()).hexdigest())',JSON.stringify(spec)],{encoding:'utf8'});
+   assert.equal(hash.status,0,hash.stderr);report.deployment.workflow_spec_sha256=hash.stdout.trim();
    let ready=false;for(let i=0;i<100;i++){
      if(spawnError)throw spawnError;if(server.exitCode!==null)throw new Error('Server exited: '+logs);
      try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}
@@ -44,6 +46,11 @@ const path=require('node:path');
    const text=await page.locator('#owgMonitorResults').textContent();
    assert.match(text,/Recent20/);assert.match(text,/100\.0%/);assert.match(text,/Attach the starter/);
 
+   await page.locator('#owgMonitorDesign').setInputFiles({name:'wrong.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...spec,title:'Wrong version'}))});
+   await page.locator('#owgMonitorStatus').filter({hasText:'does not match the workflow spec named by retained reports'}).waitFor();
+   const pinned=await page.evaluate(async()=>(await(await fetch('/v1/automation-monitoring/deployments')).json()).deployments[0]);
+   assert.equal(pinned.reported_spec_sha256,report.deployment.workflow_spec_sha256);
+   assert.equal(pinned.design_attached,false);assert.equal(pinned.runs,60);
    await page.locator('#owgMonitorDesign').setInputFiles({name:'workflow.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(spec))});
    await page.locator('#owgMonitorResults h3',{hasText:'Compared with the reviewed design'}).waitFor();
    assert.match(await page.locator('#owgMonitorResults').textContent(),/Completed every step in order/);

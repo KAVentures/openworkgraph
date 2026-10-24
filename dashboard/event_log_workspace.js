@@ -214,6 +214,7 @@
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(organizationSection());
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     status('');
   }
@@ -704,6 +705,35 @@
     return box;
   }
 
+  function organizationSection(){
+    const box=section('Who hands work to whom');box.id='owgEventLogOrganization';
+    box.appendChild(el('div','Handovers and shared cases between the resources in this log. Resources are shown as Resource 01, 02… unless you choose to show names. No speed, waiting time or performance score is calculated for anyone.','muted'));
+    const namesLabel=el('label');namesLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    const names=input('owgEventLogOrgNames','checkbox');namesLabel.append(names,document.createTextNode(' Show resource names from the log'));
+    const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run);
+    const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
+    box.append(row,out);
+    run.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        out.replaceChildren(el('div','Reading resources…','muted'));
+        const r=await getJSON(logPath('organization',{names:names.checked?'shown':'pseudonymous'}));
+        if(generation!==state.generation)return;
+        if(!r.resources.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        const m=r.activity_resource_matrix;
+        out.replaceChildren(
+          el('div',Number(r.coverage.events_with_resource).toLocaleString()+' of '+Number(r.coverage.events).toLocaleString()+' events name a resource; '+Number(r.cases_with_handover).toLocaleString()+' cases contain a handover.'+(r.resources_truncated?' Less active resources are grouped as “Other resources”.':''),'muted'),
+          table(['From','To','Handovers','Cases'],r.handover_of_work.slice(0,25).map(h=>[h.from,h.to,Number(h.handovers).toLocaleString(),Number(h.cases).toLocaleString()])),
+          table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
+          table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
+          el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
+  window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   // Builds a signal rule body from the form values; throws a readable error.
   function signalRule(values){
     const name=String(values.name||'').trim();if(!name)throw new Error('Name the signal.');

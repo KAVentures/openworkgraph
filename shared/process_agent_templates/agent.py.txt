@@ -39,6 +39,11 @@ Only a matched check supports proposing that structured rule's transition;
 false, unknown, absent or unconfirmed conditions require clarification.
 If a branch depends on missing business facts or an unconfirmed rule, return
 needs_clarification with missing_business_inputs. Do not invent rule outcomes.
+For a parallel-node-firing contract, activity_ids is a full node firing order:
+include each split, every required branch, its join after all branch arrivals,
+and the terminal node. Branch steps can interleave while preserving each
+branch's order. The customer executor schedules one business activity at a
+time; parallel gateway semantics do not promise simultaneous tool calls.
 A structurally valid route is a proposal only, not business authorization or
 proof that any business activity occurred. There are no business action tools.'''
 
