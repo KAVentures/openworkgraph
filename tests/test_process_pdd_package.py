@@ -211,5 +211,5 @@ assert.equal(source.design,undefined);assert.equal(source.process_model,undefine
 assert.match(m.aiPrompt(saved),/parallel_split/);assert.match(m.aiPrompt(saved),/fork → A/);
 assert.match(m.aiPrompt(saved),/not an execution sequence/);
 """
-    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr

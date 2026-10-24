@@ -10,6 +10,7 @@ from shared.process_conformance import compare_path
 from shared.process_model import ProcessModel
 from shared.process_parallel import compare_parallel_path
 from shared.process_metrics import minimum_route_activities, fitness_bounds, visible_prefix_precision
+from shared.process_token_replay import replay_paths
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 
@@ -17,6 +18,7 @@ MAX_TRACE_LENGTH = 300
 MAX_ALIGNMENT_WORK = 200_000
 MAX_VARIANTS = 1000
 MAX_DISPLAY_VARIANTS = 20
+MAX_REPLAY_EVENTS = 300_000
 
 
 class SavedGraphQuery(BaseModel):
@@ -62,8 +64,10 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         display = []
         analyzed_events=edit_cost=0
         matching_paths=[]
+        replayable=[]
         for source_path, count, uncertain in rows:
             path = tuple(source_path)
+            replayable.append((path, count))
             result = None
             if parallel:
                 result = compare_parallel_path(path, model, max_states=remaining)
@@ -104,7 +108,11 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
             analyzed_events=analyzed_events,edit_cost=edit_cost,minimum_model_activities=shortest)
         precision=visible_prefix_precision(model,matching_paths)
         precision['case_population_coverage']=matched/total if total else None
+        replay=replay_paths(replayable,model,max_events=MAX_REPLAY_EVENTS)
+        replay['variants']=replay['variants'][:MAX_DISPLAY_VARIANTS]
+        replay['case_population_coverage']=replay['replayed_cases']/total if total else None
         return {
+            'token_replay':replay,
             'structural_fitness':fitness,'visible_prefix_precision':precision,
             'process_reference': {key: record[key] for key in ('workflow_id','revision','content_sha256','title','saved_at')},
             'cohort': cohorts.describe(cohort), 'cases': total, 'analyzed_cases': analyzed,
