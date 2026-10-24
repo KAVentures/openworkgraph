@@ -94,6 +94,34 @@ def test_activity_cap_keeps_maps_drawable(monkeypatch):
     assert item["activities_truncated"] is True and len(item["activities"]) == 2
     names = {a["activity"] for a in item["activities"]}
     assert all(e["from"] in names and e["to"] in names for e in item["transitions"])
+    assert item['activity_types']==3 and item['transition_types']==2
+    assert item['transitions_truncated'] is True
+
+
+def test_map_limits_are_exact_and_occurrences_are_not_case_support(monkeypatch):
+    from server import event_log_cases
+    doc={'objects':[{'id':'o','type':'order'},{'id':'i','type':'item'}], 'events':[]}
+    for n, activity in enumerate(['A','B','A','B']):
+        doc['events'].append({'id':str(n),'type':activity,'time':'2024-01-01T00:00:00Z',
+            'relationships':[{'objectId':'o','qualifier':'q'},{'objectId':'o','qualifier':'other'}]+
+                ([{'objectId':'i','qualifier':'q'}] if n in (0,3) else [])})
+    log=_ocel(doc)
+    monkeypatch.setattr(objects,'MAX_TYPES',2)
+    monkeypatch.setattr(objects,'MAX_ACTIVITIES_PER_TYPE',2)
+    monkeypatch.setattr(objects,'MAX_EDGES_PER_TYPE',2)
+    graph=objects.object_graph(log)
+    assert graph['object_type_count']==2 and graph['object_types_truncated'] is False
+    order=next(t for t in graph['object_types'] if t['object_type']=='order')
+    assert not order['activities_truncated'] and not order['transitions_truncated']
+    edge=next(e for e in order['transitions'] if e['from']=='A' and e['to']=='B')
+    assert edge['transition_count']==2 and edge['case_count']==1 and edge['median_elapsed_gap_seconds']==0
+    for kind,key,length in [('order','o',4),('item','i',2)]:
+        cases=event_log_cases.cases(log,{'transition':['A','B']},kind)
+        assert cases['selected_cases']==1 and cases['cases'][0]['case_id']==key
+        assert cases['cases'][0]['events']==length and cases['cases'][0]['timestamp_ties']==length-1
+    monkeypatch.setattr(objects,'MAX_EDGES_PER_TYPE',1)
+    order=next(t for t in objects.object_graph(log)['object_types'] if t['object_type']=='order')
+    assert order['transition_types']==2 and order['transitions_truncated'] is True
 
 
 def test_real_http_object_map_route(tmp_path):

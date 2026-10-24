@@ -65,6 +65,28 @@ def test_event_pages_include_all_events_and_disclose_equal_timestamps():
     with pytest.raises(workspace.EventLogWorkspaceError):pages.events(log,{'case_id':' Case'})
 
 
+def test_transition_selectors_require_exact_adjacency_and_keep_complete_cases():
+    paths={'repeat':[' A > ','B',' A > ','B'], 'apart':[' A > ','Other','B'],
+           'reverse':['B',' A > '], 'loop':['B','B'], 'single':['B']}
+    log=imported([f'{case},{activity},2024-01-01T0{i}:00:00Z,{"bot" if case=="apart" else "person"}'
+                  for case,path in paths.items() for i,activity in enumerate(path)])
+    result=pages.cases(log,{'transition':[' A > ','B']})
+    assert result['selected_cases']==1 and result['cases'][0]['case_id']=='repeat'
+    assert result['cases'][0]['events']==4 and result['transition']==[' A > ','B']
+    assert [e['activity'] for e in pages.events(log,{'case_id':'repeat'})['events']]==paths['repeat']
+    assert pages.cases(log,{'transition':['B',' A > ']})['selected_cases']==2
+    assert pages.cases(log,{'transition':['B','B']})['cases'][0]['case_id']=='loop'
+    assert pages.cases(log,{'transition':[' A > ','B'],'cohort':{'resource':'bot'}})['selected_cases']==0
+    assert pages.cases(log,{'transition':[' A > ','B'],'path':paths['apart']})['selected_cases']==0
+    assert pages.cases(log,{'transition':[' A > ','B'],'path':paths['repeat']})['selected_cases']==1
+    assert pages.cases(log,{'transition':['A >','B']})['selected_cases']==0
+
+
+@pytest.mark.parametrize('transition',[[],['A'],['A','B','C'],['A',3],{'from':'A','to':'B'},'A>B'])
+def test_transition_selectors_reject_ambiguous_shapes(transition):
+    with pytest.raises(workspace.EventLogWorkspaceError):pages.cases('not-read',{'transition':transition})
+
+
 def test_ocel_cases_are_object_scoped_and_qualifiers_do_not_duplicate_events():
     payload={'objects':[{'id':'o','type':'order'},{'id':'i','type':'item'}],
              'events':[{'id':'e','type':' Review > ','time':'2024-01-01T00:00:00Z','relationships':[
@@ -76,6 +98,8 @@ def test_ocel_cases_are_object_scoped_and_qualifiers_do_not_duplicate_events():
     with pytest.raises(workspace.EventLogWorkspaceError):pages.events(log,{'case_id':'i'},'order')
     assert pages.cases(log,{'path':[' Review > ']},'order')['selected_cases']==1
     assert pages.cases(log,{'path':['Review >']},'order')['selected_cases']==0
+    # A shared event with several qualifiers remains one event, never a self-loop.
+    assert pages.cases(log,{'transition':[' Review > ',' Review > ']},'order')['selected_cases']==0
 
 
 @pytest.mark.parametrize('spec',[None,{'limit':True},{'limit':101},{'after':'x'*201},{'path':[]},{'path':[3]}, {'unknown':1}])
@@ -101,6 +125,8 @@ with TestClient(app) as client:
   assert r.headers['cache-control']=='no-store'
  assert client.post(base+'/case-events/query',json={'case_id':'C','limit':1},headers=h).json()['next_offset']==1
  assert client.post(base+'/cases/query',json={'path':['A','B']},headers=h).json()['selected_cases']==1
+ assert client.post(base+'/cases/query',json={'transition':['A','B']},headers=h).json()['cases'][0]['events']==2
+ assert client.post(base+'/cases/query',json={'transition':['B','A']},headers=h).json()['selected_cases']==0
  assert client.post(base+'/cases/query',content=b'x',headers={**h,'Content-Type':'text/plain'}).status_code==415
  assert client.post(base+'/cases/query',content=b' '*70000,headers={**h,'Content-Type':'application/json'}).status_code==413
  from server import db

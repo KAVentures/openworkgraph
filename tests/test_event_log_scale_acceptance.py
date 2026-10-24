@@ -67,6 +67,7 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
     for name, call in (
         ("saved_graph", lambda: graph_comparison.compare(log["log_id"],reference,graph_spec)),
         ("case_query", lambda: case_pages.cases(log["log_id"], {})),
+        ("transition_cases", lambda: case_pages.cases(log["log_id"], {"transition":["Fix","Fix"]})),
         ("variant_cases", lambda: case_pages.cases(log["log_id"], {"path":["Receive", "Validate", "Skip", "Approve", "Fix", "Fix", "Invoice", "Pay", "Archive", "Close"]})),
         ("case_events", lambda: case_pages.events(log["log_id"], {"case_id":"case-0","limit":3})),
         ("summary", lambda: workspace.summary(log["log_id"])),
@@ -98,6 +99,9 @@ def test_ten_million_event_log_imports_and_answers_within_budget(tmp_path, monke
             assert result["visible_prefix_precision"]["matching_cases"]==expected
         if name == "case_query":
             assert result["selected_cases"] == EVENTS // 10 and len(result["cases"]) == 30
+        if name == "transition_cases":
+            assert result["selected_cases"] == len(range(0, EVENTS // 10, 5))
+            assert all(case['events']==10 for case in result['cases'])
         if name == "variant_cases":
             assert result["selected_cases"] == len(range(0, EVENTS // 10, 35))
         if name == "case_events":
