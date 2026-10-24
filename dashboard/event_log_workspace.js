@@ -91,7 +91,9 @@
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Delimiter',delimiter));
+    const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
+    extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
     const consentLabel=el('label');consentLabel.style.cssText='display:flex;gap:6px;align-items:center;margin-top:8px';
     const consent=input('owgEventLogConsent','checkbox');consentLabel.append(consent,document.createTextNode(' Store this log on this computer until I delete it'));
     const importButton=button('Import log');importButton.id='owgEventLogImport';importButton.disabled=true;
@@ -125,6 +127,7 @@
       cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
       cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
       cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+      setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
     }
     file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}refreshImport();try{await readColumns();}catch(_){status('Could not read the column names.');}};
     format.onchange=()=>{refreshImport();readColumns().catch(()=>{});};
@@ -133,7 +136,7 @@
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
       const q=new URLSearchParams({format:format.value,name:name.value.trim()});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);q.set('delimiter',delimiter.value);}
+      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);}
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
@@ -145,7 +148,7 @@
     appendButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
       const q=new URLSearchParams({format:format.value});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);q.set('delimiter',delimiter.value);}
+      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);}
       appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
@@ -230,6 +233,7 @@
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(discoverySection());
+    results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
     results.appendChild(analysisSection());
@@ -806,6 +810,43 @@
           }catch(error){statusLine.textContent=error.message;}
         };
         out.appendChild(draft);
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
+  function waitingSection(){
+    const box=section('Processing and waiting time');box.id='owgWaiting';
+    box.appendChild(el('div','Splits each activity into time spent working and time waiting before it starts, from start/complete lifecycle values or an end-time column. Waiting includes nights, weekends and work that was not recorded. Nothing is attributed to a person.','muted'));
+    const lifecycle=input('owgWaitingLifecycle','text');lifecycle.value='lifecycle:transition';lifecycle.maxLength=120;
+    const end=input('owgWaitingEnd','text','for example end_time');end.maxLength=120;
+    const run=button('Show processing and waiting','secondary');run.id='owgWaitingRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Lifecycle attribute',lifecycle),field('Or end-time attribute (with timezone)',end),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgWaitingStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgWaitingResults';
+    box.append(row,statusLine,out);
+    run.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        run.disabled=true;out.replaceChildren();statusLine.textContent='Measuring…';
+        const params={lifecycle_attribute:lifecycle.value.trim()||'lifecycle:transition'};
+        if(end.value.trim())params.end_attribute=end.value.trim();
+        const r=await getJSON(logPath('waiting-time',params));
+        if(generation!==state.generation)return;
+        if(!r.available){
+          statusLine.textContent=r.reason;
+          if(r.attribute_names.length)out.appendChild(el('div','Attributes in this log: '+r.attribute_names.join(', '),'muted'));
+          return;
+        }
+        const i=r.instances,f=r.flow_efficiency;
+        statusLine.textContent=Number(i.with_processing_time).toLocaleString()+' of '+Number(i.total).toLocaleString()+' activity instances have a start and an end'+(f.median===null?'.':'; in the median case, work covers '+pct(f.median)+' of the elapsed time.')+(i.unmatched_starts?' '+Number(i.unmatched_starts).toLocaleString()+' starts have no completion yet.':'');
+        out.append(
+          table(['Activity','Instances','Median processing','90th percentile processing','Median waiting before','Total waiting before','Share of all waiting'],
+            r.activities.slice(0,25).map(a=>[a.activity,Number(a.instances).toLocaleString(),duration(a.processing.median_seconds),duration(a.processing.p90_seconds),duration(a.waiting_before.median_seconds),duration(a.waiting_before.total_seconds),pct(a.share_of_all_waiting)])),
+          el('h4','Where cases wait'),
+          table(['After','Before','Times','Median waiting','Share of all waiting'],r.waiting_hotspots.slice(0,10).map(h=>[h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting)])),
+          el('div',r.interpretation,'muted'));
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };

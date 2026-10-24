@@ -99,6 +99,8 @@ const path=require('node:path');
      return fetch('/v1/process-catalog/export?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:String(saved.revision),format:'bpmn'})).then(r=>r.text());
    });
    assert.match(discoveredBPMN,/exclusiveGateway/);
+   await page.locator('#owgWaitingRun').click();
+   await page.locator('#owgWaitingStatus').filter({hasText:'No start or complete values'}).waitFor();
    // Save a reviewed graph through the actual catalog and pin a historical revision.
    const saved=await page.evaluate(async()=>{
      const labels=['Receive','Check','Approve','Close'];
@@ -445,6 +447,27 @@ const path=require('node:path');
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    const unauthenticated=await fetch(base+'/v1/event-logs');assert.equal(unauthenticated.status,401);
+   // Lifecycle CSV: the extra column is kept only because it is selected, then splits processing from waiting.
+   const lifeRows=['case_id,activity,time,lifecycle:transition,comment'];
+   for(let c=0;c<4;c++)for(const [a,from,to] of [['Receive',0,1],['Review',3,5]]){
+     lifeRows.push(['L'+c,a,new Date(Date.UTC(2024,1,1+c,from)).toISOString(),'start','note']);
+     lifeRows.push(['L'+c,a,new Date(Date.UTC(2024,1,1+c,to)).toISOString(),'complete','note']);}
+   await page.locator('#owgEventLogFile').setInputFiles({name:'lifecycle.csv',mimeType:'text/csv',buffer:Buffer.from(lifeRows.join('\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes').options.length===5);
+   assert.deepEqual(await page.locator('#owgEventLogAttributes').evaluate(n=>[...n.selectedOptions].map(o=>o.value)),['lifecycle:transition']);
+   await page.locator('#owgEventLogCase').selectOption('case_id');await page.locator('#owgEventLogActivity').selectOption('activity');
+   await page.locator('#owgEventLogTime').selectOption('time');await page.locator('#owgEventLogResource').selectOption('');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 16 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgWaitingRun').click();
+   await page.locator('#owgWaitingStatus').filter({hasText:'8 of 8 activity instances have a start and an end'}).waitFor();
+   const waitingText=await page.locator('#owgWaitingResults').textContent();
+   assert.match(waitingText,/Review4\s*2\.0 h\s*2\.0 h\s*2\.0 h/,'Review: 2 h processing and 2 h waiting');
+   assert.doesNotMatch(waitingText,/comment|note/);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    // Use the real 10,000-case history cap, without a server-side test override.
    const ageRows=['case_id,activity,time','ARecent,Receive,2024-01-01T00:00:00Z','ARecent,Check,2024-01-05T03:00:00Z'];
    for(let i=0;i<10000;i++)ageRows.push('B'+String(i).padStart(5,'0')+',Receive,2024-01-01T00:00:00Z');
@@ -510,7 +533,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, Disco-style map sliders, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
