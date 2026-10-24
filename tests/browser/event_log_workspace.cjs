@@ -234,6 +234,19 @@ const path=require('node:path');
    const exported=JSON.parse(await fs.readFile(await download.path(),'utf8'));
    assert.equal(exported.events.length,274);assert.equal(exported.objects.length,60);
 
+   // A newer, overlapping export: one known event is skipped, two new events (one new case) are added.
+   const newer=['case_id;step;time;who',rows[1],'C200;Receive;2024-02-01T08:00:00Z;bob','C200;Check;2024-02-01T09:00:00Z;bot'].join('\n');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'claims-newer.csv',mimeType:'text/csv',buffer:Buffer.from(newer)});
+   await page.locator('#owgEventLogDelimiter').selectOption(';');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
+   await page.locator('#owgEventLogActivity').selectOption('step');
+   assert.equal(await page.locator('#owgEventLogAppend').isDisabled(),true,'append needs explicit local-storage consent');
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogAppend').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Added 2 new events'}).waitFor();
+   assert.match(await page.locator('#owgEventLogStatus').textContent(),/skipped 1 already in the log/);
+   assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/276 events/);
+
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
@@ -410,7 +423,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, variants, filtered KPIs with CSV export, cohort benchmark, what-if simulation with an added activity, conformance, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
