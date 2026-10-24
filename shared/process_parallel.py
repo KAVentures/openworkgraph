@@ -68,6 +68,35 @@ def parallel_regions(model):
 class _BudgetReached(Exception):pass
 
 
+class EdgeTokenModel:
+    """Shared visible-activity semantics for alignment and prefix replay."""
+    def __init__(self, model):
+        parallel_regions(model)
+        self.nodes={node.id:node for node in model.activities}
+        self.incoming,self.outgoing=defaultdict(list),defaultdict(list)
+        for place,edge in enumerate(model.transitions):
+            self.incoming[edge.target].append(place)
+            self.outgoing[edge.source].append(place)
+        self.initial=frozenset({-1})
+        self.done=frozenset({-2})
+        self.incoming[model.entry_activity_id].append(-1)
+        for terminal in model.terminal_activity_ids:self.outgoing[terminal]=[-2]
+
+    def moves(self, marking):
+        for identifier,node in self.nodes.items():
+            arrived=[place for place in self.incoming[identifier] if place in marking]
+            if not arrived:continue
+            if node.kind=='parallel_join':
+                if len(arrived)!=len(self.incoming[identifier]):continue
+                consumptions=[frozenset(arrived)]
+            else:consumptions=[frozenset({place}) for place in arrived]
+            emissions=([frozenset(self.outgoing[identifier])] if node.kind=='parallel_split'
+                       else [frozenset({place}) for place in self.outgoing[identifier]])
+            for consumed in consumptions:
+                for emitted in emissions:
+                    yield node,(marking-consumed)|emitted
+
+
 def compare_parallel_path(path, model, *, max_states=None):
     """Minimum insert/delete alignment over edge-token markings, with a budget.
 
@@ -78,17 +107,10 @@ def compare_parallel_path(path, model, *, max_states=None):
     if len(path)>5000:raise ValueError('Conformance path exceeds the 5,000 event limit')
     if max_states is not None and (type(max_states) is not int or max_states<0):
         raise ValueError('A nonnegative bounded alignment budget is required')
-    parallel_regions(model)
+    automaton=EdgeTokenModel(model)
     limit=MAX_ALIGNMENT_STATES if max_states is None else min(MAX_ALIGNMENT_STATES,max_states)
     if type(limit) is not int or limit<0:raise ValueError('A nonnegative bounded alignment budget is required')
-    nodes={node.id:node for node in model.activities}
-    incoming,outgoing=defaultdict(list),defaultdict(list)
-    for place,edge in enumerate(model.transitions):
-        incoming[edge.target].append(place);outgoing[edge.source].append(place)
-    initial,done=-1,-2
-    incoming[model.entry_activity_id].append(initial)
-    for terminal in model.terminal_activity_ids:outgoing[terminal]=[done]
-    start=(0,frozenset({initial}));target=(len(path),frozenset({done}))
+    start=(0,automaton.initial);target=(len(path),automaton.done)
     distances={start:0};previous={};serial=count();queue=[(0,next(serial),start)]
     prefix=False
     common={'alignment_semantics':'explicit_structured_parallel_edge_tokens',
@@ -106,28 +128,17 @@ def compare_parallel_path(path, model, *, max_states=None):
             if distances[state]!=cost:continue
             index,marking=state
             if state==target:break
-            if index==len(path) and cost==0 and marking!=frozenset({done}):prefix=True
+            if index==len(path) and cost==0 and marking!=automaton.done:prefix=True
             if index<len(path):push((index+1,marking),cost+1,state,
                 {'type':'log_only','log_position':index+1,'activity':path[index]})
-            for identifier,node in nodes.items():
-                arrived=[place for place in incoming[identifier] if place in marking]
-                if not arrived:continue
-                if node.kind=='parallel_join':
-                    if len(arrived)!=len(incoming[identifier]):continue
-                    consumptions=[frozenset(arrived)]
-                else:consumptions=[frozenset({place}) for place in arrived]
-                emissions=([frozenset(outgoing[identifier])] if node.kind=='parallel_split'
-                           else [frozenset({place}) for place in outgoing[identifier]])
-                for consumed in consumptions:
-                    for emitted in emissions:
-                        following=(marking-consumed)|emitted
-                        if node.kind!='activity':push((index,following),cost,state,None)
-                        else:
-                            if index<len(path) and node.label==path[index]:
-                                push((index+1,following),cost,state,{'type':'matched','log_position':index+1,
-                                    'activity':path[index],'model_activity_id':identifier})
-                            push((index,following),cost+1,state,
-                                {'type':'model_only','model_activity_id':identifier,'activity':node.label})
+            for node,following in automaton.moves(marking):
+                if node.kind!='activity':push((index,following),cost,state,None)
+                else:
+                    if index<len(path) and node.label==path[index]:
+                        push((index+1,following),cost,state,{'type':'matched','log_position':index+1,
+                            'activity':path[index],'model_activity_id':node.id})
+                    push((index,following),cost+1,state,
+                        {'type':'model_only','model_activity_id':node.id,'activity':node.label})
     except _BudgetReached:
         return common|{'comparison_complete':False,'comparison_reason':'alignment_state_budget_reached',
             'alignment_state_count':len(distances),'exact_structural_match':None,'minimum_activity_edit_count':None,

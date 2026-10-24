@@ -53,6 +53,36 @@ all selected cases. Neither is business-policy compliance, source completeness,
 employee performance or verified business outcomes. JSON/CSV downloads retain
 the exact reference and case denominators.
 
+## Structural fitness and visible-label precision
+
+Fitness normalizes minimum activity-edit cost across analyzed cases. Its
+maximum possible cost is their observed event count plus the shortest complete
+model route for each case. A shortest route consumes every required parallel
+branch. A score of 1 means no structural edits; it is separate from the share
+of exactly matching cases.
+
+When any case remains unknown, the full-population fitness has no point
+estimate. The report gives lower and upper bounds by allowing each unknown
+case anywhere from zero to its maximum edit cost. Its known-subset fitness and
+analysis coverage remain separate. Empty populations have no fitness score.
+
+Visible-label precision measures unobserved next activity labels at prefixes
+of exact matching cases. Each prefix is weighted by its supporting case count.
+Replay retains all possible graph markings, including parallel interleavings
+and repeated labels. The score is one minus escaping label visits divided by
+all enabled label visits. A terminal state adds no artificial end activity.
+
+This metric is conditional on the reported exact-matching cases; the report
+shows their share of the selected population. It measures visible activity
+language, not the identity of a particular graph node, individual transition
+precision or business-policy compliance. An unused alternative may be a valid
+exception absent from this log. Nonmatching cases do not become fabricated
+model observations for this calculation.
+
+Replay has a work bound. If it cannot finish, precision is unknown rather than
+an optimistic partial score. That does not change completed alignment verdicts
+or fitness. JSON/CSV reports preserve the scores, bounds and case coverage.
+
 ## Local dashboard API
 
 `POST /v1/event-logs/{log_id}/process-conformance?case_type=order`
