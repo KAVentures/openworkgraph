@@ -84,10 +84,11 @@
         save.onclick=async()=>{try{
           const values={cases:cases.value,minutes:minutes.value,share:share.value,compliance:compliance.checked};
           for(const [key] of QUESTIONS)values[key]=answers[key].value;
-          await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/assess',assessmentBody(values,idea.revision));
-          await refresh();await show(idea.idea_id);status.textContent='Assessment saved.';
+          const saved=await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/assess',assessmentBody(values,idea.revision));
+          await refresh();await show(idea.idea_id);status.textContent=idea.state==='approved'&&saved.state==='assessing'?'Assessment saved. Approval cleared; review the new assessment.':'Assessment saved.';
         }catch(e){status.textContent=e.message;}};
         box.append(el('h4','Assessment'),qrow,arow);
+        if(idea.state==='approved')box.appendChild(el('div','Saving an assessment clears this approval and returns the idea to Assessing for a fresh review.','muted'));
       }
       if(idea.allowed_transitions.length){
         const note=input('owgPipelineNote','text','Reason or note (optional)');note.maxLength=1000;
@@ -97,7 +98,23 @@
           moves.appendChild(b);});
         box.append(el('h4','Decision'),moves);
       }
-      const history=el('ol');idea.history.forEach(h=>history.appendChild(el('li',STATE_LABELS[h.state]+' · '+h.at+(h.note?' · '+h.note:''))));
+      const history=el('ol');idea.history.forEach(h=>{
+        const item=el('li',(h.action==='assessment_saved'?'Assessment saved · ':'')+STATE_LABELS[h.state]+' · '+h.at+(h.note?' · '+h.note:''));
+        if(h.assessment){
+          const details=el('details');details.appendChild(el('summary','Assessment at this decision'));
+          const appendAssessment=(a,label)=>{
+            details.appendChild(el('div',label+': '+a.cases_per_month+' cases/month × '+a.minutes_per_case+' minutes × '+Number((a.eligible_share*100).toFixed(4))+'% eligible.'));
+            const answers=QUESTIONS.map(([key,text])=>text+': '+a.ease[key]+'/5').join(' · ');
+            details.appendChild(el('div',answers,'muted'));
+            details.appendChild(el('div','Compliance review needed: '+(a.compliance_review_needed?'Yes':'No')));
+            if(a.notes)details.appendChild(el('div',a.notes));
+          };
+          appendAssessment(h.assessment,'Saved assessment');
+          if(h.previous_assessment)appendAssessment(h.previous_assessment,'Previous assessment');
+          item.appendChild(details);
+        }
+        history.appendChild(item);
+      });
       const remove=button('Delete idea','secondary');remove.id='owgPipelineDelete';
       remove.onclick=async()=>{if(!window.confirm('Delete the idea "'+idea.title+'"? This cannot be undone.'))return;try{await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/delete',{method:'POST'});detail.replaceChildren();await refresh();status.textContent='Idea deleted.';}catch(e){status.textContent=e.message;}};
       box.append(el('h4','History'),history,remove);

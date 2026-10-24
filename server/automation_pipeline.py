@@ -162,8 +162,23 @@ def assess(idea_id: str, payload: Any) -> dict[str, Any]:
         if row[4] in {"implemented", "rejected"}:
             raise PipelineError(f"a {row[4]} idea cannot be reassessed")
         data = assessment.model_dump(exclude={"expected_revision"})
-        conn.execute("UPDATE ideas SET assessment = ?, revision = revision + 1, updated_at = ? WHERE idea_id = ?",
-                     [json.dumps(data), _now(), row[0]])
+        now = _now()
+        # An approval reviewed the previous assessment. Resubmitting it must not
+        # silently retain that decision, even when the caller still has a fresh
+        # optimistic revision. Keep the old basis too, including legacy rows
+        # whose previous assessment was never recorded in history.
+        invalidated = row[4] == "approved"
+        state = "assessing" if invalidated else row[4]
+        history = json.loads(row[7]) + [{
+            "action": "assessment_saved", "state": state, "at": now,
+            "revision": row[3] + 1, "assessment": data,
+            "previous_assessment": json.loads(row[6]) if row[6] else None,
+            "approval_invalidated": invalidated,
+            "note": "Approval cleared; review the new assessment." if invalidated else "Assessment saved.",
+        }]
+        conn.execute("UPDATE ideas SET assessment = ?, state = ?, history = ?, "
+                     "revision = revision + 1, updated_at = ? WHERE idea_id = ?",
+                     [json.dumps(data), state, json.dumps(history[-100:]), now, row[0]])
         return _public(_get(conn, idea_id))
 
 
@@ -177,7 +192,12 @@ def transition(idea_id: str, payload: Any) -> dict[str, Any]:
         if move.to == "approved" and not row[6]:
             raise PipelineError("assess the idea before approving it")
         now = _now()
-        history = json.loads(row[7]) + [{"state": move.to, "at": now, "note": move.note.strip()}]
+        entry = {"state": move.to, "at": now, "note": move.note.strip()}
+        if move.to == "approved":
+            # Pin the local decision's exact assumptions in its history entry;
+            # this snapshot grants no tool or business-execution authority.
+            entry.update(revision=row[3] + 1, assessment=json.loads(row[6]))
+        history = json.loads(row[7]) + [entry]
         conn.execute("UPDATE ideas SET state = ?, history = ?, revision = revision + 1, updated_at = ? WHERE idea_id = ?",
                      [move.to, json.dumps(history[-100:]), now, row[0]])
         return _public(_get(conn, idea_id))

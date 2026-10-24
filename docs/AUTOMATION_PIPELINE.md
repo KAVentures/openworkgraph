@@ -22,6 +22,14 @@ Every move is kept in the history with its time and optional note (the last 100 
 Every change must send `expected_revision`. A stale edit is refused with HTTP 409 instead of
 overwriting someone else's change.
 
+Saving an assessment on an **approved** idea returns it to **assessing**. A fresh
+approval must review the new assumptions before the idea can become implemented.
+The state change, previous and new assessment, and revision are saved atomically
+in the bounded history. New approvals also retain the assessment they reviewed;
+expand **Assessment at this decision** to inspect it. This remains a local review
+decision and never grants execution permission. Legacy history entries remain
+readable; historical assessment snapshots that were never stored are unknown.
+
 ## Assessment and priority
 
 - **Ease (0–100):** five questions answered from 1 to 5 (decisions follow clear rules, inputs
