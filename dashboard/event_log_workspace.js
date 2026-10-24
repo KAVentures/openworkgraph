@@ -2,7 +2,9 @@
 (() => {
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
-  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0};
+  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[]};
+  // Views that honour the workspace case filter; every other section uses all cases.
+  const FILTERED=new Set(['summary','variants','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -75,7 +77,7 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(state.follows.length&&FILTERED.has(suffix))q.set('follows',JSON.stringify(state.follows));const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
@@ -167,7 +169,7 @@
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
-    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;results.replaceChildren();};
+    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     exportButton.onclick=async()=>{
       try{
@@ -202,7 +204,7 @@
   }
 
   async function selectLog(logId){
-    const generation=++state.generation;state.logId=logId;state.caseType='';
+    const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];
     document.getElementById('owgEventLogResults').replaceChildren();
     const types=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/object-types');
     if(generation!==state.generation)return;
@@ -224,8 +226,10 @@
     const overview=section('Overview');
     const d=summary.case_duration_seconds||{};
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
+    if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
     results.appendChild(overview);
     results.appendChild(qualitySection());
+    results.appendChild(caseFilterSection(names));
 
     const variantBox=section('Most common variants');
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
@@ -336,6 +340,56 @@
   }
 
   // Cohort fields; dates are whole UTC days on the case's first event.
+  // Case-filter rules from editor rows; throws a readable error.
+  const FOLLOW_MODES={eventual:['eventual',false],direct:['direct',false],'not-eventual':['eventual',true],'not-direct':['direct',true]};
+  function followSpec(rows){
+    const rules=(rows||[]).map(r=>{
+      const from=String(r.from||''),to=String(r.to||'');const mode=FOLLOW_MODES[r.mode];
+      if(!from||!to)throw new Error('Choose both activities for every rule.');
+      if(!mode)throw new Error('Choose how the activities follow each other.');
+      return {from,to,mode:mode[0],negate:mode[1]};
+    });
+    if(rules.length>5)throw new Error('Use at most 5 rules.');
+    return rules;
+  }
+  function followText(rule){
+    return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to;
+  }
+  const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
+
+  function caseFilterSection(activityNames){
+    const box=section('Case filter');box.id='owgCaseFilter';
+    box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
+    const draft=state.follows.map(followRow);
+    const rows=el('div');rows.id='owgCaseFilterRules';
+    const add=button('Add rule','secondary');add.id='owgCaseFilterAdd';
+    const apply=button('Apply filter');apply.id='owgCaseFilterApply';
+    const clear=button('Clear filter','secondary');clear.id='owgCaseFilterClear';
+    const message=el('div',state.follows.length?'Active: '+state.follows.map(followText).join('; ')+'.':'No case filter: every case is included.','muted');
+    message.id='owgCaseFilterStatus';message.setAttribute('role','status');
+    const names=activityNames.slice(0,500).map(a=>[a,a]);
+    function render(){
+      rows.replaceChildren(...draft.map((rule,i)=>{
+        const n=i+1;
+        const from=select('owgCaseFilterFrom'+n,names),mode=select('owgCaseFilterMode'+n,[['eventual','is eventually followed by'],['direct','is directly followed by'],['not-eventual','is never eventually followed by'],['not-direct','is never directly followed by']]),to=select('owgCaseFilterTo'+n,names);
+        from.value=rule.from;mode.value=rule.mode;to.value=rule.to;
+        from.onchange=()=>{rule.from=from.value;};mode.onchange=()=>{rule.mode=mode.value;};to.onchange=()=>{rule.to=to.value;};
+        const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
+        const row=el('div',null,'row');row.style.alignItems='end';
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),remove);
+        return row;
+      }));
+      add.disabled=draft.length>=5||!names.length;
+    }
+    add.onclick=()=>{draft.push({from:names[0][0],to:(names[1]||names[0])[0],mode:'eventual'});render();const focus=document.getElementById('owgCaseFilterFrom'+draft.length);if(focus)focus.focus();};
+    apply.onclick=()=>{try{state.follows=followSpec(draft);analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
+    clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
+    render();
+    const controls=el('div',null,'row');controls.append(add,apply,clear);
+    box.append(rows,controls,message);
+    return box;
+  }
+
   function cohortSpec(values){
     const spec={};
     const day=(v,label)=>{if(!v)return '';if(!/^\d{4}-\d{2}-\d{2}$/.test(v))throw new Error(label+' must be a date.');return v+'T00:00:00Z';};
@@ -1203,7 +1257,8 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(acts.wrap,paths.wrap);
     const status=el('div',null,'muted');status.id='owgMapStatus';status.setAttribute('role','status');
     const graphHost=el('div');graphHost.id='owgMapGraph';const slow=el('div');slow.id='owgMapSlowest';
-    box.append(row,status,graphHost,slow);
+    const player=mapPlayback(box);
+    box.append(row,status,player.node,graphHost,slow);
     const generation=state.generation;let timer=null,request=0;
     function schedule(){clearTimeout(timer);timer=setTimeout(()=>draw().catch(error=>{status.textContent=error.message;}),250);}
     async function draw(){
@@ -1213,9 +1268,9 @@
       const c=r.coverage;
       status.textContent='Showing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths ('+pct(c.transition_share_shown)+' of transitions).'+(c.activity_limit_reached?' The map shows at most 64 activities.':'');
       const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
-      graphHost.replaceChildren();
+      graphHost.replaceChildren();player.reset();
       if(draw&&r.activities.length){
-        try{const start=Object.keys(r.start_activities)[0];const drawing=draw({activities:r.activities,transitions:r.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{});drawing.id='owgMapDrawing';graphHost.appendChild(drawing);}
+        try{const start=Object.keys(r.start_activities)[0];const drawing=draw({activities:r.activities,transitions:r.transitions,cases:start?[{path:[start]}]:[]},()=>{},()=>{});drawing.id='owgMapDrawing';graphHost.appendChild(drawing);player.load(drawing,Number(acts.node.value)/100);}
         catch(_){graphHost.appendChild(el('div','Map unavailable at this level; the paths are listed below.','muted'));}
       }
       const slowest=[...r.transitions].filter(t=>t.median_elapsed_gap_seconds!==null).sort((x,y)=>y.median_elapsed_gap_seconds-x.median_elapsed_gap_seconds).slice(0,10);
@@ -1223,6 +1278,107 @@
     }
     draw().catch(error=>{status.textContent=error.message;});
     return box;
+  }
+
+  // Where a case's token is at time t: between events i and i+1 (fraction f), at the last event, or not started/finished.
+  function tokenAt(events,t){
+    if(!events.length||t<events[0][0]||t>events[events.length-1][0])return null;
+    let lo=0,hi=events.length-1;
+    while(lo<hi){const mid=(lo+hi+1)>>1;if(events[mid][0]<=t)lo=mid;else hi=mid-1;}
+    if(lo===events.length-1)return {i:lo,f:0};
+    const a=events[lo][0],b=events[lo+1][0];
+    return {i:lo,f:b>a?(t-a)/(b-a):1};
+  }
+
+  // Disco-style playback: one token per sampled case moves along the drawn map between its recorded events.
+  function mapPlayback(owner){
+    const node=el('div');node.id='owgMapPlayback';
+    const play=button('Play','secondary');play.id='owgPlaybackPlay';play.setAttribute('aria-pressed','false');play.disabled=true;
+    const position=input('owgPlaybackPosition','range');position.min='0';position.max='1000';position.step='1';position.value='0';position.disabled=true;
+    const length=select('owgPlaybackLength',[['20','20 seconds'],['60','1 minute'],['120','2 minutes']]);
+    const clock=el('span','—');clock.id='owgPlaybackTime';
+    const message=el('div','Playback starts once the map is drawn.','muted');message.id='owgPlaybackStatus';message.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    const where=field('Playback position',position);where.appendChild(clock);
+    row.append(play,where,field('Playback length',length));
+    node.append(el('h4','Case playback'),row,message);
+    const reduced=()=>window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let data=null,svgNode=null,layer=null,tokens=[],edges=new Map(),centres=new Map(),frame=0,last=0,ticket=0;
+    const generation=state.generation;
+    const stamp=t=>data&&data.origin?new Date(Date.parse(data.origin)+t*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':'—';
+    function stop(){cancelAnimationFrame(frame);frame=0;play.textContent='Play';play.setAttribute('aria-pressed','false');}
+    function reset(){stop();ticket++;data=null;tokens=[];if(layer)layer.remove();layer=null;play.disabled=true;position.disabled=true;}
+    function paint(){
+      if(!data)return;
+      const t=Number(position.value)/1000*data.span_seconds;
+      let moving=0;
+      data.cases.forEach((c,k)=>{
+        const token=tokens[k],at=tokenAt(c.events,t);
+        if(!at){token.setAttribute('visibility','hidden');return;}
+        const from=data.activities[c.events[at.i][1]],next=c.events[at.i+1];
+        let x,y;
+        if(!next||at.f===0){[x,y]=centres.get(from)||[0,0];}
+        else{
+          const to=data.activities[next[1]],edge=edges.get(from+'\u0000'+to);
+          if(edge){const p=edge.path.getPointAtLength(at.f*edge.length);x=p.x;y=p.y;}
+          else{const a=centres.get(from)||[0,0],b=centres.get(to)||[0,0];x=a[0]+(b[0]-a[0])*at.f;y=a[1]+(b[1]-a[1])*at.f;}
+        }
+        token.setAttribute('cx',x.toFixed(1));token.setAttribute('cy',y.toFixed(1));token.setAttribute('visibility','visible');moving++;
+      });
+      clock.textContent=stamp(t)+' · '+moving+' cases in progress';
+      position.setAttribute('aria-valuetext',stamp(t));
+    }
+    function tick(now){
+      if(!owner.isConnected||generation!==state.generation||!data){stop();return;}
+      const total=Number(length.value)*1000,step=reduced();
+      const elapsed=now-last;
+      if(!step||elapsed>=1000){
+        const advance=step?50:Math.max(0,elapsed)/total*1000;
+        last=now;
+        const value=Math.min(1000,Number(position.value)+advance);
+        position.value=String(value);paint();
+        if(value>=1000){stop();return;}
+      }
+      frame=requestAnimationFrame(tick);
+    }
+    play.onclick=()=>{
+      if(frame){stop();return;}
+      if(Number(position.value)>=1000)position.value='0';
+      play.textContent='Pause';play.setAttribute('aria-pressed','true');last=performance.now();frame=requestAnimationFrame(tick);
+    };
+    position.oninput=paint;
+    async function load(drawing,share){
+      const mine=++ticket;
+      message.textContent='Loading playback…';
+      try{
+        const r=await getJSON(logPath('playback',{activities:String(share),max_cases:'200'}));
+        if(mine!==ticket||generation!==state.generation||!drawing.isConnected)return;
+        svgNode=drawing.querySelector('svg');if(!svgNode)return;
+        edges=new Map();centres=new Map();
+        svgNode.querySelectorAll('path[aria-label^="Inspect observed transition "]').forEach(path=>{
+          const pair=path.getAttribute('aria-label').slice('Inspect observed transition '.length).split(' → ');
+          if(pair.length===2)edges.set(pair[0]+'\u0000'+pair[1],{path,length:path.getTotalLength()});
+        });
+        svgNode.querySelectorAll('g[aria-label^="Inspect observed activity "]').forEach(g=>{
+          const rect=g.querySelector('rect');if(!rect)return;
+          centres.set(g.getAttribute('aria-label').slice('Inspect observed activity '.length),[Number(rect.getAttribute('x'))+Number(rect.getAttribute('width'))/2,Number(rect.getAttribute('y'))+Number(rect.getAttribute('height'))/2]);
+        });
+        data=r;
+        layer=document.createElementNS('http://www.w3.org/2000/svg','g');layer.setAttribute('aria-hidden','true');layer.setAttribute('pointer-events','none');
+        tokens=r.cases.map(()=>{const c=document.createElementNS('http://www.w3.org/2000/svg','circle');c.setAttribute('r','5');c.setAttribute('fill','#c2410c');c.setAttribute('fill-opacity','0.75');c.setAttribute('visibility','hidden');c.dataset.owgToken='';layer.appendChild(c);return c;});
+        svgNode.appendChild(layer);
+        let offMap=0;
+        r.cases.forEach(c=>{for(let i=1;i<c.events.length;i++)if(!edges.has(r.activities[c.events[i-1][1]]+'\u0000'+r.activities[c.events[i][1]]))offMap++;});
+        const cov=r.coverage;
+        message.textContent='Playing '+Number(cov.cases_shown).toLocaleString()+' of '+Number(cov.cases).toLocaleString()+' cases'+(cov.cases_sampled?' (evenly sampled by start time)':'')+' over '+duration(r.span_seconds)+' of recorded time.'
+          +(cov.steps_sharing_a_timestamp?' '+Number(cov.steps_sharing_a_timestamp).toLocaleString()+' steps share a timestamp and jump instantly.':'')
+          +(offMap?' '+Number(offMap).toLocaleString()+' steps follow paths hidden from the map and move in a straight line.':'')
+          +(r.activities_hidden?' Events of '+r.activities_hidden+' hidden activities are left out.':'')
+          +(cov.cases_truncated?' '+cov.cases_truncated+' long cases are shortened.':'')+' '+r.interpretation;
+        position.value='0';play.disabled=!r.cases.length;position.disabled=!r.cases.length;paint();
+      }catch(error){if(mine===ticket)message.textContent=error.message;}
+    }
+    return {node,load,reset};
   }
 
   // Builds a signal rule body from the form values; throws a readable error.
@@ -1358,6 +1514,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={reasonText,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
