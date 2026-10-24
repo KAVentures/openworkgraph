@@ -345,6 +345,35 @@ many matching cases are new (up to 10,000 remembered case IDs per rule).
 A signal never sends messages, calls source systems or runs automations. It describes the
 saved log; it is not a verified business problem, a cause or an instruction to act.
 
+## Ad-hoc analyses
+
+`POST /v1/event-logs/{log_id}/analysis` runs a typed analysis: a bounded, no-SQL counterpart
+to Celonis PQL-style custom analyses. You choose the parts from fixed lists; nothing you type
+is executed as a query. Attribute names and values are passed as parameters.
+
+```json
+{"level": "cases", "dimensions": ["attribute:region", "start_month"],
+ "measures": [{"fn": "count"}, {"fn": "median", "of": "duration_seconds"}],
+ "where": {"ends_with": "Close", "duration_over_seconds": 3600},
+ "cohort": {"activity": "Approve"}, "order": "first_measure_desc", "limit": 100}
+```
+
+- `level`: `cases` or `events`.
+- Case dimensions: `start_month`, `start_week`, `end_week`, `first_activity`, `last_activity`,
+  `variant`, `has_rework`, `attribute:<case attribute>`.
+- Event dimensions: `activity`, `resource`, `month`, `week`, `weekday`, `hour`,
+  `attribute:<event attribute>`. Use up to two dimensions.
+- Measures (up to four): `count`, `cases`, `share`, and for cases `median`, `p90`, `avg`, `min`,
+  `max` or `sum` of `duration_seconds`, `events` or `distinct_activities`.
+- Case filters (`where`): `duration_over_seconds`, `duration_under_seconds`, `min_events`,
+  `ends_with`, `lacks_activity`. Also available: `activity_in`, the KPI `cohort` filters and
+  `case_type`.
+- Results return at most 500 rows, with `rows_truncated` when there are more.
+
+Saved analyses are stored with the log and deleted with it, at most 50 per log:
+`GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
+The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
+them.
 ## Appending newer exports
 
 `POST /v1/event-logs/{log_id}/append?format=…` (dashboard session plus the

@@ -275,4 +275,5 @@ outcome was certified by the synthetic acceptance tests.
 unconditional fork/join modeling, descriptive interchange and token-based
 structural analysis. SDK projects now support complete node-firing plans with
 serial customer-authorized execution across every required branch and join.
-Nested/conditional regions remain unsupported.
+Complete nested paired blocks are supported within the 40-node model limit;
+conditional regions remain unsupported.

@@ -185,7 +185,7 @@
     host.appendChild(el('h4','TO-BE proposed graph'));host.appendChild(graph());
     host.appendChild(el('p','Responsibility labels describe who should handle a step. They are user declarations and grant no access, review or execution permissions.'));
     if(model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind)))host.appendChild(el('p',
-      'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint linear branches; nested or conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
+      'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint unconditional branch chains and complete nested paired blocks; conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
@@ -481,7 +481,7 @@
   }
   function installBPMNImport(parent){
     const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
-    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint linear branches. Nested/conditional parallel regions, inclusive gateways, subprocesses, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Conditional parallel regions, inclusive gateways, subprocesses, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
     const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
     file.setAttribute('aria-label','Choose BPMN process design');
     const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;

@@ -22,6 +22,7 @@ from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_objects as objects
 from . import event_log_organization as organization
+from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
 from . import event_log_workspace as workspace
@@ -215,6 +216,35 @@ async def _json_body(request: Request, what: str) -> Any:
         return json.loads(body)
     except ValueError:
         raise HTTPException(422, f"{what} is not valid JSON") from None
+
+
+@router.post("/v1/event-logs/{log_id}/analysis")
+async def event_log_run_analysis(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "analysis")
+    try:
+        result = await run_in_threadpool(analysis.run, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/analyses")
+def event_log_saved_analyses(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.list_saved, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/analyses")
+async def event_log_save_analysis(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.save, log_id, await _json_body(request, "saved analysis"))
+
+
+@router.post("/v1/event-logs/{log_id}/analyses/{analysis_id}/delete")
+def event_log_delete_analysis(request: Request, log_id: str, analysis_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.delete_saved, log_id, analysis_id)
 
 
 @router.get("/v1/event-logs/{log_id}/signals")

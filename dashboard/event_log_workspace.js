@@ -230,6 +230,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
+    results.appendChild(analysisSection());
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     status('');
   }
@@ -748,6 +749,95 @@
     return box;
   }
 
+  const ANALYSIS_DIMENSIONS={
+    cases:[['','(none)'],['start_month','Start month'],['start_week','Start week'],['end_week','End week'],['first_activity','First activity'],['last_activity','Last activity'],['variant','Variant'],['has_rework','Rework'],['attribute','Case attribute…']],
+    events:[['','(none)'],['activity','Activity'],['resource','Resource'],['month','Month'],['week','Week'],['weekday','Weekday'],['hour','Hour of day'],['attribute','Event attribute…']]};
+  const ANALYSIS_MEASURES={
+    cases:[['count','Number of cases'],['share','Share of cases'],['median:duration_seconds','Median case time'],['p90:duration_seconds','90th percentile case time'],['avg:duration_seconds','Average case time'],['avg:events','Average events per case'],['max:events','Most events in a case']],
+    events:[['count','Number of events'],['cases','Number of cases'],['share','Share of events']]};
+  // Builds an analysis spec from form values; throws a readable error.
+  function analysisSpec(values){
+    const dims=[];
+    for(const [kind,name] of [[values.dim1,values.attr1],[values.dim2,values.attr2]]){
+      if(!kind)continue;
+      if(kind==='attribute'){const n=String(name||'').trim();if(!n)throw new Error('Enter the attribute name.');dims.push('attribute:'+n);}else dims.push(kind);
+    }
+    const measures=[values.measure1,values.measure2].filter(Boolean).map(m=>{const [fn,of]=m.split(':');return of?{fn,of}:{fn};});
+    const spec={level:values.level,dimensions:dims,measures,limit:Number(values.limit)||100};
+    if(values.level==='cases'){
+      const where={};const h=Number(values.hours);
+      if(values.hours!==''&&values.hours!==undefined){if(!(h>=0))throw new Error('Enter hours as a number.');where.duration_over_seconds=Math.round(h*3600);}
+      if(values.endsWith)where.ends_with=values.endsWith;
+      if(Object.keys(where).length)spec.where=where;
+    }
+    return spec;
+  }
+
+  function analysisSection(){
+    const box=section('Build an analysis');box.id='owgEventLogAnalysis';
+    box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
+    const level=select('owgAnalysisLevel',[['cases','Cases'],['events','Events']]);
+    const dim1=select('owgAnalysisDim1',[]),dim2=select('owgAnalysisDim2',[]);
+    const attr1=input('owgAnalysisAttr1','text','attribute name'),attr2=input('owgAnalysisAttr2','text','attribute name');
+    const measure1=select('owgAnalysisMeasure1',[]),measure2=select('owgAnalysisMeasure2',[]);
+    const hours=input('owgAnalysisHours','number','any');hours.min='0';hours.step='any';
+    const endsWith=input('owgAnalysisEnds','text','any activity');
+    const run=button('Run analysis');run.id='owgAnalysisRun';
+    const name=input('owgAnalysisName','text','Analysis name');name.maxLength=120;
+    const save=button('Save analysis','secondary');save.id='owgAnalysisSave';save.disabled=true;
+    const f={attr1:field('First attribute',attr1),attr2:field('Second attribute',attr2),hours:field('Only cases longer than (hours)',hours),ends:field('Only cases ending with',endsWith)};
+    const sync=()=>{
+      const keep=[dim1.value,dim2.value,measure1.value,measure2.value];
+      setOptions(dim1,ANALYSIS_DIMENSIONS[level.value]);setOptions(dim2,ANALYSIS_DIMENSIONS[level.value]);
+      setOptions(measure1,ANALYSIS_MEASURES[level.value]);setOptions(measure2,[['','(none)'],...ANALYSIS_MEASURES[level.value]]);
+      [dim1,dim2,measure1,measure2].forEach((node,i)=>{if([...node.options].some(o=>o.value===keep[i]))node.value=keep[i];});
+      show(f.attr1,dim1.value==='attribute');show(f.attr2,dim2.value==='attribute');show(f.hours,level.value==='cases');show(f.ends,level.value==='cases');
+    };
+    level.onchange=dim1.onchange=dim2.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Analyse',level),field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run);
+    const saveRow=el('div',null,'row');saveRow.style.alignItems='end';saveRow.append(field('Name',name),save);
+    const message=el('div',null,'muted');message.id='owgAnalysisStatus';message.setAttribute('role','status');
+    const out=el('div');out.id='owgAnalysisResults';
+    const savedList=el('div');savedList.id='owgAnalysisSaved';
+    let last=null,lastSpec=null;
+    const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
+    box.append(row,message,out,exports.node,saveRow,savedList);
+    const generation=state.generation;
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId);
+    const cell=(column,value)=>value===null||value===undefined?'—':/duration_seconds$/.test(column)?duration(value):column==='share'?pct(value):typeof value==='number'?Number(value).toLocaleString():String(value);
+    async function execute(spec){
+      if(state.caseType)spec.case_type=state.caseType;
+      const r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+      if(generation!==state.generation)return;
+      last=r;lastSpec=spec;exports.enable(true);save.disabled=false;
+      out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
+        table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v)))));
+    }
+    async function refresh(){
+      const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
+      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','',''],r.analyses.map(a=>{
+        const open=button('Run','secondary');open.setAttribute('aria-label','Run saved analysis '+a.name);
+        open.onclick=()=>execute({...a.spec}).catch(error=>{message.textContent=error.message;});
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved analysis '+a.name);
+        del.onclick=async()=>{try{await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/delete',{method:'POST'});message.textContent='Analysis deleted.';await refresh();}catch(error){message.textContent=error.message;}};
+        return [a.name,open,del];})):el('div','No saved analyses yet.','muted'));
+    }
+    run.onclick=async()=>{
+      try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim()}));}
+      catch(error){message.textContent=error.message;}
+    };
+    save.onclick=async()=>{
+      try{
+        if(!lastSpec)throw new Error('Run the analysis first.');
+        await api(base()+'/analyses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value.trim(),spec:lastSpec})});
+        message.textContent='Analysis saved.';name.value='';await refresh();
+      }catch(error){message.textContent=error.message;}
+    };
+    refresh().catch(error=>{message.textContent=error.message;});
+    return box;
+  }
+
   window.__owgEventLogModel={detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   // Builds a signal rule body from the form values; throws a readable error.
   function signalRule(values){
@@ -828,6 +918,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={signalRule,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={analysisSpec,signalRule,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

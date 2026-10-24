@@ -24,7 +24,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 @pytest.mark.skipif(not os.getenv('OWG_AGENT_SDK_PYTHON'),reason='Set an isolated Agents SDK interpreter for the real MCP implementation check')
 @pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True)])
-@pytest.mark.parametrize('parallel_schedule',[False,True])
+@pytest.mark.parametrize('parallel_schedule',[False,True,'nested'])
 def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,monkeypatch,shared_catalog,source_invariant,parallel_schedule):
     sdk=os.environ['OWG_AGENT_SDK_PYTHON']
     model=ProcessModel(goal='Resolve a selected synthetic case',baseline_source='user_declared',
@@ -42,6 +42,16 @@ def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source
         raw['transitions']=[{'source':a,'target':b} for a,b in
             [('fork','resolve'),('fork','readback'),('resolve','join'),('readback','join'),('join','done')]]
         raw['entry_activity_id']='fork';model=ProcessModel.model_validate(raw)
+        if parallel_schedule=='nested':
+            raw=model.model_dump()
+            raw['activities'] += [{'id':'innerFork','label':'Nested checks','kind':'parallel_split'},
+                                  {'id':'innerJoin','label':'Nested checks complete','kind':'parallel_join'}]
+            raw['transitions']=[e for e in raw['transitions'] if (e['source'],e['target']) not in
+                                {('fork','resolve'),('resolve','join')}]
+            raw['transitions'] += [{'source':a,'target':b} for a,b in
+                [('fork','innerFork'),('innerFork','resolve'),('innerFork','innerJoin'),
+                 ('resolve','innerJoin'),('innerJoin','join')]]
+            model=ProcessModel.model_validate(raw)
     if source_invariant:
         raw=model.model_dump()
         raw['business_rules']=[{'id':'approved_source','text':'Reviewed current source invariant','user_confirmed':True,
@@ -157,7 +167,7 @@ app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,met
         OWG_EXECUTION_CATALOG_READ_TOKEN='SYNTHETIC_CATALOG_SECRET',
         OWG_TEST_MODEL_DIGEST=json.loads((project/'workflow.spec.json').read_text())['process_model_sha256'],
         OWG_TEST_SOURCE_INVARIANT='1' if source_invariant else '0',
-        OWG_TEST_PARALLEL_SCHEDULE='1' if parallel_schedule else '0')
+        OWG_TEST_PARALLEL_SCHEDULE='nested' if parallel_schedule=='nested' else '1' if parallel_schedule else '0')
     env['NO_PROXY']=','.join(filter(None,[env.get('NO_PROXY',''),'127.0.0.1','localhost','::1']))
     def stats():
         with urlopen(Request(base+'/test-state',headers={'Authorization':'Bearer SYNTHETIC_SOURCE_SECRET'}),timeout=2) as response:
@@ -179,8 +189,10 @@ app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,met
 import json,os
 from test_execution import fixture
 _,plan,case,bindings,_=fixture()
-if os.environ['OWG_TEST_PARALLEL_SCHEDULE']=='1':
-    plan['activity_ids']=['fork','resolve','readback','join']+(['choose'] if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1' else [])+['done']
+if os.environ['OWG_TEST_PARALLEL_SCHEDULE']!='0':
+    prefix=(['fork','innerFork','resolve','innerJoin','readback','join']
+        if os.environ['OWG_TEST_PARALLEL_SCHEDULE']=='nested' else ['fork','resolve','readback','join'])
+    plan['activity_ids']=prefix+(['choose'] if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1' else [])+['done']
 if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1':
     case['approved_record']='owg:r:'+'c'*32
     bindings['source_rule_checks']=[{'rule_id':'approved_source','source_type':'github_pull_request',
