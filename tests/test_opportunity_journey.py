@@ -90,6 +90,36 @@ def test_historical_artifact_is_not_presented_as_current_idea_revision(prepared)
     assert result['projects'][0]['idea_revision_is_current'] is False
 
 
+def test_unrelated_export_history_does_not_expand_the_journey_query_work(prepared, monkeypatch):
+    _, _, idea, artifact, _ = prepared
+    with pipeline._connect() as conn, conn:
+        # Synthetic histories within the caps: 50 projects/idea, 50 exports/project.
+        for n in range(400):
+            project = 'project_' + f'{n:064x}'
+            conn.execute('INSERT INTO idea_projects VALUES (?,?,?,?,?,?,?,?)',
+                [project, 'other_idea_' + str(n//50), 1, '2026-01-01', '{}', '0'*64, '0'*64, '0'*64])
+            conn.executemany('INSERT INTO project_source_exports VALUES (?,?,?,?,?)',
+                [('source_export_' + f'{n*50+k:064x}', project, 1, '2026-01-01', '0'*64) for k in range(50)])
+        # Simulate a populated pre-index database; normal connect must upgrade it.
+        conn.execute('DROP INDEX IF EXISTS project_source_exports_by_project')
+    connect = pipeline._connect
+    work = [0]
+    def count_work():
+        conn = connect()
+        def tick():
+            work[0] += 100
+            return 0
+        conn.set_progress_handler(tick, 100)
+        return conn
+    monkeypatch.setattr(pipeline, '_connect', count_work)
+    result = journey.journey(idea['idea_id'])
+    assert result['projects'][0]['project_id'] == artifact['project_id']
+    assert result['projects'][0]['source_check_exports']['count'] == 0
+    # A VM-operation budget, not a machine-speed assertion. An unindexed scan
+    # of 20,000 unrelated records exceeds this by orders of magnitude.
+    assert work[0] < 2000, work[0]
+
+
 def test_http_journey_is_dashboard_only_and_not_cached(tmp_path):
     import os, subprocess, sys
     from pathlib import Path

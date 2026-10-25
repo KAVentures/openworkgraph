@@ -208,6 +208,8 @@ and returns a no-store projection of the existing bounded registries. The idea
 store is read in one snapshot; process and monitoring stores are checked
 separately, so the response is not an atomic cross-store snapshot and cannot
 authorize a decision. It neither creates associations nor reads a provider.
+An idempotent project index upgrades existing source-export metadata so one
+idea's lookup does not scan unrelated export history.
 Unrelated reports, report steps/outcomes, source-record references and receipt
 results are excluded. Source-check counts, last export time and document digest
 record that a document was produced, not that its contents verified an outcome.
