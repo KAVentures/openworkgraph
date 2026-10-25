@@ -89,6 +89,14 @@ def _connect() -> sqlite3.Connection:
     conn.execute("""CREATE TABLE IF NOT EXISTS ideas (
         idea_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL,
         state TEXT NOT NULL, body TEXT NOT NULL, assessment TEXT, history TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS idea_projects (
+        project_id TEXT PRIMARY KEY, idea_id TEXT NOT NULL, idea_revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, process_reference TEXT NOT NULL, spec_sha256 TEXT NOT NULL,
+        archive_sha256 TEXT NOT NULL, base_archive_sha256 TEXT NOT NULL)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idea_projects_by_idea ON idea_projects(idea_id)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS project_report_links (
+        project_id TEXT NOT NULL, deployment_id TEXT NOT NULL, linked_at TEXT NOT NULL,
+        PRIMARY KEY(project_id, deployment_id))""")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -275,6 +283,9 @@ def transition(idea_id: str, payload: Any) -> dict[str, Any]:
 def delete(idea_id: str) -> dict[str, Any]:
     with _LOCK, closing(_connect()) as conn, conn:
         _get(conn, idea_id)
+        conn.execute("DELETE FROM project_report_links WHERE project_id IN "
+                     "(SELECT project_id FROM idea_projects WHERE idea_id = ?)", [str(idea_id)])
+        conn.execute("DELETE FROM idea_projects WHERE idea_id = ?", [str(idea_id)])
         conn.execute("DELETE FROM ideas WHERE idea_id = ?", [str(idea_id)])
     return {"deleted": True, "idea_id": idea_id}
 
