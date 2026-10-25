@@ -1,7 +1,8 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
+const {createHash}=require('node:crypto');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 // Real-browser acceptance: add an idea → assess → approve with a note → implemented, CSV export, stale-edit refusal.
@@ -125,6 +126,7 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Open linked saved process',exact:true}).click();
    await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
    assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
+   assert(await page.locator('#owgPipelineProjectDownload').isDisabled());
    await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
    for(const key of ['rules_based','structured_inputs','process_stability','digital_inputs','low_exception_rate'])
@@ -134,6 +136,35 @@ const path=require('node:path');
    await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
    await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   const linkedBeforeExport=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id);
+   const [projectDownload,projectResponse]=await Promise.all([
+     page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/agent-project')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineProjectDownload').click()
+   ]);
+   assert.equal(projectResponse.status(),200);
+   const zipPath=await projectDownload.path();const zipBytes=await fs.readFile(zipPath);
+   assert.equal(createHash('sha256').update(zipBytes).digest('hex'),projectResponse.headers()['x-owg-archive-sha256']);
+   const inspected=spawnSync(python,['-c',`
+import json,sys,zipfile,hashlib
+with zipfile.ZipFile(sys.argv[1]) as z:
+ spec=json.loads(z.read('workflow.spec.json'));manifest=json.loads(z.read('opportunity.lineage.json'))
+ assert spec['execution_authorization'] is False and spec['live_business_tools']==[]
+ assert manifest['spec_sha256']==hashlib.sha256(json.dumps(spec,sort_keys=True,allow_nan=False).encode()).hexdigest()
+ print(json.dumps(manifest))
+`,zipPath],{encoding:'utf8'});
+   assert.equal(inspected.status,0,inspected.stderr);
+   const manifest=JSON.parse(inspected.stdout);
+   assert.equal(manifest.idea_id,linked.idea_id);assert.equal(manifest.idea_revision,linkedBeforeExport.revision);
+   assert.deepEqual(manifest.process_reference,linked.process_reference);
+   assert.equal(manifest.project_id,projectResponse.headers()['x-owg-project-id']);
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   await page.locator('#owgPipelineProjects li').filter({hasText:'current idea revision'}).waitFor();
+   const [sameProject]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPipelineProjectDownload').click()]);
+   assert.deepEqual(await fs.readFile(await sameProject.path()),zipBytes);
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
+   assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
    await page.evaluate(async record=>{
      await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
        body:JSON.stringify({workflow_id:record.workflow_id,title:record.title,process_model:{...record.process_model,goal:'Changed renewal policy'},expected_revision:1,user_confirmed:true})});
@@ -143,6 +174,8 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Move to Implemented',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'linked process changed or is unavailable'}).waitFor();
    assert.equal((await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id)).state,'approved');
+   await page.locator('#owgPipelineProjectDownload').click();
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'linked process changed or is unavailable'}).waitFor();
    const linkedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(linkedAudit.violations.map(v=>v.id),[]);
@@ -156,7 +189,7 @@ const path=require('node:path');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → changed/deleted source refusal, deletion, WCAG and mobile.');
+   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → tracked project ZIP/hash/manifest and repeat export → changed/deleted source refusal, deletion, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

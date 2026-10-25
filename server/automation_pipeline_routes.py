@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import automation_pipeline as pipeline
+from . import opportunity_projects
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
@@ -73,6 +74,25 @@ async def create_idea(request: Request):
 async def create_idea_from_process(request: Request):
     _require_dashboard(request)
     return _respond(pipeline.create_from_process, await _json(request))
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/agent-project")
+async def export_idea_project(request: Request, idea_id: str):
+    _require_dashboard(request)
+    try:
+        archive, record = opportunity_projects.export_project(idea_id, await _json(request))
+    except pipeline.PipelineError as exc:
+        status = 409 if "changed" in str(exc) else 404 if str(exc) == "unknown idea" else 422
+        raise HTTPException(status, str(exc)) from None
+    return Response(archive, media_type="application/zip", headers={
+        "Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="owg-opportunity-project.zip"',
+        "X-OWG-Project-ID": record['project_id'], "X-OWG-Archive-SHA256": record['archive_sha256']})
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/projects")
+def list_idea_projects(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(opportunity_projects.projects, idea_id)
 
 
 @router.get("/v1/automation-pipeline/{idea_id}/process-status")
