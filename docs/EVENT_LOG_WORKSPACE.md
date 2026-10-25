@@ -349,6 +349,40 @@ check that the mean basis brings the held-out error for exponential times within
 offer "Measured time per activity"; switching it refills the measured minutes and leaves activities
 added by hand untouched.
 
+#### Uncertainty from routing and arrivals
+
+A what-if run uses the routing shares and arrival rate measured from the log as if they were
+exact. With few cases behind a branch they are not. `"uncertainty": {"replications": 2–50}` in a
+scenario repeats the paired baseline and scenario simulation with parameters drawn from what the
+log supports:
+
+- **Routing:** shares come from a Dirichlet distribution over the observed path counts, a Bayesian
+  bootstrap of which path each case took. A branch seen three times varies far more than one seen
+  three thousand times.
+- **Arrival rate:** drawn from a Gamma distribution over the number of selected case starts and
+  their time span.
+- **Fixed values:** paths and `arrivals_per_hour` you entered stay as entered, and activity times
+  stay at their measured values. The intervals leave out activity-time uncertainty and any change
+  in the process that the log does not show.
+- **Random numbers:** each replication draws its own simulation random numbers and shares them
+  between baseline and scenario. The intervals include simulation noise, and the change stays
+  paired: an unchanged scenario shows no change in any replication.
+
+The point results are unchanged. The response adds `uncertainty`, giving:
+
+- median and 95% ranges of the p50 and p90 cycle times for both runs and their change;
+- how many replications make the scenario's median faster, and how many overload an activity;
+- each measured path's observed case count and drawn share;
+- the drawn baseline arrival rate.
+
+Replications × cases × 2 runs may not exceed 400,000. The tests check the drawn share against its
+Beta distribution, and check that the 95% routing range covers the true share in 90–99% of 300
+simulated logs. With 40 cases the long branch's range is more than three times as wide as with
+2,000.
+
+In the dashboard, "Uncertainty replications" adds an interval table. Routing and arrivals still as
+measured are left to the server to draw; values you edited stay as entered.
+
 #### Shared resource pools
 
 By default each activity has its own resources. A scenario can instead let several activities share
