@@ -200,7 +200,7 @@
               const selection=el('pre',JSON.stringify(item.selection,null,2));selection.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';origin.appendChild(selection);
             }
           });
-          }catch(error){if(attempt===originGeneration)origin.replaceChildren(el('p','Source fingerprints could not be checked.'));throw error;}
+          }catch(error){if(attempt===originGeneration){origin.replaceChildren(el('p','Source fingerprints could not be checked.'));throw error;}}
           finally{inspect.disabled=false;}
         });host.appendChild(inspect);
       }else host.appendChild(el('p','The source snapshot is recorded; this process remains an unsaved draft.'));
