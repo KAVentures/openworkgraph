@@ -79,7 +79,7 @@ class Calendar:
         lo, hi = sorted((early.timestamp(), late.timestamp()))
         while hi - lo > 1:
             mid = (lo + hi) / 2
-            if datetime.fromtimestamp(mid, self.tz).replace(tzinfo=None) >= wall:
+            if _at(mid, self.tz).replace(tzinfo=None) >= wall:
                 hi = mid
             else:
                 lo = mid
@@ -98,7 +98,7 @@ class Calendar:
         return self._days[key]
 
     def _local_day(self, t: float) -> date:
-        return datetime.fromtimestamp(self.origin + t, self.tz).date()
+        return _at(self.origin + t, self.tz).date()
 
     def _next(self, t: float) -> tuple[float, float]:
         """The working interval containing ``t`` or the next one after it."""
@@ -229,12 +229,12 @@ class ArrivalPattern:
         if slot not in self._cache:
             if len(self._cache) > 100_000:
                 self._cache.clear()
-            local = datetime.fromtimestamp(slot * SLOT, self.tz)
+            local = _at(slot * SLOT, self.tz)
             self._cache[slot] = self.weekly[local.weekday()][local.hour] * self.monthly[local.month - 1]
         return self._cache[slot]
 
     def local(self, t: float) -> datetime:
-        return datetime.fromtimestamp(self.origin + t, self.tz)
+        return _at(self.origin + t, self.tz)
 
     def next_arrival(self, t: float, rate: float, need: float) -> float:
         """The time after ``t`` at which the cumulative rate grows by ``need`` (an Exp(1) draw)."""
@@ -269,7 +269,10 @@ def _check_start_year(moment: datetime, what: str) -> None:
 
 
 def _at(seconds: float, tz: ZoneInfo) -> datetime:
-    """Local time for seconds since the Unix epoch, including before 1970 on every platform."""
+    """Local time for seconds since the Unix epoch, by arithmetic rather than the platform's clock functions.
+
+    ``datetime.fromtimestamp`` fails on Windows before 1970 and far in the future with an OSError; this
+    works everywhere and raises OverflowError past year 9999 on every platform."""
     return (EPOCH + timedelta(seconds=seconds)).astimezone(tz)
 
 

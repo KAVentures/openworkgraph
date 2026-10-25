@@ -216,6 +216,25 @@ def test_a_calendar_run_past_year_9999_is_refused():
                                           "start": "2200-01-01T00:00:00"}})
 
 
+def test_no_platform_clock_function_is_used(monkeypatch):
+    # Windows' fromtimestamp raises OSError outside about 1970–3000; the engine must not depend on it.
+    class WindowsLikeDatetime(datetime):
+        @classmethod
+        def fromtimestamp(cls, t, tz=None):
+            raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(sim, "datetime", WindowsLikeDatetime)
+    calendar = sim.parse_calendar({"timezone": "Europe/Berlin", "hours": {"mon": [["09:00", "17:00"]]}})
+    pattern = sim.parse_arrival_pattern({"hourly": OFFICE}, calendar=calendar)
+    result = sim.simulate({"label": "", "arrivals_per_hour": 2.0, "paths": [(["A"], 1.0)], "pools": {},
+                           "activities": {"A": {"minutes": 5, "resources": 1}}, "distribution": "fixed",
+                           "cases": 100, "seed": 1, "calendar": calendar, "arrival_pattern": pattern})
+    assert sum(result["arrivals_by_local_hour"][9:17]) == 100
+    with pytest.raises(workspace.EventLogWorkspaceError, match="supported date range"):
+        sim.what_if(_log(), {"cases": 100, "arrivals_per_hour": 1e-6, "distribution": "fixed",
+                             "calendar": {"timezone": "UTC", "hours": {"mon": [["09:00", "17:00"]]},
+                                          "start": "2200-01-01T00:00:00"}})
+
+
 def test_measured_patterns_handle_case_starts_before_1970():
     zone, rows = ZoneInfo("UTC"), ["case,activity,time"]
     for d in range(20):
