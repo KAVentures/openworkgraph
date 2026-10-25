@@ -188,3 +188,18 @@ def test_every_interval_near_both_clock_changes_is_usable():
             assert lo <= opened < hi and hi > lo, (start, a, b, t)
             assert cal.finish(opened, 1) <= hi
         assert cal.working_seconds(0, 30 * 24 * H) >= 0
+
+
+def test_calendars_work_without_a_system_time_zone_database():
+    """Windows and slim images have no IANA database; the base install's tzdata must cover it."""
+    import tomllib
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    assert any(d.split(">")[0].split("=")[0].strip() == "tzdata" and ";" not in d for d in deps), deps
+    code = ("import zoneinfo; assert zoneinfo.TZPATH == (), zoneinfo.TZPATH\n"
+            "from server.event_log_simulation import parse_calendar\n"
+            "cal = parse_calendar({'timezone': 'Europe/Berlin', 'start': '2025-03-28T16:00:00',"
+            " 'hours': {d: [['09:00', '17:00']] for d in ('mon', 'tue', 'wed', 'thu', 'fri')}})\n"
+            "assert cal.finish(0, 7200) == 65 * 3600, cal.finish(0, 7200)\n")
+    env = {**os.environ, "PYTHONTZPATH": ""}
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr

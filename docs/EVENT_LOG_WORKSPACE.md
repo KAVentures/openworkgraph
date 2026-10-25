@@ -264,7 +264,9 @@ repeated when clocks go back counts from its first occurrence at a period's star
 to its last occurrence at its end, and periods with no real length are dropped. Utilization is measured against
 working time, and offered load spreads arrivals over the average weekly
 working share (holidays are not counted there), so a load of 1 or more still
-flags a queue that keeps growing. Responses describe each run's calendar. The
+flags a queue that keeps growing. Responses describe each run's calendar. Time zone rules come from the
+operating system where it has them and otherwise from the bundled `tzdata`
+package, which is a base dependency so Windows and slim installs work. The
 test suite checks exact pause-and-resume times, a holiday, periods inside,
 across and partly in Berlin's skipped and repeated hours, that work always
 starts inside a usable period, and that a round-the-clock calendar reproduces
