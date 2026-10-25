@@ -448,6 +448,15 @@ const path=require('node:path');
    assert.match(predictText,/0 open cases/);assert.match(predictText,/Backtest on \d+ later steps/);assert.match(predictText,/Brier score/);
    const predictSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:' , ',outcome:''});return 'accepted';}catch(e){return e.message;}});
    assert.equal(predictSpec,'List the activities that end a case.');
+   // Censoring-aware estimates: still-open cases are learned from, and the backtest replays the log as of a cutoff.
+   await page.locator('#owgPredictOutcome').selectOption('');await page.locator('#owgPredictEstimator').selectOption('survival');
+   const [survivalResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/predictions')),page.locator('#owgPredictRun').click()]);
+   const survivalResult=await survivalResponse.json();
+   assert.equal(survivalResponse.status(),200);assert.equal(survivalResult.estimator,'survival');assert.equal(survivalResult.backtest.design,'as_of_replay');
+   await page.locator('#owgPredictResults').getByText(/As-of backtest at \d{4}-\d{2}-\d{2}: \d+ cases were in progress/).waitFor();
+   if(survivalResult.predictions.length)assert.match(await page.locator('#owgPredictResults').textContent(),/from now|withheld/);
+   assert.equal(await page.evaluate(()=>{try{window.__owgEventLogModel.predictionSpec({ends:'Close',estimator:'magic'});return 'accepted';}catch(e){return e.message;}}),'Choose what to learn from.');
+   await page.locator('#owgPredictEstimator').selectOption('completed_cases');
 
    await page.locator('#owgComplianceTemplate').selectOption('response');
    await page.locator('#owgComplianceA').selectOption('Receive');await page.locator('#owgComplianceB').selectOption('Approve');
@@ -742,7 +751,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

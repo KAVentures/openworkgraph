@@ -730,6 +730,42 @@ Remaining time is measured to the last recorded event. Predictions are estimates
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
 
+### Still-open cases and censoring
+
+Learning only from completed cases is biased: when an export ends, the cases still open are
+disproportionately the long ones, so completed history under-represents long remaining times, and
+the most recent period most of all. The default estimator also ignores how long an open case has
+already waited since its latest event. `"estimator": "survival"` corrects both:
+
+- Every case contributes. A completed case's earlier events give an observed remaining time; an
+  open case's events give a lower bound (it had not finished when the log ends), a right-censored
+  observation. A Kaplan–Meier estimator per comparable state, with the same fallbacks, turns both
+  into a survival curve. `censoring.open_cases_used_as_censored` reports how many open cases were
+  used.
+- Each open case's estimate is conditioned on its idle time: the remaining time **from the end of
+  the log** (`remaining_measured_from: "end_of_log"`) has quantiles where S(idle + t) / S(idle)
+  reaches 1 − q.
+- When too many comparable cases are still open for a quantile to be reached, the estimate is
+  withheld (`estimate_withheld`, `withheld_estimates`) and `remaining_at_least_seconds` gives the
+  lower bound the history supports, rather than a guess. Withheld estimates are listed first.
+  Each prediction reports `comparable_cases_still_open`.
+- **As-of backtest:** the log is replayed as if it ended at the cutoff. The model learns only what
+  was known then (cases open at the cutoff are censored there) and predicts the cases in progress
+  at the cutoff. Those that have finished since are scored, and the completed-cases estimator is
+  scored on the same cases for comparison (`completed_cases_estimator`,
+  `improvement_over_completed_cases_estimator`). Cases still open are counted
+  (`still_open_unscored_cases`, and `still_open_already_beyond_p90` for those already past their
+  90th percentile), not dropped silently. Scored cases are the ones that finished, so the errors
+  still favour short remaining times; the result says so.
+- Outcome risk still uses completed cases only, and the result says so.
+
+The tests check the curves against a textbook product-limit calculation. In a log where cases
+last an exponential time with a mean of 50 hours and long ones are still open at export, survival
+medians are within 15% of the true 50 · ln 2 hours for every open case; completed cases alone give
+under 40% of it. The as-of backtest shows the survival estimator with at least 15% lower error than
+completed cases alone, and 10th–90th percentile coverage near the expected 80%. One million events
+with both estimators take about 18 seconds, including the import, in the scale acceptance.
+
 ## Processing and waiting time
 
 `GET /v1/event-logs/{log_id}/waiting-time` splits elapsed time into processing (an activity
