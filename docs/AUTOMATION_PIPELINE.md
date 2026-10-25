@@ -122,3 +122,34 @@ the ZIP and `X-OWG-Project-ID` / `X-OWG-Archive-SHA256` headers;
 `GET /v1/automation-pipeline/{id}/projects` lists bounded metadata. Both are
 no-store. The server serializes local idea edits while exporting and rechecks
 source identity; a later source change cannot revoke copies already downloaded.
+
+## Project to imported-report links
+
+**Review imported run reports** explicitly links a recorded project to a
+selected local monitoring deployment. Both the attached design's hash and the
+retained report specification hash must match the project's exact specification.
+An unhashed report, unattached design, different specification or unavailable
+monitoring store refuses the association. Matching names, times or activity
+sequences are never substituted for these hashes.
+
+The pipeline stores only project/deployment identifiers and the first link time,
+at most ten links per project. Repeating a link preserves that time. Reading
+links rechecks current monitoring metadata in one bounded query; deletion or
+mismatch becomes unavailable/mismatched, never a silent replacement. An explicit
+remove action deletes only the link. Deleting an idea deletes its projects and
+links, while monitoring reports and downloaded archives remain separate.
+Historical projects can be associated with their historical reports after idea
+or process changes; this records historical evidence and grants no current
+approval or execution authority. Optimistic idea revision checks still apply.
+
+These are **reported specification associations**. A retained hash claim does
+not establish per-run attribution: monitoring deployments may also contain
+unhashed legacy runs. Neither successful runs nor reported `verified` outcomes
+become independently verified execution, business outcomes, deployment or savings.
+Those claims remain false in every link response. Independent source receipts
+and real customer acceptance remain open in #370.
+
+Dashboard-session-only, no-store routes:
+`GET /v1/automation-pipeline/{id}/project-reports`,
+`POST` to the same path to link, and `POST …/project-reports/unlink` to remove.
+Mutations require `project_id`, `deployment_id` and `expected_revision`.

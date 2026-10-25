@@ -127,7 +127,49 @@
           }catch(e){if(generation===detailGeneration)message.textContent=e.message;}
           finally{download.disabled=!['approved','implemented'].includes(idea.state);}
         };
-        projects.append(download,message,exports);box.appendChild(projects);
+        projects.append(download,message,exports);
+        const reviewReports=button('Review imported run reports','secondary');reviewReports.id='owgPipelineReviewReports';
+        const reports=el('div');reports.id='owgPipelineReportLinks';let reportVersion=0;
+        const renderReports=async()=>{
+          const version=++reportVersion;
+          const data=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-reports')).json();
+          if(generation!==detailGeneration||version!==reportVersion)return;
+          const note=el('div');note.setAttribute('role','status');
+          const help=el('div','Link a selected imported report only when its reported specification and attached design both match this exported project. These remain customer reports: individual runs, execution and outcomes are not independently verified.','muted');
+          const artifact=select('owgPipelineReportProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at+' · '+p.spec_sha256.slice(0,12)+'…']));
+          const deployment=select('owgPipelineReportDeployment',data.deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime+' · '+d.reported_run_count+' reported runs']));
+          const add=button('Link selected report','secondary');add.id='owgPipelineLinkReport';
+          add.disabled=!data.monitoring_metadata_available||!data.projects.length||!data.deployments.length;
+          add.onclick=async()=>{
+            add.disabled=true;
+            try{
+              await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-reports',{
+                project_id:artifact.value,deployment_id:deployment.value,expected_revision:idea.revision});
+              if(generation===detailGeneration){await renderReports();status.textContent='Report link saved. Matching hashes are reported metadata, not independently verified execution or outcomes.';}
+            }catch(e){if(generation===detailGeneration)note.textContent=e.message;}
+            finally{add.disabled=!data.monitoring_metadata_available||!data.projects.length||!data.deployments.length;}
+          };
+          const rows=el('ul');
+          const labels={matching_reported_specification:'Matching reported specification',unbound_specification:'Specification is not bound',
+            specification_mismatch:'Specification changed or does not match',unavailable:'Reported deployment unavailable',check_failed:'Report source could not be checked'};
+          data.links.forEach(r=>{
+            const source=data.deployments.find(d=>d.deployment_id===r.deployment_id);
+            const item=el('li',(source?source.name:r.deployment_id)+' · '+(labels[r.status]||'Unknown status'));
+            const remove=button('Remove report link','secondary');remove.setAttribute('aria-label','Remove report link '+r.deployment_id);
+            remove.onclick=async()=>{
+              try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-reports/unlink',{
+                project_id:r.project_id,deployment_id:r.deployment_id,expected_revision:idea.revision});
+                if(generation===detailGeneration)await renderReports();
+              }catch(e){if(generation===detailGeneration)note.textContent=e.message;}
+            };
+            item.appendChild(remove);rows.appendChild(item);
+          });
+          if(!data.monitoring_metadata_available)note.textContent='Monitoring metadata is unavailable; report links cannot be validated.';
+          reports.replaceChildren(el('h4','Imported report links'),help,field('Exported project',artifact),field('Imported report',deployment),add,note,
+            data.links.length?rows:el('div','No report links recorded.','muted'));
+        };
+        reviewReports.onclick=()=>renderReports().catch(e=>{if(generation===detailGeneration)status.textContent=e.message;});
+        projects.append(reviewReports,reports);box.appendChild(projects);
         refreshProjects().catch(e=>{if(generation===detailGeneration)message.textContent=e.message;});
       }
       if(idea.score)box.appendChild(el('div','Ease '+idea.score.ease_score+'/100 · '+idea.score.modeled_hours_per_month+' modeled hours per month · '+QUADRANTS[idea.score.quadrant]+(idea.assessment.compliance_review_needed?' · needs compliance review':''),'muted'));

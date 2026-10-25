@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import automation_pipeline as pipeline
 from . import opportunity_projects
+from . import project_report_links
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
@@ -89,6 +90,24 @@ async def export_idea_project(request: Request, idea_id: str):
     return Response(archive, media_type="application/zip", headers={
         "Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="owg-opportunity-project.zip"',
         "X-OWG-Project-ID": record['project_id'], "X-OWG-Archive-SHA256": record['archive_sha256']})
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/project-reports")
+def list_project_reports(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(project_report_links.links, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/project-reports")
+async def link_project_report(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, project_report_links.link, idea_id, await _json(request))
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/project-reports/unlink")
+async def unlink_project_report(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, project_report_links.unlink, idea_id, await _json(request))
 
 
 @router.get("/v1/automation-pipeline/{idea_id}/projects")
