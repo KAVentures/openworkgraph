@@ -804,12 +804,47 @@
     ' ('+p.timezone+'); the busiest hour gets '+Number(p.peak_factor).toFixed(1)+'× the average rate';
   const calendarText=c=>!c?'around the clock':Object.keys(c.hours).join(', ')+' '+Object.values(c.hours)[0].map(x=>x.join('–')).join(', ')+' ('+c.timezone+')'+(c.holidays.length?', '+c.holidays.length+' holidays':'');
 
+  // Plain-language reading of a held-out validation result.
+  function validationText(r){
+    const c=r.cycle_time_seconds,e=c.relative_error,d=r.distribution_distance;
+    const sign=x=>x===null?'—':(x>=0?'+':'−')+Math.abs(x*100).toFixed(0)+'%';
+    return {
+      cases:'Calibrated on '+Number(r.cases.calibration).toLocaleString()+' cases finished before '+String(r.cutoff).slice(0,10)+' and compared with the '+Number(r.cases.held_out).toLocaleString()+' cases that started after it; '+Number(r.cases.spanning_cutoff_left_out).toLocaleString()+' cases spanning the cutoff are left out.',
+      rows:[['Median cycle time',duration(c.simulated.p50),duration(c.observed_held_out.p50),sign(e.p50)],
+            ['90th percentile',duration(c.simulated.p90),duration(c.observed_held_out.p90),sign(e.p90)],
+            ['Mean',duration(c.simulated.mean),duration(c.observed_held_out.mean),sign(e.mean)]],
+      verdict:d.distributions_differ_at_5pct===null?'Too few cases to compare the distributions.':
+        d.distributions_differ_at_5pct?'The simulated and later cycle times differ more than chance explains (Kolmogorov–Smirnov '+d.kolmogorov_smirnov.toFixed(3)+' > '+d.critical_value_5pct.toFixed(3)+' at 5%). Treat what-if results with caution and check the assumptions.':
+        'The simulated and later cycle times are consistent at the 5% level (Kolmogorov–Smirnov '+d.kolmogorov_smirnov.toFixed(3)+' ≤ '+d.critical_value_5pct.toFixed(3)+'). This is evidence about one period, not a forecast guarantee.'};
+  }
+
+  function validationBlock(){
+    const wrap=el('div');
+    const share=select('owgEventLogSimHoldout',[['0.3','Latest 30% of cases'],['0.2','Latest 20% of cases'],['0.4','Latest 40% of cases']]);
+    const dist=select('owgEventLogSimHoldoutDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const run=button('Check against later cases','secondary');run.id='owgEventLogSimValidate';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Hold out',share),field('Activity times',dist),run);
+    const out=el('div');out.id='owgEventLogSimValidation';out.setAttribute('role','status');
+    wrap.append(el('h4','Does the model reproduce later cases?'),el('div','Calibrate on earlier cases only, simulate, and compare with the cases that started afterwards.','muted'),row,out);
+    run.onclick=async()=>{
+      run.disabled=true;out.replaceChildren(el('div','Checking…','muted'));
+      try{
+        const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value})})).json();
+        const t=validationText(r);
+        out.replaceChildren(el('div',t.cases,'muted'),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
+          (()=>{const list=el('ul');list.className='muted';r.assumptions.slice(0,4).forEach(x=>list.appendChild(el('li',x)));return list;})());
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return wrap;
+  }
+
   function simulationSection(){
     const box=section('What-if simulation');
     box.appendChild(el('div','Simulate cases flowing through the process with the times and staffing you set. Start from values measured in this log, change them, and compare. Results are model outputs under the listed assumptions, not forecasts.','muted'));
     const load=button('Load measured values','secondary');load.id='owgEventLogSimLoad';
     const form=el('div');form.id='owgEventLogSimForm';
-    const out=el('div');box.append(load,form,out);
+    const out=el('div');box.append(load,form,out,validationBlock());
     load.onclick=async()=>{
       try{
         const cal=await getJSON(logPath('simulation/calibration'));
@@ -1780,6 +1815,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={validationText,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

@@ -236,6 +236,34 @@ periods, batching, priorities or abandonment. Results are model outputs under
 the stated assumptions, not forecasts or measured outcomes, and authorize
 nothing.
 
+#### Checking the model against later cases
+
+`POST /v1/event-logs/{log_id}/simulation/validation` (dashboard session only) tests whether the
+calibrated model reproduces a later period it has not seen:
+
+```json
+{"holdout_share": 0.3, "distribution": "exponential", "cases": 2000, "seed": 1}
+```
+
+- The cutoff is the start time below which `1 - holdout_share` of the cases started (0.05–0.5).
+- The model is calibrated only from cases whose every event is at or before the cutoff. Cases that
+  span the cutoff are left out of both sides and counted.
+- It is simulated with those parameters and compared with the cases that started after the
+  cutoff. The comparison covers median, 90th percentile and mean cycle time with relative errors,
+  the calibrated and observed arrival rates, and a two-sample Kolmogorov–Smirnov distance with its
+  5% critical value (`distributions_differ_at_5pct`).
+- At most 20,000 held-out cases are sampled for the distance; quantiles use all of them.
+- Held-out cases still running when the log ends contribute their duration so far.
+- A `calendar` or entered `arrival_pattern` can be included. A pattern measured from the log is
+  refused, because it would include the held-out period.
+
+The tests check three cases. A stable process reproduces its later period exactly. A process whose
+second activity takes three times as long after the cutoff is flagged (KS distance 1). Exponential
+activity times expose the calibration's known simplification: the median gap is used as the
+exponential mean, so simulated times come out about 1 − ln 2 ≈ 31% short. Agreement on one period
+is evidence about that period, not a forecast guarantee. The dashboard's simulation section has
+"Check against later cases".
+
 #### Shared resource pools
 
 By default each activity has its own resources. A scenario can instead let several activities share

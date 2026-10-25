@@ -334,6 +334,14 @@ const path=require('node:path');
    await page.getByText('Simulated baseline').waitFor();
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
+   // Held-out validation: calibrate on earlier cases only and compare with the later ones.
+   const [validationResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);
+   const validation=await validationResponse.json();
+   assert.equal(validationResponse.status(),200,JSON.stringify(validation));assert.equal(validation.forecast_or_guarantee,false);
+   assert.ok(validation.cases.held_out>=10&&validation.cases.calibration>=10);
+   await page.locator('#owgEventLogSimValidation').getByRole('columnheader',{name:'Later cases'}).waitFor();
+   assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/Kolmogorov–Smirnov|Too few cases/);
+   assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/cases spanning the cutoff are left out/);
    // Working calendar: weekdays 09:00–17:00 in Berlin for both runs, plus Saturdays in the scenario.
    assert.equal(await page.locator('#owgEventLogSimTimezone').isVisible(),false,'calendar fields appear only with working days');
    await page.locator('#owgEventLogSimDays').selectOption('weekdays');
@@ -747,7 +755,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
