@@ -99,6 +99,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/dotted-chart?time=absolute\|relative&order=start\|duration&max_cases=` | Events over time per case for a dotted chart (below). |
 | `GET /v1/event-logs/{log_id}/drift?window=month\|week\|cases&window_cases=&min_cases=` | Change points in how cases run over time (below). |
 | `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/filter-sets`, `POST .../filter-sets/{set_id}/delete` | Saved, reusable case filters (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -728,6 +729,18 @@ alongside the other case filters (`started_from`, `started_before`, `resource`, 
 which filter was applied and how many cases the log had before filtering. In the dashboard the
 overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
 filter note says so.
+
+**Saved filters.** The active case filter can be saved under a name and applied again later from
+the same panel; applying it re-runs every filtered view at once. The API stores any case filter
+(`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
+names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`; the dashboard panel
+applies follower rules. A saved filter is re-applied to the log as it is now, so the listing says
+when newer exports were appended after it was saved and names any activities it uses that the log
+does not contain. Saved filters are deleted with the log and never change events.
+
+The case evidence drill-down also uses the active case filter, so browsing cases shows the same
+cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
+their own case notion and are not filtered.
 
 **Case playback** animates cases over the process map. `GET /v1/event-logs/{log_id}/playback` returns
 each case's events as seconds from the log's first event, restricted to the same most frequent

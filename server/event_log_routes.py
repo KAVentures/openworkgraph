@@ -23,6 +23,7 @@ from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
 from . import event_log_dotted_chart as dotted
 from . import event_log_drift as drift
+from . import event_log_filter_sets as filter_sets
 from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import event_log_objects as objects
@@ -357,6 +358,24 @@ async def event_log_save_analysis(request: Request, log_id: str):
 def event_log_delete_analysis(request: Request, log_id: str, analysis_id: str):
     _require_dashboard(request)
     return _respond(analysis.delete_saved, log_id, analysis_id)
+
+
+@router.get("/v1/event-logs/{log_id}/filter-sets")
+def event_log_filter_sets(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(filter_sets.list_sets, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/filter-sets")
+async def event_log_save_filter_set(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(filter_sets.save, log_id, await _json_body(request, "filter set"))
+
+
+@router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")
+def event_log_delete_filter_set(request: Request, log_id: str, set_id: str):
+    _require_dashboard(request)
+    return _respond(filter_sets.delete, log_id, set_id)
 
 
 @router.get("/v1/event-logs/{log_id}/signals")

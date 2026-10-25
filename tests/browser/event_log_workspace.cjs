@@ -91,6 +91,20 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgCaseFilterFrom2').inputValue(),'Fix','rules stay editable after applying');
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Fix → Check → Close/);
    await page.locator('#owgPlaybackStatus').filter({hasText:'Playing 2 of 2 cases'}).waitFor();
+   // The case evidence drill-down selects the same filtered cases.
+   await page.locator('#owgEventLogCasesBrowse').click();
+   await page.locator('#owgEventLogCasesStatus').filter({hasText:'2 matching cases (case filter applied)'}).waitFor();
+   assert.deepEqual((await page.locator('#owgEventLogCasesList button').allTextContents()).sort(),['C0','C30']);
+   // Save the active filter, clear it, then re-apply it from the saved list.
+   await page.locator('#owgFilterSetName').fill('Rework without approval');
+   await page.locator('#owgFilterSetSave').click();
+   await page.getByRole('button',{name:'Apply saved filter Rework without approval',exact:true}).waitFor();
+   await page.locator('#owgCaseFilterClear').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
+   assert.equal(await page.locator('#owgFilterSetSave').isDisabled(),true,'only an applied filter can be saved');
+   await page.getByRole('button',{name:'Apply saved filter Rework without approval',exact:true}).click();
+   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 2 of 60 cases'}).waitFor();
+   await page.locator('#owgFilterSetList').filter({hasText:'Check is directly followed by Fix; Fix is never eventually followed by Approve'}).waitFor();
    await page.locator('#owgCaseFilterClear').click();
    await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
    assert.equal(await page.locator('#owgCaseFilterCount').count(),0);
@@ -586,7 +600,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time and a counts-only quality report, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time and a counts-only quality report, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
