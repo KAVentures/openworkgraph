@@ -415,6 +415,32 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 `GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
+
+### Case metrics
+
+A case-level analysis can define up to four typed case metrics in `metrics` and measure them with
+`{"fn": "median", "of": "metric:<name>"}` (also `p90`, `avg`, `min`, `max`, `sum`). Each metric has a
+name (`a-z`, digits, `_`) and one of these kinds:
+
+| `kind` | Fields | Value per case | Unit |
+| --- | --- | --- | --- |
+| `time_between` | `from_activity`, `to_activity`, `from_occurrence` and `to_occurrence` (`first` or `last`) | Seconds between the chosen recorded events | seconds |
+| `activity_count` | `activity` | Number of events of that activity (0 when none) | events |
+| `event_attribute_sum` | `attribute`, `unit` | Sum of the numeric values of an event attribute | as declared |
+| `case_attribute_number` | `attribute`, `unit` | A numeric case attribute | as declared |
+
+A case without a value (an activity that never happens, the "to" activity coming first, or no
+numeric value) is left out of that metric's measures, and the result counts those cases per
+metric, by reason for `time_between`. Units are labels you declare, such as EUR or kg: values are
+never converted or summed across units. The result's `units` maps every measure column to its unit.
+Like every analysis, metrics compile to parameterized SQL from the fixed vocabulary.
+
+Metric definitions can be saved with the log for reuse (`openworkgraph.event-log-case-metric.v1`,
+at most 50, unique names): `GET|POST /v1/event-logs/{log_id}/metrics` with `{"metric": {...}}` and
+`POST …/metrics/{metric_id}/delete`. Saved analyses keep the full definitions they used, so they
+rerun the same way after a library metric is deleted. In the dashboard, "Case metrics" under "Build
+an analysis" defines, adds and saves metrics, and lists the saved ones.
+
 ## Appending newer exports
 
 `POST /v1/event-logs/{log_id}/append?format=…` (dashboard session plus the

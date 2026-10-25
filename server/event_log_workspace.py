@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
   log_id VARCHAR NOT NULL, analysis_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS metric_definitions (
+  log_id VARCHAR NOT NULL, metric_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS filter_sets (
   log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
@@ -438,8 +441,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("log_appends", "log_quality", "filter_sets", "saved_analyses", "signal_rules",
-                          "event_objects", "events", "objects", "logs"):
+            for table in ("log_appends", "log_quality", "filter_sets", "metric_definitions", "saved_analyses",
+                          "signal_rules", "event_objects", "events", "objects", "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
             return {"deleted": True, "log_id": log_id}
