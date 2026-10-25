@@ -25,7 +25,7 @@ const path=require('node:path');
   const made=await madeResponse.json();assert.equal(madeResponse.status(),200);const wid=made.view_id;
   await owner.locator('#status').filter({hasText:'Snapshot published.'}).waitFor();assert.equal(made.content_sha256.length,64);
   assert.equal(await viewer.evaluate(async({base,wid})=>(await fetch(base+'/v1/human/analyses/'+wid,{headers:{Authorization:'Bearer bob'}})).status,{base,wid}),404);
-  await owner.locator('#addMember').click();await owner.locator('#members input').fill('bob');await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();
+  await owner.locator('#addMember').click();await owner.locator('#members input').fill('🦉'.repeat(512));assert.equal(await owner.locator('#members input').inputValue(),'🦉'.repeat(512));await owner.locator('#members input').fill('bob');await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();
   await owner.locator('#status').filter({hasText:'Access updated;'}).waitFor();
   await viewer.locator('#refresh').click();await viewer.locator('#inventory button').filter({hasText:'Aggregate case counts'}).click();await viewer.locator('#table table').waitFor();
   assert.equal(await viewer.locator('#access').isHidden(),true);

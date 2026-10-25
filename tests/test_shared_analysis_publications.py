@@ -194,3 +194,12 @@ def test_real_http_portal_and_no_cross_scope_session_or_service_fallback(tmp_pat
         assert c.get(base+'/export?revision=1',headers=headers('bob')).status_code==404
         assert c.post('/v1/human/analyses',content=b'{"title":"x","title":"y"}',headers={**headers('alice'),'Content-Type':'application/json'}).status_code==422
         assert c.post('/v1/human/analyses',content=b'x'*(161*1024),headers={**headers('alice'),'Content-Type':'application/json'}).status_code==413
+
+
+def test_unicode_title_and_maximum_identity_are_preserved_without_invalid_surrogates(store):
+    title='🦉'*240;actor='🦉'*512
+    d=store.publish(person(),Publish(title=title,snapshot=snapshot(),user_confirmed=True,organization_sharing_confirmed=True));wid=d['view_id']
+    access(store,wid,[{'actor_id':actor,'role':'viewer'}])
+    assert store.detail(person(actor),wid)['title']==title
+    for build in [lambda:Publish(title='\ud800',snapshot=snapshot()),lambda:Access(expected_access_revision=1,members=[{'actor_id':'\ud800','role':'viewer'}])]:
+        with pytest.raises(ValidationError):build()

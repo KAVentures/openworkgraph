@@ -17,3 +17,5 @@ test('coverage, units and timestamps have explicit bounds',()=>{
  const d=doc();d.metric_coverage=[{slot:1,with_value:3,without_value:1,missing_operand:1,zero_divisor:0,non_finite:0}];assert.equal(validate(d).metric_coverage[0].with_value,3);
  for(const alter of [x=>x.metric_coverage[0].with_value=4,x=>x.metric_coverage[0].zero_divisor=2,x=>x.generated_at='2026-01-01T00:00:00',x=>x.columns[0].unit='person',x=>x.columns[1].unit='x'.repeat(257)]){const copy=JSON.parse(JSON.stringify(d));alter(copy);assert.throws(()=>validate(copy));}
 });
+
+test('unit limits count Unicode scalars and refuse unpaired surrogates before transfer',()=>{const d=doc();d.columns[1].unit='🦉'.repeat(256);assert.equal(validate(d).columns[1].unit,d.columns[1].unit);d.columns[1].unit='\ud800';assert.throws(()=>validate(d));});

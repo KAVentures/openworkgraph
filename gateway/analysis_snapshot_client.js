@@ -13,7 +13,8 @@ function validate(doc){
  const columns=doc.columns.map(c=>{
   object(c,['heading','kind','unit','aggregation','value_basis','metric_slot']);
   if(typeof c.heading!=='string'||!/^(Group|Measure) [1-6]$/.test(c.heading)||!['group','number'].includes(c.kind)||(c.heading.startsWith('Group')!==(c.kind==='group')))fail();
-  if(c.unit!==null&&(typeof c.unit!=='string'||!c.unit.length||c.unit.length>256))fail();
+  if(c.unit!==null&&(typeof c.unit!=='string'||!c.unit.length||[...c.unit].length>256))fail();
+  if(c.unit!==null&&[...c.unit].some(ch=>ch.codePointAt(0)>=0xD800&&ch.codePointAt(0)<=0xDFFF))fail();
   if(c.kind==='group'&&[c.unit,c.aggregation,c.value_basis,c.metric_slot].some(v=>v!==null))fail();
   if(c.kind==='number'&&(!['count','cases','share','median','p90','avg','min','max','sum'].includes(c.aggregation)||(['count','cases','share'].includes(c.aggregation)!==(c.value_basis===null))))fail();
   if(c.value_basis!==null&&!['duration_seconds','events','distinct_activities','case_metric'].includes(c.value_basis))fail();

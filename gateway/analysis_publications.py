@@ -5,7 +5,7 @@ import json
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import Field, StrictBool, StrictInt, model_validator
+from pydantic import Field, StrictBool, StrictInt, field_validator, model_validator
 from shared.analysis_snapshot import Snapshot, Strict, content_digest
 
 SCHEMA = '''
@@ -44,10 +44,22 @@ class Publish(Strict):
     user_confirmed: StrictBool = False
     organization_sharing_confirmed: StrictBool = False
 
+    @field_validator('title')
+    @classmethod
+    def valid_unicode(cls, value):
+        value.encode('utf-8')
+        return value
+
 
 class Member(Strict):
     actor_id: Annotated[str, Field(min_length=1, max_length=512)]
     role: Literal['viewer', 'editor']
+
+    @field_validator('actor_id')
+    @classmethod
+    def valid_unicode(cls, value):
+        value.encode('utf-8')
+        return value
 
 
 class Access(Strict):

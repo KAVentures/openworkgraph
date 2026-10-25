@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OWG · Shared analyses</title>
 <style nonce="__NONCE__">
-body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20px;color:#24392f;background:#f5f7f3}section{background:white;border:1px solid #b9c9bf;border-radius:10px;padding:18px;margin:16px 0}button,input,select{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}button{cursor:pointer;margin:5px 5px 5px 0;border:1px solid #6d8979;border-radius:5px;background:#edf4ee;color:#183a27}button:disabled{cursor:default;opacity:.6}label{display:block;margin:10px 0}input[type=text],input[type=password]{width:100%}p,li,td{overflow-wrap:anywhere}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;text-align:left;border-bottom:1px solid #d1ddd5}.member{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.member input{flex:1;min-width:130px}.muted{color:#4d6256}[hidden]{display:none!important}a{color:#1c5b36}
+body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20px;color:#24392f;background:#f5f7f3}section{background:white;border:1px solid #b9c9bf;border-radius:10px;padding:18px;margin:16px 0}button,input,select{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}button{cursor:pointer;margin:5px 5px 5px 0;border:1px solid #6d8979;border-radius:5px;background:#edf4ee;color:#183a27}button:disabled{cursor:default;opacity:.6}label{display:block;margin:10px 0}input[type=text],input[type=password]{width:100%}p,li,td,th,h1,h2{overflow-wrap:anywhere}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;text-align:left;border-bottom:1px solid #d1ddd5}.member{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.member input{flex:1;min-width:130px}.muted{color:#4d6256}[hidden]{display:none!important}a{color:#1c5b36}
 </style></head><body>
 <header><h1>Shared analyses</h1><p>Publish an explicitly reviewed numeric snapshot. Raw event logs and private evidence stay local. Each publication is visible to its owner and explicitly authorized analysis administrators; other people need membership.</p><a href="/processes">Shared processes</a></header>
 <section aria-labelledby="signin"><h2 id="signin">Connect</h2><p>Use a delegated access token from your company’s OIDC integration with explicit analysis permissions. Process sign-in sessions and service tokens do not grant analysis access. Credentials remain in this page’s memory.</p>
@@ -16,7 +16,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 </section>
 <section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot”, review it, then download it. Group codes have meaning only within that file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
 <label>Snapshot file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
-<label>Publication title <input id="title" type="text" maxlength="240"></label>
+<label>Publication title <input id="title" type="text" maxlength="480"></label>
 <label>Retention for a new publication (days, 1–90) <input id="days" type="number" min="1" max="90" value="7"></label>
 <p>Revisions keep the current expiry. Only the owner can renew it under Access.</p>
 <label><input id="confirm" type="checkbox"> I reviewed this numeric snapshot and am authorized to publish it to this organization</label>
@@ -67,7 +67,7 @@ async function inventory(after=''){
 }
 function member(actor='',role='viewer'){
  const row=document.createElement('div');row.className='member';
- const a=document.createElement('input');a.type='text';a.maxLength=512;a.value=actor;a.setAttribute('aria-label','Member organization actor ID');
+ const a=document.createElement('input');a.type='text';a.maxLength=1024;a.value=actor;a.setAttribute('aria-label','Member organization actor ID');
  const s=document.createElement('select');s.setAttribute('aria-label','Member role');for(const value of ['viewer','editor']){const o=text('option',value);o.value=value;s.append(o);}s.value=role;
  const remove=text('button','Remove member');remove.onclick=()=>{row.remove();$('accessConfirm').checked=false;sync();};
  a.oninput=s.onchange=()=>{$('accessConfirm').checked=false;sync();};row.append(a,s,remove);$('members').append(row);
@@ -94,6 +94,7 @@ $('file').onchange=()=>run(async()=>{
 $('confirm').onchange=sync;
 $('publish').onclick=()=>run(async()=>{
  if(!snapshot||!$('confirm').checked)return;
+ if([...$('title').value.trim()].length>240)throw new Error('Use at most 240 characters in the title.');
  const attempt=viewAttempt,fileVersion=fileAttempt;
  const d=await post(base+(selected?'/'+selected.view_id:''),{title:$('title').value.trim(),snapshot,expected_revision:selected?.revision||0,expires_in_days:Number($('days').value),user_confirmed:true,organization_sharing_confirmed:true});
  if(attempt!==viewAttempt||fileVersion!==fileAttempt)return;clearFile();await inventory();if(attempt!==viewAttempt)return;await open(d.view_id);$('status').textContent='Snapshot published. Access is limited to its owner, analysis administrators and explicit members.';
@@ -109,6 +110,7 @@ $('saveAccess').onclick=()=>run(async()=>{
  if(!selected||!$('accessConfirm').checked)return;
  const attempt=viewAttempt,id=selected.view_id;
  const members=[...$('members').children].map(row=>({actor_id:row.querySelector('input').value.trim(),role:row.querySelector('select').value})).filter(m=>m.actor_id);
+ if(members.some(m=>[...m.actor_id].length>512))throw new Error('Use at most 512 characters in an actor ID.');
  await post(base+'/'+selected.view_id+'/access',{expected_access_revision:selected.access_revision,members,expires_in_days:$('renew').value===''?null:Number($('renew').value),user_confirmed:true});
  if(attempt!==viewAttempt)return;await open(id);$('status').textContent='Access updated; future requests use the current member list.';
 });
