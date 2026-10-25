@@ -546,7 +546,8 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
     size = {("activity", a): p["resources"] for a, p in params.items()}
     size.update({("pool", name): pool["resources"] for name, pool in pools.items()})
     free = dict(size)
-    queues: dict[tuple[str, str], list[tuple[float, int]]] = {t: [] for t in size}
+    # Waiting work per team, first come first served by arrival time at the step; event order breaks ties.
+    queues: dict[tuple[str, str], list[tuple[float, int, tuple[int, int]]]] = {t: [] for t in size}
     busy = {a: 0.0 for a in params}
     waits = {a: [] for a in params}
     events: list[tuple[float, int, int, int]] = []  # (time, order, case, step) for arrivals at a step
@@ -586,7 +587,7 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
         if completions and (not events or completions[0][0] <= events[0][0]):
             now, _, case, step, activity = heapq.heappop(completions)
             if queues[team[activity]]:
-                _, (waiting_case, waiting_step) = heapq.heappop(queues[team[activity]])
+                _, _, (waiting_case, waiting_step) = heapq.heappop(queues[team[activity]])
                 begin(now, waiting_case, waiting_step, route[waiting_case][waiting_step])
             else:
                 free[team[activity]] += 1
@@ -602,7 +603,7 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
             free[team[activity]] -= 1
             begin(now, case, step, activity)
         else:
-            heapq.heappush(queues[team[activity]], (order, (case, step)))
+            heapq.heappush(queues[team[activity]], (now, order, (case, step)))
     warm = int(model["cases"] * WARM_UP_SHARE)
     measured = [c for c in range(warm, model["cases"])]
     cycle = sorted(finish[c] - start[c] for c in measured)

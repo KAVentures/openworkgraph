@@ -1,8 +1,10 @@
 """Shared resource pools across activities in what-if simulation (#370 R14)."""
 from __future__ import annotations
 
+import heapq
 from io import BytesIO
 import os
+import random
 from pathlib import Path
 import subprocess
 import sys
@@ -108,3 +110,38 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def _reference_single_server(arrivals, steps, minutes):
+    """Independent FCFS single server for every step of the path: serve the earliest-arrived waiting step next."""
+    waiting = [(t, case, 0) for case, t in enumerate(arrivals)]
+    heapq.heapify(waiting)
+    free, waits = 0.0, {a: [] for a in steps}
+    while waiting:
+        arrived, case, step = heapq.heappop(waiting)
+        begin = max(free, arrived)
+        waits[steps[step]].append(begin - arrived)
+        free = begin + minutes[steps[step]] * 60
+        if step + 1 < len(steps):
+            heapq.heappush(waiting, (free, case, step + 1))   # every arrival at or before ``free`` is known
+    return {a: sum(w) / len(w) for a, w in waits.items()}
+
+
+@pytest.mark.parametrize("steps, minutes, pools, rate", [
+    (["A", "B"], {"A": 60, "B": 60}, {"Team": {"resources": 1, "activities": ["A", "B"]}}, 0.4),
+    (["A", "A"], {"A": 50}, {}, 0.5),                                    # returning to a dedicated activity
+    (["A", "B", "A"], {"A": 40, "B": 20}, {"Team": {"resources": 1, "activities": ["A", "B"]}}, 0.5),
+    (["A", "B", "C", "B"], {"A": 20, "B": 30, "C": 10}, {"Team": {"resources": 1, "activities": ["A", "B", "C"]}}, 0.6),
+])
+def test_queues_serve_multi_step_work_in_arrival_order(steps, minutes, pools, rate):
+    cases, seed = 300, 3
+    model = {"label": "", "arrivals_per_hour": rate, "paths": [(steps, 1.0)], "distribution": "fixed",
+             "activities": {a: {"minutes": m, "resources": 1} for a, m in minutes.items()},
+             "cases": cases, "seed": seed, "pools": pools}
+    rng, clock, arrivals = random.Random(seed), 0.0, []
+    for _ in range(cases):
+        clock += rng.expovariate(rate / 3600)
+        arrivals.append(clock)
+    expected = _reference_single_server(arrivals, steps, minutes)
+    got = {r["activity"]: r["mean_wait_seconds"] for r in sim.simulate(model)["activities"]}
+    assert got == {a: pytest.approx(w, abs=0.01) for a, w in expected.items()}

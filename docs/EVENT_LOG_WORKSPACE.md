@@ -253,7 +253,10 @@ scenario only; the measured baseline keeps one dedicated pool per activity. Resu
 pool (people, utilization, offered load, mean and 90th-percentile wait) and mark each pooled
 activity with its pool, whose utilization and offered load it reports. The test suite checks that
 pooling two dedicated M/M/1 queues at load 0.5 (mean wait 1 h each) into one M/M/2 queue gives the
-Erlang C wait of 1/3 h. The dashboard's simulation form defines one shared pool.
+Erlang C wait of 1/3 h. Each queue serves waiting work in order of arrival at the step (ties in event
+order), so a case returning for a later step is not overtaken by newer arrivals; multi-step and
+re-entrant routes are checked against an independent first-come, first-served reference. The
+dashboard's simulation form defines one shared pool.
 
 #### Seasonal arrivals
 
