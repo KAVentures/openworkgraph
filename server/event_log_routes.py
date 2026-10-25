@@ -28,6 +28,7 @@ from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
+from . import event_log_object_constraints as object_constraints
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_organization as organization
@@ -351,6 +352,17 @@ async def event_log_compliance(request: Request, log_id: str):
     spec = await _json_body(request, "compliance rules")
     try:
         result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/object-constraints")
+async def event_log_object_constraints(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object rules")
+    try:
+        result = await run_in_threadpool(object_constraints.check, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

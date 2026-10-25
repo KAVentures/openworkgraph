@@ -504,6 +504,69 @@
     return lines;
   }
 
+  const OBJECT_RULE_TEMPLATES=[['event_cardinality','Each A event involves a number of T objects'],['object_cardinality','Each T object is related to a number of U objects'],['synchronization','A of a T comes after B of every related U']];
+  // Builds one object-centric rule from form values; throws a readable error.
+  function objectRule(values){
+    const rule={template:values.template,object_type:values.objectType};
+    if(!rule.object_type)throw new Error('Choose object type T.');
+    const counts=()=>{
+      const min=values.min===''?0:Number(values.min),max=values.max===''?null:Number(values.max);
+      if(!Number.isInteger(min)||min<0||(max!==null&&(!Number.isInteger(max)||max<min)))throw new Error('Enter whole numbers with the maximum at least the minimum.');
+      if(min===0&&max===null)throw new Error('Set a minimum above 0 or a maximum.');
+      rule.min=min;if(max!==null)rule.max=max;
+    };
+    if(values.template==='event_cardinality'){if(!values.activity)throw new Error('Choose activity A.');rule.activity=values.activity;counts();return rule;}
+    if(!values.relatedType)throw new Error('Choose the related object type U.');rule.related_type=values.relatedType;
+    if(values.template==='object_cardinality'){if(values.via)rule.via_activity=values.via;counts();return rule;}
+    if(!values.activity||!values.required)throw new Error('Choose activities A and B.');
+    if(values.activity===values.required&&rule.object_type===rule.related_type)throw new Error('Choose a different activity B or object type U.');
+    rule.activity=values.activity;rule.required_activity=values.required;return rule;
+  }
+
+  function objectRuleSection(graph){
+    const box=el('div');box.id='owgObjectRules';
+    box.append(el('h4','Object rules'),el('div','Check how object types relate, without choosing one as the case: "every payment involves exactly one invoice", "every order has one to ten items", "an order ships only after each of its items is picked". Objects are related when they share an event. Results describe recorded links, not verified business relationships or an audit.','muted'));
+    const types=(graph.object_types||[]).map(t=>[t.object_type,t.object_type]);
+    const acts=[...new Set((graph.object_types||[]).flatMap(t=>t.activities.map(a=>a.activity)))].slice(0,500).map(a=>[a,a]);
+    const template=select('owgObjectRuleTemplate',OBJECT_RULE_TEMPLATES);
+    const activity=select('owgObjectRuleActivity',acts),objectType=select('owgObjectRuleType',types),relatedType=select('owgObjectRuleRelated',types);
+    if(types.length>1)relatedType.selectedIndex=1;
+    const required=select('owgObjectRuleRequired',acts),via=select('owgObjectRuleVia',[['','Any shared event'],...acts]);
+    const min=input('owgObjectRuleMin','number');min.min='0';min.step='1';const max=input('owgObjectRuleMax','number');max.min='0';max.step='1';
+    const add=button('Add object rule','secondary');add.id='owgObjectRuleAdd';
+    const run=button('Check object rules');run.id='owgObjectRuleRun';run.disabled=true;
+    const f={activity:field('Activity A',activity),related:field('Related type U',relatedType),required:field('Activity B',required),via:field('Related through',via),min:field('At least',min),max:field('At most',max)};
+    const sync=()=>{const t=template.value;show(f.activity,t!=='object_cardinality');show(f.related,t!=='event_cardinality');show(f.required,t==='synchronization');show(f.via,t==='object_cardinality');show(f.min,t!=='synchronization');show(f.max,t!=='synchronization');};
+    template.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Object type T',objectType),...Object.values(f),add);
+    const pending=el('div');pending.id='owgObjectRuleList';
+    const message=el('div',null,'muted');message.id='owgObjectRuleStatus';message.setAttribute('role','status');
+    const out=el('div');out.id='owgObjectRuleResults';
+    box.append(row,pending,run,message,out);
+    const rules=[],generation=state.generation;
+    const counts=r=>r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max;
+    const label=r=>({event_cardinality:'each '+r.activity+' involves '+counts(r)+' '+r.object_type,object_cardinality:'each '+r.object_type+' is related to '+counts(r)+' '+r.related_type+(r.via_activity?' through '+r.via_activity:''),synchronization:r.activity+' events of '+r.object_type+' objects come after '+r.required_activity+' of every related '+r.related_type}[r.template]);
+    function drawPending(){
+      pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove object rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No object rules added yet.','muted'));
+      run.disabled=!rules.length;
+    }
+    drawPending();
+    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');rules.push(objectRule({template:template.value,activity:activity.value,objectType:objectType.value,relatedType:relatedType.value,required:required.value,via:via.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
+    run.onclick=async()=>{
+      try{
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/object-constraints',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules})})).json();
+        if(generation!==state.generation||!box.isConnected)return;
+        const unit={events:'events',objects:'objects',event_object_pairs:'event–object pairs'};
+        const rows=r.results.map(res=>res.complete?[res.description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
+          res.violation_rate===null?'—':pct(res.violation_rate)+' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']',
+          res.violating_examples.slice(0,5).map(e=>e.unit+' ('+e.detail+')').join(', ')]:[res.description,'—','Unknown: too many related objects to check','—','']);
+        out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
+          table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples'],rows),el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
   function objectMapSection(){
     const box=section('Object-centric map');
     const generation=state.generation;
@@ -578,7 +641,8 @@
       graph=g;setOptions(pick,(g.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
-      shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]));
+      shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]),
+        ...((g.object_types||[]).length>1?[objectRuleSection(g)]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
@@ -1919,6 +1983,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
