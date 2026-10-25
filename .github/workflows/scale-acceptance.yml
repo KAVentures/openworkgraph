@@ -29,3 +29,7 @@ jobs:
         env:
           OWG_SCALE_ACCEPTANCE: "1"
         run: python -m pytest -q -s tests/test_process_discovery_provenance.py
+      - name: Verify arithmetic metrics on 500k cases
+        env:
+          OWG_SCALE_ACCEPTANCE: "1"
+        run: python -m pytest -q -s tests/test_event_log_arithmetic_metrics.py

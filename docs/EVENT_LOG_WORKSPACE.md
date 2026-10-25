@@ -634,6 +634,7 @@ name (`a-z`, digits, `_`) and one of these kinds:
 | `activity_count` | `activity` | Number of events of that activity (0 when none) | events |
 | `event_attribute_sum` | `attribute`, `unit` | Sum of the numeric values of an event attribute | as declared |
 | `case_attribute_number` | `attribute`, `unit` | A numeric case attribute | as declared |
+| `arithmetic` | `operation`, `left`, `right`, `expression_version: "1"` | Add/subtract/multiply/divide earlier metrics or finite typed constants | checked symbolic units |
 
 A case without a value (an activity that never happens, the "to" activity coming first, or no
 numeric value) is left out of that metric's measures, and the result counts those cases per
@@ -650,6 +651,12 @@ at most 50, unique names): `GET|POST /v1/event-logs/{log_id}/metrics` with `{"me
 `POST …/metrics/{metric_id}/delete`. Saved analyses keep the full definitions they used, so they
 rerun the same way after a library metric is deleted. In the dashboard, "Case metrics" under "Build
 an analysis" defines, adds and saves metrics, and lists the saved ones.
+
+[Arithmetic metrics](EVENT_LOG_ARITHMETIC_METRICS.md) keep the same four-metric limit, reject
+forward/cyclic references and incompatible addition units, and disclose zero/missing/overflow
+coverage. Units are never converted. Saved arithmetic library entries are symbolic templates;
+save a complete analysis to retain their dependency definitions. JSON exports retain the spec,
+units and coverage; CSV exports remain numeric tables.
 
 ## Appending newer exports
 
