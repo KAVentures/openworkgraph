@@ -236,6 +236,28 @@ periods, batching, priorities or abandonment. Results are model outputs under
 the stated assumptions, not forecasts or measured outcomes, and authorize
 nothing.
 
+#### Shared resource pools
+
+By default each activity has its own resources. A scenario can instead let several activities share
+one team:
+
+```json
+{"pools": {"Review team": {"resources": 3, "activities": ["Check", "Approve"]}}}
+```
+
+A pool's activities are served by one team of interchangeable resources from a single first-come,
+first-served queue, so a person who finishes a Check can take the next waiting Approve. A pooled
+activity's own resource count is not used; each activity is in at most one pool, every pooled
+activity must be on one of the scenario's paths, and up to 20 pools are allowed. Pools change the
+scenario only; the measured baseline keeps one dedicated pool per activity. Results add a row per
+pool (people, utilization, offered load, mean and 90th-percentile wait) and mark each pooled
+activity with its pool, whose utilization and offered load it reports. The test suite checks that
+pooling two dedicated M/M/1 queues at load 0.5 (mean wait 1 h each) into one M/M/2 queue gives the
+Erlang C wait of 1/3 h. Each queue serves waiting work in order of arrival at the step (ties in event
+order), so a case returning for a later step is not overtaken by newer arrivals; multi-step and
+re-entrant routes are checked against an independent first-come, first-served reference. The
+dashboard's simulation form defines one shared pool.
+
 #### Working calendars
 
 Without a calendar, resources work around the clock. A `calendar` limits every

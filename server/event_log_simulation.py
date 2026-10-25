@@ -26,6 +26,7 @@ MAX_ACTIVITIES = 100
 MAX_PATHS = 20
 MAX_PATH_LENGTH = 100
 MAX_RESOURCES = 1000
+MAX_POOLS = 20
 WARM_UP_SHARE = 0.1
 ASSUMPTIONS = [
     "Cases arrive as a Poisson process at the stated rate.",
@@ -260,7 +261,7 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict) or spec.get("format", FORMAT) != FORMAT:
         raise EventLogWorkspaceError(f"scenario must use format {FORMAT}")
     unknown = set(spec) - {"format", "label", "arrivals_per_hour", "paths", "activities", "distribution", "cases", "seed",
-                           "calendar", "scenario_calendar"}
+                           "calendar", "scenario_calendar", "pools"}
     if unknown:
         raise EventLogWorkspaceError("unknown scenario fields: " + ", ".join(sorted(unknown))[:200])
     arrivals = spec.get("arrivals_per_hour", base["arrivals_per_hour"])
@@ -308,7 +309,37 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     label = spec.get("label") if isinstance(spec.get("label"), str) else ""
     calendar = parse_calendar(spec["scenario_calendar"] if "scenario_calendar" in spec else spec.get("calendar"))
     return {"label": label[:80], "arrivals_per_hour": arrivals, "paths": [(s, w / total) for s, w in routing],
-            "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar}
+            "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar,
+            "pools": _pools(spec.get("pools"), params)}
+
+
+def _pools(spec: Any, params: dict[str, dict[str, float]]) -> dict[str, dict[str, Any]]:
+    """Shared resource pools: each pool's activities draw on one team through one first-come, first-served queue."""
+    if spec is None:
+        return {}
+    if not isinstance(spec, dict) or not 0 < len(spec) <= MAX_POOLS:
+        raise EventLogWorkspaceError(f"pools map 1 to {MAX_POOLS} pool names to resources and activities")
+    pools, owner = {}, {}
+    for name, pool in spec.items():
+        if not isinstance(name, str) or not 0 < len(name.strip()) <= 80:
+            raise EventLogWorkspaceError("pool names are 1 to 80 characters")
+        if not isinstance(pool, dict) or set(pool) != {"resources", "activities"}:
+            raise EventLogWorkspaceError("each pool has resources and activities")
+        resources = _number(pool["resources"], 1, MAX_RESOURCES, "pool resources")
+        if resources != int(resources):
+            raise EventLogWorkspaceError("pool resources must be a whole number")
+        members = pool["activities"]
+        if (not isinstance(members, list) or not 0 < len(members) <= MAX_ACTIVITIES
+                or not all(isinstance(m, str) for m in members) or len(set(members)) != len(members)):
+            raise EventLogWorkspaceError("each pool lists distinct activities")
+        for activity in members:
+            if activity not in params:
+                raise EventLogWorkspaceError(f"pool {name!r} names an activity the scenario's paths do not use")
+            if activity in owner:
+                raise EventLogWorkspaceError(f"activity {activity!r} is in more than one pool")
+            owner[activity] = name
+        pools[name] = {"resources": int(resources), "activities": list(members)}
+    return pools
 
 
 def _percentile(ordered: list[float], q: float) -> float | None:
@@ -331,8 +362,15 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
         acc += weight
         cumulative.append(acc)
     params, fixed = model["activities"], model["distribution"] == "fixed"
-    free = {a: p["resources"] for a, p in params.items()}
-    queues: dict[str, list[tuple[float, int]]] = {a: [] for a in params}
+    pools = model.get("pools") or {}
+    # Each activity draws on its own resources or on its shared pool; one FCFS queue per team.
+    team = {a: ("activity", a) for a in params}
+    team.update({a: ("pool", name) for name, pool in pools.items() for a in pool["activities"]})
+    size = {("activity", a): p["resources"] for a, p in params.items()}
+    size.update({("pool", name): pool["resources"] for name, pool in pools.items()})
+    free = dict(size)
+    # Waiting work per team, first come first served by arrival time at the step; event order breaks ties.
+    queues: dict[tuple[str, str], list[tuple[float, int, tuple[int, int]]]] = {t: [] for t in size}
     busy = {a: 0.0 for a in params}
     waits = {a: [] for a in params}
     events: list[tuple[float, int, int, int]] = []  # (time, order, case, step) for arrivals at a step
@@ -369,11 +407,11 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
     while events or completions:
         if completions and (not events or completions[0][0] <= events[0][0]):
             now, _, case, step, activity = heapq.heappop(completions)
-            if queues[activity]:
-                _, (waiting_case, waiting_step) = heapq.heappop(queues[activity])
-                begin(now, waiting_case, waiting_step, activity)
+            if queues[team[activity]]:
+                _, _, (waiting_case, waiting_step) = heapq.heappop(queues[team[activity]])
+                begin(now, waiting_case, waiting_step, route[waiting_case][waiting_step])
             else:
-                free[activity] += 1
+                free[team[activity]] += 1
             if step + 1 < len(route[case]):
                 heapq.heappush(events, (now, seq, case, step + 1)); seq += 1
             else:
@@ -382,11 +420,11 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
         now, order, case, step = heapq.heappop(events)
         activity = route[case][step]
         step_arrival[(case, step)] = now
-        if free[activity]:
-            free[activity] -= 1
+        if free[team[activity]]:
+            free[team[activity]] -= 1
             begin(now, case, step, activity)
         else:
-            heapq.heappush(queues[activity], (order, (case, step)))
+            heapq.heappush(queues[team[activity]], (now, order, (case, step)))
     warm = int(model["cases"] * WARM_UP_SHARE)
     measured = [c for c in range(warm, model["cases"])]
     cycle = sorted(finish[c] - start[c] for c in measured)
@@ -396,16 +434,35 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
     window = (finish[measured[-1]] - start[measured[0]]) if measured else 0
     activity_rows = []
     share = calendar.weekly_share if calendar is not None else 1.0
+
+    def work_per_second(activity: str) -> float:
+        return model["arrivals_per_hour"] / 3600 * params[activity]["minutes"] * 60 * sum(
+            w * steps.count(activity) for steps, w in model["paths"])
+    team_busy, team_work = {t: 0.0 for t in size}, {t: 0.0 for t in size}
+    for activity in params:
+        team_busy[team[activity]] += busy[activity]
+        team_work[team[activity]] += work_per_second(activity)
+    utilization_of = {t: team_busy[t] / (size[t] * horizon) if horizon else 0 for t in size}
+    offered_of = {t: team_work[t] / size[t] / share for t in size}
     for activity, p in sorted(params.items()):
         ordered = sorted(waits[activity])
-        utilization = busy[activity] / (p["resources"] * horizon) if horizon else 0
-        offered = model["arrivals_per_hour"] / 3600 * p["minutes"] * 60 * sum(
-            w * steps.count(activity) for steps, w in model["paths"]) / p["resources"] / share
-        activity_rows.append({"activity": activity, "minutes": p["minutes"], "resources": p["resources"],
-                              "utilization": round(utilization, 4), "offered_load": round(offered, 4),
-                              "mean_wait_seconds": round(sum(ordered) / len(ordered), 3) if ordered else 0,
-                              "p90_wait_seconds": _percentile(ordered, 0.9) or 0,
-                              "overloaded": offered >= 1})
+        t = team[activity]
+        row = {"activity": activity, "minutes": p["minutes"], "resources": size[t],
+               "utilization": round(utilization_of[t], 4), "offered_load": round(offered_of[t], 4),
+               "mean_wait_seconds": round(sum(ordered) / len(ordered), 3) if ordered else 0,
+               "p90_wait_seconds": _percentile(ordered, 0.9) or 0,
+               "overloaded": offered_of[t] >= 1}
+        if t[0] == "pool":
+            row["pool"] = t[1]
+        activity_rows.append(row)
+    pool_rows = []
+    for name, pool in sorted(pools.items()):
+        t = ("pool", name)
+        ordered = sorted(x for a in pool["activities"] for x in waits[a])
+        pool_rows.append({"pool": name, "resources": pool["resources"], "activities": pool["activities"],
+                          "utilization": round(utilization_of[t], 4), "offered_load": round(offered_of[t], 4),
+                          "mean_wait_seconds": round(sum(ordered) / len(ordered), 3) if ordered else 0,
+                          "p90_wait_seconds": _percentile(ordered, 0.9) or 0, "overloaded": offered_of[t] >= 1})
     return {
         "cases_simulated": model["cases"],
         "cases_measured": len(cycle),
@@ -413,9 +470,17 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
                                "mean": sum(cycle) / len(cycle) if cycle else None},
         "completed_per_day": round(len(cycle) / (window / 86400), 3) if window > 0 else None,
         "activities": activity_rows,
+        **({"pools": pool_rows} if pools else {}),
         "unstable": any(r["overloaded"] for r in activity_rows),
         **({"calendar": calendar.describe(), "utilization_basis": "working_time"} if calendar is not None else {}),
     }
+
+
+POOL_ASSUMPTIONS = [
+    "In the scenario, the activities of each shared pool are done by one team of interchangeable resources that serve "
+    "the pool's single first-come, first-served queue; a pooled activity's own resource count is not used. The "
+    "measured baseline keeps one dedicated pool per activity.",
+]
 
 
 CALENDAR_ASSUMPTIONS = [
@@ -460,7 +525,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
                      "paths": [{"activities": p, "weight": round(w, 6)} for p, w in scenario_model["paths"]],
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],
                      "cases": scenario_model["cases"], "seed": scenario_model["seed"],
-                     "calendar": scenario_model["calendar"].describe() if scenario_model["calendar"] else None},
+                     "calendar": scenario_model["calendar"].describe() if scenario_model["calendar"] else None,
+                     "pools": scenario_model["pools"] or None},
         "baseline": baseline,
         "baseline_calendar": baseline_model["calendar"].describe() if baseline_model["calendar"] else None,
         "baseline_arrivals_per_hour": baseline_model["arrivals_per_hour"],
@@ -468,7 +534,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "result": changed,
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
-        "assumptions": _assumptions(baseline_model, scenario_model) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
+        "assumptions": _assumptions(baseline_model, scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,

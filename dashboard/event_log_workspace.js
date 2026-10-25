@@ -771,6 +771,15 @@
     return calendar;
   }
 
+  // One shared resource pool from form values, or null when no pool is named; throws a readable error.
+  function simPool(values){
+    const name=String(values.name||'').trim();
+    if(!name)return null;
+    const resources=Number(values.resources);
+    if(!Number.isInteger(resources)||resources<1)throw new Error('Enter a whole number of people for the pool.');
+    if(!values.activities||values.activities.length<2)throw new Error('Choose at least two activities for the shared pool.');
+    return {[name]:{resources,activities:[...values.activities]}};
+  }
   const calendarText=c=>!c?'around the clock':Object.keys(c.hours).join(', ')+' '+Object.values(c.hours)[0].map(x=>x.join('–')).join(', ')+' ('+c.timezone+')'+(c.holidays.length?', '+c.holidays.length+' holidays':'');
 
   function simulationSection(){
@@ -819,8 +828,14 @@
         const add=button('Add activity','secondary');add.id='owgEventLogSimAdd';
         add.onclick=()=>{const name=newName.value.trim();if(!name||rows.some(r=>r.name===name))return;addRow(name,{minutes:0,resources:1});newName.value='';};
         const addRowNode=el('div',null,'row');addRowNode.style.alignItems='end';addRowNode.append(field('Activity not in the log',newName),add);
+        // One shared pool for the scenario: the chosen activities draw on one team through one queue.
+        const poolName=input('owgEventLogSimPoolName','text','e.g. Review team');poolName.maxLength=80;
+        const poolSize=input('owgEventLogSimPoolResources','number');poolSize.min='1';poolSize.step='1';poolSize.value='2';
+        const poolActivities=select('owgEventLogSimPoolActivities',Object.keys(cal.activities||{}).map(a=>[a,a]));poolActivities.multiple=true;poolActivities.size=3;
+        const poolRow=el('div',null,'row');poolRow.style.alignItems='end';
+        poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities));
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
-        form.replaceChildren(top,calRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,
+        form.replaceChildren(top,calRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
@@ -828,6 +843,8 @@
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
             const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000)};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
+            const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
+            if(pool)scenario.pools=pool;
             const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
             const calendar=simCalendar(calValues);
             if(calendar){scenario.calendar=calendar;if(scenarioDays.value&&scenarioDays.value!==days.value)scenario.scenario_calendar=simCalendar({...calValues,days:scenarioDays.value});}
@@ -840,7 +857,8 @@
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
-              table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity,a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+              table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+              ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
               (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
           }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
           finally{run.disabled=false;}
@@ -1701,6 +1719,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

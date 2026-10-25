@@ -298,6 +298,17 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent(),/pauses outside them/);
    const badCalendar=await page.evaluate(()=>{try{window.__owgEventLogModel.simCalendar({days:'weekdays',from:'17:00',to:'09:00',timezone:'UTC'});return 'accepted';}catch(e){return e.message;}});
    assert.match(badCalendar,/end after the start/);
+   // A shared pool in the scenario: Check and Approve done by one team of two through one queue.
+   await page.locator('#owgEventLogSimPoolName').fill('Review team');await page.locator('#owgEventLogSimPoolResources').fill('2');
+   await page.locator('#owgEventLogSimPoolActivities').selectOption(['Check','Approve']);
+   const [poolResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const pooled=await poolResponse.json();
+   assert.deepEqual(pooled.scenario.pools,{'Review team':{resources:2,activities:['Check','Approve']}});
+   assert.equal(pooled.baseline.pools,undefined,'the measured baseline keeps dedicated resources');
+   await page.getByRole('cell',{name:'Check (Review team)',exact:true}).waitFor();
+   await page.getByRole('cell',{name:'Check, Approve',exact:true}).waitFor();
+   const badPool=await page.evaluate(()=>{try{window.__owgEventLogModel.simPool({name:'Team',resources:'2',activities:['Check']});return 'accepted';}catch(e){return e.message;}});
+   assert.match(badPool,/at least two activities/);
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -648,7 +659,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and working calendars, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars and a shared resource pool, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
