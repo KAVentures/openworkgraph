@@ -59,6 +59,31 @@ Lifecycle maps remain available. API clients must inspect
 does not establish absence of links. Responses include a fixed unknown reason,
 count method, scope and work limits. No partial link estimates are reported.
 
+### What flattening onto one object type does
+
+Every case analysis (variants, KPIs, maps, predictions, simulation) flattens the log onto the
+chosen case notion: each object of that type becomes a case with a copy of every event linked to
+it. `GET /v1/event-logs/{log_id}/object-flattening` (dashboard session only) reports, per object
+type, how that changes the evidence, so case and event counts and cycle times are read with the
+right caveats:
+
+- **Deficiency:** events linked to no object of the type disappear (`events_left_out`, their share
+  of the log and the activities they belong to).
+- **Convergence:** events linked to several objects of the type are copied into each case
+  (`convergent_events`, `flattened_event_rows`, `extra_event_rows`, `duplication_factor`, per
+  activity), which inflates event counts and activity frequencies.
+- **Divergence:** an activity repeated for one object of the type (`objects_with_repeats`,
+  `repetitions`), with the other object types whose objects differ between the repetitions
+  (`repetitions_differ_by`). A check repeated once per item of an order is item-level work, not
+  rework of the order.
+- **Qualifiers:** links per qualifier, and objects linked under more than one qualifier, a sign
+  of a relationship that changes over the object's life.
+
+The map shows these consequences in plain language under the selected object type. Explaining
+repetitions examines at most five million links; beyond that `divergence_explanation_complete`
+is false with a fixed reason, and the repetitions are still counted. Counts describe recorded
+links, not verified business relationships. 160,000 OCEL events take about one second.
+
 ## Limits
 
 - 4 GB per import, 50 stored logs (delete one to import another).
@@ -85,6 +110,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
+| `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
