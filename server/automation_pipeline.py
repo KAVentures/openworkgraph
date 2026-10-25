@@ -54,6 +54,12 @@ class Source(_Strict):
     reference: str = Field(default="", max_length=200)
 
 
+class ProcessReference(_Strict):
+    workflow_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    revision: StrictInt = Field(ge=1, le=2**63-1)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class NewIdea(_Strict):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
@@ -139,7 +145,31 @@ def _check_revision(row, expected: int) -> None:
 
 
 def create(payload: Any) -> dict[str, Any]:
-    idea = _validate(NewIdea, payload)
+    return _create(_validate(NewIdea, payload))
+
+
+def _catalog():
+    from .local_process_catalog import catalog
+    return catalog
+
+
+def create_from_process(payload: Any) -> dict[str, Any]:
+    """Resolve a selected local revision; clients cannot assert verified lineage."""
+    ref = _validate(ProcessReference, payload)
+    try:
+        record = _catalog().get(ref.workflow_id, ref.revision)
+    except LookupError:
+        raise PipelineError("selected process revision is unavailable") from None
+    except Exception:
+        raise PipelineError("selected process could not be checked; try again") from None
+    if record["content_sha256"] != ref.content_sha256:
+        raise PipelineError("selected process changed; reload it before adding an idea")
+    idea = NewIdea(title=record["title"].strip()[:200] or "Saved process opportunity", description=record["process_model"]["goal"],
+                   source=Source(kind="process_catalog", reference=f"{ref.workflow_id}@{ref.revision}"))
+    return _create(idea, ref.model_dump())
+
+
+def _create(idea: NewIdea, process_reference: dict[str, Any] | None = None) -> dict[str, Any]:
     if not idea.title.strip():
         raise PipelineError("title must not be blank")
     with _LOCK, closing(_connect()) as conn, conn:
@@ -147,9 +177,42 @@ def create(payload: Any) -> dict[str, Any]:
             raise PipelineError(f"the pipeline holds at most {MAX_IDEAS} ideas; delete some first")
         idea_id, now = "idea_" + secrets.token_hex(8), _now()
         history = [{"state": "idea", "at": now, "note": "created"}]
+        body = idea.model_dump()
+        if process_reference is not None:
+            body["process_reference"] = process_reference
         conn.execute("INSERT INTO ideas VALUES (?, ?, ?, 1, 'idea', ?, NULL, ?)",
-                     [idea_id, now, now, idea.model_dump_json(), json.dumps(history)])
+                     [idea_id, now, now, json.dumps(body), json.dumps(history)])
         return _public(_get(conn, idea_id))
+
+
+def process_status(idea_id: str) -> dict[str, Any]:
+    return _process_status(get(idea_id).get("process_reference"))
+
+
+def _process_status(reference: dict[str, Any] | None) -> dict[str, Any]:
+    result = {"format": "openworkgraph.opportunity-process-status.v1",
+              "status": "unbound_reference", "process_reference": reference,
+              "latest_revision": None, "reference_is_current": False,
+              "execution_authorized": False, "business_outcomes_verified": False,
+              "independent_design_review_verified": False}
+    if reference is None:
+        return result
+    try:
+        ref = ProcessReference.model_validate(reference)
+        catalog = _catalog()
+        pinned = catalog.get(ref.workflow_id, ref.revision)
+        if pinned["content_sha256"] != ref.content_sha256:
+            return result | {"status": "reference_mismatch"}
+        latest = catalog.get(ref.workflow_id)
+        current = latest["revision"] == ref.revision and latest["content_sha256"] == ref.content_sha256
+        return result | {"status": "current" if current else "changed",
+                         "latest_revision": latest["revision"], "reference_is_current": current}
+    except LookupError:
+        return result | {"status": "unavailable"}
+    except Exception:
+        # The check is a refusal boundary, not a reason to expose source data or
+        # treat an unavailable database as a fresh design. Reads never mutate it.
+        return result | {"status": "check_failed"}
 
 
 def assess(idea_id: str, payload: Any) -> dict[str, Any]:
@@ -191,12 +254,18 @@ def transition(idea_id: str, payload: Any) -> dict[str, Any]:
             raise PipelineError(f"cannot move from {row[4]} to {move.to}")
         if move.to == "approved" and not row[6]:
             raise PipelineError("assess the idea before approving it")
+        reference = json.loads(row[5]).get("process_reference")
+        if reference is not None and move.to in {"approved", "implemented"}:
+            if not _process_status(reference)["reference_is_current"]:
+                raise PipelineError("linked process changed or is unavailable; open its current revision and create a new idea")
         now = _now()
         entry = {"state": move.to, "at": now, "note": move.note.strip()}
         if move.to == "approved":
             # Pin the local decision's exact assumptions in its history entry;
             # this snapshot grants no tool or business-execution authority.
             entry.update(revision=row[3] + 1, assessment=json.loads(row[6]))
+            if reference is not None:
+                entry["process_reference"] = reference
         history = json.loads(row[7]) + [entry]
         conn.execute("UPDATE ideas SET state = ?, history = ?, revision = revision + 1, updated_at = ? WHERE idea_id = ?",
                      [move.to, json.dumps(history[-100:]), now, row[0]])

@@ -69,6 +69,18 @@ async def create_idea(request: Request):
     return _respond(pipeline.create, await _json(request))
 
 
+@router.post("/v1/automation-pipeline/from-process")
+async def create_idea_from_process(request: Request):
+    _require_dashboard(request)
+    return _respond(pipeline.create_from_process, await _json(request))
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/process-status")
+def process_status(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(pipeline.process_status, idea_id)
+
+
 @router.get("/v1/automation-pipeline/{idea_id}")
 def get_idea(request: Request, idea_id: str):
     _require_dashboard(request)

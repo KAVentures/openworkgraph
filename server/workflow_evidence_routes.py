@@ -701,19 +701,8 @@ __all__ = [
 
 
 # Reviewed context is deliberately separate from the canonical events table.
-from shared.workflow_knowledge import KnowledgeStore, KnowledgeWrite
-from . import db as _knowledge_db
-
-
-class _LocalKnowledgeDB:
-    connect = staticmethod(_knowledge_db.connect)
-
-    @staticmethod
-    def _execute(conn, sql, params=()):
-        return conn.execute(sql, params)
-
-
-_knowledge = KnowledgeStore(_LocalKnowledgeDB())
+from shared.workflow_knowledge import KnowledgeWrite
+from .local_process_catalog import knowledge as _knowledge, catalog as _catalog
 
 
 @app.get("/v1/workflow-knowledge")
@@ -746,7 +735,6 @@ from shared.process_model import ProcessModel
 from .process_catalog import CatalogWrite, ProcessCatalog, process_bpmn, process_document
 from .workflow_groupings import WorkflowGroupings, GroupSave, GroupMove, GroupingError, GROUP_ID
 
-_catalog = ProcessCatalog(_knowledge, 'local')
 _groupings = WorkflowGroupings(_knowledge)
 _PROCESS_ID = r'^[a-zA-Z0-9_-]{1,80}$'
 

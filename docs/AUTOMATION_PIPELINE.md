@@ -60,3 +60,30 @@ calculator ([PROCESS_OPPORTUNITY_REVIEW.md](PROCESS_OPPORTUNITY_REVIEW.md)).
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,
 `GET /v1/automation-pipeline/{id}`, `POST …/{id}/assess`, `POST …/{id}/transition`,
 `POST …/{id}/delete`, `GET /v1/automation-pipeline/export.csv`.
+
+## Exact saved-process links
+
+Open a saved local process and choose **Add saved revision to automation pipeline**.
+The server resolves that immutable revision and checks its content hash before
+creating an idea. It records only the local workflow ID, revision and content
+hash alongside the idea; source observations, case identifiers and process rules
+are not copied. Unsaved editor changes are excluded. Manually entered source
+references remain descriptive strings and cannot assert a resolved link.
+
+The idea shows whether the pinned process still exists and is current, and can
+reopen the exact linked revision. Refreshing status is read-only. Approval and
+moving to implemented recheck linked revisions on the server; a changed, deleted,
+replaced or uncheckable process refuses the decision. To use a different revision,
+open it and create a new idea. Existing ideas and assessment history are not
+silently rebound or rewritten. Approval history retains the selected reference.
+
+Checks are point-in-time local catalog reads, not an atomic transaction spanning
+both stores or continuous monitoring. Source changes can occur after a check;
+later decisions check again. They do not verify independent review, business
+outcomes, policy, tool grants or deployment readiness. Legacy ideas keep their
+existing behavior. This is the process-to-opportunity part of #370 M0/R5, not yet
+full log/cohort → project → execution → independently verified receipt lineage.
+
+Dashboard-session-only APIs: `POST /v1/automation-pipeline/from-process` with
+`workflow_id`, `revision` and `content_sha256`, and
+`GET /v1/automation-pipeline/{id}/process-status`. Both are no-store.

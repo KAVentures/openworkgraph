@@ -92,11 +92,12 @@
     status('Saved process inventory loaded from local reviewed knowledge.');
   }
   function replaceDraft(){return !model||window.confirm('Discard unsaved catalog edits and load this revision?');}
-  async function load(id,revision){
+  async function load(id,revision,expectedHash){
     return locked(async()=>{
       if(!replaceDraft())return;
       const params=new URLSearchParams({workflow_id:id});if(revision)params.set('revision',String(revision));
       const result=await request('/v1/process-catalog/revision?'+params);
+      if(expectedHash&&result.content_sha256!==expectedHash)throw new Error('Linked process revision no longer matches its saved reference.');
       record=result;model=copy(result.process_model);reviewed=false;renderEditor();
       status('Opened immutable revision '+record.revision+'. Saving requires review and the same latest revision.');
     });
@@ -308,6 +309,14 @@
     actions.append(button('Save new revision',()=>save()),button('Save as a new process',()=>save(true)));
     if(record.revision){
     actions.appendChild(button('Load revision history',()=>history()));
+    actions.appendChild(button('Add saved revision to automation pipeline',()=>locked(async()=>{
+      const selected={workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256};
+      const idea=await request('/v1/automation-pipeline/from-process',selected);
+      window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:idea.idea_id}}));
+      document.getElementById('owgPipelineCard')?.scrollIntoView({block:'start'});
+      status('Added saved revision '+selected.revision+' to the automation pipeline. Unsaved edits are excluded.');
+    })));
+
     const project=button('Download OpenAI Agents project',()=>download('agent-project'));
     actions.appendChild(project);
     ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
@@ -560,7 +569,7 @@
     const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);
     panel.appendChild(host);
   }
-  window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered};
+  window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered,openSaved:ref=>load(ref.workflow_id,ref.revision,ref.content_sha256)};
   window.__owgProcessCatalogModel={linearModel};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
