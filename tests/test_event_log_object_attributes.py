@@ -217,3 +217,58 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def _untimed_first(first):
+    status = [{"name": "status", "value": "created"} if first is None else _value("status", first, "created"),
+              _value("status", "2024-01-02T00:00:00Z", "approved")]
+    return {"objectTypes": [], "eventTypes": [], "objects": [{"id": "o", "type": "order", "attributes": status}],
+            "events": [{"id": "s", "type": "Ship", "time": "2024-01-03T00:00:00Z",
+                        "relationships": [{"objectId": "o", "qualifier": ""}]}]}
+
+
+def _stored(log_id):
+    conn = workspace._connect()
+    try:
+        return json.loads(conn.execute("SELECT attributes FROM objects WHERE log_id = ? AND object_id = 'o'",
+                                       [log_id]).fetchone()[0])
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
+@pytest.mark.parametrize("first", [None, "not a time", "2024-01-01T00:00:00"])
+def test_a_stored_value_without_a_usable_time_survives_export(fmt, first):
+    log = _import(_untimed_first(first))["log_id"]
+    assert _stored(log) == {"status": "created"}
+    out = StringIO()
+    workspace.export_log(log, fmt, out)
+    again = workspace.import_log(BytesIO(out.getvalue().encode()), name="again", source_format=fmt)["log_id"]
+    assert _stored(again) == {"status": "created"}
+    # The stored value goes out at the documented unknown-time origin and is reported as such, not as a change time.
+    status = _status(attributes.attribute_changes(again))
+    assert status["initial_values_without_known_time"] == 1 and status["first_change_or_value_at"] == "2024-01-02T00:00:00Z"
+
+
+def test_append_keeping_a_static_value_still_exports_it():
+    base = _untimed_first("2024-01-01T00:00:00Z")
+    base["objects"][0]["attributes"] = [_value("region", T0, "EU")]
+    log = _import(base)["log_id"]
+    conn = workspace._connect()
+    try:  # a log imported before timed values were kept has the stored value only
+        conn.execute("DELETE FROM object_attribute_values WHERE log_id = ?", [log])
+    finally:
+        conn.close()
+    newer = json.loads(json.dumps(base))
+    newer["objects"][0]["attributes"] = [_value("region", "2024-01-02T00:00:00Z", "US"),
+                                         _value("priority", "2024-01-05T00:00:00Z", "high"),
+                                         _value("priority", "2024-01-04T00:00:00Z", "low")]
+    workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format="ocel")
+    for fmt in ("ocel", "ocelxml"):
+        out = StringIO()
+        workspace.export_log(log, fmt, out)
+        again = workspace.import_log(BytesIO(out.getvalue().encode()), name="again", source_format=fmt)["log_id"]
+        assert _stored(log) == {"region": "EU"}
+        # An attribute only an append added has no stored value; OCEL cannot say so, so a re-import stores
+        # its earliest value. Existing stored values are never replaced.
+        assert _stored(again) == {"region": "EU", "priority": "low"}

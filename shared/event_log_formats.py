@@ -295,21 +295,23 @@ def _ocel_object(object_id: str, object_type: str, values: list[tuple[Any, Any, 
 
 
 def _history_entries(o: dict[str, Any]) -> list[tuple[str, str, str]]:
-    """(name, ISO time, value) for export: the stored history, with the value ``attributes`` holds listed
-    first for its name so a re-import keeps the same first value; untimed attributes keep the 1970 origin."""
+    """(name, ISO time, value) for export, listing the value ``attributes`` holds first for its name so a
+    re-import keeps the same stored value. A stored value without a timed entry of its own (its time was
+    missing or not timezone-qualified, or an append kept it while adding other values) goes out at the
+    1970 origin, the OCEL convention for an initial value without a known time, never at an observed time."""
     attributes = o.get("attributes") or {}
     by_name: dict[str, list[tuple[datetime, str]]] = {}
     for name, stamp, value in o.get("history") or []:
         by_name.setdefault(name, []).append((stamp, value))
     entries: list[tuple[str, str, str]] = []
     for name in sorted(set(attributes) | set(by_name)):
-        timed = sorted(set(by_name.get(name, [])))
-        if not timed:
-            entries.append((name, "1970-01-01T00:00:00Z", attributes[name]))
-            continue
-        first = next((i for i, (_, v) in enumerate(timed) if v == attributes.get(name)), 0)
-        for stamp, value in [timed[first], *timed[:first], *timed[first + 1:]]:
-            entries.append((name, _iso(stamp), value))
+        timed = [(_iso(stamp), value) for stamp, value in sorted(set(by_name.get(name, [])))]
+        if name in attributes:
+            stored = attributes[name]
+            first = next((i for i, (_, v) in enumerate(timed) if v == stored), None)
+            head = timed.pop(first) if first is not None else ("1970-01-01T00:00:00Z", stored)
+            timed.insert(0, head)
+        entries.extend((name, time, value) for time, value in timed)
     return entries
 
 

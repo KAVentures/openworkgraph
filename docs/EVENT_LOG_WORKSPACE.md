@@ -97,7 +97,11 @@ time. The workspace keeps two things:
   with any values over the limit.
 
 OCEL exports write the timed values with their own times, listing the stored value first, so a
-re-import keeps both. Attributes without timed values are still written at the 1970 origin. An
+re-import keeps both. A stored value without a timed value of its own (its time was missing or
+had no timezone, or the log predates timed values) is written at the 1970 origin, never at an
+observed time, so a re-import keeps it as the stored value and reports it as an initial value
+without a known time. An attribute that only an append added to an existing object has timed
+values but no stored value; OCEL cannot express that, so a re-import stores its earliest value. An
 append adds timed values for new and existing objects (a newer export can carry later changes)
 and skips values the log already holds. The stored value of an existing object is never changed.
 
