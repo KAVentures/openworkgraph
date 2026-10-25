@@ -24,6 +24,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError
 
 from . import event_log_cohorts as cohorts
+from . import event_log_survival as survival
 from . import event_log_workspace as workspace
 from .event_log_analytics import _wilson
 
@@ -50,6 +51,9 @@ class PredictionSpec(_Strict):
     cohort: dict[str, Any] = Field(default_factory=dict)
     case_type: Label | None = None
     limit: StrictInt = Field(default=50, ge=1, le=MAX_OPEN_CASES)
+    # completed_cases: learn from finished cases only. survival: also learn from open cases as censored
+    # observations and condition each estimate on the time the case has already been idle.
+    estimator: Literal["completed_cases", "survival"] = "completed_cases"
 
 
 def parse(spec: Any) -> PredictionSpec:
@@ -105,6 +109,8 @@ def predict(log_id: str, spec: Any) -> dict[str, Any]:
         _train(conn, "TRUE", [])
         _choose(conn, "po", settings.min_support)
         has_outcome = settings.outcome is not None
+        if settings.estimator == "survival":
+            return _survival_result(conn, settings, as_of, completed, open_total, has_outcome)
         rows = conn.execute("""SELECT case_id, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n
             FROM po_est WHERE basis IS NOT NULL ORDER BY """ + ("rate DESC" if has_outcome else "q50 DESC") +
                             ", case_id LIMIT ?", [settings.limit + 1]).fetchall()
@@ -131,6 +137,58 @@ def predict(log_id: str, spec: Any) -> dict[str, Any]:
             "resources_used": False,
         }
     return workspace._query(log_id, settings.case_type, run)
+
+
+def _survival_result(conn, settings: PredictionSpec, as_of, completed: int, open_total: int,
+                     has_outcome: bool) -> dict[str, Any]:
+    survival.observations(conn)
+    survival.fit(conn)
+    survival.estimate(conn, "po", settings.min_support)
+    censored_training = conn.execute("SELECT count(DISTINCT case_id) FROM so WHERE NOT observed").fetchone()[0]
+    # Withheld estimates (more than the history shows) are the longest, so they come first.
+    order = "e.rate DESC NULLS LAST, " if has_outcome else ""
+    rows = conn.execute(f"""SELECT v.case_id, v.activity, v.step, v.age, v.idle, v.basis, v.cases, v.censored_cases,
+          v.q50, v.q10, v.q90, v.at_least, e.rate, e.hits, e.n
+        FROM po_sv v JOIN po_est e USING (case_id) WHERE v.basis IS NOT NULL
+        ORDER BY {order}(v.q50 IS NULL) DESC, v.q50 DESC, v.case_id LIMIT ?""", [settings.limit + 1]).fetchall()
+    predicted, withheld = conn.execute("""SELECT count(*) FILTER (WHERE basis IS NOT NULL),
+          count(*) FILTER (WHERE basis IS NOT NULL AND q50 IS NULL) FROM po_sv""").fetchone()
+    predictions = []
+    for (case_id, activity, step, age, idle, basis, cases, still_open, q50, q10, q90, at_least,
+         rate, hits, n) in rows[:settings.limit]:
+        item = {"case_id": case_id, "last_activity": activity, "events_so_far": step, "age_seconds": age,
+                "idle_seconds": idle, "basis": basis, "comparable_cases": cases,
+                "comparable_cases_still_open": still_open, "median_remaining_seconds": q50,
+                "remaining_p10_seconds": q10, "remaining_p90_seconds": q90, "remaining_measured_from": "end_of_log",
+                "estimate_withheld": q50 is None}
+        if q50 is None:
+            item["remaining_at_least_seconds"] = at_least
+        if has_outcome:
+            item["outcome_probability"] = rate
+            item["outcome_probability_ci95"] = list(_wilson(hits, n, 1.959964)) if n else None
+        predictions.append(item)
+    cutoff = conn.execute("SELECT quantile_disc(ended, ?) FROM pc WHERE complete",
+                          [1 - float(settings.backtest_share)]).fetchone()[0]
+    return {
+        "as_of": as_of.isoformat() + "Z" if as_of else None,
+        "completed_cases": completed, "open_cases": open_total,
+        "predicted_open_cases": predicted, "unsupported_open_cases": open_total - predicted,
+        "withheld_estimates": withheld,
+        "predictions": predictions, "predictions_truncated": predicted > len(predictions),
+        "backtest": (survival.backtest(conn, cutoff, settings.min_support) if cutoff is not None
+                     else {"available": False, "reason": "no completed cases"}),
+        "settings": settings.model_dump(),
+        "estimator": "survival",
+        "censoring": {"open_cases_used_as_censored": censored_training, "method": "kaplan_meier",
+                      "conditioned_on_idle_time": True},
+        "basis": ("Kaplan–Meier estimate over completed and still-open cases in a comparable state (latest activity "
+                  "and step), with fallbacks; open cases count as unfinished at the end of the log."),
+        "interpretation": ("Estimates from this log's history, not commitments or targets. Remaining time is measured "
+                           "from the end of the log to the last recorded event, given how long each case has "
+                           "already been idle. An estimate is withheld when too many comparable cases are still "
+                           "open to know it. Outcome risk still uses completed cases only. No person is rated."),
+        "resources_used": False,
+    }
 
 
 def _train(conn, where: str, params: list[Any]) -> None:

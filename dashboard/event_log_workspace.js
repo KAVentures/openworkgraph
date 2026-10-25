@@ -1726,37 +1726,54 @@
     const spec={end_activities:ends,limit:50};
     if(values.outcome==='duration_over'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the hours for the outcome.');spec.outcome={kind:'duration_over',seconds:Math.round(h*3600)};}
     if(values.outcome==='contains_activity'){if(!values.activity)throw new Error('Choose the outcome activity.');spec.outcome={kind:'contains_activity',activity:values.activity};}
+    if(values.estimator==='survival')spec.estimator='survival';
+    else if(values.estimator&&values.estimator!=='completed_cases')throw new Error('Choose what to learn from.');
     return spec;
   }
 
+  // Remaining-time cell: from the last event, or (censoring-aware) from the end of the log; a withheld estimate shows its lower bound.
+  const remainingText=p=>p.estimate_withheld?'more than '+duration(p.remaining_at_least_seconds)+' (withheld)':duration(p.median_remaining_seconds)+(p.remaining_measured_from==='end_of_log'?' from now':'');
+  const asOfBacktestText=b=>{
+    const head='As-of backtest at '+String(b.cutoff).slice(0,10)+': '+Number(b.cases_in_progress_at_cutoff).toLocaleString()+' cases were in progress';
+    if(!b.available)return head+'. No score: '+b.reason+'.';
+    const c=b.completed_cases_estimator;
+    return head+'; '+Number(b.scored_cases).toLocaleString()+' have finished since. Typical error '+duration(b.mean_absolute_error_seconds)+' vs '+duration(c.mean_absolute_error_seconds)+
+      ' learning from completed cases only; the range held the actual time '+pct(b.p10_p90_coverage)+' of the time vs '+pct(c.p10_p90_coverage)+' (target 80%). '+
+      Number(b.still_open_unscored_cases).toLocaleString()+' are still open and not scored'+(b.still_open_already_beyond_p90?', '+Number(b.still_open_already_beyond_p90).toLocaleString()+' already past their 90th percentile':'')+'. '+b.scoring_note;
+  };
+
   function predictionSection(activityNames){
     const box=section('Predict open cases');box.id='owgEventLogPredictions';
-    box.appendChild(el('div','Estimate how much longer open cases will take, and how likely an outcome is, from completed cases that were at the same point. A backtest on later cases shows how accurate these estimates have been. Estimates are not commitments, and nobody is rated.','muted'));
+    box.appendChild(el('div','Estimate how much longer open cases will take, and how likely an outcome is, from cases that were at the same point. Learning from completed cases only is biased toward short times when long cases are still open; including still-open cases corrects for that and takes into account how long each case has already waited. A backtest shows how accurate these estimates have been. Estimates are not commitments, and nobody is rated.','muted'));
     const ends=input('owgPredictEnds','text','Close, Cancel');
     const outcome=select('owgPredictOutcome',[['','Remaining time only'],['duration_over','Case takes longer than…'],['contains_activity','Case will include activity…']]);
     const hours=input('owgPredictHours','number');hours.min='0';hours.step='any';
     const activity=select('owgPredictActivity',activityNames.slice(0,500).map(x=>[x,x]));
+    const estimator=select('owgPredictEstimator',[['completed_cases','Completed cases only'],['survival','Completed and still-open cases']]);
     const run=button('Predict');run.id='owgPredictRun';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
     const sync=()=>{show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');};
     outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     box.append(row,out);
     const generation=state.generation;
     run.onclick=async()=>{
       try{
-        const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value});
+        const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
         if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const b=r.backtest;
-        const quality=b.available?'Backtest on '+Number(b.scored_prefixes).toLocaleString()+' later steps: typical error '+duration(b.mean_absolute_error_seconds)+' vs '+duration(b.naive_mean_absolute_error_seconds)+' for a naive guess; the range held the actual time '+pct(b.p10_p90_coverage)+' of the time (target 80%).'+(b.brier_score!==undefined?' Outcome Brier score '+b.brier_score.toFixed(3)+' vs '+b.base_rate_brier_score.toFixed(3)+' for the base rate.':''):'No backtest: '+b.reason+'.';
+        const quality=b.design==='as_of_replay'?asOfBacktestText(b):b.available?'Backtest on '+Number(b.scored_prefixes).toLocaleString()+' later steps: typical error '+duration(b.mean_absolute_error_seconds)+' vs '+duration(b.naive_mean_absolute_error_seconds)+' for a naive guess; the range held the actual time '+pct(b.p10_p90_coverage)+' of the time (target 80%).'+(b.brier_score!==undefined?' Outcome Brier score '+b.brier_score.toFixed(3)+' vs '+b.base_rate_brier_score.toFixed(3)+' for the base rate.':''):'No backtest: '+b.reason+'.';
         const headers=['Case','Latest activity','Open for','Expected remaining','Likely range',...(spec.outcome?['Outcome likelihood']:[]),'Based on'];
-        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,duration(p.age_seconds),duration(p.median_remaining_seconds),duration(p.remaining_p10_seconds)+' – '+duration(p.remaining_p90_seconds),
-          ...(spec.outcome?[pct(p.outcome_probability)+' ['+pct(p.outcome_probability_ci95[0])+', '+pct(p.outcome_probability_ci95[1])+']']:[]),
-          Number(p.comparable_cases).toLocaleString()+' cases ('+({same_activity_and_step:'same step',same_activity:'same activity',all_completed_cases:'all cases'})[p.basis]+')']);
-        out.replaceChildren(el('div',Number(r.open_cases).toLocaleString()+' open cases; '+Number(r.predicted_open_cases).toLocaleString()+' have enough comparable history.','muted'),
+        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,duration(p.age_seconds),remainingText(p),
+          (p.remaining_p10_seconds===null?'unknown':duration(p.remaining_p10_seconds))+' – '+(p.remaining_p90_seconds===null?'unknown':duration(p.remaining_p90_seconds)),
+          ...(spec.outcome?[p.outcome_probability_ci95?pct(p.outcome_probability)+' ['+pct(p.outcome_probability_ci95[0])+', '+pct(p.outcome_probability_ci95[1])+']':'—']:[]),
+          Number(p.comparable_cases).toLocaleString()+' cases ('+({same_activity_and_step:'same step',same_activity:'same activity',all_completed_cases:'all cases',all_cases:'all cases'})[p.basis]+')'+
+            (p.comparable_cases_still_open?', '+Number(p.comparable_cases_still_open).toLocaleString()+' still open':'')]);
+        out.replaceChildren(el('div',Number(r.open_cases).toLocaleString()+' open cases; '+Number(r.predicted_open_cases).toLocaleString()+' have enough comparable history'+
+            (r.withheld_estimates?'; '+Number(r.withheld_estimates).toLocaleString()+' estimates withheld because too many comparable cases are still open':'')+'.','muted'),
           el('div',quality,'muted'),table(headers,rows),el('div',r.interpretation,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
