@@ -64,7 +64,10 @@ def test_calibration_measures_the_log():
     assert paths[("Receive", "Check", "Approve", "Close")] == pytest.approx(36 / 60)
     assert sum(paths.values()) == pytest.approx(1) and cal["paths_cover_cases_share"] == 1
     fix = cal["activities"]["Fix"]
-    assert fix == {"minutes": 180.0, "mean_minutes": 180.0, "resources": 1, "time_source": "median observed gap"}
+    # Every third of the 60 cases is slow, so Fix is measured from 20 gaps; Receive starts every case.
+    assert fix == {"minutes": 180.0, "mean_minutes": 180.0, "observed_gaps": 20, "resources": 1,
+                   "time_source": "median observed gap"}
+    assert cal["activities"]["Receive"]["observed_gaps"] == 0
     assert cal["activities"]["Receive"]["minutes"] == 0 and cal["activities"]["Approve"]["resources"] == 2
 
 

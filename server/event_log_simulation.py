@@ -405,7 +405,7 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
             JOIN simulation_selected USING(case_id)""").fetchone()
         span_hours = (last - first).total_seconds() / 3600 if covered and last > first else 0
         arrivals = round((covered - 1) / span_hours, 6) if span_hours > 0 else None
-        rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(*), count(DISTINCT nullif(resource, '')), avg(gap)
+        rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(gap), count(DISTINCT nullif(resource, '')), avg(gap)
             FROM (SELECT activity, resource,
                     date_diff('second', lag(ts) OVER w, ts) AS gap
                   FROM ce JOIN simulation_selected USING(case_id)
@@ -425,9 +425,9 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
             "limits": {"path_events": MAX_PATH_LENGTH, "activities": MAX_ACTIVITIES, "paths": max_paths},
             "arrival_rate_basis": "selected_complete_cases",
             "activities": {a: {"minutes": round((g or 0) / 60, 3), "mean_minutes": round((m or 0) / 60, 3),
-                               "resources": max(1, r),
+                               "observed_gaps": n, "resources": max(1, r),
                                "time_source": "median observed gap" if g is not None else "first activity; no gap"}
-                           for a, g, _, r, m in rows},
+                           for a, g, n, r, m in rows},
             "distribution": "exponential",
         }
     return workspace._query(log_id, case_type, run)

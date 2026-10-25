@@ -1063,6 +1063,10 @@
               // Values still as measured are left to the server, which draws them from what the log supports.
               if(paths.value===measuredRouting)delete scenario.paths;
               if(arrivals.value===measuredArrivals)delete scenario.arrivals_per_hour;
+              for(const r of rows){
+                if(!r.measured||r.minutes.value!==String(measuredMinutes(r.measured,timeBasis.value)))continue;
+                if(Number(r.people.value)===r.measured.resources)delete activities[r.name];else delete activities[r.name].minutes;
+              }
             }
             run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
             const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
@@ -1076,7 +1080,8 @@
                 box.append(el('h4','Uncertainty from routing and arrivals ('+r.uncertainty.replications+' replications, 95% range)'),
                   table(['Run','Median cycle time','90th percentile'],uncertaintyRows(r.uncertainty)),
                   table(['Measured path','Cases','Share drawn (95% range)'],r.uncertainty.measured_routing.map(p=>[p.activities.join(' → '),Number(p.observed_cases).toLocaleString(),pct(p.drawn.median)+' ('+pct(p.drawn.low)+' – '+pct(p.drawn.high)+')'])),
-                  el('div','The scenario median is faster in '+r.uncertainty.replications_where_scenario_median_is_faster+' of '+r.uncertainty.replications+' replications. Activity times and values you entered stay fixed.','muted'));return box;})()]:[]),
+                  ...((r.uncertainty.measured_activity_minutes||[]).length?[table(['Measured activity','Gaps measured','Minutes drawn (95% range)'],r.uncertainty.measured_activity_minutes.map(a=>[a.activity,Number(a.observed_gaps).toLocaleString(),a.drawn.median.toFixed(1)+' ('+a.drawn.low.toFixed(1)+' – '+a.drawn.high.toFixed(1)+')']))]:[]),
+                  el('div','The scenario median is faster in '+r.uncertainty.replications_where_scenario_median_is_faster+' of '+r.uncertainty.replications+' replications. Values you entered stay fixed.','muted'));return box;})()]:[]),
               ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
