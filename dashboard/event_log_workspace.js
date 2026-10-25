@@ -842,18 +842,23 @@
         'The simulated and later cycle times are consistent at the 5% level (Kolmogorov–Smirnov '+d.kolmogorov_smirnov.toFixed(3)+' ≤ '+d.critical_value_5pct.toFixed(3)+'). This is evidence about one period, not a forecast guarantee.'};
   }
 
+  // The measured gap that stands for an activity's time; the mean suits variable (exponential) times.
+  const TIME_BASES=[['median','Median gap (robust)'],['mean','Mean gap (suits variable times)']];
+  const measuredMinutes=(p,basis)=>basis==='mean'&&p.mean_minutes!==undefined?p.mean_minutes:p.minutes;
+
   function validationBlock(){
     const wrap=el('div');
     const share=select('owgEventLogSimHoldout',[['0.3','Latest 30% of cases'],['0.2','Latest 20% of cases'],['0.4','Latest 40% of cases']]);
     const dist=select('owgEventLogSimHoldoutDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const basis=select('owgEventLogSimHoldoutBasis',TIME_BASES);
     const run=button('Check against later cases','secondary');run.id='owgEventLogSimValidate';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Hold out',share),field('Activity times',dist),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Hold out',share),field('Activity times',dist),field('Measured time per activity',basis),run);
     const out=el('div');out.id='owgEventLogSimValidation';out.setAttribute('role','status');
     wrap.append(el('h4','Does the model reproduce later cases?'),el('div','Calibrate on earlier cases only, simulate, and compare with the cases that started afterwards.','muted'),row,out);
     run.onclick=async()=>{
       run.disabled=true;out.replaceChildren(el('div','Checking…','muted'));
       try{
-        const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value})})).json();
+        const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value,activity_time_basis:basis.value})})).json();
         const t=validationText(r);
         out.replaceChildren(el('div',t.cases,'muted'),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
           (()=>{const list=el('ul');list.className='muted';r.assumptions.slice(0,4).forEach(x=>list.appendChild(el('li',x)));return list;})());
@@ -880,7 +885,8 @@
         const dist=select('owgEventLogSimDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
         const label=input('owgEventLogSimLabel','text','e.g. Two reviewers');label.maxLength=80;
         const top=el('div',null,'row');top.style.alignItems='end';
-        top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Cases to simulate',cases));
+        const timeBasis=select('owgEventLogSimTimeBasis',TIME_BASES);
+        top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Measured time per activity',timeBasis),field('Cases to simulate',cases));
         const dayChoices=[['weekdays','Monday to Friday'],['weekdays_sat','Monday to Saturday'],['every_day','Every day']];
         const days=select('owgEventLogSimDays',[['','Around the clock'],...dayChoices]);
         const scenarioDays=select('owgEventLogSimScenarioDays',[['','Same as the baseline'],...dayChoices]);
@@ -909,10 +915,12 @@
           const i=rows.length;
           const minutes=input('owgEventLogSimMinutes'+i,'number');minutes.min='0';minutes.step='any';minutes.value=String(p.minutes);minutes.setAttribute('aria-label','Minutes for '+name);
           const people=input('owgEventLogSimResources'+i,'number');people.min='1';people.step='1';people.value=String(p.resources);people.setAttribute('aria-label','Resources for '+name);
-          rows.push({name,minutes,people});
+          rows.push({name,minutes,people,measured:cal.activities&&cal.activities[name]});
           const tr=el('tr');const a=el('td'),b=el('td');a.appendChild(minutes);b.appendChild(people);tr.append(el('td',name),a,b);body.appendChild(tr);
         };
         Object.entries(cal.activities||{}).forEach(([name,p])=>addRow(name,p));
+        // Switching the basis refills the measured minutes; activities added by hand keep what was typed.
+        timeBasis.onchange=()=>rows.forEach(r=>{if(r.measured)r.minutes.value=String(measuredMinutes(r.measured,timeBasis.value));});
         const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
         t.append(head,body);wrap.appendChild(t);
         const newName=input('owgEventLogSimNewName','text','New activity');newName.maxLength=200;
@@ -932,7 +940,7 @@
           try{
             const activities=Object.create(null);
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
-            const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000)};
+            const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000),activity_time_basis:timeBasis.value};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
             const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
             if(pool)scenario.pools=pool;
@@ -1839,6 +1847,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

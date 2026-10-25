@@ -404,7 +404,7 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
             JOIN simulation_selected USING(case_id)""").fetchone()
         span_hours = (last - first).total_seconds() / 3600 if covered and last > first else 0
         arrivals = round((covered - 1) / span_hours, 6) if span_hours > 0 else None
-        rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(*), count(DISTINCT nullif(resource, ''))
+        rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(*), count(DISTINCT nullif(resource, '')), avg(gap)
             FROM (SELECT activity, resource,
                     date_diff('second', lag(ts) OVER w, ts) AS gap
                   FROM ce JOIN simulation_selected USING(case_id)
@@ -423,9 +423,10 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
                 "activity_limit": cases - too_long - eligible, "variant_limit": eligible - covered},
             "limits": {"path_events": MAX_PATH_LENGTH, "activities": MAX_ACTIVITIES, "paths": max_paths},
             "arrival_rate_basis": "selected_complete_cases",
-            "activities": {a: {"minutes": round((g or 0) / 60, 3), "resources": max(1, r),
+            "activities": {a: {"minutes": round((g or 0) / 60, 3), "mean_minutes": round((m or 0) / 60, 3),
+                               "resources": max(1, r),
                                "time_source": "median observed gap" if g is not None else "first activity; no gap"}
-                           for a, g, _, r in rows},
+                           for a, g, _, r, m in rows},
             "distribution": "exponential",
         }
     return workspace._query(log_id, case_type, run)
@@ -442,7 +443,8 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict) or spec.get("format", FORMAT) != FORMAT:
         raise EventLogWorkspaceError(f"scenario must use format {FORMAT}")
     unknown = set(spec) - {"format", "label", "arrivals_per_hour", "paths", "activities", "distribution", "cases", "seed",
-                           "calendar", "scenario_calendar", "pools", "arrival_pattern", "scenario_arrival_pattern"}
+                           "calendar", "scenario_calendar", "pools", "arrival_pattern", "scenario_arrival_pattern",
+                           "activity_time_basis"}
     if unknown:
         raise EventLogWorkspaceError("unknown scenario fields: " + ", ".join(sorted(unknown))[:200])
     arrivals = spec.get("arrivals_per_hour", base["arrivals_per_hour"])
@@ -466,13 +468,19 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     overrides = spec.get("activities", {})
     if not isinstance(overrides, dict) or len(overrides) > MAX_ACTIVITIES:
         raise EventLogWorkspaceError("activities must map activity names to minutes and resources")
+    # Which measured gap stands for an activity's time: the median (robust, the default) or the mean, which is the
+    # right parameter for exponential times and does not shorten skewed ones.
+    basis = spec.get("activity_time_basis", "median")
+    if basis not in ("median", "mean"):
+        raise EventLogWorkspaceError("activity_time_basis must be median or mean")
+    measured_key = "minutes" if basis == "median" else "mean_minutes"
     params: dict[str, dict[str, float]] = {}
     for name in {a for steps, _ in routing for a in steps}:
         known = base["activities"].get(name, {})
         given = overrides.get(name, {})
         if not isinstance(given, dict) or set(given) - {"minutes", "resources"}:
             raise EventLogWorkspaceError("each activity takes minutes and resources")
-        minutes = given.get("minutes", known.get("minutes"))
+        minutes = given.get("minutes", known.get(measured_key, known.get("minutes")))
         if minutes is None:
             raise EventLogWorkspaceError("enter minutes for activities not seen in the log")
         resources = given.get("resources", known.get("resources", 1))
@@ -498,6 +506,7 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     return {"arrival_pattern": pattern,
             "label": label[:80], "arrivals_per_hour": arrivals, "paths": [(s, w / total) for s, w in routing],
             "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar,
+            "activity_time_basis": basis,
             "pools": _pools(spec.get("pools"), params)}
 
 
@@ -714,6 +723,17 @@ CALENDAR_ASSUMPTIONS = [
 ]
 
 
+MEAN_BASIS_ASSUMPTION = ("Calibrated activity times are the mean gap before each activity in the log "
+                         "(activity_time_basis: mean); those gaps include any waiting, so the baseline can overstate "
+                         "processing time.")
+
+
+def _time_basis(lines: list[str], model: dict[str, Any]) -> list[str]:
+    if model.get("activity_time_basis") != "mean":
+        return lines
+    return [MEAN_BASIS_ASSUMPTION if a.startswith("Calibrated activity times are the median") else a for a in lines]
+
+
 def _assumptions(baseline: dict[str, Any], scenario: dict[str, Any]) -> list[str]:
     if baseline.get("calendar") is None and scenario.get("calendar") is None:
         return list(ASSUMPTIONS)
@@ -741,6 +761,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
                      "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}
+    if isinstance(scenario, dict) and "activity_time_basis" in scenario:
+        baseline_spec["activity_time_basis"] = scenario["activity_time_basis"]   # both runs measure times alike
     if isinstance(scenario, dict) and scenario.get("calendar") is not None:
         baseline_spec["calendar"] = scenario["calendar"]      # shared by both runs; scenario_calendar overrides
     if isinstance(scenario, dict) and scenario.get("arrival_pattern") is not None:
@@ -767,6 +789,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
                      "paths": [{"activities": p, "weight": round(w, 6)} for p, w in scenario_model["paths"]],
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],
                      "cases": scenario_model["cases"], "seed": scenario_model["seed"],
+                     "activity_time_basis": scenario_model["activity_time_basis"],
                      "calendar": scenario_model["calendar"].describe() if scenario_model["calendar"] else None,
                      "pools": scenario_model["pools"] or None,
                      "arrival_pattern": scenario_model["arrival_pattern"].describe() if scenario_model["arrival_pattern"] else None},
@@ -778,7 +801,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "result": changed,
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
-        "assumptions": _assumptions(baseline_model, scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
+        "assumptions": _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
@@ -813,8 +836,9 @@ def _ks(a: list[float], b: list[float]) -> float:
 def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
     """Calibrate on the earlier cases, simulate, and compare with the cases that started after the cutoff."""
     if not isinstance(spec, dict) or set(spec) - {"holdout_share", "cases", "seed", "distribution", "calendar",
-                                                   "arrival_pattern"}:
-        raise EventLogWorkspaceError("validation takes holdout_share, cases, seed, distribution, calendar and arrival_pattern")
+                                                   "arrival_pattern", "activity_time_basis"}:
+        raise EventLogWorkspaceError("validation takes holdout_share, cases, seed, distribution, calendar, arrival_pattern "
+                                     "and activity_time_basis")
     share = _number(spec.get("holdout_share", 0.3), 0.05, 0.5, "holdout_share")
     if isinstance(spec.get("arrival_pattern"), dict) and spec["arrival_pattern"].get("from_log"):
         raise EventLogWorkspaceError("validation uses entered arrival weights; a pattern measured from the log would "
@@ -845,7 +869,8 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
     base = calibrate(log_id, case_type, until=cutoff)
     if not base["paths"]:
         raise EventLogWorkspaceError("no cases finished before the cutoff fit the simulation limits")
-    model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern") if k in spec},
+    model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern",
+                                                 "activity_time_basis") if k in spec},
                            base)
     samples: list[float] = []
     try:
@@ -880,8 +905,10 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
         "arrivals_per_hour": {"calibrated": base["arrivals_per_hour"],
                               "observed_held_out": round((holdout - 1) / span_hours, 6) if span_hours > 0 else None},
         "calibration": {k: base[k] for k in ("paths", "activities", "paths_cover_cases_share", "excluded_case_reasons")},
-        "assumptions": VALIDATION_ASSUMPTIONS + (list(ASSUMPTIONS) if model["calendar"] is None else
-                        [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS)
+        "activity_time_basis": model["activity_time_basis"],
+        "assumptions": VALIDATION_ASSUMPTIONS + _time_basis(list(ASSUMPTIONS) if model["calendar"] is None else
+                        [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS,
+                                                            model)
                        + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else []),
         "simulated_not_observed": True, "forecast_or_guarantee": False, "execution_authorized": False,
     }

@@ -290,6 +290,16 @@ exponential mean, so simulated times come out about 1 − ln 2 ≈ 31% short. Ag
 is evidence about that period, not a forecast guarantee. The dashboard's simulation section has
 "Check against later cases".
 
+**Measured time per activity.** Calibration reports both the median gap (`minutes`, robust to
+outliers) and the mean gap (`mean_minutes`) before each activity. `"activity_time_basis": "mean"` in
+a scenario or validation uses the mean for every measured activity in both runs. The mean is the
+correct parameter for variable (exponential) times and does not shorten skewed ones. The default
+stays `median`, so existing results are unchanged; explicitly entered minutes always win. The tests
+check that the mean basis brings the held-out error for exponential times within 12%, against about
+31% with the median, across three seeds. The dashboard's simulation form and held-out check both
+offer "Measured time per activity"; switching it refills the measured minutes and leaves activities
+added by hand untouched.
+
 #### Shared resource pools
 
 By default each activity has its own resources. A scenario can instead let several activities share

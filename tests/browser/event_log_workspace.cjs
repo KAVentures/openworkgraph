@@ -342,6 +342,16 @@ const path=require('node:path');
    await page.locator('#owgEventLogSimValidation').getByRole('columnheader',{name:'Later cases'}).waitFor();
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/Kolmogorov–Smirnov|Too few cases/);
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/cases spanning the cutoff are left out/);
+   // Mean measured times: the validation request carries the basis, and the form refills measured minutes.
+   await page.locator('#owgEventLogSimHoldoutBasis').selectOption('mean');
+   const [meanResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);
+   assert.equal((await meanResponse.json()).activity_time_basis,'mean');
+   const medianFix=await page.locator('[aria-label="Minutes for Fix"]').inputValue();
+   await page.locator('#owgEventLogSimTimeBasis').selectOption('mean');
+   const meanFix=await page.locator('[aria-label="Minutes for Fix"]').inputValue();
+   assert.ok(Number(meanFix)>0&&Number(medianFix)>0,'both bases give a measured time for Fix');
+   await page.locator('#owgEventLogSimTimeBasis').selectOption('median');
+   assert.equal(await page.locator('[aria-label="Minutes for Fix"]').inputValue(),medianFix,'switching back restores the median');
    // Working calendar: weekdays 09:00–17:00 in Berlin for both runs, plus Saturdays in the scenario.
    assert.equal(await page.locator('#owgEventLogSimTimezone').isVisible(),false,'calendar fields appear only with working days');
    await page.locator('#owgEventLogSimDays').selectOption('weekdays');
