@@ -755,6 +755,24 @@
   const formatWeightedPaths=paths=>paths.some(p=>Number(Number(p.weight).toFixed(3))!==Number(p.weight)||p.activities.some(a=>a!==a.trim()||/[>→]/.test(a)))
     ?JSON.stringify(paths,null,2):paths.map(p=>Number(p.weight).toFixed(3)+': '+p.activities.join(' > ')).join('\n');
 
+  // A working calendar for the simulation from form values, or null for around the clock; throws a readable error.
+  const SIM_DAYS={weekdays:['mon','tue','wed','thu','fri'],weekdays_sat:['mon','tue','wed','thu','fri','sat'],every_day:['mon','tue','wed','thu','fri','sat','sun']};
+  function simCalendar(values){
+    if(!values.days)return null;
+    const days=SIM_DAYS[values.days];if(!days)throw new Error('Choose the working days.');
+    const from=String(values.from||''),to=String(values.to||'');
+    if(!/^\d{2}:\d{2}$/.test(from)||!/^\d{2}:\d{2}$/.test(to)||to<=from)throw new Error('Enter working hours with the end after the start.');
+    const timezone=String(values.timezone||'').trim();if(!timezone)throw new Error('Enter the time zone, for example Europe/Berlin.');
+    const holidays=String(values.holidays||'').split(/[\s,]+/).filter(Boolean);
+    if(holidays.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)))throw new Error('Enter holidays as dates such as 2025-12-25.');
+    const hours={};days.forEach(d=>{hours[d]=[[from,to]];});
+    const calendar={timezone,hours};if(holidays.length)calendar.holidays=holidays;
+    if(values.start)calendar.start=values.start;
+    return calendar;
+  }
+
+  const calendarText=c=>!c?'around the clock':Object.keys(c.hours).join(', ')+' '+Object.values(c.hours)[0].map(x=>x.join('–')).join(', ')+' ('+c.timezone+')'+(c.holidays.length?', '+c.holidays.length+' holidays':'');
+
   function simulationSection(){
     const box=section('What-if simulation');
     box.appendChild(el('div','Simulate cases flowing through the process with the times and staffing you set. Start from values measured in this log, change them, and compare. Results are model outputs under the listed assumptions, not forecasts.','muted'));
@@ -773,6 +791,17 @@
         const label=input('owgEventLogSimLabel','text','e.g. Two reviewers');label.maxLength=80;
         const top=el('div',null,'row');top.style.alignItems='end';
         top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Cases to simulate',cases));
+        const dayChoices=[['weekdays','Monday to Friday'],['weekdays_sat','Monday to Saturday'],['every_day','Every day']];
+        const days=select('owgEventLogSimDays',[['','Around the clock'],...dayChoices]);
+        const scenarioDays=select('owgEventLogSimScenarioDays',[['','Same as the baseline'],...dayChoices]);
+        const from=input('owgEventLogSimFrom','time');from.value='09:00';const to=input('owgEventLogSimTo','time');to.value='17:00';
+        const zone=input('owgEventLogSimTimezone','text','Europe/Berlin');zone.maxLength=64;
+        try{zone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'';}catch(_){}
+        const holidays=input('owgEventLogSimHolidays','text','2025-12-25, 2025-12-26');
+        const calRow=el('div',null,'row');calRow.style.alignItems='end';
+        const calFields={from:field('Working from',from),to:field('Until',to),zone:field('Time zone',zone),holidays:field('Holidays (dates)',holidays),scenario:field('Scenario working days',scenarioDays)};
+        const syncCal=()=>Object.values(calFields).forEach(f=>show(f,!!days.value));days.onchange=syncCal;syncCal();
+        calRow.append(field('Working days (both runs)',days),...Object.values(calFields));
         const paths=document.createElement('textarea');paths.id='owgEventLogSimPaths';paths.rows=4;paths.style.width='100%';paths.value=formatWeightedPaths(cal.paths||[]);
         const rows=[];
         const body=el('tbody');
@@ -791,7 +820,7 @@
         add.onclick=()=>{const name=newName.value.trim();if(!name||rows.some(r=>r.name===name))return;addRow(name,{minutes:0,resources:1});newName.value='';};
         const addRowNode=el('div',null,'row');addRowNode.style.alignItems='end';addRowNode.append(field('Activity not in the log',newName),add);
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
-        form.replaceChildren(top,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,
+        form.replaceChildren(top,calRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
@@ -799,6 +828,9 @@
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
             const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000)};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
+            const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
+            const calendar=simCalendar(calValues);
+            if(calendar){scenario.calendar=calendar;if(scenarioDays.value&&scenarioDays.value!==days.value)scenario.scenario_calendar=simCalendar({...calValues,days:scenarioDays.value});}
             run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
             const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
             const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
@@ -807,6 +839,7 @@
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+              ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity,a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
               (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
           }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
@@ -1595,6 +1628,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simCalendar,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
