@@ -27,6 +27,7 @@ from . import event_log_filter_sets as filter_sets
 from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
 from . import process_discovery_provenance as discovery_provenance
+from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_organization as organization
 from . import event_log_playback as playback
@@ -221,6 +222,12 @@ def event_log_object_types(request: Request, log_id: str):
 def event_log_object_map(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(objects.object_graph, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/object-flattening")
+def event_log_object_flattening(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(object_diagnostics.flattening, log_id)
 
 
 @router.get("/v1/event-logs/{log_id}/variants")

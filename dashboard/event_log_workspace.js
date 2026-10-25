@@ -473,6 +473,18 @@
     return {node:row,enable:on=>{json.disabled=!on;csv.disabled=!on;}};
   }
 
+  // Plain-language consequences of analysing the log with one object type as the case notion.
+  function flatteningSummary(t){
+    if(!t)return [];
+    const n=x=>Number(x).toLocaleString(),d=t.deficiency,c=t.convergence,lines=[];
+    lines.push(d.events_left_out?n(d.events_left_out)+' events ('+(d.share_of_log_events*100).toFixed(1)+'% of the log) are linked to no '+t.object_type+' and are left out'+(d.by_activity.length?': '+d.by_activity.slice(0,3).map(a=>a.activity+' ('+n(a.events)+')').join(', '):'')+'.':'No events are left out.');
+    lines.push(c.convergent_events?n(c.convergent_events)+' events are linked to several '+t.object_type+' objects and are counted once per object: '+n(c.extra_event_rows)+' extra event rows, '+Number(c.duplication_factor).toFixed(2)+'× the linked events'+(c.by_activity.length?' (most from '+c.by_activity.slice(0,3).map(a=>a.activity).join(', ')+')':'')+'.':'No event is counted more than once.');
+    const explained=t.divergence.by_activity.filter(a=>a.repetitions_differ_by.some(x=>x.groups_with_different_objects>0));
+    if(explained.length)lines.push('Repeats that happen once per other object, not rework: '+explained.slice(0,3).map(a=>a.activity+' (per '+a.repetitions_differ_by.filter(x=>x.groups_with_different_objects>0).map(x=>x.object_type).join(', ')+')').join('; ')+'.');
+    if(t.qualifiers.objects_with_several_qualifiers)lines.push(n(t.qualifiers.objects_with_several_qualifiers)+' '+t.object_type+' objects are linked under more than one qualifier.');
+    return lines;
+  }
+
   function objectMapSection(){
     const box=section('Object-centric map');
     const generation=state.generation;
@@ -483,9 +495,20 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Object type',pick),showMap);
     const out=el('div');out.id='owgEventLogObjectMap';
     const shared=el('div');
-    box.append(row,out,shared);
-    let graph=null;
+    const flatOut=el('div');flatOut.id='owgEventLogFlatteningBox';
+    box.append(row,out,flatOut,shared);
+    let graph=null,flat=null;
+    // Filled on its own so late diagnostics never reset an open map selection or case browser.
+    const renderFlat=()=>{
+      const flatType=flat&&(flat.object_types||[]).find(t=>t.object_type===pick.value);
+      if(!flatType){flatOut.replaceChildren();return;}
+      const list=el('ul');list.id='owgEventLogFlattening';flatteningSummary(flatType).forEach(x=>list.appendChild(el('li',x)));
+      flatOut.replaceChildren(el('h4','Analysing '+flatType.object_type+' as the case'),list,
+        ...(flat.divergence_explanation_complete===false?[el('p','Which other objects explain repeated activities is unknown within the analysis limits for this log.','muted')]:[]),
+        el('p',flat.interpretation,'muted'));
+    };
     const render=()=>{
+      if(!graph)return;
       const type=(graph.object_types||[]).find(t=>t.object_type===pick.value);if(!type)return;
       const inspection=caseInspector(type.activities.map(a=>a.activity),{prefix:'owgEventLogObjectCases',caseType:type.object_type});
       inspection.node.querySelector('h3').textContent='Map case evidence · '+type.object_type;
@@ -519,7 +542,7 @@
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
       if(graph.relations_calculation_complete===false)parts.push(el('p','Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.','muted'));
       if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
-      parts.push(inspection.node);out.replaceChildren(...parts);
+      renderFlat();parts.push(inspection.node);out.replaceChildren(...parts);
     };
     showMap.onclick=render;pick.onchange=render;
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(g=>{
@@ -530,6 +553,7 @@
       shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
+    getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
     return box;
   }
 
@@ -1780,6 +1804,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
