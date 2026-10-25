@@ -285,6 +285,19 @@ const path=require('node:path');
    await page.getByText('Simulated baseline').waitFor();
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
+   // Working calendar: weekdays 09:00–17:00 in Berlin for both runs, plus Saturdays in the scenario.
+   assert.equal(await page.locator('#owgEventLogSimTimezone').isVisible(),false,'calendar fields appear only with working days');
+   await page.locator('#owgEventLogSimDays').selectOption('weekdays');
+   await page.locator('#owgEventLogSimTimezone').fill('Europe/Berlin');await page.locator('#owgEventLogSimHolidays').fill('2025-12-25');
+   await page.locator('#owgEventLogSimScenarioDays').selectOption('weekdays_sat');
+   const [calendarResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const calendared=await calendarResponse.json();
+   assert.deepEqual(Object.keys(calendared.baseline_calendar.hours),['mon','tue','wed','thu','fri']);
+   assert.equal(calendared.scenario.calendar.hours.sat[0][0],'09:00');assert.deepEqual(calendared.baseline_calendar.holidays,['2025-12-25']);
+   await page.getByText('Working time: baseline mon, tue, wed, thu, fri 09:00–17:00 (Europe/Berlin), 1 holidays; scenario mon, tue, wed, thu, fri, sat').waitFor();
+   assert.match(await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent(),/pauses outside them/);
+   const badCalendar=await page.evaluate(()=>{try{window.__owgEventLogModel.simCalendar({days:'weekdays',from:'17:00',to:'09:00',timezone:'UTC'});return 'accepted';}catch(e){return e.message;}});
+   assert.match(badCalendar,/end after the start/);
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -635,7 +648,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and working calendars, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

@@ -231,10 +231,44 @@ coverage and no baseline simulation can run. Responses include the population
 counts and limits alongside the calibration, including in what-if results.
 
 The engine is checked against queueing theory in the test suite (M/M/1,
-M/D/1 and M/M/2 waiting times within 8%). It models no calendars, breaks,
-batching, priorities or abandonment. Results are model outputs under the
-stated assumptions, not forecasts or measured outcomes, and authorize
+M/D/1 and M/M/2 waiting times within 8%). It models no breaks inside working
+periods, batching, priorities or abandonment. Results are model outputs under
+the stated assumptions, not forecasts or measured outcomes, and authorize
 nothing.
+
+#### Working calendars
+
+Without a calendar, resources work around the clock. A `calendar` limits every
+resource to working periods in one IANA time zone, for both runs:
+
+```json
+{"calendar": {"timezone": "Europe/Berlin",
+              "hours": {"mon": [["09:00", "17:00"]], "tue": [["09:00", "12:00"], ["13:00", "17:00"]]},
+              "holidays": ["2025-12-25"], "start": "2025-01-06T00:00:00"},
+ "scenario_calendar": {"timezone": "Europe/Berlin", "hours": {"mon": [["08:00", "18:00"]]}}}
+```
+
+Days not listed are closed; each day takes up to four non-overlapping periods
+(`24:00` ends a day), holidays close whole local days, and `start` (local time,
+default Monday 6 January 2025) anchors the simulated clock. `scenario_calendar`
+changes the scenario only, for example to test a Saturday shift. Cases keep
+arriving around the clock. A case can reserve a free resource outside working
+time but work starts at the next opening, pauses when a period ends and
+resumes at the next one; waiting counts from arrival to the start of work.
+Local hours are converted with the time zone's rules, so a daylight-saving
+change moves them in UTC exactly as clocks do. A period covers exactly the real
+moments whose local clock time falls inside it: a clock time skipped when clocks
+go forward maps to the moment of the jump (a period inside the skipped hour has
+no working time; one starting inside it begins at the jump), a clock time
+repeated when clocks go back counts from its first occurrence at a period's start
+to its last occurrence at its end, and periods with no real length are dropped. Utilization is measured against
+working time, and offered load spreads arrivals over the average weekly
+working share (holidays are not counted there), so a load of 1 or more still
+flags a queue that keeps growing. Responses describe each run's calendar. The
+test suite checks exact pause-and-resume times, a holiday, periods inside,
+across and partly in Berlin's skipped and repeated hours, that work always
+starts inside a usable period, and that a round-the-clock calendar reproduces
+the results without one.
 
 ## Literal case identity and qualified relationships
 
