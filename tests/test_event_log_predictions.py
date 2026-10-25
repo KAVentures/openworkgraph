@@ -139,3 +139,7 @@ def test_one_million_events_stay_interactive():
     started = time.perf_counter()
     result = predictions.predict(log, {"end_activities": ["Close"], "outcome": {"kind": "duration_over", "seconds": 36000}})
     assert time.perf_counter() - started < 60 and result["open_cases"] == 5000 and result["backtest"]["available"]
+    started = time.perf_counter()
+    censored = predictions.predict(log, {"end_activities": ["Close"], "estimator": "survival"})
+    assert time.perf_counter() - started < 60 and censored["predicted_open_cases"] == 5000
+    assert censored["backtest"]["available"]
