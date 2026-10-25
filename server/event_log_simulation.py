@@ -2,8 +2,8 @@
 
 A discrete-event simulation of cases flowing through activities, each with a
 pool of interchangeable resources served first come, first served. The
-baseline uses parameters measured from the log; a scenario overrides arrivals,
-routing, durations or resources. Both runs share random numbers, so the
+baseline uses parameters measured from the log; a scenario overrides arrivals
+(optionally with a seasonal pattern), routing, durations or resources. Both runs share random numbers, so the
 difference reflects the changed assumptions. Every result is a model output
 under stated assumptions, not a forecast or a measured outcome.
 """
@@ -79,7 +79,7 @@ class Calendar:
         lo, hi = sorted((early.timestamp(), late.timestamp()))
         while hi - lo > 1:
             mid = (lo + hi) / 2
-            if datetime.fromtimestamp(mid, self.tz).replace(tzinfo=None) >= wall:
+            if _at(mid, self.tz).replace(tzinfo=None) >= wall:
                 hi = mid
             else:
                 lo = mid
@@ -98,7 +98,7 @@ class Calendar:
         return self._days[key]
 
     def _local_day(self, t: float) -> date:
-        return datetime.fromtimestamp(self.origin + t, self.tz).date()
+        return _at(self.origin + t, self.tz).date()
 
     def _next(self, t: float) -> tuple[float, float]:
         """The working interval containing ``t`` or the next one after it."""
@@ -194,11 +194,186 @@ def parse_calendar(spec: Any) -> Calendar | None:
     if moment is None:
         raise EventLogWorkspaceError("calendar start must be a date and time such as 2025-01-06T00:00:00")
     moment = moment.replace(tzinfo=tz) if moment.tzinfo is None else moment.astimezone(tz)
+    _check_start_year(moment, "calendar start")
     return Calendar(zone, moment, weekly, closed)
 
 
-def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10) -> dict[str, Any]:
-    """Measure arrival rate, routing, activity times and resources from the log."""
+SLOT = 900                      # every real UTC offset and clock change falls on a quarter hour
+MAX_PATTERN_HOURS = 10 * 8760   # simulated arrival span a seasonal pattern may cover
+MAX_MEASURED_SLOTS = 400_000    # about 11 years of quarter hours
+MIN_MEASURED_DAYS = 14
+MONTH_DAYS = (31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+class ArrivalPattern:
+    """Seasonal arrivals: the long-run average rate scaled by local hour of week and month.
+
+    Weights are normalized so a week (and a year) of arrivals averages exactly the stated
+    ``arrivals_per_hour``. Local time comes from one IANA time zone; the rate is constant
+    within each UTC quarter hour, so arrivals are drawn exactly by inverting the
+    piecewise-constant cumulative rate with one random number per case."""
+
+    def __init__(self, zone: str, start: datetime, weekly: list[list[float]], monthly: list[float], source: str,
+                 basis: dict[str, Any] | None = None):
+        self.zone, self.tz, self.start, self.origin = zone, ZoneInfo(zone), start, start.timestamp()
+        week_mean = sum(map(sum, weekly)) / 168
+        year_mean = sum(m * d for m, d in zip(monthly, MONTH_DAYS)) / sum(MONTH_DAYS)
+        self.weekly = [[w / week_mean for w in day] for day in weekly]
+        self.monthly = [m / year_mean for m in monthly]
+        self.source, self.basis = source, basis or {}
+        self.peak = max(map(max, self.weekly)) * max(self.monthly)
+        self._cache: dict[int, float] = {}
+
+    def factor(self, slot: int) -> float:
+        """Rate multiplier for the quarter hour starting at ``slot * SLOT`` seconds since the Unix epoch."""
+        if slot not in self._cache:
+            if len(self._cache) > 100_000:
+                self._cache.clear()
+            local = _at(slot * SLOT, self.tz)
+            self._cache[slot] = self.weekly[local.weekday()][local.hour] * self.monthly[local.month - 1]
+        return self._cache[slot]
+
+    def local(self, t: float) -> datetime:
+        return _at(self.origin + t, self.tz)
+
+    def next_arrival(self, t: float, rate: float, need: float) -> float:
+        """The time after ``t`` at which the cumulative rate grows by ``need`` (an Exp(1) draw)."""
+        now = self.origin + t
+        while True:
+            slot = math.floor(now / SLOT)
+            end = (slot + 1) * SLOT
+            r = rate * self.factor(slot)
+            if r > 0 and need < r * (end - now):
+                # Stay inside this quarter hour even when rounding would land on its end.
+                return min(now + need / r, math.nextafter(end, -math.inf)) - self.origin
+            need -= r * (end - now)
+            now = end
+
+    def describe(self) -> dict[str, Any]:
+        hourly = [sum(self.weekly[d][h] for d in range(7)) / 7 for h in range(24)]
+        daily = [sum(day) / 24 for day in self.weekly]
+        return {"timezone": self.zone, "start": self.start.isoformat(), "source": self.source,
+                "hourly_factors": [round(x, 4) for x in hourly],
+                "daily_factors": {DAYS[d]: round(x, 4) for d, x in enumerate(daily)},
+                "monthly_factors": [round(x, 4) for x in self.monthly],
+                "peak_factor": round(self.peak, 4), **({"basis": self.basis} if self.basis else {})}
+
+
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+START_YEARS = (1971, 2200)
+
+
+def _check_start_year(moment: datetime, what: str) -> None:
+    if not START_YEARS[0] <= moment.year <= START_YEARS[1]:
+        raise EventLogWorkspaceError(f"{what} must be between the years {START_YEARS[0]} and {START_YEARS[1]}")
+
+
+def _at(seconds: float, tz: ZoneInfo) -> datetime:
+    """Local time for seconds since the Unix epoch, by arithmetic rather than the platform's clock functions.
+
+    ``datetime.fromtimestamp`` fails on Windows before 1970 and far in the future with an OSError; this
+    works everywhere and raises OverflowError past year 9999 on every platform."""
+    return (EPOCH + timedelta(seconds=seconds)).astimezone(tz)
+
+
+def _weights(values: Any, count: int, what: str) -> list[float]:
+    if not isinstance(values, list) or len(values) != count:
+        raise EventLogWorkspaceError(f"{what} must be a list of {count} non-negative weights")
+    out = [_number(v, 0, 1e6, what) for v in values]
+    if not any(out):
+        raise EventLogWorkspaceError(f"{what} must not all be zero")
+    return out
+
+
+def _zone(value: Any, what: str) -> ZoneInfo:
+    try:
+        if not isinstance(value, str) or not 0 < len(value) <= 64 or ".." in value:
+            raise ZoneInfoNotFoundError
+        return ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise EventLogWorkspaceError(f"{what} must be an IANA time zone such as Europe/Berlin") from None
+
+
+def parse_arrival_pattern(spec: Any, measured: dict[str, Any] | None = None,
+                          calendar: Calendar | None = None) -> ArrivalPattern | None:
+    """``{"timezone", "hourly": [24], "daily": [7], "monthly": [12], "start"}`` or ``{"from_log": true, "timezone"}``."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict) or set(spec) - {"timezone", "hourly", "daily", "monthly", "start", "from_log"}:
+        raise EventLogWorkspaceError("an arrival pattern has timezone, hourly, daily, monthly, start or from_log")
+    zone = spec.get("timezone", calendar.zone if calendar is not None else "UTC")
+    tz = _zone(zone, "arrival pattern timezone")
+    start = spec.get("start")
+    if start is None:
+        moment = calendar.start if calendar is not None else datetime.fromisoformat(DEFAULT_START).replace(tzinfo=tz)
+    else:
+        try:
+            moment = datetime.fromisoformat(start) if isinstance(start, str) and len(start) <= 40 else None
+        except ValueError:
+            moment = None
+        if moment is None:
+            raise EventLogWorkspaceError("arrival pattern start must be a date and time such as 2025-01-06T00:00:00")
+        moment = moment.replace(tzinfo=tz) if moment.tzinfo is None else moment
+        _check_start_year(moment, "arrival pattern start")
+        # One simulated clock per run: with a calendar, both must start at the same instant (any offset).
+        if calendar is not None and moment.timestamp() != calendar.origin:
+            raise EventLogWorkspaceError("the arrival pattern start must be the same instant as the calendar start, "
+                                         "because both share the run's clock; omit it to use the calendar's")
+    monthly = _weights(spec["monthly"], 12, "monthly arrival weights") if "monthly" in spec else [1.0] * 12
+    if spec.get("from_log", False) is not False:
+        if spec["from_log"] is not True or "hourly" in spec or "daily" in spec:
+            raise EventLogWorkspaceError("from_log measures the hourly and daily pattern; do not also give them")
+        if measured is None or measured.get("timezone") != zone:
+            raise EventLogWorkspaceError("the arrival pattern could not be measured from the log")
+        if measured.get("refused"):
+            raise EventLogWorkspaceError(measured["refused"])
+        return ArrivalPattern(zone, moment, measured["weekly"], monthly, "measured_case_starts", measured["basis"])
+    if not any(k in spec for k in ("hourly", "daily", "monthly")):
+        raise EventLogWorkspaceError("an arrival pattern needs hourly, daily or monthly weights, or from_log")
+    hourly = _weights(spec["hourly"], 24, "hourly arrival weights") if "hourly" in spec else [1.0] * 24
+    daily = _weights(spec["daily"], 7, "daily arrival weights") if "daily" in spec else [1.0] * 7
+    return ArrivalPattern(zone, moment, [[d * h for h in hourly] for d in daily], monthly, "user_weights")
+
+
+def _measure_pattern(conn, zone: str) -> dict[str, Any]:
+    """Case-start rate per local hour of week, divided by how often that hour occurs in the measured span."""
+    tz = _zone(zone, "arrival pattern timezone")
+    first, last, distinct = conn.execute("""SELECT min(slot), max(slot), count(DISTINCT slot) FROM (
+        SELECT floor(epoch(started) / ?)::BIGINT AS slot FROM simulation_case_counts JOIN simulation_selected USING(case_id))""",
+        [SLOT]).fetchone()
+    if first is None:
+        return {"timezone": zone, "refused": "no selected cases to measure an arrival pattern from"}
+    if (last - first + 1) * SLOT < MIN_MEASURED_DAYS * 86400:
+        return {"timezone": zone, "refused": f"measuring an arrival pattern needs case starts spanning at least {MIN_MEASURED_DAYS} days"}
+    if last - first + 1 > MAX_MEASURED_SLOTS:
+        return {"timezone": zone, "refused": "the case starts span too long to measure an arrival pattern; filter to a shorter period"}
+    counts = [[0] * 24 for _ in range(7)]
+    exposure = [[0] * 24 for _ in range(7)]
+    for slot, n in conn.execute("""SELECT floor(epoch(started) / ?)::BIGINT AS slot, count(*)
+            FROM simulation_case_counts JOIN simulation_selected USING(case_id) GROUP BY slot""", [SLOT]).fetchall():
+        local = _at(slot * SLOT, tz)
+        counts[local.weekday()][local.hour] += n
+    # Exposure: every quarter hour of the whole local days spanned counts once toward its local hour of week.
+    first_day = _at(first * SLOT, tz).date()
+    last_day = _at(last * SLOT, tz).date() + timedelta(days=1)
+    first = math.floor(datetime.combine(first_day, time(0), tz).timestamp() / SLOT)
+    last = math.ceil(datetime.combine(last_day, time(0), tz).timestamp() / SLOT) - 1
+    for slot in range(first, last + 1):
+        local = _at(slot * SLOT, tz)
+        exposure[local.weekday()][local.hour] += 1
+    weekly = [[counts[d][h] / exposure[d][h] if exposure[d][h] else 0.0 for h in range(24)] for d in range(7)]
+    total = sum(map(sum, counts))
+    return {"timezone": zone, "weekly": weekly, "basis": {
+        "case_starts": total, "measured_days": round((last - first + 1) * SLOT / 86400, 3),
+        "case_start_resolution_seconds": SLOT, "monthly_measured": False,
+        "hours_of_week_without_starts": sum(1 for d in range(7) for h in range(24) if counts[d][h] == 0)}}
+
+
+def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
+              pattern_zones: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Measure arrival rate, routing, activity times and resources from the log.
+
+    ``pattern_zones`` also measures the local hour-of-week arrival pattern of the selected cases."""
     max_paths = max(1, min(int(max_paths), MAX_PATHS))
 
     def run(conn):
@@ -231,7 +406,9 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10) ->
                   FROM ce JOIN simulation_selected USING(case_id)
                   WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
             GROUP BY activity ORDER BY count(*) DESC LIMIT {MAX_ACTIVITIES}""").fetchall()
+        measured = {zone: _measure_pattern(conn, zone) for zone in pattern_zones}
         return {
+            **({"measured_arrival_patterns": measured} if measured else {}),
             "format": FORMAT,
             "arrivals_per_hour": arrivals,
             "paths": [{"activities": p, "weight": n / covered}
@@ -261,7 +438,7 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(spec, dict) or spec.get("format", FORMAT) != FORMAT:
         raise EventLogWorkspaceError(f"scenario must use format {FORMAT}")
     unknown = set(spec) - {"format", "label", "arrivals_per_hour", "paths", "activities", "distribution", "cases", "seed",
-                           "calendar", "scenario_calendar", "pools"}
+                           "calendar", "scenario_calendar", "pools", "arrival_pattern", "scenario_arrival_pattern"}
     if unknown:
         raise EventLogWorkspaceError("unknown scenario fields: " + ", ".join(sorted(unknown))[:200])
     arrivals = spec.get("arrivals_per_hour", base["arrivals_per_hour"])
@@ -308,7 +485,14 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     seed = int(_number(spec.get("seed", 1), 0, 2 ** 31, "seed"))
     label = spec.get("label") if isinstance(spec.get("label"), str) else ""
     calendar = parse_calendar(spec["scenario_calendar"] if "scenario_calendar" in spec else spec.get("calendar"))
-    return {"label": label[:80], "arrivals_per_hour": arrivals, "paths": [(s, w / total) for s, w in routing],
+    pattern_spec = spec["scenario_arrival_pattern"] if "scenario_arrival_pattern" in spec else spec.get("arrival_pattern")
+    zone = _pattern_zone(pattern_spec, calendar.zone if calendar is not None else None)
+    pattern = parse_arrival_pattern(pattern_spec, (base.get("measured_arrival_patterns") or {}).get(zone), calendar)
+    if pattern is not None and cases / arrivals > MAX_PATTERN_HOURS:
+        raise EventLogWorkspaceError("with an arrival pattern, the simulated cases must arrive within 10 years; "
+                                     "raise arrivals_per_hour or lower cases")
+    return {"arrival_pattern": pattern,
+            "label": label[:80], "arrivals_per_hour": arrivals, "paths": [(s, w / total) for s, w in routing],
             "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar,
             "pools": _pools(spec.get("pools"), params)}
 
@@ -377,8 +561,10 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
     seq = 0
     start, finish, route, step_arrival = {}, {}, {}, {}
     clock = 0.0
+    pattern = model.get("arrival_pattern")
     for case in range(model["cases"]):
-        clock += rng_arrival.expovariate(rate)
+        # Same random number per case with or without a pattern, so runs stay paired.
+        clock = pattern.next_arrival(clock, rate, rng_arrival.expovariate(1.0)) if pattern else clock + rng_arrival.expovariate(rate)
         draw = rng_route.random()
         route[case] = paths[next((i for i, c in enumerate(cumulative) if draw <= c), len(paths) - 1)]
         start[case] = clock
@@ -473,7 +659,37 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
         **({"pools": pool_rows} if pools else {}),
         "unstable": any(r["overloaded"] for r in activity_rows),
         **({"calendar": calendar.describe(), "utilization_basis": "working_time"} if calendar is not None else {}),
+        **(_arrival_counts(pattern, start) if pattern is not None else {}),
     }
+
+
+def _arrival_counts(pattern: ArrivalPattern, start: dict[int, float]) -> dict[str, Any]:
+    """Simulated arrivals by local hour and weekday, so the applied pattern can be checked."""
+    hours, days = [0] * 24, {d: 0 for d in DAYS}
+    for t in start.values():
+        local = pattern.local(t)
+        hours[local.hour] += 1
+        days[DAYS[local.weekday()]] += 1
+    return {"arrival_pattern": pattern.describe(), "arrivals_by_local_hour": hours, "arrivals_by_local_weekday": days}
+
+
+def _pattern_zone(spec: Any, calendar_zone: str | None) -> str | None:
+    """The zone a measured pattern is read in: its own, else the run's calendar zone, else UTC."""
+    if not isinstance(spec, dict) or spec.get("from_log") is not True:
+        return None
+    zone = spec.get("timezone", calendar_zone or "UTC")
+    return zone if isinstance(zone, str) else None
+
+
+ARRIVAL_PATTERN_ASSUMPTIONS = [
+    "Arrivals follow a seasonal pattern: the stated rate is the long-run average, scaled by local hour of week and "
+    "month in the pattern's time zone (constant within each quarter hour) as a non-homogeneous Poisson process.",
+    "Offered load and the overload flag use the long-run average rate; queues can still build during peaks.",
+]
+
+
+def _uses_pattern(spec: Any) -> bool:
+    return isinstance(spec, dict) and (spec.get("arrival_pattern") is not None or spec.get("scenario_arrival_pattern") is not None)
 
 
 POOL_ASSUMPTIONS = [
@@ -503,19 +719,39 @@ def _assumptions(baseline: dict[str, Any], scenario: dict[str, Any]) -> list[str
 
 
 def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[str, Any]:
-    base = calibrate(log_id, case_type)
+    zones: tuple[str, ...] = ()
+    if isinstance(scenario, dict):
+        def calendar_zone(cal):
+            return cal.get("timezone") if isinstance(cal, dict) and isinstance(cal.get("timezone"), str) else None
+        scenario_cal = scenario["scenario_calendar"] if "scenario_calendar" in scenario else scenario.get("calendar")
+        wanted = {_pattern_zone(scenario.get("arrival_pattern"), calendar_zone(scenario.get("calendar"))),
+                  _pattern_zone(scenario.get("scenario_arrival_pattern", scenario.get("arrival_pattern")),
+                                calendar_zone(scenario_cal))}
+        zones = tuple(sorted(z for z in wanted if z))
+        for zone in zones:
+            _zone(zone, "arrival pattern timezone")
+    base = calibrate(log_id, case_type, pattern_zones=zones)
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
                      "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}
     if isinstance(scenario, dict) and scenario.get("calendar") is not None:
         baseline_spec["calendar"] = scenario["calendar"]      # shared by both runs; scenario_calendar overrides
+    if isinstance(scenario, dict) and scenario.get("arrival_pattern") is not None:
+        baseline_spec["arrival_pattern"] = scenario["arrival_pattern"]  # demand is shared; scenario_arrival_pattern overrides
     assumed_arrivals = base["arrivals_per_hour"] is None
     if assumed_arrivals and isinstance(scenario, dict) and "arrivals_per_hour" in scenario:
         baseline_spec["arrivals_per_hour"] = scenario["arrivals_per_hour"]
     baseline_model = parse_scenario(baseline_spec, base)
     scenario_model = parse_scenario(scenario, base)
-    baseline, changed = simulate(baseline_model), simulate(scenario_model)
+    try:
+        baseline, changed = simulate(baseline_model), simulate(scenario_model)
+    except (OverflowError, ValueError) as error:
+        # Dates past year 9999: the calendar or pattern clock left the representable range.
+        if isinstance(error, ValueError) and "out of range" not in str(error):
+            raise
+        raise EventLogWorkspaceError("the simulated period runs past the supported date range; "
+                                     "simulate fewer cases or raise the arrival rate") from None
     b, s = baseline["cycle_time_seconds"]["p50"], changed["cycle_time_seconds"]["p50"]
     return {
         "log": base["log"], "case_notion": base["case_notion"],
@@ -526,15 +762,17 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],
                      "cases": scenario_model["cases"], "seed": scenario_model["seed"],
                      "calendar": scenario_model["calendar"].describe() if scenario_model["calendar"] else None,
-                     "pools": scenario_model["pools"] or None},
+                     "pools": scenario_model["pools"] or None,
+                     "arrival_pattern": scenario_model["arrival_pattern"].describe() if scenario_model["arrival_pattern"] else None},
         "baseline": baseline,
         "baseline_calendar": baseline_model["calendar"].describe() if baseline_model["calendar"] else None,
+        "baseline_arrival_pattern": baseline_model["arrival_pattern"].describe() if baseline_model["arrival_pattern"] else None,
         "baseline_arrivals_per_hour": baseline_model["arrivals_per_hour"],
         "baseline_arrival_rate_source": "user_assumption" if assumed_arrivals else "selected_case_start_times",
         "result": changed,
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
-        "assumptions": _assumptions(baseline_model, scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
+        "assumptions": _assumptions(baseline_model, scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
