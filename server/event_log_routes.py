@@ -393,6 +393,24 @@ def event_log_delete_analysis(request: Request, log_id: str, analysis_id: str):
     return _respond(analysis.delete_saved, log_id, analysis_id)
 
 
+@router.get("/v1/event-logs/{log_id}/metrics")
+def event_log_metrics(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.list_metrics, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/metrics")
+async def event_log_save_metric(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.save_metric, log_id, await _json_body(request, "case metric"))
+
+
+@router.post("/v1/event-logs/{log_id}/metrics/{metric_id}/delete")
+def event_log_delete_metric(request: Request, log_id: str, metric_id: str):
+    _require_dashboard(request)
+    return _respond(analysis.delete_metric, log_id, metric_id)
+
+
 @router.get("/v1/event-logs/{log_id}/filter-sets")
 def event_log_filter_sets(request: Request, log_id: str):
     _require_dashboard(request)
