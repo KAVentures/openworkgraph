@@ -142,6 +142,18 @@ with TestClient(app) as client:
     spec = {"level": "cases", "metrics": [metric], "measures": [{"fn": "max", "of": "metric:a_to_b"}]}
     result = client.post(base + "/analysis", json=spec, headers=headers).json()
     assert result["rows"] == [[3600.0]] and result["metrics"][0]["cases_without_to_activity"] == 1
+    arithmetic = {"name": "half", "kind": "arithmetic", "operation": "divide",
+                  "left": {"kind": "metric", "name": "a_to_b"},
+                  "right": {"kind": "constant", "value": 2, "unit": "ratio"}}
+    spec["metrics"].append(arithmetic)
+    spec["measures"] = [{"fn": "max", "of": "metric:half"}]
+    reply = client.post(base + "/analysis", json=spec, headers=headers)
+    assert reply.status_code == 200 and reply.headers["cache-control"] == "no-store", reply.text
+    assert reply.json()["rows"] == [[1800.0]] and reply.json()["metrics"][1]["cases_with_missing_operand"] == 1
+    assert client.post(base + "/analysis", json=spec, headers=bearer).status_code in (401, 403)
+    arithmetic["right"]["unit"] = "EUR"
+    arithmetic["operation"] = "add"
+    assert client.post(base + "/analysis", json=spec, headers=headers).status_code == 422
     listed = client.get(base + "/metrics", headers=headers).json()["metrics"]
     assert client.post(base + "/metrics/" + listed[0]["metric_id"] + "/delete", headers=headers).status_code == 200
 '''
