@@ -258,6 +258,41 @@ order), so a case returning for a later step is not overtaken by newer arrivals;
 re-entrant routes are checked against an independent first-come, first-served reference. The
 dashboard's simulation form defines one shared pool.
 
+#### Seasonal arrivals
+
+Without a pattern, cases arrive at a steady rate around the clock. An `arrival_pattern` makes the rate
+vary by local hour of week and month in one IANA time zone, for both runs (demand is the same);
+`scenario_arrival_pattern` replaces it for the scenario only:
+
+```json
+{"arrival_pattern": {"timezone": "Europe/Berlin",
+  "hourly": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+  "daily": [1, 1, 1, 1, 1, 0, 0], "monthly": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]}}
+```
+
+`hourly` (24 weights, midnight first), `daily` (7, Monday first) and `monthly` (12) are relative
+weights, each optional, multiplied together and normalized so that a week, and a year, of arrivals
+average exactly `arrivals_per_hour`: the stated rate stays the long-run average, and only its timing
+changes. `{"from_log": true, "timezone": "Europe/Berlin"}` instead measures the hour-of-week pattern
+from the start times of the selected calibration cases: starts per local hour of week, divided by how
+often that hour occurs in the whole local days spanned. It needs at least 14 days of case starts, uses
+15-minute resolution, does not measure months, and reports its basis (case starts, days, hours of week
+without starts). The time zone defaults to the run's calendar zone, else UTC. A run has one clock:
+with a calendar, the pattern starts at the calendar start, and an explicit `start` must be that same
+instant (any offset or zone); without one, `start` sets the clock.
+
+Arrivals form a non-homogeneous Poisson process, drawn exactly by inverting the cumulative rate, which
+is constant within each UTC quarter hour (every real UTC offset and clock change falls on one), with
+one random number per case, so runs with and without a pattern stay paired. Daylight-saving changes
+follow the zone's rules. Results add the applied pattern (normalized factors and the peak factor) and
+the simulated arrivals by local hour and weekday. Offered load and the overload flag still use the
+long-run average rate, so queues can build during peaks even when no activity is flagged. The tests
+check that office-hour weights put every arrival in those hours, that 12 open hours double the rate
+while open (giving the M/M/1 wait at that rate), and that a measured pattern recovers weekday office
+hours across a clock change. At most 10 years of simulated arrivals are allowed with a pattern; pattern
+and calendar start dates must fall between 1971 and 2200, and a run whose clock would pass year 9999
+is refused rather than failing.
+
 #### Working calendars
 
 Without a calendar, resources work around the clock. A `calendar` limits every

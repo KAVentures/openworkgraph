@@ -30,6 +30,7 @@ from shared.process_model import ProcessModel
 
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
+from . import process_discovery_provenance as provenance
 
 MAX_VARIANTS = 5000          # most frequent variants used for discovery
 MAX_TRACE_LENGTH = 300       # longer cases are excluded, not clipped
@@ -44,7 +45,8 @@ _CHOICE_OPS = {"xor", "loop"}
 
 
 def discover(log_id: str, case_type: str | None = None, *, noise: float = 0.2, activities: float = 1.0,
-             cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+             cohort: dict[str, Any] | None = None, _record_snapshot: bool = False,
+             _expected_model_sha256: str | None = None) -> dict[str, Any]:
     if not 0 <= float(noise) < 1:
         raise workspace.EventLogWorkspaceError("noise must be a share from 0 up to (not including) 1")
     if not 0 < float(activities) <= 1:
@@ -85,7 +87,7 @@ def discover(log_id: str, case_type: str | None = None, *, noise: float = 0.2, a
         checked = [(path, n) for path, n in rows[:MAX_FITNESS_VARIANTS] if len(path) <= MAX_FITNESS_TRACE_LENGTH]
         fitting = sum(n for path, n in checked if _accepts(tree, tuple(a for a in path if a in keep)))
         checked_cases = sum(n for _, n in checked)
-        return {
+        result = {
             "tree": tree,
             "process_model": model,
             "quality": {
@@ -102,12 +104,21 @@ def discover(log_id: str, case_type: str | None = None, *, noise: float = 0.2, a
             },
             "simplifications": notes,
             "settings": {"noise": float(noise), "activities": float(activities)},
+            "discovery_method": {"algorithm": "bounded_inductive.v1", "max_variants": MAX_VARIANTS,
+                                 "max_trace_length": MAX_TRACE_LENGTH,
+                                 "max_fitness_variants": MAX_FITNESS_VARIANTS,
+                                 "max_fitness_trace_length": MAX_FITNESS_TRACE_LENGTH},
             "cohort": cohorts.describe(chosen),
             "interpretation": ("A discovered draft for review, not a verified workflow. Decision rules state only "
                                "observed shares of cases; replace them with the real business conditions. "
                                "Fitting cases are replayed against the draft over the shown activities only. "
                                "Infrequent behaviour below the noise filter is left out."),
         }
+        result['process_model_sha256'] = provenance.model_digest(model)
+        if _record_snapshot:
+            result['source_snapshot'] = provenance.retain(conn, log_id, workspace._case_type(conn, log_id, case_type),
+                                                         result, _expected_model_sha256)
+        return result
     return workspace._query(log_id, case_type, run)
 
 

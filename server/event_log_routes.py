@@ -26,6 +26,7 @@ from . import event_log_drift as drift
 from . import event_log_filter_sets as filter_sets
 from . import event_log_map_comparison as map_comparison
 from . import event_log_model_discovery as model_discovery
+from . import process_discovery_provenance as discovery_provenance
 from . import event_log_objects as objects
 from . import event_log_organization as organization
 from . import event_log_playback as playback
@@ -479,6 +480,29 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
         cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/model-discovery-draft")
+async def event_log_discovery_draft(request: Request, log_id: str):
+    _require_dashboard(request)
+    if request.headers.get('x-owg-local-storage-confirmed') != 'true':
+        raise HTTPException(403, 'Confirm local retention of discovery snapshot metadata')
+    return await run_in_threadpool(_respond, discovery_provenance.record_draft, log_id,
+                                   await _json_body(request, 'discovery snapshot'))
+
+
+@router.get('/v1/event-log-discovery/process-origin')
+def process_discovery_origin(request: Request, workflow_id: str = Query(pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
+                             revision: int = Query(ge=1)):
+    _require_dashboard(request)
+    from .local_process_catalog import catalog
+    try:
+        record = catalog.get(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(404, 'Process revision unavailable') from None
+    return JSONResponse({'origins': discovery_provenance.origins(record, include_selection=True),
+                         'execution_authorized': False, 'derivation_independently_verified': False},
+                        headers={'Cache-Control': 'no-store'})
 
 
 @router.get("/v1/event-logs/{log_id}/root-cause")

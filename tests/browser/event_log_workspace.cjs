@@ -137,18 +137,67 @@ const path=require('node:path');
    outline=await page.locator('#owgDiscoveryOutline').textContent();
    assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
    assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
-   await page.locator('#owgDiscoveryDraft').click();
+   const [snapshotResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
+     page.locator('#owgDiscoveryDraft').click()
+   ]);
+   assert.equal(snapshotResponse.status(),200);
+   const sourceSnapshot=(await snapshotResponse.json()).source_snapshot;
+   assert.match(sourceSnapshot.reference,/^urn:openworkgraph:local-log-discovery:[0-9a-f]{64}$/);
    await page.locator('#owgCatalogStatus').filter({hasText:'Unsaved draft discovered from an event log'}).waitFor();
    const draftRules=await page.locator('#owgCatalogEditor').evaluate(node=>[...node.querySelectorAll('input,textarea')].map(i=>i.value).join('\n'));
    assert.match(draftRules,/Observed choice, not a confirmed rule: 54 of 60 cases/);
-   const discoveredBPMN=await page.evaluate(async()=>{
-     const logId=document.querySelector('#owgEventLogPick').value;
-     const result=await fetch('/v1/event-logs/'+encodeURIComponent(logId)+'/model-discovery?noise=0',{cache:'no-store'}).then(r=>r.json());
-     const saved=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
-       body:JSON.stringify({title:'Discovered claims',user_confirmed:true,process_model:{...result.process_model,goal:'Decide claims'}})}).then(r=>r.json());
-     return fetch('/v1/process-catalog/export?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:String(saved.revision),format:'bpmn'})).then(r=>r.text());
-   });
+   await page.locator('#owgCatalogEditor').getByRole('textbox',{name:'Business goal',exact:true}).fill('Decide claims');
+   await page.locator('#owgCatalogReviewed').check();
+   const [savedResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-catalog'&&r.request().method()==='POST'),
+     page.locator('#owgCatalogEditor').getByRole('button',{name:'Save new revision',exact:true}).click()
+   ]);
+   assert.equal(savedResponse.status(),200);
+   const savedDiscovery=await savedResponse.json();
+   assert.deepEqual(savedDiscovery.evidence_refs,[sourceSnapshot.reference]);
+   await page.getByRole('button',{name:'Inspect discovery source snapshots',exact:true}).click();
+   await page.locator('#owgCatalogOriginResult').getByText('Source data unchanged',{exact:true}).waitFor();
+   assert.match(await page.locator('#owgCatalogOriginResult').textContent(),/User-selected reference to an edited graph/);
+   assert.match(await page.locator('#owgCatalogOriginResult').textContent(),/"noise": 0/);
+   let heldOrigin,signalOrigin;const originHeld=new Promise(resolve=>{signalOrigin=resolve;});
+   await page.route('**/event-log-discovery/process-origin?*',route=>{heldOrigin=route;signalOrigin();});
+   await page.getByRole('button',{name:'Inspect discovery source snapshots',exact:true}).click();await originHeld;
+   const catalogStatusBefore=await page.locator('#owgCatalogStatus').textContent();
+   await page.locator('#owgCatalogEditor').getByRole('textbox',{name:'Business goal',exact:true}).fill('New unsaved goal');
+   const failedOrigin=page.waitForResponse(r=>r.url().includes('/event-log-discovery/process-origin'));
+   await heldOrigin.fulfill({status:422,contentType:'application/json',body:JSON.stringify({detail:'OLD_STALE_SOURCE_ERROR'})});
+   await (await failedOrigin).finished();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.equal(await page.locator('#owgCatalogStatus').textContent(),catalogStatusBefore,'an old failed check must not replace status after an edit');
+   await page.unroute('**/event-log-discovery/process-origin?*');
+   await page.locator('#owgCatalogEditor').getByRole('textbox',{name:'Business goal',exact:true}).fill('Decide claims');
+   await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyResult').getByText(/Dataset and cohort → process: source data unchanged/).waitFor();
+   assert((await page.locator('#owgPipelineJourneyResult').textContent()).includes(sourceSnapshot.source_content_sha256));
+   await page.addScriptTag({content:axeSource});
+   const discoveryAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCatalogEditor'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(discoveryAudit.violations.map(v=>v.id),[]);
+   const discoveredBPMN=await page.evaluate(async saved=>fetch('/v1/process-catalog/export?'+new URLSearchParams({workflow_id:saved.workflow_id,revision:String(saved.revision),format:'bpmn'})).then(r=>r.text()),savedDiscovery);
    assert.match(discoveredBPMN,/exclusiveGateway/);
+   // A completed snapshot request must not replace the saved editor after the
+   // user refreshes analysis. Accept any unexpected confirmation so a missing
+   // generation guard would visibly replace the graph and fail this assertion.
+   let heldSnapshot,signalSnapshot;const snapshotHeld=new Promise(resolve=>{signalSnapshot=resolve;});
+   await page.route('**/model-discovery-draft',route=>{heldSnapshot=route;signalSnapshot();});
+   await page.locator('#owgDiscoveryDraft').click();await snapshotHeld;
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgWaitingRun').waitFor();
+   let lateDraftDialogs=0;const lateDialog=dialog=>{lateDraftDialogs++;return dialog.accept();};
+   page.on('dialog',lateDialog);
+   const lateResponse=page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft'));
+   await heldSnapshot.continue();await (await lateResponse).finished();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   page.off('dialog',lateDialog);await page.unroute('**/model-discovery-draft');
+   assert.equal(lateDraftDialogs,0,'a stale response must not ask to replace the current saved graph');
+   await page.locator('#owgCatalogEditor').getByRole('heading',{name:'Review process · revision 1',exact:true}).waitFor();
    await page.locator('#owgWaitingRun').click();
    await page.locator('#owgWaitingStatus').filter({hasText:'No start or complete values'}).waitFor();
    await page.locator('#owgDotsRun').click();
@@ -309,6 +358,30 @@ const path=require('node:path');
    await page.getByRole('cell',{name:'Check, Approve',exact:true}).waitFor();
    const badPool=await page.evaluate(()=>{try{window.__owgEventLogModel.simPool({name:'Team',resources:'2',activities:['Check']});return 'accepted';}catch(e){return e.message;}});
    assert.match(badPool,/at least two activities/);
+   // Seasonal arrivals for both runs: weekday office hours entered as weights, then measured from this log.
+   await page.locator('#owgEventLogSimDays').selectOption('');
+   assert.equal(await page.locator('#owgEventLogSimHourly').isVisible(),false,'weight fields appear only for entered weights');
+   await page.locator('#owgEventLogSimArrivalMode').selectOption('weights');
+   assert.equal(await page.locator('#owgEventLogSimTimezone').isVisible(),true,'the time zone is needed for an arrival pattern');
+   await page.locator('#owgEventLogSimHourly').fill('0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0');
+   await page.locator('#owgEventLogSimDaily').fill('1 1 1 1 1 0 0');
+   const [weightedResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const weighted=await weightedResponse.json();
+   assert.equal(weightedResponse.status(),200);assert.equal(weighted.baseline_calendar,null);
+   assert.deepEqual(weighted.baseline_arrival_pattern,weighted.scenario.arrival_pattern,'demand is shared by both runs');
+   const byHour=weighted.result.arrivals_by_local_hour;
+   assert.equal(byHour.slice(9,17).reduce((a,b)=>a+b,0),500);assert.equal(weighted.result.arrivals_by_local_weekday.sun,0);
+   await page.getByText('Arrivals: your weights (Europe/Berlin); the busiest hour gets 4.2× the average rate').waitFor();
+   await page.locator('#owgEventLogSimArrivalMode').selectOption('from_log');
+   const [measuredResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const measured=(await measuredResponse.json()).scenario.arrival_pattern;
+   assert.equal(measured.source,'measured_case_starts');assert.equal(measured.hourly_factors[3],0);
+   (await measuredResponse.json()).result.arrivals_by_local_hour.forEach((n,h)=>assert.ok(n===0||measured.hourly_factors[h]>0,'arrivals only in measured hours'));
+   await page.getByText(/Arrivals: measured from \d+ case starts over \d+ days \(Europe\/Berlin\)/).waitFor();
+   assert.match(await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent(),/seasonal pattern/);
+   const badArrivals=await page.evaluate(()=>{try{window.__owgEventLogModel.simArrivals({mode:'weights',hourly:'1 2'});return 'accepted';}catch(e){return e.message;}});
+   assert.match(badArrivals,/24 non-negative hourly/);
+   await page.locator('#owgEventLogSimArrivalMode').selectOption('');
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -427,6 +500,8 @@ const path=require('node:path');
    await page.locator('#owgEventLogStatus').filter({hasText:'Added 2 new events'}).waitFor();
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/skipped 1 already in the log/);
    assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/276 events/);
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyResult').getByText(/Dataset and cohort → process: source data changed since snapshot/).waitFor();
 
    // The kept rejected row (C99, a time without an offset) is released under an explicit offset decision.
    await page.locator('#owgEventLogAnalyze').click();
@@ -448,6 +523,10 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyResult').getByText(/Dataset and cohort → process: snapshot unavailable/).waitFor();
+   await page.getByRole('button',{name:'Inspect discovery source snapshots',exact:true}).click();
+   await page.locator('#owgCatalogOriginResult').getByText('Source snapshot unavailable',{exact:true}).waitFor();
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    assert.equal(await page.locator('#owgEventLogManage').isHidden(),true);
    const listed=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.length);
@@ -668,7 +747,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars and a shared resource pool, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);
