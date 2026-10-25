@@ -108,7 +108,8 @@ const path=require('node:path');
    // never become the source of a saved-process opportunity.
    const saved=await page.evaluate(async()=>{
      const model={goal:'Review the selected renewal',baseline_source:'user_declared',baseline_coverage:'user_declared_design',baseline_path:['Review'],
-       activities:[{id:'review',label:'Review'}],transitions:[],entry_activity_id:'review',terminal_activity_ids:['review']};
+       activities:[{id:'review',label:'Review'}],transitions:[],entry_activity_id:'review',terminal_activity_ids:['review'],
+       outcome_expectations:[{terminal_activity_id:'review',operation:'github_pr_merged',user_confirmed:true}]};
      return (await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
        body:JSON.stringify({workflow_id:'renewal_review',title:'Saved renewal review',process_model:model,user_confirmed:true,expected_revision:0})})).json();
    });
@@ -165,6 +166,49 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
    assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
+   // Source-state checks are explicitly confirmed and downloaded only. The
+   // unobserved synthetic record must remain unknown and never reach a provider.
+   let sourceDownloads=0;page.on('download',d=>{if(d.suggestedFilename()==='owg-project-source-check.json')sourceDownloads++;});
+   await page.locator('#owgPipelineSourceChecks').click();
+   await page.locator('#owgPipelineSourceExpectation option').waitFor({state:'attached'});
+   assert(await page.locator('#owgPipelineSourceExport').isDisabled());
+   const sourceA='owg:r:'+'a'.repeat(32),sourceB='owg:r:'+'b'.repeat(32),sourceC='owg:r:'+'c'.repeat(32);
+   await page.locator('#owgPipelineSourceRecord').fill(sourceA);await page.locator('#owgPipelineSourceConsent').check();
+   assert(await page.locator('#owgPipelineSourceExport').isEnabled());
+   await page.locator('#owgPipelineSourceRecord').fill(sourceB);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   assert(await page.locator('#owgPipelineSourceExport').isDisabled());
+   await page.locator('#owgPipelineSourceConsent').check();
+   const [checkDownload,checkResponse]=await Promise.all([page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/source-check-export')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineSourceExport').click()]);
+   assert.equal(checkResponse.status(),200);
+   const checkBytes=await fs.readFile(await checkDownload.path());const checkDoc=JSON.parse(checkBytes.toString('utf8'));
+   assert.equal(createHash('sha256').update(checkBytes).digest('hex'),checkResponse.headers()['x-owg-document-sha256']);
+   assert.equal(checkDoc.project_id,manifest.project_id);assert.equal(checkDoc.spec_sha256,manifest.spec_sha256);
+   assert.equal(checkDoc.receipt.resource_ref,sourceB);assert.equal(checkDoc.receipt.availability,'unknown');
+   assert.equal(checkDoc.receipt.operation_verified,false);assert.equal(checkDoc.receipt_body_persisted,false);
+   assert.equal(checkDoc.agent_caused_operation_verified,false);assert.equal(checkDoc.reported_run_case_identity_verified,false);
+   await page.locator('#owgPipelineSourceCheckForm').getByRole('status').filter({hasText:'Source-check document downloaded.'}).waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceRecord').inputValue(),'');
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   const checkHistory=await page.evaluate(async({id,project})=>(await fetch('/v1/automation-pipeline/'+id+'/projects/'+project+'/source-check-exports')).json(),{id:linked.idea_id,project:manifest.project_id});
+   assert.equal(checkHistory.exports.length,1);assert.equal(checkHistory.exports[0].document_sha256,checkResponse.headers()['x-owg-document-sha256']);
+   assert(!JSON.stringify(checkHistory).includes(sourceB));assert(!JSON.stringify(checkHistory).includes('resource_ref'));
+   const sourceAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(sourceAudit.violations.map(v=>v.id),[]);
+   // Changing the selected record while a source response is held must prevent
+   // a late download from appearing to describe the new record.
+   let heldRoute,signalHeld;const held=new Promise(resolve=>{signalHeld=resolve;});
+   await page.route('**/source-check-export',route=>{heldRoute=route;signalHeld();});
+   await page.locator('#owgPipelineSourceRecord').fill(sourceB);await page.locator('#owgPipelineSourceConsent').check();
+   await page.locator('#owgPipelineSourceExport').click();await held;
+   await page.locator('#owgPipelineSourceRecord').fill(sourceC);await heldRoute.continue();
+   await page.waitForFunction(()=>!document.getElementById('owgPipelineSourceConsent').disabled);
+   assert.equal(sourceDownloads,1);assert.equal(await page.locator('#owgPipelineSourceRecord').inputValue(),sourceC);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   await page.unroute('**/source-check-export');
    const reported=await page.evaluate(async specHash=>{
      const doc={format:'openworkgraph.automation-run-report.v1',deployment:{name:'Synthetic renewal report',runtime:'openai-agents',workflow_spec_sha256:specHash},
        runs:[{run_id:'reported_run',started_at:'2024-03-01T10:00:00Z',finished_at:'2024-03-01T10:01:00Z',status:'succeeded',steps:[],
@@ -220,7 +264,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → tracked project ZIP/hash/manifest and repeat export → exact reported-spec association with unknown outcomes, source deletion and unlink → changed/deleted source refusal, deletion, WCAG and mobile.');
+   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → tracked project ZIP/hash/manifest and repeat export → explicit source-check download with unknown source state, digest-only history and held-response guard → exact reported-spec association with unknown outcomes, source deletion and unlink → changed/deleted source refusal, deletion, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

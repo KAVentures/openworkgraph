@@ -169,7 +169,65 @@
             data.links.length?rows:el('div','No report links recorded.','muted'));
         };
         reviewReports.onclick=()=>renderReports().catch(e=>{if(generation===detailGeneration)status.textContent=e.message;});
-        projects.append(reviewReports,reports);box.appendChild(projects);
+        projects.append(reviewReports,reports);
+        const sourceChecks=button('Check selected source state','secondary');sourceChecks.id='owgPipelineSourceChecks';
+        const checkHost=el('div');checkHost.id='owgPipelineSourceCheckForm';let sourceView=0;
+        sourceChecks.onclick=async()=>{
+          const view=++sourceView;
+          try{
+            const saved=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects')).json();
+            if(generation!==detailGeneration||view!==sourceView)return;
+            const selected=select('owgPipelineSourceProject',saved.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
+            const expectation=select('owgPipelineSourceExpectation',[]);
+            const sourceRef=input('owgPipelineSourceRecord','text','owg:r:…');sourceRef.maxLength=38;sourceRef.autocomplete='off';sourceRef.spellcheck=false;
+            const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
+            const run=button('Read source and download check','secondary');run.id='owgPipelineSourceExport';run.disabled=true;
+            const note=el('div',null,'muted');note.setAttribute('role','status');const history=el('div');
+            let entries=[],formVersion=0,optionsVersion=0,pending=false;
+            const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
+            const invalidate=()=>{formVersion++;confirmed.checked=false;ready();};
+            sourceRef.oninput=invalidate;expectation.onchange=invalidate;confirmed.onchange=ready;
+            const base=()=>'/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects/'+encodeURIComponent(selected.value);
+            const loadOptions=async()=>{
+              const version=++optionsVersion;invalidate();entries=[];expectation.replaceChildren();ready();
+              if(!selected.value){note.textContent='Export a linked project before checking source state.';return;}
+              const path=base();
+              const results=await Promise.allSettled([api(path+'/source-check-options').then(r=>r.json()),api(path+'/source-check-exports').then(r=>r.json())]);
+              if(generation!==detailGeneration||view!==sourceView||version!==optionsVersion)return;
+              const options=results[0],records=results[1];
+              if(options.status==='fulfilled'&&options.value.current_idea_revision===idea.revision){
+                entries=options.value.expectations;
+                entries.forEach((e,i)=>{const opt=el('option',e.activity_label+' · '+e.operation.replaceAll('_',' '));opt.value=String(i);expectation.appendChild(opt);});
+                note.textContent=entries.length?'Select the exact observed record. Source state does not prove agent causality, run/case identity or customer outcomes.':'This saved process has no confirmed source-state expectation. Review one in a new saved revision before creating its idea/project.';
+              }else note.textContent=options.status==='rejected'?options.reason.message:'The idea changed; reopen it before checking a source.';
+              if(records.status==='fulfilled'){
+                const list=el('ul');records.value.exports.forEach(r=>list.appendChild(el('li','Check document exported '+r.created_at+' · hash '+r.document_sha256.slice(0,12)+'…')));
+                history.replaceChildren(el('div','Only export hashes and times are retained here; receipt bodies and observed-record references are not stored.','muted'),records.value.exports.length?list:el('div','No source-check exports recorded.','muted'));
+              }
+              ready();
+            };
+            selected.onchange=()=>{sourceRef.value='';loadOptions().catch(e=>{if(generation===detailGeneration)note.textContent=e.message;});};
+            run.onclick=async()=>{
+              if(run.disabled)return;
+              const entry=entries[Number(expectation.value)],path=base(),version=formVersion;
+              const payload={expected_revision:idea.revision,terminal_activity_id:entry.terminal_activity_id,expected_operation:entry.operation,
+                resource_ref:sourceRef.value.trim(),source_read_and_export_confirmed:confirmed.checked};
+              confirmed.checked=false;pending=true;ready();
+              try{
+                const response=await api(path+'/source-check-export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                const blob=await response.blob();
+                if(generation!==detailGeneration||view!==sourceView||version!==formVersion)return;
+                const url=URL.createObjectURL(blob),link=el('a');link.href=url;link.download='owg-project-source-check.json';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+                sourceRef.value='';await loadOptions();note.textContent='Source-check document downloaded. Unknown results remain unknown; no agent causality or business outcome is established.';
+              }catch(e){if(generation===detailGeneration&&view===sourceView&&version===formVersion)note.textContent=e.message;}
+              finally{pending=false;ready();}
+            };
+            checkHost.replaceChildren(el('h4','Selected source-state check'),el('div','This performs an explicitly authorized read through existing source adapters. The receipt is downloaded only; OWG retains a checksum, not the receipt or a verified-state value.','muted'),
+              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
+            await loadOptions();
+          }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
+        };
+        projects.append(sourceChecks,checkHost);box.appendChild(projects);
         refreshProjects().catch(e=>{if(generation===detailGeneration)message.textContent=e.message;});
       }
       if(idea.score)box.appendChild(el('div','Ease '+idea.score.ease_score+'/100 · '+idea.score.modeled_hours_per_month+' modeled hours per month · '+QUADRANTS[idea.score.quadrant]+(idea.assessment.compliance_review_needed?' · needs compliance review':''),'muted'));
