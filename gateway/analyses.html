@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OWG · Shared analyses</title>
+<style nonce="__NONCE__">
+body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20px;color:#24392f;background:#f5f7f3}section{background:white;border:1px solid #b9c9bf;border-radius:10px;padding:18px;margin:16px 0}button,input,select{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}button{cursor:pointer;margin:5px 5px 5px 0;border:1px solid #6d8979;border-radius:5px;background:#edf4ee;color:#183a27}button:disabled{cursor:default;opacity:.6}label{display:block;margin:10px 0}input[type=text],input[type=password]{width:100%}p,li,td,th,h1,h2{overflow-wrap:anywhere}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;text-align:left;border-bottom:1px solid #d1ddd5}.member{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.member input{flex:1;min-width:130px}.muted{color:#4d6256}[hidden]{display:none!important}a{color:#1c5b36}
+</style></head><body>
+<header><h1>Shared analyses</h1><p>Publish an explicitly reviewed numeric snapshot. Raw event logs and private evidence stay local. Each publication is visible to its owner and explicitly authorized analysis administrators; other people need membership.</p><a href="/processes">Shared processes</a></header>
+<section aria-labelledby="signin"><h2 id="signin">Connect</h2><p>Use a delegated access token from your company’s OIDC integration with explicit analysis permissions. Process sign-in sessions and service tokens do not grant analysis access. Credentials remain in this page’s memory.</p>
+<label>Delegated access token <input id="token" type="password" autocomplete="off" maxlength="16384"></label>
+<button id="connect">Connect</button><button id="disconnect">Disconnect and clear</button></section>
+<p id="status" role="status" aria-live="polite"></p>
+<main id="workspace" hidden>
+<section><h2>Your authorized publications</h2><button id="refresh">Refresh</button><button id="new">New publication</button><div id="inventory"></div><button id="more" hidden>More publications</button></section>
+<section id="detail" hidden><h2 id="viewTitle"></h2><p id="basis"></p><div class="scroll" id="table"></div><div id="coverage"></div>
+<label>Revision <input id="revision" type="number" min="1" step="1"></label><button id="openRevision">Open revision</button><button id="export">Download this revision</button>
+</section>
+<section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot”, review it, then download it. Group codes have meaning only within that file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
+<label>Snapshot file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
+<label>Publication title <input id="title" type="text" maxlength="480"></label>
+<label>Retention for a new publication (days, 1–90) <input id="days" type="number" min="1" max="90" value="7"></label>
+<p>Revisions keep the current expiry. Only the owner can renew it under Access.</p>
+<label><input id="confirm" type="checkbox"> I reviewed this numeric snapshot and am authorized to publish it to this organization</label>
+<button id="publish" disabled>Publish</button></section>
+<section id="access" hidden><h2>Access and retention</h2><p>Members need the corresponding company analysis scope as well as this role. Revocation stops future reads and exports; it cannot recall copies already downloaded. Clearing this list removes all members.</p>
+<div id="members"></div><button id="addMember">Add member</button>
+<label>Renew retention (days, 1–90; blank keeps the current expiry) <input id="renew" type="number" min="1" max="90"></label>
+<label><input id="accessConfirm" type="checkbox"> I confirm the complete member list and retention change</label><button id="saveAccess" disabled>Save access</button>
+<label><input id="deleteConfirm" type="checkbox"> Delete this publication, all retained revisions and member access</label><button id="delete" disabled>Delete publication</button></section>
+</main>
+<script nonce="__NONCE__" src="/analysis-snapshot-client.js"></script>
+<script nonce="__NONCE__">
+(()=>{'use strict';
+const $=id=>document.getElementById(id),base='/v1/human/analyses';
+let credential='',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
+const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
+function table(node,doc){
+ node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
+ for(const c of doc.columns){const th=text('th',c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':''));th.scope='col';head.append(th);}
+ const thead=document.createElement('thead');thead.append(head);t.append(thead);const body=document.createElement('tbody');
+ for(const row of doc.rows){const tr=document.createElement('tr');for(const v of row)tr.append(text('td',v===null?'—':String(v)));body.append(tr);}t.append(body);node.append(t);
+}
+function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
+function clearSelection(){viewAttempt++;selected=null;$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
+function sync(){
+ $('publisher').hidden=!credential||!canPublish;
+ $('publish').disabled=!snapshot||!$('confirm').checked||!!(selected&&!selected.permissions.edit);
+ $('publish').textContent=selected?'Publish new revision':'Publish privately';
+ $('days').disabled=!!selected;
+ $('saveAccess').disabled=!$('accessConfirm').checked;$('delete').disabled=!$('deleteConfirm').checked;
+}
+function disconnect(){epoch++;credential='';canPublish=false;clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
+async function api(path,options={}){
+ const attempt=epoch,token=credential;
+ const r=await fetch(path,{...options,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:'Bearer '+token}});
+ const value=await r.json();if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
+ if(!r.ok){if([401,403,404].includes(r.status))clearSelection();throw new Error(value.detail||'Request failed');}return value;
+}
+async function run(operation){const attempt=epoch;try{await operation();}catch(e){if(attempt===epoch)$('status').textContent=e.message;}}
+const post=(path,value)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
+async function inventory(after=''){
+ if(!after)listAttempt++;const attempt=listAttempt;
+ const r=await api(base+'?limit=20&after='+encodeURIComponent(after));if(attempt!==listAttempt)return;canPublish=r.can_publish;next=r.next_after;
+ if(!after)$('inventory').replaceChildren();
+ for(const item of r.views){const b=text('button',item.title+' · revision '+item.revision);b.onclick=()=>run(()=>open(item.view_id));$('inventory').append(b);}
+ if(!r.views.length&&!after)$('inventory').append(text('p','No authorized publications.'));
+ $('more').hidden=!next;sync();
+}
+function member(actor='',role='viewer'){
+ const row=document.createElement('div');row.className='member';
+ const a=document.createElement('input');a.type='text';a.maxLength=1024;a.value=actor;a.setAttribute('aria-label','Member organization actor ID');
+ const s=document.createElement('select');s.setAttribute('aria-label','Member role');for(const value of ['viewer','editor']){const o=text('option',value);o.value=value;s.append(o);}s.value=role;
+ const remove=text('button','Remove member');remove.onclick=()=>{row.remove();$('accessConfirm').checked=false;sync();};
+ a.oninput=s.onchange=()=>{$('accessConfirm').checked=false;sync();};row.append(a,s,remove);$('members').append(row);
+}
+async function open(id,revision){
+ clearSelection();const attempt=viewAttempt;
+ const d=await api(base+'/'+id+(revision?'?revision='+revision:''));if(attempt!==viewAttempt)return;selected=d;clearFile();$('detail').hidden=false;
+ $('viewTitle').textContent=d.title;$('title').value=d.title;$('revision').value=d.viewing_revision;$('revision').max=d.revision;
+ $('basis').textContent='Viewing revision '+d.viewing_revision+' of '+d.revision+' · expires '+d.expires_at+' · publisher-supplied snapshot, source freshness unknown. Digest '+d.content_sha256;
+ table($('table'),d.snapshot);$('coverage').replaceChildren(text('p',d.snapshot.matching_cases+' selected cases; '+d.snapshot.matching_rows+' '+d.snapshot.level+' rows. '+(d.snapshot.rows_truncated?'Only bounded result rows are included. ':'')+'Group codes apply only within this snapshot.'));
+ for(const c of d.snapshot.metric_coverage)$('coverage').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value, '+c.without_value+' without; '+c.missing_operand+' missing operand, '+c.zero_divisor+' zero divisor, '+c.non_finite+' nonfinite.'));
+ $('access').hidden=!d.permissions.manage;$('members').replaceChildren();$('accessConfirm').checked=false;$('deleteConfirm').checked=false;$('renew').value='';
+ if(d.permissions.manage){const access=await api(base+'/'+id+'/access');if(attempt!==viewAttempt)return;selected.access_revision=access.access_revision;for(const m of access.members)member(m.actor_id,m.role);}
+ sync();
+}
+$('connect').onclick=()=>{const value=$('token').value.trim();disconnect();credential=value;epoch++;$('token').value='';run(async()=>{await inventory();$('workspace').hidden=false;$('status').textContent='Connected to authorized analyses.';});};
+$('disconnect').onclick=disconnect;$('refresh').onclick=()=>run(async()=>{clearSelection();await inventory();});$('new').onclick=clearSelection;$('more').onclick=()=>run(()=>inventory(next));
+$('file').onchange=()=>run(async()=>{
+ const file=$('file').files[0];clearFile();if(!file)return;if(file.size>128*1024)throw new Error('Snapshot file exceeds 128 KiB.');
+ const attempt=fileAttempt,raw=await file.text();if(attempt!==fileAttempt)return;const doc=window.owgAnalysisSnapshotClient.validate(JSON.parse(raw));
+ if(doc.format!=='openworkgraph.aggregate-analysis-snapshot.v1'||!Array.isArray(doc.columns)||!Array.isArray(doc.rows)||doc.columns.length>6||doc.rows.length>100||doc.rows.some(r=>!Array.isArray(r)||r.length!==doc.columns.length))throw new Error('Choose a bounded OWG analysis snapshot.');
+ snapshot=doc;table($('preview'),doc);$('preview').append(text('p',doc.matching_cases+' selected cases; '+doc.matching_rows+' '+doc.level+' rows; '+doc.non_finite_results_withheld+' nonfinite output results withheld; generated '+doc.generated_at+'. Source fingerprint '+doc.source_content_sha256+'. Analysis fingerprint '+doc.analysis_spec_sha256+'. '+(doc.rows_truncated?'Bounded result rows only. ':'')));for(const c of doc.metric_coverage)$('preview').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.'));sync();
+});
+$('confirm').onchange=sync;
+$('publish').onclick=()=>run(async()=>{
+ if(!snapshot||!$('confirm').checked)return;
+ if([...$('title').value.trim()].length>240)throw new Error('Use at most 240 characters in the title.');
+ const attempt=viewAttempt,fileVersion=fileAttempt;
+ const d=await post(base+(selected?'/'+selected.view_id:''),{title:$('title').value.trim(),snapshot,expected_revision:selected?.revision||0,expires_in_days:Number($('days').value),user_confirmed:true,organization_sharing_confirmed:true});
+ if(attempt!==viewAttempt||fileVersion!==fileAttempt)return;clearFile();await inventory();if(attempt!==viewAttempt)return;await open(d.view_id);$('status').textContent='Snapshot published. Access is limited to its owner, analysis administrators and explicit members.';
+});
+$('openRevision').onclick=()=>run(()=>open(selected.view_id,Number($('revision').value)));
+$('export').onclick=()=>run(async()=>{
+ const d=await api(base+'/'+selected.view_id+'/export?revision='+selected.viewing_revision);
+ const url=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='owg-shared-analysis.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$('status').textContent='Revision exported; this download is recorded in the audit log.';
+});
+$('addMember').onclick=()=>{if($('members').children.length<50)member();$('accessConfirm').checked=false;sync();};
+$('accessConfirm').onchange=$('deleteConfirm').onchange=sync;$('renew').oninput=()=>{$('accessConfirm').checked=false;sync();};
+$('saveAccess').onclick=()=>run(async()=>{
+ if(!selected||!$('accessConfirm').checked)return;
+ const attempt=viewAttempt,id=selected.view_id;
+ const members=[...$('members').children].map(row=>({actor_id:row.querySelector('input').value.trim(),role:row.querySelector('select').value})).filter(m=>m.actor_id);
+ if(members.some(m=>[...m.actor_id].length>512))throw new Error('Use at most 512 characters in an actor ID.');
+ await post(base+'/'+selected.view_id+'/access',{expected_access_revision:selected.access_revision,members,expires_in_days:$('renew').value===''?null:Number($('renew').value),user_confirmed:true});
+ if(attempt!==viewAttempt)return;await open(id);$('status').textContent='Access updated; future requests use the current member list.';
+});
+$('delete').onclick=()=>run(async()=>{if(!selected||!$('deleteConfirm').checked)return;const attempt=viewAttempt;await post(base+'/'+selected.view_id+'/delete',{expected_revision:selected.revision,expected_access_revision:selected.access_revision,user_confirmed:true});if(attempt!==viewAttempt)return;clearSelection();await inventory();$('status').textContent='Publication, revisions and member access deleted.';});
+})();
+</script></body></html>

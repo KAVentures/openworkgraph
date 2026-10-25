@@ -1616,8 +1616,37 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
+    let sharingAttempt=0,sharingSnapshot=null;
+    const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
+    const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
+    const sharingTable=el('div');sharingTable.style.overflowX='auto';
+    const sharingInfo=el('p',null,'muted');sharingInfo.style.overflowWrap='anywhere';
+    const sharingConsent=input('owgAnalysisSharingConsent','checkbox');
+    const sharingDownload=button('Download reviewed snapshot','secondary');sharingDownload.id='owgAnalysisSharingDownload';sharingDownload.disabled=true;
+    sharing.append(el('p','This snapshot recomputes the analysis, replaces group labels with codes and omits raw events, case IDs, filter values and metric definitions. Declared units and numeric values may still be sensitive. Review every cell before sharing. Upload the downloaded file to your organization’s Shared analyses portal; downloading sends nothing to a Gateway.'),sharingTable,sharingInfo,
+      field('I reviewed this snapshot and intend to share it with my organization',sharingConsent),sharingDownload);
+    function resetSharing(){sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;}
+    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot;};
+    prepareShare.onclick=async()=>{
+      if(!lastSpec)return;
+      resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;
+      try{
+        const r=await(await api(base()+'/analysis-sharing-preview',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify(lastSpec)})).json();
+        if(generation!==state.generation||attempt!==sharingAttempt)return;
+        sharingSnapshot=r;sharing.hidden=false;
+        sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
+          ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
+        sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
+      }catch(error){if(generation===state.generation&&attempt===sharingAttempt)message.textContent=error.message;}
+      finally{if(generation===state.generation&&attempt===sharingAttempt)prepareShare.disabled=!lastSpec;}
+    };
+    sharingDownload.onclick=()=>{
+      if(!sharingConsent.checked||!sharingSnapshot||generation!==state.generation)return;
+      download('owg-analysis-snapshot.json',JSON.stringify(sharingSnapshot,null,2),'application/json');
+      sharingConsent.checked=false;sharingDownload.disabled=true;
+    };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
-    box.append(row,metricBox,message,out,exports.node,saveRow,savedList);
+    box.append(row,metricBox,message,out,exports.node,prepareShare,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
     async function refreshLibrary(){
@@ -1633,10 +1662,11 @@
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId);
     const cell=(column,value,unit)=>value===null||value===undefined?'—':unit==='seconds'?duration(value):unit==='share'?pct(value):typeof value==='number'?Number(value).toLocaleString()+(unit&&!['cases','events','activities'].includes(unit)?' '+unit:''):String(value);
     async function execute(spec){
+      resetSharing();prepareShare.disabled=true;
       if(state.caseType)spec.case_type=state.caseType;
       const r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
       if(generation!==state.generation)return;
-      last=r;lastSpec=spec;exports.enable(true);save.disabled=false;
+      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),

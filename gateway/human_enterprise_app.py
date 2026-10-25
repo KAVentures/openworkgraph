@@ -67,6 +67,13 @@ def create_human_enterprise_app(
     app.include_router(sign_in_router)
     app.include_router(build_process_router(process_store, process_human))
     app.state.organization_process_store = process_store
+    from .analysis_publications import AnalysisPublications
+    from .analysis_publication_routes import build_router, retention_hooks
+    analysis_store = AnalysisPublications(db)
+    analysis_start, analysis_stop = retention_hooks(analysis_store)
+    extend_lifespan(app, startup=analysis_start, shutdown=analysis_stop)
+    app.include_router(build_router(analysis_store, app.state.human_principal_dependency))
+    app.state.analysis_publications = analysis_store
 
     previous_health = _take_get_endpoint(app, "/health")
     previous_capabilities = _take_get_endpoint(app, "/v1/capabilities")
@@ -83,6 +90,16 @@ def create_human_enterprise_app(
     def capabilities() -> dict[str, Any]:
         payload = dict(previous_capabilities() if previous_capabilities else {})
         payload["human_access"] = {
+            "shared_analyses": {
+                "explicit_group_scopes_required": True,
+                "explicit_view_membership_required": True,
+                "minimized_numeric_snapshots_only": True,
+                "raw_logs_shared": False,
+                "source_freshness_independently_verified": False,
+                "retention_max_days": 90,
+                "retention_cleanup_batch": 100,
+                "retention_cleanup_interval_seconds": 60,
+            },
             "process_collaboration": {
                 "explicit_group_scopes_required": True,
                 "personal_evidence_published_automatically": False,

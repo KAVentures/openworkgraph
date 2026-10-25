@@ -38,6 +38,7 @@ from . import event_log_predictions as predictions
 from . import event_log_quality as quality
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
+from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
 from . import event_log_waiting as waiting
@@ -402,6 +403,21 @@ async def event_log_run_analysis(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/analysis-sharing-preview")
+async def analysis_sharing_preview(request: Request, log_id: str):
+    _require_dashboard(request)
+    if request.headers.get('x-owg-analysis-sharing-preview') != 'true':
+        raise HTTPException(403, 'Explicit sharing-preview request required')
+    spec = await _json_body(request, 'analysis sharing preview')
+    try:
+        result = await run_in_threadpool(analysis_snapshot_export.export_snapshot, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, 'Analysis cannot fit the bounded sharing format; select fewer rows or measures') from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @router.get("/v1/event-logs/{log_id}/analyses")
