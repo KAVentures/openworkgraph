@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
   log_id VARCHAR NOT NULL, analysis_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS quarantine (
+  log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, row_n BIGINT NOT NULL, reasons VARCHAR NOT NULL, row VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quarantine_decisions (
+  log_id VARCHAR NOT NULL, decided_at TIMESTAMP NOT NULL, decision VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS filter_sets (
   log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
@@ -164,9 +170,37 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
             columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
 
 
+MAX_QUARANTINED_ROWS = 10_000          # rejected rows kept per batch when the user asks to keep them
+_OFFSET_RE = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
+_DECISION = re.compile(r"^(Z|[+-](0[0-9]|1[0-4]):[0-5][0-9])$")
+
+
+def naive_offset(mapping: dict[str, Any] | None) -> str:
+    """The explicit UTC offset to assume for times written without one, or "" (reject such rows)."""
+    value = (mapping or {}).get("naive_timestamp_offset") or ""
+    if value and not (isinstance(value, str) and _DECISION.match(value)):
+        raise EventLogFormatError("the offset for times without one must look like +01:00, -05:30 or Z")
+    return value
+
+
+def timestamp_sql(raw: str, offset: str) -> str:
+    """SQL for a TIMESTAMPTZ from text ``raw``: times with an explicit offset as written, times without
+    one only under an explicit offset decision (otherwise NULL, which rejects the row)."""
+    parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast(trim({raw}) AS TIMESTAMPTZ)"
+    if offset:
+        suffix = "+00:00" if offset == "Z" else offset
+        parsed += (f" WHEN trim(coalesce({raw}, '')) <> '' THEN try_cast(strftime(try_cast(trim({raw}) AS TIMESTAMP),"
+                   f" '%Y-%m-%d %H:%M:%S.%f') || '{suffix}' AS TIMESTAMPTZ)")
+    return parsed + " END"
+
+
 def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, mapping: dict[str, Any],
-                   reasons: dict[str, int] | None = None) -> ReadStats:
-    """Bulk CSV import in SQL, with the same rules as the streaming reader."""
+                   reasons: dict[str, int] | None = None, keep_rejected: dict[str, int] | None = None) -> ReadStats:
+    """Bulk CSV import in SQL, with the same rules as the streaming reader.
+
+    With ``keep_rejected`` the mapped fields of up to MAX_QUARANTINED_ROWS rejected rows are left in the
+    temporary table ``rejected_rows`` for the caller to store, and the dict receives the counts."""
+    offset = naive_offset(mapping)
     delimiter = mapping.get("delimiter") or ","
     if delimiter not in {",", ";", "\t", "|"}:
         raise EventLogFormatError("unsupported delimiter")
@@ -204,8 +238,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         for column, key in names.items()) + ")::VARCHAR") if names else "'{}'"
     conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
           {case} AS case_id, {activity} AS activity,
-          CASE WHEN regexp_matches(trim({stamp}), '(Z|[+-][0-9]{{2}}:?[0-9]{{2}})$')
-               THEN try_cast(trim({stamp}) AS TIMESTAMPTZ) END AS ts,
+          {timestamp_sql(stamp, offset)} AS ts,
           coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
           row_number() OVER () AS n
         FROM {source}""", [str(path),original_header])
@@ -225,8 +258,32 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
             FROM staged""").fetchone()
         reasons.update(zip(("missing_case", "missing_activity", "missing_timestamp",
                             "timestamp_without_utc_offset", "unparseable_timestamp"), counts))
-    conn.execute("DELETE FROM staged WHERE case_id IS NULL OR trim(case_id) = '' OR activity IS NULL "
-                 "OR trim(activity) = '' OR ts IS NULL")
+        if offset:
+            # Under an explicit decision, times without an offset are accepted; only unreadable ones are rejected.
+            assumed, unreadable = conn.execute(f"""SELECT count(*) FILTER (WHERE ts IS NOT NULL),
+                  count(*) FILTER (WHERE ts IS NULL) FROM staged WHERE trim(coalesce(raw_ts, '')) <> ''
+                  AND NOT regexp_matches(trim(raw_ts), '{_OFFSET_RE}')""").fetchone()
+            reasons["timestamp_without_utc_offset"] = 0
+            reasons["unparseable_timestamp"] += unreadable
+            reasons["timestamps_with_assumed_offset"] = assumed
+    invalid = "case_id IS NULL OR trim(case_id) = '' OR activity IS NULL OR trim(activity) = '' OR ts IS NULL"
+    if keep_rejected is not None:
+        conn.execute(f"""CREATE OR REPLACE TEMP TABLE rejected_rows AS SELECT n,
+              to_json(list_filter([
+                CASE WHEN case_id IS NULL OR trim(case_id) = '' THEN 'missing_case' END,
+                CASE WHEN activity IS NULL OR trim(activity) = '' THEN 'missing_activity' END,
+                CASE WHEN raw_ts IS NULL OR trim(raw_ts) = '' THEN 'missing_timestamp'
+                     WHEN ts IS NULL AND NOT regexp_matches(trim(raw_ts), '{_OFFSET_RE}') AND '{offset}' = ''
+                       THEN 'timestamp_without_utc_offset'
+                     WHEN ts IS NULL THEN 'unparseable_timestamp' END], x -> x IS NOT NULL))::VARCHAR AS reasons,
+              json_object('case', coalesce(case_id, ''), 'activity', coalesce(activity, ''),
+                          'time', left(coalesce(raw_ts, ''), 200), 'resource', resource,
+                          'attributes', attributes::JSON)::VARCHAR AS row
+            FROM staged WHERE {invalid} ORDER BY n LIMIT {MAX_QUARANTINED_ROWS}""")
+        kept_rows = conn.execute("SELECT count(*) FROM rejected_rows").fetchone()[0]
+        total_bad = conn.execute(f"SELECT count(*) FROM staged WHERE {invalid}").fetchone()[0]
+        keep_rejected.update(retained=kept_rows, not_retained=total_bad - kept_rows)
+    conn.execute(f"DELETE FROM staged WHERE {invalid}")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
     conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, attributes FROM staged""",
                  [log_id])
@@ -238,9 +295,12 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
 
 
 def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: Path, source_format: str,
-            mapping: dict[str, Any] | None, reasons: dict[str, int] | None = None) -> ReadStats:
+            mapping: dict[str, Any] | None, reasons: dict[str, int] | None = None,
+            keep_rejected: dict[str, int] | None = None) -> ReadStats:
     if source_format == "csv":
-        return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons)
+        return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons, keep_rejected)
+    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset"):
+        raise EventLogWorkspaceError("keeping rejected rows and assuming an offset are available for CSV only")
     stats = ReadStats()
     with upload.open("rb") as raw:
         reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
@@ -279,9 +339,11 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
             conn.execute("BEGIN")
             try:
                 reasons: dict[str, int] = {}
-                stats = _ingest(conn, log_id, upload, folder, source_format, mapping, reasons)
+                kept = {} if (mapping or {}).get("keep_rejected") else None
+                stats = _ingest(conn, log_id, upload, folder, source_format, mapping, reasons, kept)
                 if stats.events == 0:
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
+                _store_rejected(conn, log_id, 0, kept)
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
                              [log_id, name.strip(), source_format, datetime.now(timezone.utc).replace(tzinfo=None),
                               stats.events, stats.objects, stats.rejected_events])
@@ -292,7 +354,7 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
             report = _record_quality(conn, log_id, batch=0, kind="import", source_format=source_format,
                                      mapping=mapping, upload=upload, rows_accepted=stats.events,
                                      rows_rejected=stats.rejected_events,
-                                     rejection_reasons=reasons if source_format == "csv" else None)
+                                     rejection_reasons=reasons if source_format == "csv" else None, kept=kept)
             return {**_check_log(conn, log_id), "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
@@ -307,7 +369,7 @@ _FINGERPRINT = """SELECT e.event_id, e.activity, e.ts, e.resource,
 
 
 def append_log(log_id: str, source: IO[bytes], *, source_format: str,
-               mapping: dict[str, Any] | None = None) -> dict[str, Any]:
+               mapping: dict[str, Any] | None = None, kind: str = "append") -> dict[str, Any]:
     """Add a newer export to a saved log, skipping events it already holds.
 
     An event already in the log (same activity, time, resource and linked
@@ -328,7 +390,8 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             conn.execute("BEGIN")
             try:
                 reasons: dict[str, int] = {}
-                stats = _ingest(conn, staging, upload, folder, source_format, mapping, reasons)
+                kept = {} if (mapping or {}).get("keep_rejected") else None
+                stats = _ingest(conn, staging, upload, folder, source_format, mapping, reasons, kept)
                 if stats.events == 0:
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 batch = conn.execute("SELECT coalesce(max(batch), 0) + 1 FROM log_appends WHERE log_id = ?",
@@ -359,6 +422,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                 for table in ("event_objects", "events", "objects"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
+                _store_rejected(conn, log_id, batch, kept)
                 conn.execute("INSERT INTO log_appends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                              [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), source_format,
                               added, duplicates, stats.rejected_events, new_objects])
@@ -369,11 +433,11 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-            report = _record_quality(conn, log_id, batch=batch, kind="append", source_format=source_format,
+            report = _record_quality(conn, log_id, batch=batch, kind=kind, source_format=source_format,
                                      mapping=mapping, upload=upload, rows_accepted=added,
                                      rows_rejected=stats.rejected_events,
                                      rejection_reasons=reasons if source_format == "csv" else None,
-                                     duplicates_skipped=duplicates, prefix=prefix)
+                                     duplicates_skipped=duplicates, prefix=prefix, kept=kept)
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
@@ -382,6 +446,15 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
             conn.close()
+
+
+def _store_rejected(conn: duckdb.DuckDBPyConnection, log_id: str, batch: int, kept: dict[str, int] | None) -> None:
+    """Keep the rejected rows of this batch for review, inside the caller's transaction (opt-in only)."""
+    if kept is None:
+        return
+    if kept.get("retained"):
+        conn.execute("INSERT INTO quarantine SELECT ?, ?, n, reasons, row FROM rejected_rows", [log_id, batch])
+    conn.execute("DROP TABLE IF EXISTS rejected_rows")
 
 
 def _record_quality(conn: duckdb.DuckDBPyConnection, log_id: str, **details: Any) -> dict[str, Any] | None:
@@ -405,7 +478,9 @@ def _quality_summary(report: dict[str, Any]) -> dict[str, Any]:
             "rejected_by_reason": report["rows"]["rejected_by_reason"],
             "duplicate_events": d["duplicate_events"],
             "events_sharing_a_timestamp_in_a_case": d["events_sharing_a_timestamp_in_a_case"],
-            "events_without_resource": d["events_without_resource"]}
+            "events_without_resource": d["events_without_resource"],
+            "timestamps_with_assumed_offset": report["rows"].get("timestamps_with_assumed_offset", 0),
+            "rejected_rows_kept_for_review": report["rows"].get("rejected_rows_kept_for_review", 0)}
 
 
 def append_history(log_id: str) -> dict[str, Any]:
@@ -438,8 +513,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("log_appends", "log_quality", "filter_sets", "saved_analyses", "signal_rules",
-                          "event_objects", "events", "objects", "logs"):
+            for table in ("log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+                          "saved_analyses", "signal_rules", "event_objects", "events", "objects", "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
             return {"deleted": True, "log_id": log_id}
