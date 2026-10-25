@@ -256,7 +256,7 @@
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
-    results.appendChild(analysisSection());
+    results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
@@ -1225,8 +1225,9 @@
       if(!kind)continue;
       if(kind==='attribute'){const n=String(name||'').trim();if(!n)throw new Error('Enter the attribute name.');dims.push('attribute:'+n);}else dims.push(kind);
     }
-    const measures=[values.measure1,values.measure2].filter(Boolean).map(m=>{const [fn,of]=m.split(':');return of?{fn,of}:{fn};});
+    const measures=[values.measure1,values.measure2].filter(Boolean).map(m=>{const i=m.indexOf(':');return i<0?{fn:m}:{fn:m.slice(0,i),of:m.slice(i+1)};});
     const spec={level:values.level,dimensions:dims,measures,limit:Number(values.limit)||100};
+    if(values.level==='cases'&&values.metrics&&values.metrics.length)spec.metrics=values.metrics;
     if(values.level==='cases'){
       const where={};const h=Number(values.hours);
       if(values.hours!==''&&values.hours!==undefined){if(!(h>=0))throw new Error('Enter hours as a number.');where.duration_over_seconds=Math.round(h*3600);}
@@ -1236,7 +1237,32 @@
     return spec;
   }
 
-  function analysisSection(){
+  // One typed case metric from form values; throws a readable error.
+  function caseMetric(values){
+    const name=String(values.name||'').trim();
+    if(!/^[a-z][a-z0-9_]{0,39}$/.test(name))throw new Error('Name the metric with lower-case letters, digits and _ (for example wait_for_approval).');
+    if(values.kind==='time_between'){
+      if(!values.from||!values.to)throw new Error('Choose both activities.');
+      return {name,kind:'time_between',from_activity:values.from,to_activity:values.to,from_occurrence:values.fromOccurrence||'first',to_occurrence:values.toOccurrence||'first'};
+    }
+    if(values.kind==='activity_count'){if(!values.activity)throw new Error('Choose the activity to count.');return {name,kind:'activity_count',activity:values.activity};}
+    if(values.kind==='event_attribute_sum'||values.kind==='case_attribute_number'){
+      const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
+      if(!attribute)throw new Error('Enter the attribute name.');
+      if(!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(unit))throw new Error('Enter the unit of the values, for example EUR or kg.');
+      return {name,kind:values.kind,attribute,unit};
+    }
+    throw new Error('Choose what the metric measures.');
+  }
+  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute']];
+  function metricText(m){
+    if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
+    if(m.kind==='activity_count')return m.name+': number of '+m.activity+' events';
+    return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
+  }
+
+  function analysisSection(activityNames){
+    const metrics=[];
     const box=section('Build an analysis');box.id='owgEventLogAnalysis';
     box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
     const level=select('owgAnalysisLevel',[['cases','Cases'],['events','Events']]);
@@ -1252,30 +1278,76 @@
     const sync=()=>{
       const keep=[dim1.value,dim2.value,measure1.value,measure2.value];
       setOptions(dim1,ANALYSIS_DIMENSIONS[level.value]);setOptions(dim2,ANALYSIS_DIMENSIONS[level.value]);
-      setOptions(measure1,ANALYSIS_MEASURES[level.value]);setOptions(measure2,[['','(none)'],...ANALYSIS_MEASURES[level.value]]);
+      const extra=level.value==='cases'?metrics.flatMap(m=>[['median','Median'],['avg','Average'],['sum','Total'],['max','Highest']].map(([fn,label])=>[fn+':metric:'+m.name,label+' '+m.name])):[];
+      setOptions(measure1,[...ANALYSIS_MEASURES[level.value],...extra]);setOptions(measure2,[['','(none)'],...ANALYSIS_MEASURES[level.value],...extra]);
       [dim1,dim2,measure1,measure2].forEach((node,i)=>{if([...node.options].some(o=>o.value===keep[i]))node.value=keep[i];});
       show(f.attr1,dim1.value==='attribute');show(f.attr2,dim2.value==='attribute');show(f.hours,level.value==='cases');show(f.ends,level.value==='cases');
     };
     level.onchange=dim1.onchange=dim2.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Analyse',level),field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run);
+    // Case metrics: typed per-case values that the measures above can use.
+    const names=(activityNames||[]).slice(0,500).map(a=>[a,a]);
+    const mKind=select('owgMetricKind',METRIC_KINDS),mName=input('owgMetricName','text','wait_for_approval');mName.maxLength=40;
+    const mFrom=select('owgMetricFrom',names),mTo=select('owgMetricTo',names),mActivity=select('owgMetricActivity',names);
+    const occurrences=[['first','first'],['last','last']];
+    const mFromOcc=select('owgMetricFromOccurrence',occurrences),mToOcc=select('owgMetricToOccurrence',occurrences);
+    const mAttribute=input('owgMetricAttribute','text','amount'),mUnit=input('owgMetricUnit','text','EUR');mUnit.maxLength=20;
+    const mAdd=button('Add metric to this analysis','secondary');mAdd.id='owgMetricAdd';
+    const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
+    const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
+      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit)};
+    const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
+      show(mf.activity,k==='activity_count');show(mf.attribute,k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,k.endsWith('_number')||k.endsWith('_sum'));};
+    mKind.onchange=mSync;mSync();
+    const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
+    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mSave);
+    const metricList=el('div');metricList.id='owgMetricList';
+    const library=el('div');library.id='owgMetricLibrary';
+    const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define a value per case, then choose it as a measure. Times are in seconds between recorded events; attribute values keep the unit you declare and are never converted.','muted'),metricRow,metricList,library);
+    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value});
+    function useMetric(metric){
+      if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
+      if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
+      metrics.push(metric);renderMetrics();
+    }
+    function renderMetrics(){
+      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{metrics.splice(i,1);renderMetrics();};item.appendChild(rm);return item;}));
+      sync();
+    }
     const saveRow=el('div',null,'row');saveRow.style.alignItems='end';saveRow.append(field('Name',name),save);
     const message=el('div',null,'muted');message.id='owgAnalysisStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
-    box.append(row,message,out,exports.node,saveRow,savedList);
+    box.append(row,metricBox,message,out,exports.node,saveRow,savedList);
+    mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
+    mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
+    async function refreshLibrary(){
+      const r=await getJSON(base()+'/metrics');if(generation!==state.generation)return;
+      library.replaceChildren(r.metrics.length?table(['Saved metric','',''],r.metrics.map(entry=>{
+        const m=entry.metric;const add=button('Add','secondary');add.setAttribute('aria-label','Add saved metric '+m.name);
+        add.onclick=()=>{try{useMetric(m);message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved metric '+m.name);
+        del.onclick=async()=>{try{await api(base()+'/metrics/'+encodeURIComponent(entry.metric_id)+'/delete',{method:'POST'});message.textContent='Saved metric deleted.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
+        return [metricText(m),add,del];})):el('div','No saved metrics yet.','muted'));
+    }
     const generation=state.generation;
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId);
-    const cell=(column,value)=>value===null||value===undefined?'—':/duration_seconds$/.test(column)?duration(value):column==='share'?pct(value):typeof value==='number'?Number(value).toLocaleString():String(value);
+    const cell=(column,value,unit)=>value===null||value===undefined?'—':unit==='seconds'?duration(value):unit==='share'?pct(value):typeof value==='number'?Number(value).toLocaleString()+(unit&&!['cases','events','activities'].includes(unit)?' '+unit:''):String(value);
     async function execute(spec){
       if(state.caseType)spec.case_type=state.caseType;
       const r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
       if(generation!==state.generation)return;
       last=r;lastSpec=spec;exports.enable(true);save.disabled=false;
+      const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
-        table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v)))));
+        table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
+        ...(r.metrics||[]).map(c=>el('div',c.name+': '+Number(c.cases_with_value).toLocaleString()+' cases have a value, '+Number(c.cases_without_value).toLocaleString()+' do not'
+          +(c.cases_without_from_activity!==undefined?' ('+c.cases_without_from_activity+' without '+c.definition.from_activity+', '+c.cases_without_to_activity+' without '+c.definition.to_activity+', '+c.cases_where_to_precedes_from+' where '+c.definition.to_activity+' comes first)':'')+(c.cases_with_non_finite_value?' ('+c.cases_with_non_finite_value+' with a value that is not a finite number, such as NaN or an overflowing sum)':'')+'; cases without a value are left out of its measures.','muted')),
+        ...(r.non_finite_results_withheld?[el('div',r.non_finite_results_withheld+' results overflowed and are shown as —.','muted')]:[]));
     }
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
@@ -1287,7 +1359,7 @@
         return [a.name,open,del];})):el('div','No saved analyses yet.','muted'));
     }
     run.onclick=async()=>{
-      try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim()}));}
+      try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim(),metrics:[...metrics]}));}
       catch(error){message.textContent=error.message;}
     };
     save.onclick=async()=>{
@@ -1298,6 +1370,7 @@
       }catch(error){message.textContent=error.message;}
     };
     refresh().catch(error=>{message.textContent=error.message;});
+    refreshLibrary().catch(error=>{message.textContent=error.message;});
     return box;
   }
 
@@ -1628,6 +1701,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simCalendar,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

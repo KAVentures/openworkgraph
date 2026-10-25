@@ -326,6 +326,22 @@ def list_deployments() -> dict[str, Any]:
             conn.close()
 
 
+def deployment_references() -> list[dict[str, Any]]:
+    """Bounded local report identifiers/hashes, without graphs, steps or outcomes."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute("""SELECT d.deployment_id,d.name,d.runtime,d.design_sha256,
+                d.reported_spec_sha256,count(r.run_id) FROM deployments d
+                LEFT JOIN runs r ON r.deployment_id=d.deployment_id
+                GROUP BY d.deployment_id,d.name,d.runtime,d.design_sha256,d.reported_spec_sha256
+                ORDER BY d.deployment_id LIMIT ?""", [MAX_DEPLOYMENTS]).fetchall()
+            return [dict(zip(('deployment_id','name','runtime','design_sha256',
+                              'reported_spec_sha256','reported_run_count'), row)) for row in rows]
+        finally:
+            conn.close()
+
+
 def delete_deployment(deployment_id: str) -> dict[str, Any]:
     with _LOCK:
         conn = _connect()
