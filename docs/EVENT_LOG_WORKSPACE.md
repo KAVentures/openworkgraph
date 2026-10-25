@@ -256,13 +256,19 @@ arriving around the clock. A case can reserve a free resource outside working
 time but work starts at the next opening, pauses when a period ends and
 resumes at the next one; waiting counts from arrival to the start of work.
 Local hours are converted with the time zone's rules, so a daylight-saving
-change moves them in UTC exactly as clocks do. Utilization is measured against
+change moves them in UTC exactly as clocks do. A period covers exactly the real
+moments whose local clock time falls inside it: a clock time skipped when clocks
+go forward maps to the moment of the jump (a period inside the skipped hour has
+no working time; one starting inside it begins at the jump), a clock time
+repeated when clocks go back counts from its first occurrence at a period's start
+to its last occurrence at its end, and periods with no real length are dropped. Utilization is measured against
 working time, and offered load spreads arrivals over the average weekly
 working share (holidays are not counted there), so a load of 1 or more still
 flags a queue that keeps growing. Responses describe each run's calendar. The
-test suite checks exact pause-and-resume times, a holiday, the March
-clock change in Berlin, and that a round-the-clock calendar reproduces the
-results without one.
+test suite checks exact pause-and-resume times, a holiday, periods inside,
+across and partly in Berlin's skipped and repeated hours, that work always
+starts inside a usable period, and that a round-the-clock calendar reproduces
+the results without one.
 
 ## Literal case identity and qualified relationships
 

@@ -9,7 +9,7 @@ under stated assumptions, not a forecast or a measured outcome.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import heapq
 import math
 import random
@@ -48,7 +48,14 @@ class Calendar:
     """Working time for a scenario's resources: weekly hours in one IANA time zone, minus holidays.
 
     Simulation time is seconds from ``start``. Local opening hours are converted per date with the
-    zone's rules, so daylight-saving changes shift them in UTC exactly as the clocks do."""
+    zone's rules, so daylight-saving changes shift them in UTC exactly as the clocks do. A working
+    period covers exactly the real instants whose local wall-clock time falls inside it:
+
+    - a wall time skipped when clocks go forward maps to the instant of the jump, so a period inside
+      the skipped hour has no working time and one crossing it starts at the jump;
+    - a wall time repeated when clocks go back counts from its first occurrence at a period's start
+      and to its last occurrence at a period's end;
+    - periods with no real length are dropped, so every interval handed out has positive length."""
 
     def __init__(self, zone: str, start: datetime, hours: dict[int, list[tuple[int, int]]], holidays: set[date]):
         self.zone, self.tz, self.hours, self.holidays = zone, ZoneInfo(zone), hours, holidays
@@ -57,16 +64,35 @@ class Calendar:
         self._days: dict[int, list[tuple[float, float]]] = {}
         self.weekly_share = sum(b - a for spans in hours.values() for a, b in spans) / (7 * 24 * 60)
 
+    def _instant(self, day: date, minute: int, latest: bool) -> float:
+        """The real instant (seconds since the origin) for a local wall time on ``day``."""
+        if minute == 1440:
+            day, minute = day + timedelta(days=1), 0
+        wall = datetime.combine(day, time(minute // 60, minute % 60))
+        early, late = (wall.replace(tzinfo=self.tz, fold=f) for f in (0, 1))
+        exists = early.astimezone(timezone.utc).astimezone(self.tz).replace(tzinfo=None) == wall
+        if exists:
+            # Repeated wall times have two instants; take the latest one only for a period's end.
+            return (late if latest else early).timestamp() - self.origin
+        # Skipped wall time: the jump happens between the two readings of this wall time.
+        lo, hi = sorted((early.timestamp(), late.timestamp()))
+        while hi - lo > 1:
+            mid = (lo + hi) / 2
+            if datetime.fromtimestamp(mid, self.tz).replace(tzinfo=None) >= wall:
+                hi = mid
+            else:
+                lo = mid
+        return round(hi) - self.origin
+
     def _intervals(self, day: date) -> list[tuple[float, float]]:
         key = day.toordinal()
         if key not in self._days:
             spans = [] if day in self.holidays else self.hours.get(day.weekday(), [])
             out = []
             for a, b in spans:
-                lo = datetime.combine(day, time(a // 60, a % 60), self.tz)
-                hi = (datetime.combine(day + timedelta(days=1), time(0, 0), self.tz) if b == 1440
-                      else datetime.combine(day, time(b // 60, b % 60), self.tz))
-                out.append((lo.timestamp() - self.origin, hi.timestamp() - self.origin))
+                lo, hi = self._instant(day, a, latest=False), self._instant(day, b, latest=True)
+                if hi > lo:
+                    out.append((lo, hi))
             self._days[key] = out
         return self._days[key]
 

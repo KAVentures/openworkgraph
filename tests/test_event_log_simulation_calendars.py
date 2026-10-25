@@ -135,3 +135,56 @@ def test_periods_inside_a_daylight_saving_gap_never_stall():
     gap = _calendar("2025-03-29T00:00:00", zone="Europe/Berlin", hours={d: [["02:00", "03:00"]] for d in sim.DAYS})
     done = gap.finish(0, 2 * H)          # the 02:00–03:00 period does not exist on 30 March
     assert done == pytest.approx(50 * H)   # Sat 02:00–03:00 CET, then Mon 02:00–03:00 CEST (01:00 UTC)
+
+
+SPRING = "2025-03-30T00:00:00"      # Berlin: 02:00 CET jumps to 03:00 CEST
+AUTUMN = "2025-10-26T00:00:00"      # Berlin: 03:00 CEST falls back to 02:00 CET
+
+
+def _sunday(start, span):
+    return _calendar(start, zone="Europe/Berlin", hours={"sun": [span]})
+
+
+@pytest.mark.parametrize("span,real_seconds,first_local", [
+    (["02:10", "02:20"], 0, None),                    # wholly inside the skipped hour
+    (["02:00", "03:00"], 0, None),                    # exactly the skipped hour
+    (["02:30", "03:00"], 0, None),                    # ends where the skipped hour ends
+    (["02:30", "04:00"], 1 * H, "03:00"),             # starts inside it: work begins at the jump
+    (["01:00", "04:00"], 2 * H, "01:00"),             # crosses it: two real hours
+])
+def test_skipped_hour_periods_have_their_real_length_and_a_consistent_start(span, real_seconds, first_local):
+    from datetime import datetime
+    cal = _sunday(SPRING, span)
+    assert cal.working_seconds(0, 23 * H) == pytest.approx(real_seconds)
+    opened = cal.open_at(0)
+    local = datetime.fromtimestamp(cal.origin + opened, cal.tz)
+    if first_local is None:
+        assert local.date().isoformat() == "2025-04-06"            # nothing that day: next Sunday
+        assert local.strftime("%H:%M") == span[0]
+    else:
+        assert local.date().isoformat() == "2025-03-30" and local.strftime("%H:%M") == first_local
+    # Work started at open_at is done inside that same period, never before it or a week later.
+    assert cal.finish(opened, 60) == pytest.approx(opened + 60)
+
+
+@pytest.mark.parametrize("span,real_seconds", [
+    (["02:00", "03:00"], 2 * H),          # the repeated hour counts both times
+    (["01:00", "02:30"], 2.5 * H),        # ends at the second 02:30
+    (["02:30", "02:45"], 1.25 * H),       # first 02:30 (CEST) to the last 02:45 (CET)
+])
+def test_repeated_hour_periods_run_from_first_to_last_occurrence(span, real_seconds):
+    assert _sunday(AUTUMN, span).working_seconds(0, 23 * H) == pytest.approx(real_seconds)
+
+
+def test_every_interval_near_both_clock_changes_is_usable():
+    import itertools
+    clocks = [f"{h:02d}:{m:02d}" for h in range(0, 5) for m in (0, 15, 30, 45)] + ["24:00"]
+    for start, (a, b) in itertools.product((SPRING, AUTUMN), itertools.combinations(clocks, 2)):
+        cal = _sunday(start, [a, b])
+        for t in (0, 1.5 * H, 2.25 * H, 3 * H):
+            opened = cal.open_at(t)
+            assert opened >= t
+            lo, hi = cal._next(opened)
+            assert lo <= opened < hi and hi > lo, (start, a, b, t)
+            assert cal.finish(opened, 1) <= hi
+        assert cal.working_seconds(0, 30 * 24 * H) >= 0
