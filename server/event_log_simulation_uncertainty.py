@@ -6,10 +6,12 @@ baseline/scenario simulation with parameters drawn from what the log supports:
 
 - routing: shares from a Dirichlet distribution over the observed path counts (a Bayesian bootstrap of
   which path each case took), so a branch seen 3 times varies far more than one seen 3,000 times;
-- arrival rate: from a Gamma distribution over the number of arrivals and their time span.
+- arrival rate: from a Gamma distribution over the number of arrivals and their time span;
+- activity times: each measured time is scaled by a Gamma draw with as many observations as gaps it was
+  measured from (exact for the mean of exponential times), so a time seen 5 times varies far more than
+  one seen 5,000 times.
 
-Values the user entered (paths, arrivals_per_hour) stay as entered; activity times stay at their measured
-values. Each replication draws its own simulation random numbers and shares them between baseline and
+Values the user entered (paths, arrivals_per_hour, minutes) stay as entered. Each replication draws its own simulation random numbers and shares them between baseline and
 scenario, so intervals include simulation noise and the change stays paired. The intervals describe this
 estimation uncertainty only, not unmodelled changes in the process.
 """
@@ -23,12 +25,14 @@ from .event_log_workspace import EventLogWorkspaceError
 MIN_REPLICATIONS = 2
 MAX_REPLICATIONS = 50
 MAX_SIMULATED_CASES = 400_000        # replications × cases × 2 runs
+MAX_MINUTES = 525_600                # a drawn activity time stays within what a scenario accepts (one year)
 LEVEL = 0.95
 ASSUMPTIONS = [
-    "Intervals repeat the paired simulation with routing shares and the arrival rate drawn from what the log "
-    "supports: a Dirichlet distribution over observed path counts and a Gamma distribution over observed arrivals.",
-    "Paths and arrival rates you entered stay as entered; activity times stay at their measured values, so the "
-    "intervals leave out their uncertainty.",
+    "Intervals repeat the paired simulation with routing shares, the arrival rate and measured activity times drawn "
+    "from what the log supports: a Dirichlet distribution over observed path counts, a Gamma distribution over "
+    "observed arrivals, and for each activity time a Gamma scale with as many observations as measured gaps.",
+    "Paths, arrival rates and minutes you entered stay as entered. Resources and the process structure are not "
+    "varied.",
     "Each replication uses its own simulation random numbers, shared by baseline and scenario. The intervals cover "
     "estimation and simulation noise, not changes in the process that the log does not show.",
 ]
@@ -50,7 +54,8 @@ def parse(spec: Any, cases: int) -> int | None:
 
 
 def draw(base: dict[str, Any], rng: random.Random) -> dict[str, Any]:
-    """A copy of the calibration with routing shares and the arrival rate drawn from their estimation uncertainty."""
+    """A copy of the calibration with routing shares, the arrival rate and measured activity times drawn from
+    their estimation uncertainty."""
     covered = base["calibrated_cases"]
     counts = [max(1, round(p["weight"] * covered)) for p in base["paths"]]
     gammas = [rng.gammavariate(n, 1.0) for n in counts]
@@ -61,6 +66,15 @@ def draw(base: dict[str, Any], rng: random.Random) -> dict[str, Any]:
     if rate is not None and covered >= 3:
         shape = covered - 1                       # arrivals between the first and last selected case start
         drawn["arrivals_per_hour"] = rng.gammavariate(shape, rate / shape)
+    activities = {}
+    for name, p in base.get("activities", {}).items():
+        gaps = p.get("observed_gaps") or 0
+        if gaps:
+            scale = rng.gammavariate(gaps, 1.0 / gaps)   # mean 1, relative spread 1/sqrt(gaps)
+            p = {**p, "minutes": min(p["minutes"] * scale, MAX_MINUTES),
+                 "mean_minutes": min(p.get("mean_minutes", p["minutes"]) * scale, MAX_MINUTES)}
+        activities[name] = p
+    drawn["activities"] = activities
     return drawn
 
 
@@ -85,6 +99,8 @@ def replicate(base: dict[str, Any], seed: int, count: int,
     rows: dict[str, list[float]] = {k: [] for k in ("baseline_p50", "baseline_p90", "result_p50", "result_p90",
                                                     "change_p50", "change_p90", "arrivals_per_hour")}
     weights: list[list[float]] = [[] for _ in base["paths"]]
+    measured = {a: p for a, p in base.get("activities", {}).items() if p.get("observed_gaps")}
+    minutes: dict[str, list[float]] = {a: [] for a in measured}
     faster = unstable = 0
     for r in range(count):
         drawn = draw(base, rng)
@@ -96,13 +112,16 @@ def replicate(base: dict[str, Any], seed: int, count: int,
             if runs[0][key] is not None and runs[1][key] is not None:
                 rows["change_" + key].append(runs[1][key] - runs[0][key])
         rows["arrivals_per_hour"].append(baseline_model["arrivals_per_hour"])
+        for a in minutes:
+            if a in baseline_model["activities"]:
+                minutes[a].append(baseline_model["activities"][a]["minutes"])
         for i, p in enumerate(drawn["paths"]):
             weights[i].append(p["weight"])
         faster += bool(b["p50"] is not None and s["p50"] is not None and s["p50"] < b["p50"])
         unstable += bool(baseline["unstable"] or result["unstable"])
     seconds = {k: _interval(v) for k, v in rows.items() if k != "arrivals_per_hour"}
     return {
-        "replications": count, "level": LEVEL, "method": "dirichlet_routing_gamma_arrivals",
+        "replications": count, "level": LEVEL, "method": "dirichlet_routing_gamma_arrivals_gamma_activity_times",
         "cycle_time_seconds": {"baseline": {"p50": seconds["baseline_p50"], "p90": seconds["baseline_p90"]},
                                "result": {"p50": seconds["result_p50"], "p90": seconds["result_p90"]},
                                "change": {"p50": seconds["change_p50"], "p90": seconds["change_p90"]}},
@@ -112,6 +131,8 @@ def replicate(base: dict[str, Any], seed: int, count: int,
                               "observed_cases": max(1, round(p["weight"] * base["calibrated_cases"])),
                               "drawn": _interval(w)} for p, w in zip(base["paths"], weights)],
         "baseline_arrivals_per_hour": _interval(rows["arrivals_per_hour"]),
+        "measured_activity_minutes": [{"activity": a, "observed_gaps": measured[a]["observed_gaps"],
+                                       "drawn": _interval(v)} for a, v in sorted(minutes.items()) if v],
         "assumptions": ASSUMPTIONS,
     }
 
