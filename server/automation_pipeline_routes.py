@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from . import automation_pipeline as pipeline
 from . import opportunity_projects
@@ -80,7 +81,8 @@ async def create_idea_from_process(request: Request):
 async def export_idea_project(request: Request, idea_id: str):
     _require_dashboard(request)
     try:
-        archive, record = opportunity_projects.export_project(idea_id, await _json(request))
+        payload = await _json(request)
+        archive, record = await run_in_threadpool(opportunity_projects.export_project, idea_id, payload)
     except pipeline.PipelineError as exc:
         status = 409 if "changed" in str(exc) else 404 if str(exc) == "unknown idea" else 422
         raise HTTPException(status, str(exc)) from None
