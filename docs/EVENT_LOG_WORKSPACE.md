@@ -431,7 +431,11 @@ name (`a-z`, digits, `_`) and one of these kinds:
 
 A case without a value (an activity that never happens, the "to" activity coming first, or no
 numeric value) is left out of that metric's measures, and the result counts those cases per
-metric, by reason for `time_between`. Units are labels you declare, such as EUR or kg: values are
+metric, by reason for `time_between`. Coverage counts describe the cases the analysis selects,
+after its case filters. NaN, infinite values and per-case sums that overflow count as missing
+(`cases_with_non_finite_value`), and an aggregate that overflows is returned as unavailable and
+counted in `non_finite_results_withheld`; results never contain NaN or infinity. Metrics are
+referenced only as `metric:<name>`. Units are labels you declare, such as EUR or kg: values are
 never converted or summed across units. The result's `units` maps every measure column to its unit.
 Like every analysis, metrics compile to parameterized SQL from the fixed vocabulary.
 

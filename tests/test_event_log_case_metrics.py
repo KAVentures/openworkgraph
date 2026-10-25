@@ -150,3 +150,42 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def _review_log():
+    doc = ("case,activity,time,value\na,A,2024-01-01T00:00:00Z,NaN\na,B,2024-01-01T02:00:00Z,1\n"
+           "b,A,2024-01-01T00:00:00Z,2\nb,B,2024-01-01T00:01:00Z,3\nc,A,2024-01-02T00:00:00Z,1e308\n"
+           "c,B,2024-01-02T03:00:00Z,1e308\n")
+    return workspace.import_log(BytesIO(doc.encode()), name="r", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["value"]})["log_id"]
+
+
+def test_metric_references_need_the_metric_prefix():
+    log = _review_log()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="metric:<name>"):
+        _run(log, [{"kind": "activity_count", "name": "items", "activity": "A"}], [{"fn": "avg", "of": "items"}])
+
+
+def test_non_finite_values_and_overflow_are_withheld_and_disclosed():
+    import json
+    log = _review_log()
+    spend = {"name": "v", "kind": "event_attribute_sum", "attribute": "value", "unit": "EUR"}
+    r = _run(log, [spend], [{"fn": "sum", "of": "metric:v"}, {"fn": "max", "of": "metric:v"}])
+    json.dumps(r, allow_nan=False)                           # never a non-JSON NaN or Infinity
+    cov = r["metrics"][0]
+    assert cov["cases_with_non_finite_value"] == 2 and cov["cases_with_value"] == 1   # a: NaN, c: overflow
+    assert r["rows"] == [[5.0, 5.0]]
+    big = _run(log, [{**spend, "kind": "case_attribute_number"}, {"name": "w", "kind": "event_attribute_sum",
+                                                                 "attribute": "value", "unit": "EUR"}],
+               [{"fn": "count"}])
+    json.dumps(big, allow_nan=False)
+
+
+def test_metric_coverage_follows_the_case_filters():
+    log = _review_log()
+    wait = {"name": "a_to_b", "kind": "time_between", "from_activity": "A", "to_activity": "B"}
+    r = _run(log, [wait, {"name": "n", "kind": "activity_count", "activity": "A"}],
+             [{"fn": "count"}, {"fn": "max", "of": "metric:a_to_b"}], where={"duration_over_seconds": 3600})
+    assert r["rows"] == [[2, 3 * 3600.0]] and r["matching"]["cases"] == 2
+    assert [c["cases_with_value"] + c["cases_without_value"] for c in r["metrics"]] == [2, 2]

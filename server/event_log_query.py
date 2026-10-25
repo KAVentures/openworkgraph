@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import secrets
 from typing import Annotated, Any, Literal
 
@@ -155,7 +156,8 @@ def parse(spec: Any) -> AnalysisSpec:
     if parsed.metrics and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("case metrics apply to case-level analyses")
     for measure in parsed.measures:
-        if measure.of is not None and measure.of not in _CASE_VALUES and measure.of.removeprefix("metric:") not in names:
+        if measure.of is not None and measure.of not in _CASE_VALUES and not (
+                measure.of.startswith("metric:") and measure.of[7:] in names):
             raise workspace.EventLogWorkspaceError(
                 f"unknown value {measure.of!r}; use {sorted(_CASE_VALUES)} or metric:<name> of a defined case metric")
         if measure.fn in {"count", "cases", "share"}:
@@ -215,10 +217,16 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                          [_path(metric.attribute)])
             unit = metric.unit
         else:
+            # A non-finite event value makes the case's sum non-finite, so it is withheld below, not silently skipped.
             conn.execute(f"""UPDATE qc SET {column} = s.v FROM (SELECT case_id,
                   sum(try_cast(json_extract_string(attributes, ?) AS DOUBLE)) AS v FROM ce GROUP BY case_id) s
                 WHERE qc.case_id = s.case_id""", [_path(metric.attribute)])
             unit = metric.unit
+        # NaN, ±Infinity (and sums that overflow) are not values: they become missing and are counted.
+        non_finite = conn.execute(f"SELECT count(*) FROM qc WHERE {column} IS NOT NULL AND NOT isfinite({column})").fetchone()[0]
+        conn.execute(f"UPDATE qc SET {column} = NULL WHERE NOT isfinite({column})")
+        if non_finite:
+            extra["cases_with_non_finite_value"] = non_finite
         with_value, without = conn.execute(
             f"SELECT count({column}), count(*) - count({column}) FROM qc").fetchone()
         columns[metric.name] = column
@@ -241,6 +249,13 @@ def _materialize_variants(conn, where_sql: str, params: list[Any]) -> None:
         SELECT case_id, CAST(to_json(list(activity ORDER BY ts, event_id)) AS VARCHAR) AS variant
         FROM ce WHERE case_id IN ({selected}) GROUP BY case_id""", params)
     conn.execute('UPDATE qc SET variant = qv.variant FROM qv WHERE qc.case_id = qv.case_id')
+
+
+def _finite(value: Any) -> Any:
+    """Round floats; an aggregate that overflowed to ±Infinity or NaN is reported as unavailable (None)."""
+    if isinstance(value, float):
+        return round(value, 6) if math.isfinite(value) else None
+    return value
 
 
 def _unit(measure: Measure, coverage: list[dict[str, Any]], level: str) -> str | None:
@@ -276,7 +291,6 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
                 LEFT JOIN (SELECT object_id, any_value(attributes) AS attributes FROM objects
                            WHERE log_id = ? AND object_type = ? GROUP BY object_id) o ON o.object_id = c.case_id""",
                          [log_id, notion])
-            metric_columns, metric_coverage = _metrics(conn, parsed.metrics)
             source, clauses = "qc", []
             where = parsed.where
             if where.duration_over_seconds is not None:
@@ -293,6 +307,10 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
             if parsed.activity_in:
                 clauses.append("case_id IN (SELECT case_id FROM ce WHERE list_contains(?, activity))")
                 params.append(parsed.activity_in)
+            if parsed.metrics and clauses:
+                # Keep only the selected cases first, so metric coverage describes the analyzed population.
+                conn.execute(f"DELETE FROM qc WHERE NOT coalesce(({' AND '.join(clauses)}), false)", params)
+            metric_columns, metric_coverage = _metrics(conn, parsed.metrics)
             dimension_sql = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
@@ -329,7 +347,9 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
         return {
             "spec": parsed.model_dump(),
             "columns": columns,
-            "rows": [[(round(v, 6) if isinstance(v, float) else v) for v in row] for row in rows[:parsed.limit]],
+            "rows": [[_finite(v) for v in row] for row in rows[:parsed.limit]],
+            "non_finite_results_withheld": sum(isinstance(v, float) and not math.isfinite(v)
+                                               for row in rows[:parsed.limit] for v in row),
             "rows_truncated": len(rows) > parsed.limit,
             "matching": {"rows": total[0], "cases": total[1]},
             "cohort": cohorts.describe(cohorts.parse_cohort(parsed.cohort)),
