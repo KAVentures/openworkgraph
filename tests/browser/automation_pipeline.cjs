@@ -230,6 +230,14 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineReportLinks li').filter({hasText:'Matching reported specification'}).waitFor();
    const linkedReports=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/project-reports')).json(),linked.idea_id);
    assert.equal(linkedReports.links.length,1);assert.equal(linkedReports.business_outcomes_verified,false);
+   await page.locator('#owgPipelineJourney').click();
+   const journey=page.locator('#owgPipelineJourneyResult');
+   await journey.getByText('Dataset and cohort → process: origin is not linked.',{exact:true}).waitFor();
+   await journey.getByText(projectResponse.headers()['x-owg-archive-sha256'],{exact:true}).waitFor();
+   await page.locator('#owgPipelineJourneyArtifact').getByText(/Matching reported specification/).waitFor();
+   assert((await journey.textContent()).includes(manifest.spec_sha256));
+   assert((await journey.textContent()).includes('Receipt and result are not retained'));
+   assert((await journey.textContent()).includes('Artifact execution and individual run/case attribution are unverified'));
    assert.equal(linkedReports.links[0].per_run_attribution_verified,false);
    assert.equal(linkedReports.links[0].independent_execution_verified,false);
    const reportsAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
@@ -238,6 +246,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.evaluate(async id=>fetch('/v1/automation-monitoring/deployments/'+id+'/delete',{method:'POST'}),reported.deployment.deployment_id);
    await page.locator('#owgPipelineReviewReports').click();
    await page.locator('#owgPipelineReportLinks li').filter({hasText:'Reported deployment unavailable'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyArtifact').getByText(/Reported deployment unavailable/).waitFor();
    await page.getByRole('button',{name:'Remove report link '+reported.deployment.deployment_id,exact:true}).click();
    await page.locator('#owgPipelineReportLinks').getByText('No report links recorded.',{exact:true}).waitFor();
    await page.evaluate(async record=>{
@@ -246,6 +256,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    },saved);
    await page.getByRole('button',{name:'Refresh process status',exact:true}).click();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Process changed since this idea was created'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await journey.getByText(/Saved process renewal_review · revision 1 · changed since this idea/).waitFor();
    await page.getByRole('button',{name:'Move to Implemented',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'linked process changed or is unavailable'}).waitFor();
    assert.equal((await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id)).state,'approved');
@@ -260,11 +272,13 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await page.getByRole('button',{name:'Refresh process status',exact:true}).click();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Linked revision is unavailable'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await journey.getByText(/Saved process renewal_review · revision 1 · unavailable/).waitFor();
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → tracked project ZIP/hash/manifest and repeat export → explicit source-check download with unknown source state, digest-only history and held-response guard → exact reported-spec association with unknown outcomes, source deletion and unlink → changed/deleted source refusal, deletion, WCAG and mobile.');
+   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → tracked project ZIP/hash/manifest and repeat export → explicit source-check download with unknown source state, digest-only history and held-response guard → exact reported-spec association with unknown outcomes → combined read-only journey with digests and missing evidence, source/report drift and deletion → changed/deleted source refusal, deletion, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

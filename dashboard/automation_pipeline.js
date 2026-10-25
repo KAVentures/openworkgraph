@@ -102,6 +102,45 @@
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
       }
+      const journeyButton=button('View evidence journey','secondary');journeyButton.id='owgPipelineJourney';
+      const journeyHost=el('div');journeyHost.id='owgPipelineJourneyResult';journeyHost.style.overflowWrap='anywhere';
+      journeyButton.onclick=async()=>{
+        journeyButton.disabled=true;journeyHost.replaceChildren(el('div','Checking local references…','muted'));
+        try{
+          const data=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
+          if(generation!==detailGeneration)return;
+          journeyHost.replaceChildren(el('h4','Evidence journey'));
+          const stages=el('ol');
+          stages.appendChild(el('li','Dataset and cohort → process: origin is not linked.'));
+          const process=data.process_status,ref=process.process_reference;
+          const sourceLabels={current:'current',changed:'changed since this idea',unavailable:'unavailable',reference_mismatch:'reference no longer matches',check_failed:'could not be checked'};
+          stages.appendChild(el('li',ref?'Saved process '+ref.workflow_id+' · revision '+ref.revision+' · '+(sourceLabels[process.status]||'unknown status')+' · SHA-256 '+ref.content_sha256:'Saved process: no exact revision linked.'));
+          stages.appendChild(el('li','Opportunity revision '+data.idea.revision+' · '+(STATE_LABELS[data.idea.state]||data.idea.state)+'. Review state does not grant execution authority.'));
+          journeyHost.append(stages,el('div','Checked local references now, across separate stores. Refresh after changes. Reported specifications do not prove which artifact ran; source-check results are not retained here.','muted'));
+          if(!data.projects.length){journeyHost.appendChild(el('p','No project artifacts recorded.'));return;}
+          const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
+          const artifact=el('div');artifact.id='owgPipelineJourneyArtifact';
+          const render=()=>{
+            const p=data.projects.find(item=>item.project_id===choice.value);if(!p)return;
+            artifact.replaceChildren();const list=el('dl');
+            const add=(label,value)=>list.append(el('dt',label),el('dd',value));
+            add('Project artifact',p.project_id+' · '+(p.idea_revision_is_current?'current idea revision':'historical idea revision'));
+            add('Specification SHA-256',p.spec_sha256);add('ZIP SHA-256',p.archive_sha256);
+            artifact.appendChild(list);
+            const linked=el('ul');
+            const labels={matching_reported_specification:'Matching reported specification',unavailable:'Reported deployment unavailable',specification_mismatch:'Reported specification changed',unbound_specification:'Reported specification unbound',check_failed:'Reported specification could not be checked'};
+            p.reported_specifications.forEach(r=>linked.appendChild(el('li',r.deployment_id+' · '+(labels[r.status]||'Unknown report status')+(r.reported_run_count===null?'':' · '+r.reported_run_count+' reported runs')+'. Artifact execution and individual run/case attribution are unverified.')));
+            artifact.append(el('h5','Reported specifications'),p.reported_specifications.length?linked:el('p','No reported specifications linked.'));
+            const checks=p.source_check_exports;
+            artifact.append(el('h5','Source-check exports'),el('p',checks.count?checks.count+' recorded · latest '+checks.last_export_at+' · document SHA-256 '+checks.last_document_sha256+'. Receipt and result are not retained; no outcome can be inferred from this record.':'No source-check exports recorded.'));
+            artifact.appendChild(el('p','Business outcomes and agent causality remain unverified.'));
+          };
+          choice.onchange=render;journeyHost.append(field('Recorded project',choice),artifact);render();
+          if(data.projects_truncated)journeyHost.appendChild(el('p','Only the first '+data.max_projects+' projects are shown.'));
+        }catch(e){if(generation===detailGeneration)journeyHost.replaceChildren(el('div',e.message,'muted'));}
+        finally{journeyButton.disabled=false;journeyButton.textContent='Refresh evidence journey';}
+      };
+      box.append(journeyButton,journeyHost);
       if(idea.process_reference){
         const projects=el('div');projects.id='owgPipelineProjects';
         projects.appendChild(el('h4','Agent project exports'));
