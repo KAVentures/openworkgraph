@@ -351,8 +351,8 @@ added by hand untouched.
 
 #### Uncertainty from routing and arrivals
 
-A what-if run uses the routing shares and arrival rate measured from the log as if they were
-exact. With few cases behind a branch they are not. `"uncertainty": {"replications": 2–50}` in a
+A what-if run uses the routing shares, arrival rate and activity times measured from the log as if
+they were exact. With few cases behind a branch they are not. `"uncertainty": {"replications": 2–50}` in a
 scenario repeats the paired baseline and scenario simulation with parameters drawn from what the
 log supports:
 
@@ -361,9 +361,13 @@ log supports:
   three thousand times.
 - **Arrival rate:** drawn from a Gamma distribution over the number of selected case starts and
   their time span.
-- **Fixed values:** paths and `arrivals_per_hour` you entered stay as entered, and activity times
-  stay at their measured values. The intervals leave out activity-time uncertainty and any change
-  in the process that the log does not show.
+- **Activity times:** each measured time is scaled by a Gamma draw with as many observations as gaps
+  it was measured from (`observed_gaps` in the calibration). This is exact for the mean of
+  exponential times; the median and mean scale together. A time seen five times varies far more
+  than one seen five thousand times, and a first activity with no gap is not drawn.
+- **Fixed values:** paths, `arrivals_per_hour` and minutes you entered stay as entered. Resources
+  and the process structure are not varied, and the intervals leave out any change in the process
+  that the log does not show.
 - **Random numbers:** each replication draws its own simulation random numbers and shares them
   between baseline and scenario. The intervals include simulation noise, and the change stays
   paired: an unchanged scenario shows no change in any replication.
@@ -373,15 +377,17 @@ The point results are unchanged. The response adds `uncertainty`, giving:
 - median and 95% ranges of the p50 and p90 cycle times for both runs and their change;
 - how many replications make the scenario's median faster, and how many overload an activity;
 - each measured path's observed case count and drawn share;
+- each measured activity's gap count and drawn minutes;
 - the drawn baseline arrival rate.
 
 Replications × cases × 2 runs may not exceed 400,000. The tests check the drawn share against its
-Beta distribution, and check that the 95% routing range covers the true share in 90–99% of 300
-simulated logs. With 40 cases the long branch's range is more than three times as wide as with
+Beta distribution and the drawn times against their Gamma spread. They check that the 95% ranges
+cover the true routing share, and the true mean of exponential times from 30 gaps, in 90–99% of
+300 simulated logs. With 40 cases the long branch's range is more than three times as wide as with
 2,000.
 
-In the dashboard, "Uncertainty replications" adds an interval table. Routing and arrivals still as
-measured are left to the server to draw; values you edited stay as entered.
+In the dashboard, "Uncertainty replications" adds interval tables. Routing, arrivals and minutes
+still as measured are left to the server to draw; values you edited stay as entered.
 
 #### Shared resource pools
 

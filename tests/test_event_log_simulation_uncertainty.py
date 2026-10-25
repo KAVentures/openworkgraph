@@ -124,3 +124,50 @@ def test_invalid_uncertainty_settings_are_refused(spec, message):
 def test_the_simulation_work_budget_is_enforced():
     with pytest.raises(workspace.EventLogWorkspaceError, match="400,000"):
         sim.what_if(_branching(30), {"cases": 5000, "uncertainty": {"replications": 50}})
+
+
+def test_measured_activity_times_vary_with_how_often_they_were_seen():
+    base = {"calibrated_cases": 50, "arrivals_per_hour": None, "paths": [{"activities": ["A", "B"], "weight": 1.0}],
+            "activities": {"A": {"minutes": 0, "mean_minutes": 0, "observed_gaps": 0, "resources": 1},
+                           "B": {"minutes": 41.6, "mean_minutes": 60.0, "observed_gaps": 100, "resources": 1}}}
+    rng = random.Random(5)
+    draws = [uncertainty.draw(base, rng)["activities"] for _ in range(4000)]
+    b = [d["B"]["mean_minutes"] for d in draws]
+    assert statistics.mean(b) == pytest.approx(60, rel=0.01)
+    assert statistics.stdev(b) == pytest.approx(6, rel=0.08)          # 60 / sqrt(100)
+    ratio = {round(d["B"]["minutes"] / d["B"]["mean_minutes"], 9) for d in draws}
+    assert ratio == {round(41.6 / 60, 9)}                              # median and mean scale together
+    assert all(d["A"] == base["activities"]["A"] for d in draws)       # a time without gaps is not drawn
+
+
+def test_activity_time_ranges_cover_the_true_mean_at_about_the_stated_level():
+    rng, covered, trials = random.Random(13), 0, 300
+    for _ in range(trials):
+        sample = [rng.expovariate(1 / 60) for _ in range(30)]
+        mean = statistics.mean(sample)
+        base = {"calibrated_cases": 30, "arrivals_per_hour": None, "paths": [{"activities": ["B"], "weight": 1.0}],
+                "activities": {"B": {"minutes": mean, "mean_minutes": mean, "observed_gaps": 30, "resources": 1}}}
+        drawn = sorted(uncertainty.draw(base, rng)["activities"]["B"]["mean_minutes"] for _ in range(400))
+        covered += drawn[9] <= 60 <= drawn[390]
+    assert 0.9 <= covered / trials <= 0.99
+
+
+def test_entered_minutes_stay_fixed_and_measured_minutes_are_reported(monkeypatch):
+    seen = []
+    real = sim.simulate
+
+    def record(model, samples=None):
+        seen.append((model["label"], model["activities"]["B"]["minutes"]))
+        return real(model, samples)
+    monkeypatch.setattr(sim, "simulate", record)
+    few = sim.what_if(_branching(40), {"label": "fixed", "cases": 200, "activities": {"B": {"minutes": 7}},
+                                       "uncertainty": {"replications": 8}})["uncertainty"]
+    replicated = seen[2:]
+    assert {m for label, m in replicated if label == "fixed"} == {7}
+    assert len({m for label, m in replicated if label == ""}) == 8
+    many = sim.what_if(_branching(2000), {"cases": 200, "uncertainty": {"replications": 8}})["uncertainty"]
+    by = lambda u: {r["activity"]: r for r in u["measured_activity_minutes"]}
+    assert by(few)["C"]["observed_gaps"] < by(many)["C"]["observed_gaps"]
+    assert _width(by(few)["C"]["drawn"]) > _width(by(many)["C"]["drawn"])
+    assert "A" not in by(few)             # the first activity has no gap to measure
+    assert few["method"] == "dirichlet_routing_gamma_arrivals_gamma_activity_times"
