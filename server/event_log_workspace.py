@@ -444,10 +444,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                             "appended identifiers conflict with the saved log (for example an object with another type)")
                 # Timed attribute values are added for new and existing objects: a newer export can carry
                 # later changes. Values the log already holds (same name, time and value) are skipped.
-                new_values = conn.execute("""INSERT INTO object_attribute_values SELECT ?, s.object_id, s.name, s.valid_from, s.value
-                    FROM object_attribute_values s WHERE s.log_id = ? AND NOT EXISTS (SELECT 1 FROM object_attribute_values t
-                      WHERE t.log_id = ? AND t.object_id = s.object_id AND t.name = s.name AND t.valid_from = s.valid_from
-                        AND t.value = s.value)""", [log_id, staging, log_id]).fetchone()[0]
+                new_values, values_over_limit = _append_values(conn, log_id, staging)
                 for table in ("event_objects", "events", "objects", "object_attribute_values"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
@@ -470,7 +467,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
-                    **_history_counts(source_format, stats, added=new_values),
+                    **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit),
                     "appended_event_id_prefix": prefix, "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
@@ -478,14 +475,49 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             conn.close()
 
 
-def _history_counts(source_format: str, stats: ReadStats, added: int | None = None) -> dict[str, Any]:
+def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -> tuple[int, int]:
+    """Add the staged timed attribute values the log does not hold yet, keeping the per-object limit.
+
+    As on import, each attribute's stored-value entry (the earliest value equal to the stored value) is
+    exempt and the limit applies to the other values, counting those the object already has. Returns
+    (added, left out over the limit)."""
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nv AS SELECT DISTINCT s.object_id, s.name, s.valid_from, s.value
+        FROM object_attribute_values s WHERE s.log_id = ? AND NOT EXISTS (SELECT 1 FROM object_attribute_values t
+          WHERE t.log_id = ? AND t.object_id = s.object_id AND t.name = s.name AND t.valid_from = s.valid_from
+            AND t.value = s.value)""", [staging, log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvs AS SELECT o.object_id, j.key AS name,
+          json_extract_string(j.value, '$') AS stored
+        FROM objects o, json_each(o.attributes) j WHERE o.log_id = ? AND o.object_id IN (SELECT object_id FROM nv)""",
+                 [log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvo AS SELECT v.object_id,
+          count(*) - count(DISTINCT v.name) FILTER (WHERE v.value = s.stored) AS others
+        FROM object_attribute_values v LEFT JOIN nvs s ON s.object_id = v.object_id AND s.name = v.name
+        WHERE v.log_id = ? AND v.object_id IN (SELECT object_id FROM nv) GROUP BY 1""", [log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvr AS SELECT n.*, coalesce(n.value = s.stored, false)
+          AND NOT EXISTS (SELECT 1 FROM object_attribute_values t WHERE t.log_id = ? AND t.object_id = n.object_id
+            AND t.name = n.name AND t.value = s.stored)
+          AND row_number() OVER (PARTITION BY n.object_id, n.name, n.value ORDER BY n.valid_from) = 1 AS head
+        FROM nv n LEFT JOIN nvs s ON s.object_id = n.object_id AND s.name = n.name""", [log_id])
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE nvk AS SELECT r.*, head OR row_number() OVER (
+          PARTITION BY r.object_id, head ORDER BY r.valid_from, r.name, r.value)
+          <= {MAX_OBJECT_ATTRIBUTE_VALUES} - coalesce(o.others, 0) AS keep
+        FROM nvr r LEFT JOIN nvo o ON o.object_id = r.object_id""")
+    added = conn.execute("""INSERT INTO object_attribute_values SELECT ?, object_id, name, valid_from, value
+        FROM nvk WHERE keep""", [log_id]).fetchone()[0]
+    left_out = conn.execute("SELECT count(*) FROM nvk WHERE NOT keep").fetchone()[0]
+    return added, left_out
+
+
+def _history_counts(source_format: str, stats: ReadStats, added: int | None = None,
+                    over_limit: int = 0) -> dict[str, Any]:
     """Counts of timed object attribute values read from an OCEL file (other formats have none)."""
     if source_format not in ("ocel", "ocelxml"):
         return {}
     counts = {"read": stats.object_attribute_values,
               "without_timezone_qualified_time": stats.object_attribute_values_without_time,
-              "over_per_object_limit": stats.object_attribute_values_over_limit,
-              "per_object_limit": MAX_OBJECT_ATTRIBUTE_VALUES}
+              "over_per_object_limit": stats.object_attribute_values_over_limit + over_limit,
+              "per_object_limit": MAX_OBJECT_ATTRIBUTE_VALUES,
+              "per_object_limit_excludes_stored_values": True}
     if added is not None:
         counts["added"] = added
     return {"object_attribute_values": counts}
