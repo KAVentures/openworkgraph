@@ -1,7 +1,7 @@
 """Temporal object attributes in object-centric logs (#370 R24)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 import json
 import os
@@ -90,16 +90,20 @@ def test_readers_keep_every_timed_value_and_the_first_listed_value():
 
 
 def test_per_object_value_limit_is_counted(monkeypatch):
-    monkeypatch.setattr(formats, "MAX_OBJECT_ATTRIBUTE_VALUES", 2)
+    monkeypatch.setattr(formats, "MAX_OBJECT_ATTRIBUTE_VALUES", 1)
     stats = formats.ReadStats()
-    list(formats.read_ocel_json(BytesIO(json.dumps(_orders()).encode()), stats=stats))
-    assert stats.object_attribute_values_over_limit == 2  # o1 has four timed values
+    o1 = next(r for r in formats.read_ocel_json(BytesIO(json.dumps(_orders()).encode()), stats=stats)
+              if isinstance(r, formats.ObjectRecord))
+    # o1's stored-value entries (status created, region EU) are exempt; one of its two other values fits.
+    assert stats.object_attribute_values_over_limit == 1
+    assert sorted(v for _, _, v in o1.history) == ["EU", "created", "shipped"]
 
 
 def test_changes_and_stored_value_comparison_match_hand_counts():
     made = _import(_orders())
     assert made["object_attribute_values"] == {"read": 7, "without_timezone_qualified_time": 1,
-                                               "over_per_object_limit": 0, "per_object_limit": 1000}
+                                               "over_per_object_limit": 0, "per_object_limit": 1000,
+                                               "per_object_limit_excludes_stored_values": True}
     result = attributes.attribute_changes(made["log_id"])
     assert result["stored_value_comparison_complete"] and result["execution_authorized"] is False
     status = _status(result)
@@ -272,3 +276,80 @@ def test_append_keeping_a_static_value_still_exports_it():
         # An attribute only an append added has no stored value; OCEL cannot say so, so a re-import stores
         # its earliest value. Existing stored values are never replaced.
         assert _stored(again) == {"region": "EU", "priority": "low"}
+
+
+def _many(first, n, start="2024-01-01T00:00:00Z"):
+    """One order whose status has a stored first value (``first`` time, None for none) and n later values."""
+    base = _utc(start)
+    status = [{"name": "status", "value": "created"} if first is None else _value("status", first, "created")]
+    status += [_value("status", (base + timedelta(minutes=i)).isoformat().replace("+00:00", "Z"), f"v{i:04d}")
+               for i in range(n)]
+    return {"objectTypes": [], "eventTypes": [], "objects": [{"id": "o", "type": "order", "attributes": status}],
+            "events": [{"id": "s", "type": "Ship", "time": "2024-02-01T00:00:00Z",
+                        "relationships": [{"objectId": "o", "qualifier": ""}]}]}
+
+
+def _history(log_id):
+    conn = workspace._connect()
+    try:
+        return conn.execute("""SELECT name, valid_from, value FROM object_attribute_values WHERE log_id = ?
+            ORDER BY 1, 2, 3""", [log_id]).fetchall()
+    finally:
+        conn.close()
+
+
+def _roundtrip(log_id, fmt):
+    out = StringIO()
+    workspace.export_log(log_id, fmt, out)
+    return workspace.import_log(BytesIO(out.getvalue().encode()), name="again", source_format=fmt)
+
+
+@pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
+@pytest.mark.parametrize("first", [None, "2023-12-31T00:00:00Z"])
+def test_a_history_at_the_limit_survives_export(fmt, first):
+    made = _import(_many(first, formats.MAX_OBJECT_ATTRIBUTE_VALUES))
+    assert made["object_attribute_values"]["over_per_object_limit"] == 0
+    again = _roundtrip(made["log_id"], fmt)
+    assert again["object_attribute_values"]["over_per_object_limit"] == 0
+    original, copied = _history(made["log_id"]), _history(again["log_id"])
+    assert copied[-1][2] == original[-1][2] == "v0999" and _stored(again["log_id"]) == {"status": "created"}
+    # Only the stored value gains an entry, at the unknown-time origin, when it had no time of its own.
+    assert set(original) <= set(copied) and len(copied) - len(original) == (first is None)
+
+
+@pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
+def test_appends_keep_the_limit_and_count_what_they_leave_out(fmt):
+    log = _import(_many(None, 990))["log_id"]
+    later = _many(None, 20, start="2024-03-01T00:00:00Z")
+    appended = workspace.append_log(log, BytesIO(json.dumps(later).encode()), source_format="ocel")
+    assert (appended["object_attribute_values"]["added"],
+            appended["object_attribute_values"]["over_per_object_limit"]) == (10, 10)
+    assert len(_history(log)) == formats.MAX_OBJECT_ATTRIBUTE_VALUES
+    again = _roundtrip(log, fmt)
+    assert again["object_attribute_values"]["over_per_object_limit"] == 0
+    assert set(_history(log)) <= set(_history(again["log_id"])) and _stored(again["log_id"]) == {"status": "created"}
+
+
+@pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
+def test_append_cannot_push_an_object_past_the_attribute_name_limit(fmt):
+    names = [f"z{i:02d}" for i in range(formats.MAX_ATTRIBUTES)]
+    doc = _untimed_first("2024-01-01T00:00:00Z")
+    doc["objects"][0]["attributes"] = [_value(n, "2024-01-01T00:00:00Z", "kept") for n in names]
+    log = _import(doc)["log_id"]
+    newer = json.loads(json.dumps(doc))
+    newer["objects"][0]["attributes"] = [_value("a_new", "2024-01-02T00:00:00Z", "later"),
+                                         _value("z00", "2024-01-03T00:00:00Z", "changed")]
+    counts = workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format="ocel")["object_attribute_values"]
+    assert (counts["added"], counts["over_attribute_name_limit"], counts["attribute_name_limit"]) == (1, 1, 32)
+    again = _roundtrip(log, fmt)["log_id"]
+    assert _stored(again) == _stored(log) == {n: "kept" for n in names}
+    assert set(_history(log)) == set(_history(again))
+
+
+def test_export_refuses_an_object_it_cannot_represent(monkeypatch):
+    log = _import(_orders())["log_id"]
+    monkeypatch.setattr(workspace, "MAX_ATTRIBUTES", 1)  # o1 has two names
+    out = StringIO()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no OCEL file was written"):
+        workspace.export_log(log, "ocel", out)
+    assert out.getvalue() == ""

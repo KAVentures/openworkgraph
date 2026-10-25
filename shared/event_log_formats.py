@@ -26,7 +26,7 @@ MAX_ID = 200
 MAX_ACTIVITY = 200
 MAX_ATTRIBUTES = 32
 MAX_ATTRIBUTE_VALUE = 500
-MAX_OBJECT_ATTRIBUTE_VALUES = 1000   # timed attribute values kept per object (OCEL 2.0)
+MAX_OBJECT_ATTRIBUTE_VALUES = 1000   # timed attribute values kept per object besides each stored value (OCEL 2.0)
 MAX_OCEL_BYTES = 256 * 1024 * 1024
 CASE_TYPE = "case"
 _XES_NS = "{http://www.xes-standard.org/}"
@@ -272,18 +272,27 @@ def _ocel_attributes(items: Any) -> dict[str, str]:
 
 def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, str],
                     stats: ReadStats) -> list[tuple[str, datetime, str]]:
-    """Timed (name, time, value) entries for the attribute names kept in ``attributes``, bounded per object."""
+    """Timed (name, time, value) entries for the attribute names kept in ``attributes``, bounded per object.
+
+    The first listed entry of each name, which gives the stored value, is always kept when timed (at most
+    MAX_ATTRIBUTES per object); the limit applies to the other entries. An export lists the stored value
+    first, so a re-import keeps every value the original import kept."""
     history: list[tuple[str, datetime, str]] = []
+    seen: set[str] = set()
+    others = 0
     for key, time, value in values:
         name = _text(key, 80)
         if name not in attributes:
             continue
+        first = name not in seen
+        seen.add(name)
         stamp = parse_timestamp(time)
         if stamp is None:
             stats.object_attribute_values_without_time += 1
-        elif len(history) >= MAX_OBJECT_ATTRIBUTE_VALUES:
+        elif not first and others >= MAX_OBJECT_ATTRIBUTE_VALUES:
             stats.object_attribute_values_over_limit += 1
         else:
+            others += not first
             history.append((name, stamp, _text(value, MAX_ATTRIBUTE_VALUE)))
     stats.object_attribute_values += len(history)
     return history

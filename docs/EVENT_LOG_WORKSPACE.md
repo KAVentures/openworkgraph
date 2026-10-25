@@ -92,9 +92,9 @@ time. The workspace keeps two things:
 
 - the **stored value**: the first listed value per attribute, as before. Case attributes, filters
   and analyses use it;
-- every **timed value** (at most 1,000 per object). Values whose time is missing or has no
-  timezone are not kept. The import and append responses count them in `object_attribute_values`,
-  with any values over the limit.
+- every **timed value**: each attribute's stored-value entry, plus at most 1,000 other values
+  per object. Values whose time is missing or has no timezone are not kept. The import and
+  append responses count them in `object_attribute_values`, with any values over the limit.
 
 OCEL exports write the timed values with their own times, listing the stored value first, so a
 re-import keeps both. A stored value without a timed value of its own (its time was missing or
@@ -103,7 +103,14 @@ observed time, so a re-import keeps it as the stored value and reports it as an 
 without a known time. An attribute that only an append added to an existing object has timed
 values but no stored value; OCEL cannot express that, so a re-import stores its earliest value. An
 append adds timed values for new and existing objects (a newer export can carry later changes)
-and skips values the log already holds. The stored value of an existing object is never changed.
+and skips values the log already holds. It keeps the same per-object limit, counting the values
+the object already has, and reports the values it leaves out in `over_per_object_limit`. An existing
+object also keeps at most 32 attribute names, stored or timed. Values of further new names are left
+out and reported in `over_attribute_name_limit`. The stored value of an existing object is never
+changed. Because the value limit excludes each stored-value entry and the name limit matches what
+a re-import reads, every value an import or append keeps survives an OCEL export and re-import.
+An OCEL export of an object that would not (more than 32 names) is refused before any file is
+written.
 
 `GET /v1/event-logs/{log_id}/object-attributes` (dashboard session only; optional `object_type`,
 and `object_id` for one object's timeline of at most 200 values) reports, per object type and
