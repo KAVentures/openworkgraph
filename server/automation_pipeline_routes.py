@@ -13,6 +13,7 @@ from . import automation_pipeline as pipeline
 from . import opportunity_projects
 from . import project_report_links
 from . import project_source_checks
+from . import opportunity_journey
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
@@ -136,6 +137,12 @@ async def link_project_report(request: Request, idea_id: str):
 async def unlink_project_report(request: Request, idea_id: str):
     _require_dashboard(request)
     return await run_in_threadpool(_respond, project_report_links.unlink, idea_id, await _json(request))
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/journey")
+def idea_journey(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(opportunity_journey.journey, idea_id)
 
 
 @router.get("/v1/automation-pipeline/{idea_id}/projects")

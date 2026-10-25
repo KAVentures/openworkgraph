@@ -100,6 +100,7 @@ def _connect() -> sqlite3.Connection:
     conn.execute("""CREATE TABLE IF NOT EXISTS project_source_exports (
         export_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, idea_revision INTEGER NOT NULL,
         created_at TEXT NOT NULL, document_sha256 TEXT NOT NULL)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS project_source_exports_by_project ON project_source_exports(project_id)")
     try:
         os.chmod(path, 0o600)
     except OSError:
