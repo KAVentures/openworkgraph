@@ -444,7 +444,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                             "appended identifiers conflict with the saved log (for example an object with another type)")
                 # Timed attribute values are added for new and existing objects: a newer export can carry
                 # later changes. Values the log already holds (same name, time and value) are skipped.
-                new_values, values_over_limit = _append_values(conn, log_id, staging)
+                new_values, values_over_limit, values_over_names = _append_values(conn, log_id, staging)
                 for table in ("event_objects", "events", "objects", "object_attribute_values"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
@@ -467,7 +467,8 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
-                    **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit),
+                    **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit,
+                                      over_names=values_over_names),
                     "appended_event_id_prefix": prefix, "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
@@ -479,8 +480,10 @@ def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -
     """Add the staged timed attribute values the log does not hold yet, keeping the per-object limit.
 
     As on import, each attribute's stored-value entry (the earliest value equal to the stored value) is
-    exempt and the limit applies to the other values, counting those the object already has. Returns
-    (added, left out over the limit)."""
+    exempt and the limit applies to the other values, counting those the object already has. An existing
+    object also keeps at most MAX_ATTRIBUTES attribute names (stored or timed), so an OCEL export can carry
+    every name and a re-import never drops a stored attribute. Returns (added, left out over the value
+    limit, left out over the name limit)."""
     conn.execute("""CREATE OR REPLACE TEMP TABLE nv AS SELECT DISTINCT s.object_id, s.name, s.valid_from, s.value
         FROM object_attribute_values s WHERE s.log_id = ? AND NOT EXISTS (SELECT 1 FROM object_attribute_values t
           WHERE t.log_id = ? AND t.object_id = s.object_id AND t.name = s.name AND t.valid_from = s.valid_from
@@ -489,6 +492,15 @@ def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -
           json_extract_string(j.value, '$') AS stored
         FROM objects o, json_each(o.attributes) j WHERE o.log_id = ? AND o.object_id IN (SELECT object_id FROM nv)""",
                  [log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvn AS SELECT object_id, name FROM nvs UNION
+        SELECT object_id, name FROM object_attribute_values WHERE log_id = ? AND object_id IN (SELECT object_id FROM nv)""",
+                 [log_id])
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE nvx AS SELECT n.object_id, n.name FROM (
+          SELECT object_id, name, row_number() OVER (PARTITION BY object_id ORDER BY name) AS k
+          FROM (SELECT DISTINCT object_id, name FROM nv) WHERE (object_id, name) NOT IN (SELECT object_id, name FROM nvn)) n
+        LEFT JOIN (SELECT object_id, count(*) AS names FROM nvn GROUP BY 1) e ON e.object_id = n.object_id
+        WHERE n.k > {MAX_ATTRIBUTES} - coalesce(e.names, 0)""")
+    names_left_out = conn.execute("""DELETE FROM nv WHERE (object_id, name) IN (SELECT object_id, name FROM nvx)""").fetchone()[0]
     conn.execute("""CREATE OR REPLACE TEMP TABLE nvo AS SELECT v.object_id,
           count(*) - count(DISTINCT v.name) FILTER (WHERE v.value = s.stored) AS others
         FROM object_attribute_values v LEFT JOIN nvs s ON s.object_id = v.object_id AND s.name = v.name
@@ -505,11 +517,11 @@ def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -
     added = conn.execute("""INSERT INTO object_attribute_values SELECT ?, object_id, name, valid_from, value
         FROM nvk WHERE keep""", [log_id]).fetchone()[0]
     left_out = conn.execute("SELECT count(*) FROM nvk WHERE NOT keep").fetchone()[0]
-    return added, left_out
+    return added, left_out, names_left_out
 
 
 def _history_counts(source_format: str, stats: ReadStats, added: int | None = None,
-                    over_limit: int = 0) -> dict[str, Any]:
+                    over_limit: int = 0, over_names: int = 0) -> dict[str, Any]:
     """Counts of timed object attribute values read from an OCEL file (other formats have none)."""
     if source_format not in ("ocel", "ocelxml"):
         return {}
@@ -520,6 +532,8 @@ def _history_counts(source_format: str, stats: ReadStats, added: int | None = No
               "per_object_limit_excludes_stored_values": True}
     if added is not None:
         counts["added"] = added
+        counts["over_attribute_name_limit"] = over_names
+        counts["attribute_name_limit"] = MAX_ATTRIBUTES
     return {"object_attribute_values": counts}
 
 
@@ -772,6 +786,13 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
             conn = _connect()
             try:
                 _check_log(conn, log_id)
+                # Refuse before writing anything: a re-import keeps MAX_ATTRIBUTES names per object.
+                if conn.execute(f"""SELECT 1 FROM (SELECT object_id, name FROM object_attribute_values WHERE log_id = ?
+                        UNION SELECT o.object_id, j.key FROM objects o, json_each(o.attributes) j WHERE o.log_id = ?)
+                        GROUP BY object_id HAVING count(*) > {MAX_ATTRIBUTES} LIMIT 1""", [log_id, log_id]).fetchone():
+                    raise EventLogWorkspaceError(
+                        f"an object has more than {MAX_ATTRIBUTES} attribute names, more than an OCEL re-import keeps; "
+                        "no OCEL file was written")
                 history: dict[str, list[tuple[str, datetime, str]]] = {}
                 for object_id, name, at, value in conn.execute(
                         "SELECT object_id, name, valid_from, value FROM object_attribute_values WHERE log_id = ? ORDER BY 1, 2, 3, 4",

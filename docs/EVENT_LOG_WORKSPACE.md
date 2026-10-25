@@ -104,9 +104,13 @@ without a known time. An attribute that only an append added to an existing obje
 values but no stored value; OCEL cannot express that, so a re-import stores its earliest value. An
 append adds timed values for new and existing objects (a newer export can carry later changes)
 and skips values the log already holds. It keeps the same per-object limit, counting the values
-the object already has, and reports the values it leaves out in `over_per_object_limit`. The stored
-value of an existing object is never changed. Because the limit leaves out each stored-value
-entry, every value an import or append keeps survives an OCEL export and re-import.
+the object already has, and reports the values it leaves out in `over_per_object_limit`. An existing
+object also keeps at most 32 attribute names, stored or timed. Values of further new names are left
+out and reported in `over_attribute_name_limit`. The stored value of an existing object is never
+changed. Because the value limit excludes each stored-value entry and the name limit matches what
+a re-import reads, every value an import or append keeps survives an OCEL export and re-import.
+An OCEL export of an object that would not (more than 32 names) is refused before any file is
+written.
 
 `GET /v1/event-logs/{log_id}/object-attributes` (dashboard session only; optional `object_type`,
 and `object_id` for one object's timeline of at most 200 values) reports, per object type and

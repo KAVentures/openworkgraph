@@ -328,3 +328,28 @@ def test_appends_keep_the_limit_and_count_what_they_leave_out(fmt):
     again = _roundtrip(log, fmt)
     assert again["object_attribute_values"]["over_per_object_limit"] == 0
     assert set(_history(log)) <= set(_history(again["log_id"])) and _stored(again["log_id"]) == {"status": "created"}
+
+
+@pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
+def test_append_cannot_push_an_object_past_the_attribute_name_limit(fmt):
+    names = [f"z{i:02d}" for i in range(formats.MAX_ATTRIBUTES)]
+    doc = _untimed_first("2024-01-01T00:00:00Z")
+    doc["objects"][0]["attributes"] = [_value(n, "2024-01-01T00:00:00Z", "kept") for n in names]
+    log = _import(doc)["log_id"]
+    newer = json.loads(json.dumps(doc))
+    newer["objects"][0]["attributes"] = [_value("a_new", "2024-01-02T00:00:00Z", "later"),
+                                         _value("z00", "2024-01-03T00:00:00Z", "changed")]
+    counts = workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format="ocel")["object_attribute_values"]
+    assert (counts["added"], counts["over_attribute_name_limit"], counts["attribute_name_limit"]) == (1, 1, 32)
+    again = _roundtrip(log, fmt)["log_id"]
+    assert _stored(again) == _stored(log) == {n: "kept" for n in names}
+    assert set(_history(log)) == set(_history(again))
+
+
+def test_export_refuses_an_object_it_cannot_represent(monkeypatch):
+    log = _import(_orders())["log_id"]
+    monkeypatch.setattr(workspace, "MAX_ATTRIBUTES", 1)  # o1 has two names
+    out = StringIO()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no OCEL file was written"):
+        workspace.export_log(log, "ocel", out)
+    assert out.getvalue() == ""
