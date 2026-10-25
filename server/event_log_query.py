@@ -4,7 +4,8 @@ A typed, bounded alternative to writing SQL or PQL: pick a level (cases or
 events), optional filters, up to two dimensions and up to four measures.
 Case-level analyses can also define up to four typed *case metrics* (derived
 per-case values such as the time from one activity to another, how often an
-activity occurs, or a numeric attribute with its declared unit) and measure
+activity occurs, a numeric attribute with its declared unit, or bounded typed
+arithmetic over earlier metrics and finite constants) and measure
 them; named metric definitions can be saved with the log and reused. The
 spec is validated against fixed vocabularies and compiled to a parameterized
 query; no user text ever becomes SQL. Analyses can be saved with the log and
@@ -21,6 +22,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from . import event_log_cohorts as cohorts
+from . import event_log_expressions as expressions
 from . import event_log_workspace as workspace
 
 MAX_ROWS = 500
@@ -94,7 +96,7 @@ class EventAttributeSum(_Strict):
     unit: Unit
 
 
-Metric = Annotated[TimeBetween | ActivityCount | CaseAttributeNumber | EventAttributeSum, Field(discriminator="kind")]
+Metric = Annotated[TimeBetween | ActivityCount | CaseAttributeNumber | EventAttributeSum | expressions.Arithmetic, Field(discriminator="kind")]
 METRIC_FORMAT = "openworkgraph.event-log-case-metric.v1"
 
 
@@ -155,6 +157,10 @@ def parse(spec: Any) -> AnalysisSpec:
         raise workspace.EventLogWorkspaceError("case metric names must be different")
     if parsed.metrics and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("case metrics apply to case-level analyses")
+    try:
+        expressions.units(parsed.metrics)
+    except ValueError as exc:
+        raise workspace.EventLogWorkspaceError(str(exc)) from None
     for measure in parsed.measures:
         if measure.of is not None and measure.of not in _CASE_VALUES and not (
                 measure.of.startswith("metric:") and measure.of[7:] in names):
@@ -192,11 +198,16 @@ def _path(attribute: str) -> str:
 def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Add one DOUBLE column per case metric to ``qc`` and report how many cases have a value."""
     columns, coverage = {}, []
+    metric_units = expressions.units(metrics)
     for i, metric in enumerate(metrics):
         column = f"mv{i}"
         conn.execute(f"ALTER TABLE qc ADD COLUMN {column} DOUBLE")
         extra: dict[str, Any] = {}
-        if metric.kind == "time_between":
+        if metric.kind == "arithmetic":
+            extra = expressions.materialize(conn, metric, columns, column)
+            extra["unit_powers"] = metric_units[metric.name]
+            unit = expressions.unit_text(metric_units[metric.name])
+        elif metric.kind == "time_between":
             pick = {"first": "min", "last": "max"}
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE qm AS SELECT case_id,
                   {pick[metric.from_occurrence]}(ts) FILTER (WHERE activity = ?) AS a,

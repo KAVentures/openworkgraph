@@ -1404,6 +1404,21 @@
       return {name,kind:'time_between',from_activity:values.from,to_activity:values.to,from_occurrence:values.fromOccurrence||'first',to_occurrence:values.toOccurrence||'first'};
     }
     if(values.kind==='activity_count'){if(!values.activity)throw new Error('Choose the activity to count.');return {name,kind:'activity_count',activity:values.activity};}
+    if(values.kind==='arithmetic'){
+      const operand=side=>{
+        if(values[side+'Kind']==='constant'){
+          const raw=String(values[side+'Value']??'').trim(),value=Number(raw),unit=String(values[side+'Unit']||'ratio').trim();
+          if(!raw||!Number.isFinite(value))throw new Error('Enter a finite constant for the '+side+' operand.');
+          if(!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(unit))throw new Error('Enter the constant unit, or ratio for a dimensionless number.');
+          return {kind:'constant',value,unit};
+        }
+        const ref=String(values[side+'Metric']||'');
+        if(!/^[a-z][a-z0-9_]{0,39}$/.test(ref)||ref===name)throw new Error('Choose an earlier metric for the '+side+' operand.');
+        return {kind:'metric',name:ref};
+      };
+      if(!['add','subtract','multiply','divide'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
+      return {name,kind:'arithmetic',expression_version:'1',operation:values.operation,left:operand('left'),right:operand('right')};
+    }
     if(values.kind==='event_attribute_sum'||values.kind==='case_attribute_number'){
       const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
       if(!attribute)throw new Error('Enter the attribute name.');
@@ -1412,10 +1427,14 @@
     }
     throw new Error('Choose what the metric measures.');
   }
-  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute']];
+  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
     if(m.kind==='activity_count')return m.name+': number of '+m.activity+' events';
+    if(m.kind==='arithmetic'){
+      const text=o=>o.kind==='metric'?o.name:String(o.value)+' '+o.unit;
+      return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷'}[m.operation])+' '+text(m.right);
+    }
     return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
   }
 
@@ -1451,27 +1470,49 @@
     const occurrences=[['first','first'],['last','last']];
     const mFromOcc=select('owgMetricFromOccurrence',occurrences),mToOcc=select('owgMetricToOccurrence',occurrences);
     const mAttribute=input('owgMetricAttribute','text','amount'),mUnit=input('owgMetricUnit','text','EUR');mUnit.maxLength=20;
+    const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide']]);
+    const operands={};
+    for(const side of ['left','right']){
+      const title=side==='left'?'Left':'Right';
+      operands[side]={kind:select('owgMetric'+title+'Kind',[['metric','Earlier metric'],['constant','Typed constant']]),
+        metric:select('owgMetric'+title+'Metric',[]),value:input('owgMetric'+title+'Value','number','constant'),unit:input('owgMetric'+title+'Unit','text','ratio')};
+      operands[side].value.step='any';operands[side].unit.maxLength=20;
+    }
     const mAdd=button('Add metric to this analysis','secondary');mAdd.id='owgMetricAdd';
     const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
     const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
-      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit)};
+      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),operation:field('Operation',mOperation)};
+    for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
-      show(mf.activity,k==='activity_count');show(mf.attribute,k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,k.endsWith('_number')||k.endsWith('_sum'));};
+      show(mf.activity,k==='activity_count');show(mf.attribute,k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,k.endsWith('_number')||k.endsWith('_sum'));
+      show(mf.operation,k==='arithmetic');
+      for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])show(mf[side+key],k==='arithmetic'&&(key==='kind'||(key==='metric'?operands[side].kind.value==='metric':operands[side].kind.value==='constant')));
+    };
+    operands.left.kind.onchange=operands.right.kind.onchange=mSync;
     mKind.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
     metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define a value per case, then choose it as a measure. Times are in seconds between recorded events; attribute values keep the unit you declare and are never converted.','muted'),metricRow,metricList,library);
-    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value});
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,operation:mOperation.value,
+      ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
       if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
+      if(metric.kind==='arithmetic')for(const o of [metric.left,metric.right])if(o.kind==='metric'&&!metrics.some(m=>m.name===o.name))throw new Error('Add earlier metric '+o.name+' first.');
       metrics.push(metric);renderMetrics();
     }
     function renderMetrics(){
-      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{metrics.splice(i,1);renderMetrics();};item.appendChild(rm);return item;}));
+      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+        const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
+        if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
+        metrics.splice(i,1);renderMetrics();};item.appendChild(rm);return item;}));
+      for(const controls of Object.values(operands)){
+        const keep=controls.metric.value;setOptions(controls.metric,metrics.length?metrics.map(m=>[m.name,m.name]):[['','(add an earlier metric)']]);
+        if(metrics.some(m=>m.name===keep))controls.metric.value=keep;
+      }
       sync();
     }
     const saveRow=el('div',null,'row');saveRow.style.alignItems='end';saveRow.append(field('Name',name),save);
@@ -1504,7 +1545,9 @@
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
         ...(r.metrics||[]).map(c=>el('div',c.name+': '+Number(c.cases_with_value).toLocaleString()+' cases have a value, '+Number(c.cases_without_value).toLocaleString()+' do not'
-          +(c.cases_without_from_activity!==undefined?' ('+c.cases_without_from_activity+' without '+c.definition.from_activity+', '+c.cases_without_to_activity+' without '+c.definition.to_activity+', '+c.cases_where_to_precedes_from+' where '+c.definition.to_activity+' comes first)':'')+(c.cases_with_non_finite_value?' ('+c.cases_with_non_finite_value+' with a value that is not a finite number, such as NaN or an overflowing sum)':'')+'; cases without a value are left out of its measures.','muted')),
+          +(c.cases_without_from_activity!==undefined?' ('+c.cases_without_from_activity+' without '+c.definition.from_activity+', '+c.cases_without_to_activity+' without '+c.definition.to_activity+', '+c.cases_where_to_precedes_from+' where '+c.definition.to_activity+' comes first)':'')
+          +(c.definition.kind==='arithmetic'?' ('+c.cases_with_missing_operand+' with a missing operand, '+c.cases_with_zero_divisor+' with a zero divisor; unit '+c.unit+')':'')
+          +(c.cases_with_non_finite_value?' ('+c.cases_with_non_finite_value+' with a value that is not a finite number, such as NaN or an overflowing sum)':'')+'; cases without a value are left out of its measures.','muted')),
         ...(r.non_finite_results_withheld?[el('div',r.non_finite_results_withheld+' results overflowed and are shown as —.','muted')]:[]));
     }
     async function refresh(){
