@@ -87,3 +87,38 @@ full log/cohort → project → execution → independently verified receipt lin
 Dashboard-session-only APIs: `POST /v1/automation-pipeline/from-process` with
 `workflow_id`, `revision` and `content_sha256`, and
 `GET /v1/automation-pipeline/{id}/process-status`. Both are no-store.
+
+## Tracked agent project exports
+
+An approved or implemented idea with an exact current local process link can
+**Download tracked agent project**. The server checks the idea revision and
+linked process before generating, and checks the process again afterward. A
+stale edit, changed/deleted/replaced process, failed source check, unapproved
+idea or descriptive-only reference refuses a new export.
+
+The download uses the existing SDK generator. Its specification, executable
+files, disabled mappings and separate customer-intent/permission requirements
+are unchanged. The additional `opportunity.lineage.json` names the idea and its
+revision, exact process reference, specification digest, generator archive
+digest and project ID. It grants no execution or design-review authority.
+
+Only references, digests and the first export time are retained in the existing
+local pipeline database, at most 50 distinct artifacts per idea. Identical
+exports reuse the same record; a generator change produces a different artifact
+identity even if the specification is unchanged. The archive itself is not
+stored. Deleting the idea deletes these records; downloaded copies remain
+outside OWG. A failed generation records nothing. Historical artifact metadata
+remains after reassessment or source deletion, with current-revision/source
+status reported separately. Exporting never changes the idea's revision/state.
+
+This proves which bytes were generated for a selected local decision. It does
+not prove deployment, customer execution, testing, causal benefit or business
+outcomes. Checks are point-in-time, not a transaction across both source stores.
+The project-to-run-to-independent-receipt connection remains open in #370 M0/R5.
+
+Dashboard-session-only APIs:
+`POST /v1/automation-pipeline/{id}/agent-project` with `expected_revision` returns
+the ZIP and `X-OWG-Project-ID` / `X-OWG-Archive-SHA256` headers;
+`GET /v1/automation-pipeline/{id}/projects` lists bounded metadata. Both are
+no-store. The server serializes local idea edits while exporting and rechecks
+source identity; a later source change cannot revoke copies already downloaded.

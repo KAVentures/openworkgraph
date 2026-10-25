@@ -102,6 +102,34 @@
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
       }
+      if(idea.process_reference){
+        const projects=el('div');projects.id='owgPipelineProjects';
+        projects.appendChild(el('h4','Agent project exports'));
+        projects.appendChild(el('div','Download a starter for this exact idea and saved design. Tool mappings and execution remain disabled. Export records show what was generated, not a deployment or verified outcome.','muted'));
+        const exports=el('div');const message=el('div',null,'muted');message.setAttribute('role','status');
+        const refreshProjects=async()=>{
+          const result=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects')).json();
+          if(generation!==detailGeneration)return;
+          const list=el('ul');
+          result.projects.forEach(p=>list.appendChild(el('li','Idea revision '+p.idea_revision+' · '+p.created_at+' · '+(p.idea_revision_is_current?'current idea revision':'historical idea revision')+' · specification '+p.spec_sha256.slice(0,12)+'…')));
+          exports.replaceChildren(result.projects.length?list:el('div','No project exports recorded.','muted'));
+        };
+        const download=button('Download tracked agent project','secondary');download.id='owgPipelineProjectDownload';
+        download.disabled=!['approved','implemented'].includes(idea.state);
+        download.onclick=async()=>{
+          download.disabled=true;
+          try{
+            const response=await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/agent-project',{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:idea.revision})});
+            const blob=await response.blob();const url=URL.createObjectURL(blob);const link=el('a');
+            link.href=url;link.download='owg-opportunity-project.zip';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            if(generation===detailGeneration){message.textContent='Project downloaded. Its specification and archive hashes are recorded; execution remains disabled.';await refreshProjects();}
+          }catch(e){if(generation===detailGeneration)message.textContent=e.message;}
+          finally{download.disabled=!['approved','implemented'].includes(idea.state);}
+        };
+        projects.append(download,message,exports);box.appendChild(projects);
+        refreshProjects().catch(e=>{if(generation===detailGeneration)message.textContent=e.message;});
+      }
       if(idea.score)box.appendChild(el('div','Ease '+idea.score.ease_score+'/100 · '+idea.score.modeled_hours_per_month+' modeled hours per month · '+QUADRANTS[idea.score.quadrant]+(idea.assessment.compliance_review_needed?' · needs compliance review':''),'muted'));
       if(!['implemented','rejected'].includes(idea.state)){
         const answers={};const qrow=el('div',null,'row');qrow.style.alignItems='end';
