@@ -15,7 +15,7 @@ delete them.
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
-| OCEL 2.0 JSON | yes | yes | Objects, object types, events and event-to-object relationships with qualifiers. |
+| OCEL 2.0 JSON | yes | yes | Objects, object types, events and event-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same content in the OCEL 2.0 XML layout (`.xmlocel`). Objects must precede events, as the standard requires; the file is streamed, so memory stays bounded. |
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
@@ -84,6 +84,42 @@ repetitions examines at most five million links; beyond that `divergence_explana
 is false with a fixed reason, and the repetitions are still counted. Counts describe recorded
 links, not verified business relationships. 160,000 OCEL events take about one second.
 
+### Object attributes over time
+
+In OCEL 2.0 every object attribute value has a time, and a value holds until the next value of
+the same attribute; `1970-01-01T00:00:00Z` is the convention for an initial value without a known
+time. The workspace keeps two things:
+
+- the **stored value**: the first listed value per attribute, as before. Case attributes, filters
+  and analyses use it;
+- every **timed value** (at most 1,000 per object). Values whose time is missing or has no
+  timezone are not kept. The import and append responses count them in `object_attribute_values`,
+  with any values over the limit.
+
+OCEL exports write the timed values with their own times, listing the stored value first, so a
+re-import keeps both. Attributes without timed values are still written at the 1970 origin. An
+append adds timed values for new and existing objects (a newer export can carry later changes)
+and skips values the log already holds. The stored value of an existing object is never changed.
+
+`GET /v1/event-logs/{log_id}/object-attributes` (dashboard session only; optional `object_type`,
+and `object_id` for one object's timeline of at most 200 values) reports, per object type and
+attribute:
+
+- `objects_whose_value_changes`, `value_changes` and the most frequent changes (`from` → `to`);
+- initial values without a known time, and times with several different values (ambiguous);
+- `event_links`: for every event linked to an object, the value at the event's time is compared
+  with the stored value. A value recorded at the event's exact time applies to that event. The
+  result counts links where the two differ, links before any value was recorded, and links at an
+  ambiguous time.
+
+The comparison examines at most five million event links. Beyond that,
+`stored_value_comparison_complete` is false with a fixed reason; change counts stay exact. The map
+summarizes changing attributes for the selected object type. 160,000 timed values on 160,000
+events take under a second to analyze and add about 0.7 s to the import. The counts describe the
+recorded values; they do not verify when the business change really happened. Discovery source
+snapshots fingerprint events, objects and links. They do not yet include timed values, because no
+analysis reads them.
+
 ## Limits
 
 - 4 GB per import, 50 stored logs (delete one to import another).
@@ -111,6 +147,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
 | `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
+| `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
@@ -612,7 +649,8 @@ In the dashboard, choose the file, confirm local storage and press "Add file to 
 - An event the log already holds (same activity, time, resource and linked objects) is skipped
   and counted in `duplicate_events_skipped`, so overlapping exports can be appended repeatedly.
 - Appended events get a batch prefix on their identifier (`a1:`, `a2:`, …). Objects the log
-  already holds keep their attributes; new objects are added.
+  already holds keep their stored attributes; new objects are added. Timed OCEL attribute values
+  are added for both, skipping values already held (see Object attributes over time).
 - The whole append is one transaction. Malformed files, files without valid events, and
   identifier conflicts (for example an object ID reused with another type) leave the log
   unchanged.
