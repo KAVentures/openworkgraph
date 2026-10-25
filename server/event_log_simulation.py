@@ -370,13 +370,17 @@ def _measure_pattern(conn, zone: str) -> dict[str, Any]:
 
 
 def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
-              pattern_zones: tuple[str, ...] = ()) -> dict[str, Any]:
+              pattern_zones: tuple[str, ...] = (), until: datetime | None = None) -> dict[str, Any]:
     """Measure arrival rate, routing, activity times and resources from the log.
 
-    ``pattern_zones`` also measures the local hour-of-week arrival pattern of the selected cases."""
+    ``pattern_zones`` also measures the local hour-of-week arrival pattern of the selected cases.
+    ``until`` learns only from cases whose every event is at or before that time (a held-out validation)."""
     max_paths = max(1, min(int(max_paths), MAX_PATHS))
 
     def run(conn):
+        if until is not None:
+            conn.execute("DELETE FROM ce WHERE case_id IN (SELECT case_id FROM ce GROUP BY case_id HAVING max(ts) > ?)",
+                         [until])
         # Count first: never build or simulate a truncated long-case prefix.
         conn.execute("""CREATE TEMP TABLE simulation_case_counts AS
             SELECT case_id, count(*) AS events, min(ts) AS started FROM ce GROUP BY case_id""")
@@ -535,7 +539,7 @@ def _percentile(ordered: list[float], q: float) -> float | None:
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def simulate(model: dict[str, Any]) -> dict[str, Any]:
+def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[str, Any]:
     """Run one deterministic simulation; times are in seconds."""
     rng_arrival = random.Random(model["seed"])
     rng_route = random.Random(model["seed"] + 1)
@@ -614,6 +618,8 @@ def simulate(model: dict[str, Any]) -> dict[str, Any]:
     warm = int(model["cases"] * WARM_UP_SHARE)
     measured = [c for c in range(warm, model["cases"])]
     cycle = sorted(finish[c] - start[c] for c in measured)
+    if samples is not None:
+        samples.extend(cycle)
     horizon = max(finish.values()) - start[0] if finish else 0
     if calendar is not None and finish:
         horizon = calendar.working_seconds(start[0], max(finish.values()))
@@ -776,4 +782,106 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
+    }
+
+
+MAX_OBSERVED_SAMPLE = 20000
+VALIDATION_ASSUMPTIONS = [
+    "The model is calibrated only from cases whose every event is at or before the cutoff; cases that span the "
+    "cutoff are left out of both the calibration and the held-out comparison.",
+    "Held-out cases are those that started after the cutoff. Cases still running when the log ends contribute "
+    "their duration so far, so observed held-out times can be too short.",
+    "The simulated cycle times use the calibrated parameters as they are, including their stated biases.",
+    "Agreement on one held-out period is evidence about that period, not a forecast guarantee for others.",
+]
+
+
+def _ks(a: list[float], b: list[float]) -> float:
+    """Two-sample Kolmogorov–Smirnov distance between two sorted samples."""
+    i = j = 0
+    gap = 0.0
+    while i < len(a) and j < len(b):
+        x = min(a[i], b[j])
+        while i < len(a) and a[i] <= x:
+            i += 1
+        while j < len(b) and b[j] <= x:
+            j += 1
+        gap = max(gap, abs(i / len(a) - j / len(b)))
+    return gap
+
+
+def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
+    """Calibrate on the earlier cases, simulate, and compare with the cases that started after the cutoff."""
+    if not isinstance(spec, dict) or set(spec) - {"holdout_share", "cases", "seed", "distribution", "calendar",
+                                                   "arrival_pattern"}:
+        raise EventLogWorkspaceError("validation takes holdout_share, cases, seed, distribution, calendar and arrival_pattern")
+    share = _number(spec.get("holdout_share", 0.3), 0.05, 0.5, "holdout_share")
+    if isinstance(spec.get("arrival_pattern"), dict) and spec["arrival_pattern"].get("from_log"):
+        raise EventLogWorkspaceError("validation uses entered arrival weights; a pattern measured from the log would "
+                                     "include the held-out period")
+
+    def held_out(conn):
+        conn.execute("""CREATE TEMP TABLE validation_cases AS
+            SELECT case_id, min(ts) AS started, max(ts) AS ended FROM ce GROUP BY case_id""")
+        cutoff = conn.execute("SELECT quantile_disc(started, ?) FROM validation_cases", [1 - share]).fetchone()[0]
+        if cutoff is None:
+            raise EventLogWorkspaceError("the log has no cases to validate against")
+        counts = conn.execute("""SELECT count(*) FILTER (WHERE ended <= $c), count(*) FILTER (WHERE started <= $c AND ended > $c),
+              count(*) FILTER (WHERE started > $c), min(started) FILTER (WHERE started > $c),
+              max(started) FILTER (WHERE started > $c),
+              quantile_cont(epoch(ended - started), 0.5) FILTER (WHERE started > $c),
+              quantile_cont(epoch(ended - started), 0.9) FILTER (WHERE started > $c),
+              avg(epoch(ended - started)) FILTER (WHERE started > $c), max(ended)
+            FROM validation_cases""", {"c": cutoff}).fetchone()
+        sample = sorted(r[0] for r in conn.execute(f"""SELECT epoch(ended - started) FROM validation_cases
+            WHERE started > ? USING SAMPLE reservoir({MAX_OBSERVED_SAMPLE} ROWS) REPEATABLE (1)""", [cutoff]).fetchall())
+        return {"cutoff": cutoff, "counts": counts, "sample": sample}
+
+    observed = workspace._query(log_id, case_type, held_out)
+    cutoff = observed["cutoff"]
+    training, spanning, holdout, first, last, p50, p90, mean, log_end = observed["counts"]
+    if holdout < 10 or training < 10:
+        raise EventLogWorkspaceError("validation needs at least 10 cases finished before the cutoff and 10 started after it")
+    base = calibrate(log_id, case_type, until=cutoff)
+    if not base["paths"]:
+        raise EventLogWorkspaceError("no cases finished before the cutoff fit the simulation limits")
+    model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern") if k in spec},
+                           base)
+    samples: list[float] = []
+    try:
+        simulated = simulate(model, samples)
+    except (OverflowError, ValueError) as error:
+        if isinstance(error, ValueError) and "out of range" not in str(error):
+            raise
+        raise EventLogWorkspaceError("the simulated period runs past the supported date range") from None
+    ks = _ks(samples, observed["sample"]) if samples and observed["sample"] else None
+    n, m = len(samples), len(observed["sample"])
+    critical = 1.358 * math.sqrt((n + m) / (n * m)) if n and m else None
+    span_hours = (last - first).total_seconds() / 3600 if last and first and last > first else 0
+    sim_c = simulated["cycle_time_seconds"]
+
+    def relative(sim: float | None, obs: float | None) -> float | None:
+        return round(sim / obs - 1, 6) if sim is not None and obs else None
+    return {
+        "log": base["log"], "case_notion": base["case_notion"],
+        "cutoff": cutoff.isoformat() + "Z", "holdout_share": share,
+        "cases": {"calibration": base["calibrated_cases"], "finished_before_cutoff": training,
+                  "spanning_cutoff_left_out": spanning, "held_out": holdout,
+                  "held_out_sampled_for_distribution": m, "held_out_sample_limit": MAX_OBSERVED_SAMPLE},
+        "cycle_time_seconds": {
+            "simulated": sim_c,
+            "observed_held_out": {"p50": p50, "p90": p90, "mean": mean},
+            "relative_error": {"p50": relative(sim_c["p50"], p50), "p90": relative(sim_c["p90"], p90),
+                               "mean": relative(sim_c["mean"], mean)},
+        },
+        "distribution_distance": {"kolmogorov_smirnov": round(ks, 6) if ks is not None else None,
+                                  "critical_value_5pct": round(critical, 6) if critical else None,
+                                  "distributions_differ_at_5pct": (ks > critical) if ks is not None and critical else None},
+        "arrivals_per_hour": {"calibrated": base["arrivals_per_hour"],
+                              "observed_held_out": round((holdout - 1) / span_hours, 6) if span_hours > 0 else None},
+        "calibration": {k: base[k] for k in ("paths", "activities", "paths_cover_cases_share", "excluded_case_reasons")},
+        "assumptions": VALIDATION_ASSUMPTIONS + (list(ASSUMPTIONS) if model["calendar"] is None else
+                        [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS)
+                       + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else []),
+        "simulated_not_observed": True, "forecast_or_guarantee": False, "execution_authorized": False,
     }

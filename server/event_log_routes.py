@@ -544,6 +544,18 @@ async def event_log_simulate(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/simulation/validation")
+async def event_log_simulation_validation(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "validation settings")
+    try:
+        result = await run_in_threadpool(simulation.validate, log_id, spec, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/export")
 def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
