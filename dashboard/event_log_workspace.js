@@ -780,6 +780,28 @@
     if(!values.activities||values.activities.length<2)throw new Error('Choose at least two activities for the shared pool.');
     return {[name]:{resources,activities:[...values.activities]}};
   }
+  // A seasonal arrival pattern from form values, or null for a steady rate; throws a readable error.
+  function simArrivals(values){
+    const timezone=String(values.timezone||'').trim();
+    if(!values.mode)return null;
+    if(values.mode==='from_log')return timezone?{from_log:true,timezone}:{from_log:true};
+    if(values.mode!=='weights')throw new Error('Choose how cases arrive.');
+    const list=(text,count,what)=>{
+      const parts=String(text||'').split(/[\s,;]+/).filter(Boolean);
+      if(!parts.length)return null;
+      const nums=parts.map(Number);
+      if(nums.length!==count||nums.some(n=>!Number.isFinite(n)||n<0)||!nums.some(n=>n>0))throw new Error('Enter '+count+' non-negative '+what+' weights, not all zero.');
+      return nums;
+    };
+    const pattern={};
+    const hourly=list(values.hourly,24,'hourly'),daily=list(values.daily,7,'daily (Monday first)');
+    if(hourly)pattern.hourly=hourly;if(daily)pattern.daily=daily;
+    if(!hourly&&!daily)throw new Error('Enter hourly or daily arrival weights.');
+    if(timezone)pattern.timezone=timezone;
+    return pattern;
+  }
+  const arrivalText=p=>!p?'steady around the clock':(p.source==='measured_case_starts'?'measured from '+Number(p.basis.case_starts).toLocaleString()+' case starts over '+Number(p.basis.measured_days).toFixed(0)+' days':'your weights')+
+    ' ('+p.timezone+'); the busiest hour gets '+Number(p.peak_factor).toFixed(1)+'× the average rate';
   const calendarText=c=>!c?'around the clock':Object.keys(c.hours).join(', ')+' '+Object.values(c.hours)[0].map(x=>x.join('–')).join(', ')+' ('+c.timezone+')'+(c.holidays.length?', '+c.holidays.length+' holidays':'');
 
   function simulationSection(){
@@ -811,6 +833,16 @@
         const calFields={from:field('Working from',from),to:field('Until',to),zone:field('Time zone',zone),holidays:field('Holidays (dates)',holidays),scenario:field('Scenario working days',scenarioDays)};
         const syncCal=()=>Object.values(calFields).forEach(f=>show(f,!!days.value));days.onchange=syncCal;syncCal();
         calRow.append(field('Working days (both runs)',days),...Object.values(calFields));
+        // How cases arrive over the week, for both runs: steady, measured from this log, or weights you enter.
+        const arrivalMode=select('owgEventLogSimArrivalMode',[['','Steady around the clock'],['from_log','Measured from this log (hour of week)'],['weights','Weights I enter']]);
+        const hourly=input('owgEventLogSimHourly','text','24 numbers, midnight first, e.g. 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0');
+        const daily=input('owgEventLogSimDaily','text','7 numbers, Monday first, e.g. 1 1 1 1 1 0 0');
+        const arrivalFields=[field('Hourly arrival weights',hourly),field('Daily arrival weights',daily)];
+        const zoneField=calFields.zone;
+        const syncArrivals=()=>{arrivalFields.forEach(f=>show(f,arrivalMode.value==='weights'));show(zoneField,!!days.value||!!arrivalMode.value);};
+        arrivalMode.onchange=syncArrivals;days.addEventListener('change',syncArrivals);syncArrivals();
+        const arrivalRow=el('div',null,'row');arrivalRow.style.alignItems='end';
+        arrivalRow.append(field('How cases arrive (both runs)',arrivalMode),...arrivalFields);
         const paths=document.createElement('textarea');paths.id='owgEventLogSimPaths';paths.rows=4;paths.style.width='100%';paths.value=formatWeightedPaths(cal.paths||[]);
         const rows=[];
         const body=el('tbody');
@@ -835,7 +867,7 @@
         const poolRow=el('div',null,'row');poolRow.style.alignItems='end';
         poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities));
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
-        form.replaceChildren(top,calRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,poolRow,
+        form.replaceChildren(top,calRow,arrivalRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
@@ -847,6 +879,8 @@
             if(pool)scenario.pools=pool;
             const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
             const calendar=simCalendar(calValues);
+            const pattern=simArrivals({mode:arrivalMode.value,timezone:zone.value,hourly:hourly.value,daily:daily.value});
+            if(pattern)scenario.arrival_pattern=pattern;
             if(calendar){scenario.calendar=calendar;if(scenarioDays.value&&scenarioDays.value!==days.value)scenario.scenario_calendar=simCalendar({...calValues,days:scenarioDays.value});}
             run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
             const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
@@ -856,6 +890,7 @@
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+              ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
               ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
@@ -1719,6 +1754,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
