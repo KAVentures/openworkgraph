@@ -5,6 +5,7 @@
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
+  let originGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
@@ -12,7 +13,8 @@
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
-  function changed(){clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
+  function changed(){clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -168,12 +170,42 @@
     wrap.appendChild(drawing);return wrap;
   }
   function renderEditor(){
+    clearOrigins();
     clearSourceRuleChecks();
     clearRuleChecks();
     clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
     host.appendChild(el('p','Edits create a new revision. These are proposed designs and declared rules; they do not authorize an agent or establish company policy.'));
+    if((record.evidence_refs||[]).some(ref=>ref.startsWith('urn:openworkgraph:local-log-discovery:'))){
+      const origin=el('div');origin.id='owgCatalogOriginResult';origin.style.overflowWrap='anywhere';
+      host.appendChild(el('p','Local discovery snapshot reference retained. Source details stay in the imported-log store. Inspect the saved revision; unsaved graph edits have no verified relationship to it.'));
+      if(record.workflow_id&&record.revision){
+        const inspect=button('Inspect discovery source snapshots',async()=>{
+          const attempt=++originGeneration;
+          inspect.disabled=true;
+          const progress=el('p','Checking retained source fingerprints… Large sources can take tens of seconds.');progress.setAttribute('role','status');origin.replaceChildren(progress);
+          try{
+          const result=await request('/v1/event-log-discovery/process-origin?'+new URLSearchParams({workflow_id:record.workflow_id,revision:String(record.revision)}));
+          if(attempt!==originGeneration)return;
+          origin.replaceChildren(el('h4','Saved revision source snapshots'));
+          result.origins.forEach(item=>{
+            const labels={current:'Source data unchanged',source_advanced:'Source data changed since this snapshot',unavailable:'Source snapshot unavailable',check_failed:'Source snapshot could not be checked',reference_mismatch:'Snapshot metadata no longer matches its reference',not_checked_work_budget:'Source not checked: fingerprint work budget exceeded'};
+            origin.appendChild(el('p',labels[item.status]||'Source status unknown'));
+            if(item.source_content_sha256){
+              origin.appendChild(el('p','Recorded '+item.recorded_at+' · source SHA-256 '+item.source_content_sha256));
+              if(item.source_fingerprint_checked_at)origin.appendChild(el('p','Source data checked at '+item.source_fingerprint_checked_at+'. Inspect again after changes.'));
+              origin.appendChild(el('p','At recording: '+item.quality.cases_used+' of '+item.quality.cases_total+' cohort cases used; '+item.quality.checked_cases+' checked by draft replay. Coverage describes the supplied log.'));
+              origin.appendChild(el('p',item.reviewed_graph_matches_discovery?'Saved graph matches the recorded generated graph. Business rules remain unverified.':'User-selected reference to an edited graph; derivation is not independently verified.'));
+              const selection=el('pre',JSON.stringify(item.selection,null,2));selection.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';origin.appendChild(selection);
+            }
+          });
+          }catch(error){if(attempt===originGeneration){origin.replaceChildren(el('p','Source fingerprints could not be checked.'));throw error;}}
+          finally{inspect.disabled=false;}
+        });host.appendChild(inspect);
+      }else host.appendChild(el('p','The source snapshot is recorded; this process remains an unsaved draft.'));
+      host.appendChild(origin);
+    }
     field(host,'Process title',record.title,value=>record.title=value);
     field(host,'Business goal',model.goal,value=>model.goal=value);
     field(host,'Process owner',model.owner_label,value=>model.owner_label=value);
@@ -538,7 +570,7 @@
     if(!replaceDraft())return false;
     model=copy(value);
     record={workflow_id:null,revision:0,title:String(source.logName?'Discovered from '+source.logName:'Discovered process draft').slice(0,240),
-      process_model:copy(model),evidence_refs:[]};
+      process_model:copy(model),evidence_refs:typeof source.sourceReference==='string'&&/^urn:openworkgraph:local-log-discovery:[0-9a-f]{64}$/.test(source.sourceReference)?[source.sourceReference]:[]};
     reviewed=false;renderEditor();
     status('Unsaved draft discovered from an event log. Add a business goal, replace each observed-share rule with the real condition and review every step before saving. Saving never authorizes execution.');
     document.querySelector('[role=tab][data-tab=evidence]')?.click();

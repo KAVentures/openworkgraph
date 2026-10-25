@@ -5,6 +5,7 @@ import json
 from . import automation_pipeline as pipeline
 from . import project_report_links as reports
 from .opportunity_projects import MAX_PROJECTS_PER_IDEA
+from . import process_discovery_provenance as discovery
 
 
 def journey(idea_id: str) -> dict:
@@ -45,12 +46,25 @@ def journey(idea_id: str) -> dict:
                       'reported_specifications': linked,
                       'source_check_exports': exported.get(project, {'count': 0, 'last_export_at': None,
                                                                     'last_export_id': None, 'last_document_sha256': None})})
+    origins, origin_check_available = [], True
+    if idea.get('process_reference'):
+        ref = idea['process_reference']
+        try:
+            record = pipeline._catalog().get(ref['workflow_id'], ref['revision'])
+            if record['content_sha256'] != ref['content_sha256']:
+                raise ValueError('changed reference')
+            origins = discovery.origins(record)
+        except Exception:
+            origin_check_available = False
     return {'format': 'openworkgraph.opportunity-journey.v1',
             'idea': {key: idea[key] for key in ('idea_id', 'revision', 'state')},
             'process_status': pipeline._process_status(idea.get('process_reference')),
             'projects': items, 'projects_truncated': len(projects) > MAX_PROJECTS_PER_IDEA,
             'max_projects': MAX_PROJECTS_PER_IDEA, 'snapshot_is_atomic_across_stores': False,
-            'dataset_cohort_origin_linked': False, 'source_receipt_results_retained': False,
-            'source_read_performed': False, 'artifact_execution_verified': False,
+            'dataset_cohort_origin_linked': bool(origins), 'dataset_origins': origins,
+            'dataset_origin_check_available': origin_check_available,
+            'dataset_derivation_independently_verified': False, 'source_receipt_results_retained': False,
+            'source_read_performed': False, 'source_read_scope': 'live_provider_only',
+            'local_log_check_mode': 'bounded_fingerprint_or_explicit_unknown', 'artifact_execution_verified': False,
             'reported_run_case_identity_verified': False, 'business_outcomes_verified': False,
             'execution_authorized': False}
