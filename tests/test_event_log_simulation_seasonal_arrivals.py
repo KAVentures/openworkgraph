@@ -97,6 +97,29 @@ def test_patterns_keep_runs_paired_and_the_calendar_zone_is_the_default():
     assert a == b
 
 
+def test_a_calendar_and_a_pattern_share_one_clock():
+    calendar = sim.parse_calendar({"timezone": "UTC", "start": "2025-01-06T00:00:00", "hours": {"mon": [["09:00", "17:00"]]}})
+    monday_office = {"timezone": "UTC", "hourly": OFFICE, "daily": [1, 0, 0, 0, 0, 0, 0]}
+    # A different instant would give the same case two different dates (peer-review reproduction).
+    with pytest.raises(workspace.EventLogWorkspaceError, match="same instant as the calendar start"):
+        sim.parse_arrival_pattern({**monday_office, "start": "2025-01-05T00:00:00"}, calendar=calendar)
+    # The same instant written with another offset or zone is the same clock.
+    for start in ("2025-01-06T01:00:00+01:00", "2025-01-06T00:00:00Z"):
+        assert sim.parse_arrival_pattern({**monday_office, "start": start}, calendar=calendar).origin == calendar.origin
+    berlin = sim.parse_arrival_pattern({**monday_office, "timezone": "Europe/Berlin", "start": "2025-01-06T01:00:00"},
+                                       calendar=calendar)
+    assert berlin.origin == calendar.origin
+    # Arrivals sent during Monday working hours start work then, not a week later.
+    pattern = sim.parse_arrival_pattern(monday_office, calendar=calendar)
+    result = sim.simulate({"label": "", "arrivals_per_hour": 0.1, "paths": [(["A"], 1.0)], "pools": {},
+                           "activities": {"A": {"minutes": 1, "resources": 5}}, "distribution": "fixed",
+                           "cases": 200, "seed": 4, "calendar": calendar, "arrival_pattern": pattern})
+    assert result["activities"][0]["p90_wait_seconds"] == 0
+    with pytest.raises(workspace.EventLogWorkspaceError, match="same instant"):
+        sim.what_if(_log(), {"cases": 100, "calendar": {"timezone": "UTC", "hours": {"mon": [["09:00", "17:00"]]}},
+                             "arrival_pattern": {**monday_office, "start": "2025-01-05T00:00:00"}})
+
+
 def _log():
     return workspace.import_log(BytesIO(_claims_csv().encode()), name="claims", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time",

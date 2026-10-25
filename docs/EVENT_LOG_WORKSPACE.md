@@ -277,8 +277,9 @@ changes. `{"from_log": true, "timezone": "Europe/Berlin"}` instead measures the 
 from the start times of the selected calibration cases: starts per local hour of week, divided by how
 often that hour occurs in the whole local days spanned. It needs at least 14 days of case starts, uses
 15-minute resolution, does not measure months, and reports its basis (case starts, days, hours of week
-without starts). The time zone defaults to the run's calendar zone, else UTC; the pattern's clock
-starts at the calendar start (or `start`).
+without starts). The time zone defaults to the run's calendar zone, else UTC. A run has one clock:
+with a calendar, the pattern starts at the calendar start, and an explicit `start` must be that same
+instant (any offset or zone); without one, `start` sets the clock.
 
 Arrivals form a non-homogeneous Poisson process, drawn exactly by inverting the cumulative rate, which
 is constant within each UTC quarter hour (every real UTC offset and clock change falls on one), with

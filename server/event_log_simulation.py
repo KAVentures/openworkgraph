@@ -312,6 +312,10 @@ def parse_arrival_pattern(spec: Any, measured: dict[str, Any] | None = None,
             raise EventLogWorkspaceError("arrival pattern start must be a date and time such as 2025-01-06T00:00:00")
         moment = moment.replace(tzinfo=tz) if moment.tzinfo is None else moment
         _check_start_year(moment, "arrival pattern start")
+        # One simulated clock per run: with a calendar, both must start at the same instant (any offset).
+        if calendar is not None and moment.timestamp() != calendar.origin:
+            raise EventLogWorkspaceError("the arrival pattern start must be the same instant as the calendar start, "
+                                         "because both share the run's clock; omit it to use the calendar's")
     monthly = _weights(spec["monthly"], 12, "monthly arrival weights") if "monthly" in spec else [1.0] * 12
     if spec.get("from_log", False) is not False:
         if spec["from_log"] is not True or "hourly" in spec or "daily" in spec:
