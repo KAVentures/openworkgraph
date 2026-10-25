@@ -214,7 +214,12 @@ Unrelated reports, report steps/outcomes, source-record references and receipt
 results are excluded. Source-check counts, last export time and document digest
 record that a document was produced, not that its contents verified an outcome.
 
-Dataset/cohort origin is explicitly unlinked. A reported specification match
+Legacy processes without a recorded discovery reference show dataset/cohort
+origin as unlinked. Processes saved with a [local discovery snapshot](PROCESS_DISCOVERY_PROVENANCE.md)
+show its source/selection digests, coverage and current/advanced/unavailable
+status; actual filter values remain excluded from the journey. An opaque
+reference is a user-selected association, never independently verified derivation.
+A reported specification match
 does not prove artifact execution, individual run/case attribution, agent
 causality or business outcomes. This view connects the existing local segments;
 it does not fill those evidence gaps or create a second evidence store.

@@ -25,3 +25,7 @@ jobs:
         env:
           OWG_SCALE_ACCEPTANCE: "1"
         run: python -m pytest -q -s tests/test_event_log_scale_acceptance.py
+      - name: Verify complete discovery source fingerprints on a 1M-event log
+        env:
+          OWG_SCALE_ACCEPTANCE: "1"
+        run: python -m pytest -q -s tests/test_process_discovery_provenance.py

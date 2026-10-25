@@ -105,13 +105,19 @@
       const journeyButton=button('View evidence journey','secondary');journeyButton.id='owgPipelineJourney';
       const journeyHost=el('div');journeyHost.id='owgPipelineJourneyResult';journeyHost.style.overflowWrap='anywhere';
       journeyButton.onclick=async()=>{
-        journeyButton.disabled=true;journeyHost.replaceChildren(el('div','Checking local references…','muted'));
+        journeyButton.disabled=true;const progress=el('div','Checking local references…','muted');progress.setAttribute('role','status');journeyHost.replaceChildren(progress);
         try{
           const data=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
           if(generation!==detailGeneration)return;
           journeyHost.replaceChildren(el('h4','Evidence journey'));
           const stages=el('ol');
-          stages.appendChild(el('li','Dataset and cohort → process: origin is not linked.'));
+          if(data.dataset_origins?.length){
+            data.dataset_origins.forEach(item=>{
+              const labels={current:'source data unchanged',source_advanced:'source data changed since snapshot',unavailable:'snapshot unavailable',check_failed:'source could not be checked',reference_mismatch:'snapshot metadata no longer matches its reference',not_checked_work_budget:'source not checked: fingerprint work budget exceeded'};
+              stages.appendChild(el('li','Dataset and cohort → process: '+(labels[item.status]||'unknown status')+
+                (item.source_content_sha256?' · source SHA-256 '+item.source_content_sha256+' · selection SHA-256 '+item.selection_sha256:'')+'. User-selected reference; derivation and business rules are not independently verified.'));
+            });
+          }else stages.appendChild(el('li',data.dataset_origin_check_available===false?'Dataset and cohort → process: source references could not be checked.':'Dataset and cohort → process: origin is not linked.'));
           const process=data.process_status,ref=process.process_reference;
           const sourceLabels={current:'current',changed:'changed since this idea',unavailable:'unavailable',reference_mismatch:'reference no longer matches',check_failed:'could not be checked'};
           stages.appendChild(el('li',ref?'Saved process '+ref.workflow_id+' · revision '+ref.revision+' · '+(sourceLabels[process.status]||'unknown status')+' · SHA-256 '+ref.content_sha256:'Saved process: no exact revision linked.'));
