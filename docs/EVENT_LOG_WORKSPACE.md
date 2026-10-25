@@ -1123,3 +1123,12 @@ the status line counts both. Play, pause and the position slider work from the k
 motion the playback advances in steps once per second. Tokens show recorded timestamps, not work
 being done, and nothing is executed. A million events filter and play back in a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_playback_filters.py`).
+
+## Share a minimized aggregate snapshot
+
+After running a local analysis, **Prepare sharing snapshot** recomputes and previews a bounded
+numeric artifact with coded group labels, units, aggregate definitions, coverage and source/spec
+fingerprints. Nothing is sent to an organization until you explicitly download, review and publish
+the file through its Shared analyses portal. [Shared analyses](SHARED_ANALYSES.md) documents
+separate scopes, per-view roles, revisions, expiry, revocation, audited export and the remaining
+shared-dataset limitations. Codes minimize labels; they do not anonymize the numeric information.
