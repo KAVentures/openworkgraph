@@ -400,6 +400,19 @@ const path=require('node:path');
    const badArrivals=await page.evaluate(()=>{try{window.__owgEventLogModel.simArrivals({mode:'weights',hourly:'1 2'});return 'accepted';}catch(e){return e.message;}});
    assert.match(badArrivals,/24 non-negative hourly/);
    await page.locator('#owgEventLogSimArrivalMode').selectOption('');
+   // Branch and arrival uncertainty: replications redraw what the log measured; edited values stay as entered.
+   await page.locator('#owgEventLogSimReplications').fill('5');
+   const [spreadResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const spreadRequest=JSON.parse(spreadResponse.request().postData());
+   assert.deepEqual(spreadRequest.uncertainty,{replications:5});
+   const spread=(await spreadResponse.json()).uncertainty;
+   assert.equal(spreadResponse.status(),200);assert.equal(spread.replications,5);
+   assert.ok(spread.measured_routing.length>0&&spread.measured_routing.every(p=>p.drawn.low<=p.drawn.high));
+   await page.locator('#owgEventLogSimUncertainty').getByText('Uncertainty from routing and arrivals (5 replications, 95% range)').waitFor();
+   assert.match(await page.locator('#owgEventLogSimUncertainty').textContent(),/The scenario median is faster in \d of 5 replications/);
+   await page.locator('#owgEventLogSimReplications').fill('1');await page.locator('#owgEventLogSimRun').click();
+   await page.getByText('Enter 2 to 50 replications, or leave it empty.').waitFor();
+   await page.locator('#owgEventLogSimReplications').fill('');
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -824,7 +837,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, routing and arrival uncertainty, and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

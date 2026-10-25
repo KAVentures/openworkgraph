@@ -17,6 +17,7 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import event_log_simulation_uncertainty as uncertainty
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
@@ -745,6 +746,10 @@ def _assumptions(baseline: dict[str, Any], scenario: dict[str, Any]) -> list[str
 
 
 def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[str, Any]:
+    uncertainty_spec = None
+    if isinstance(scenario, dict) and "uncertainty" in scenario:
+        uncertainty_spec = scenario["uncertainty"]
+        scenario = {k: v for k, v in scenario.items() if k != "uncertainty"}
     zones: tuple[str, ...] = ()
     if isinstance(scenario, dict):
         def calendar_zone(cal):
@@ -772,14 +777,24 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         baseline_spec["arrivals_per_hour"] = scenario["arrivals_per_hour"]
     baseline_model = parse_scenario(baseline_spec, base)
     scenario_model = parse_scenario(scenario, base)
-    try:
-        baseline, changed = simulate(baseline_model), simulate(scenario_model)
-    except (OverflowError, ValueError) as error:
-        # Dates past year 9999: the calendar or pattern clock left the representable range.
-        if isinstance(error, ValueError) and "out of range" not in str(error):
-            raise
-        raise EventLogWorkspaceError("the simulated period runs past the supported date range; "
-                                     "simulate fewer cases or raise the arrival rate") from None
+    replications = uncertainty.parse(uncertainty_spec, scenario_model["cases"])
+
+    def run_pair(calibration: dict[str, Any], seed: int | None = None):
+        if seed is None:
+            models = baseline_model, scenario_model
+        else:
+            models = (parse_scenario({**baseline_spec, "seed": seed}, calibration),
+                      parse_scenario({**scenario, "seed": seed}, calibration))
+        try:
+            return simulate(models[0]), simulate(models[1]), models[0], models[1]
+        except (OverflowError, ValueError) as error:
+            # Dates past year 9999: the calendar or pattern clock left the representable range.
+            if isinstance(error, ValueError) and "out of range" not in str(error):
+                raise
+            raise EventLogWorkspaceError("the simulated period runs past the supported date range; "
+                                         "simulate fewer cases or raise the arrival rate") from None
+    baseline, changed, _, _ = run_pair(base)
+    spread = uncertainty.replicate(base, scenario_model["seed"], replications, run_pair) if replications else None
     b, s = baseline["cycle_time_seconds"]["p50"], changed["cycle_time_seconds"]["p50"]
     return {
         "log": base["log"], "case_notion": base["case_notion"],
@@ -801,7 +816,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "result": changed,
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
-        "assumptions": _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []),
+        **({"uncertainty": spread} if spread else {}),
+        "assumptions": _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,

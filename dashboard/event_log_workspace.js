@@ -937,6 +937,19 @@
 
   // The measured gap that stands for an activity's time; the mean suits variable (exponential) times.
   const TIME_BASES=[['median','Median gap (robust)'],['mean','Mean gap (suits variable times)']];
+  // Replications for branch and arrival uncertainty: empty or 0 is off, otherwise 2–50.
+  function simUncertainty(value){
+    const text=String(value??'').trim();if(text===''||text==='0')return null;
+    const n=Number(text);if(!Number.isInteger(n)||n<2||n>50)throw new Error('Enter 2 to 50 replications, or leave it empty.');
+    return {replications:n};
+  }
+  // One line per interval: median and 95% range across replications.
+  function uncertaintyRows(u){
+    const span=x=>x?duration(x.median)+' ('+duration(x.low)+' – '+duration(x.high)+')':'—';
+    const signed=x=>{if(!x)return '—';const f=v=>(v>0?'+':v<0?'−':'')+duration(Math.abs(v));return f(x.median)+' ('+f(x.low)+' to '+f(x.high)+')';};
+    const c=u.cycle_time_seconds;
+    return [['Baseline',span(c.baseline.p50),span(c.baseline.p90)],['Scenario',span(c.result.p50),span(c.result.p90)],['Change',signed(c.change.p50),signed(c.change.p90)]];
+  }
   const measuredMinutes=(p,basis)=>basis==='mean'&&p.mean_minutes!==undefined?p.mean_minutes:p.minutes;
 
   function validationBlock(){
@@ -979,7 +992,8 @@
         const label=input('owgEventLogSimLabel','text','e.g. Two reviewers');label.maxLength=80;
         const top=el('div',null,'row');top.style.alignItems='end';
         const timeBasis=select('owgEventLogSimTimeBasis',TIME_BASES);
-        top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Measured time per activity',timeBasis),field('Cases to simulate',cases));
+        const spread=input('owgEventLogSimReplications','number','Off');spread.min='0';spread.max='50';spread.step='1';
+        top.append(field('Scenario name',label),field('Cases arriving per hour',arrivals),field('Activity times',dist),field('Measured time per activity',timeBasis),field('Cases to simulate',cases),field('Uncertainty replications (2–50)',spread));
         const dayChoices=[['weekdays','Monday to Friday'],['weekdays_sat','Monday to Saturday'],['every_day','Every day']];
         const days=select('owgEventLogSimDays',[['','Around the clock'],...dayChoices]);
         const scenarioDays=select('owgEventLogSimScenarioDays',[['','Same as the baseline'],...dayChoices]);
@@ -1002,6 +1016,7 @@
         const arrivalRow=el('div',null,'row');arrivalRow.style.alignItems='end';
         arrivalRow.append(field('How cases arrive (both runs)',arrivalMode),...arrivalFields);
         const paths=document.createElement('textarea');paths.id='owgEventLogSimPaths';paths.rows=4;paths.style.width='100%';paths.value=formatWeightedPaths(cal.paths||[]);
+        const measuredRouting=paths.value,measuredArrivals=arrivals.value;
         const rows=[];
         const body=el('tbody');
         const addRow=(name,p)=>{
@@ -1042,6 +1057,13 @@
             const pattern=simArrivals({mode:arrivalMode.value,timezone:zone.value,hourly:hourly.value,daily:daily.value});
             if(pattern)scenario.arrival_pattern=pattern;
             if(calendar){scenario.calendar=calendar;if(scenarioDays.value&&scenarioDays.value!==days.value)scenario.scenario_calendar=simCalendar({...calValues,days:scenarioDays.value});}
+            const uncertainty=simUncertainty(spread.value);
+            if(uncertainty){
+              scenario.uncertainty=uncertainty;
+              // Values still as measured are left to the server, which draws them from what the log supports.
+              if(paths.value===measuredRouting)delete scenario.paths;
+              if(arrivals.value===measuredArrivals)delete scenario.arrivals_per_hour;
+            }
             run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
             const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
             const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
@@ -1050,6 +1072,11 @@
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+              ...(r.uncertainty?[(()=>{const box=el('div');box.id='owgEventLogSimUncertainty';
+                box.append(el('h4','Uncertainty from routing and arrivals ('+r.uncertainty.replications+' replications, 95% range)'),
+                  table(['Run','Median cycle time','90th percentile'],uncertaintyRows(r.uncertainty)),
+                  table(['Measured path','Cases','Share drawn (95% range)'],r.uncertainty.measured_routing.map(p=>[p.activities.join(' → '),Number(p.observed_cases).toLocaleString(),pct(p.drawn.median)+' ('+pct(p.drawn.low)+' – '+pct(p.drawn.high)+')'])),
+                  el('div','The scenario median is faster in '+r.uncertainty.replications_where_scenario_median_is_faster+' of '+r.uncertainty.replications+' replications. Activity times and values you entered stay fixed.','muted'));return box;})()]:[]),
               ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
@@ -1983,6 +2010,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
