@@ -32,6 +32,7 @@ from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
 from . import event_log_quality as quality
+from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
 from . import event_log_signals as signals
 from . import event_log_simulation as simulation
@@ -99,6 +100,8 @@ async def import_event_log(
     resource_column: str = Query(default="", max_length=200),
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
+    keep_rejected: bool = Query(default=False),
+    naive_timestamp_offset: str = Query(default="", max_length=6),
 ):
     _require_dashboard(request)
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
@@ -115,7 +118,9 @@ async def import_event_log(
         mapping = {"case_column": case_column, "activity_column": activity_column,
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
-                   "delimiter": "\t" if delimiter == "t" else delimiter}
+                   "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"keep_rejected": True} if keep_rejected else {}),
+                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
 
@@ -129,6 +134,8 @@ async def append_event_log(
     resource_column: str = Query(default="", max_length=200),
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
+    keep_rejected: bool = Query(default=False),
+    naive_timestamp_offset: str = Query(default="", max_length=6),
 ):
     _require_dashboard(request)
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
@@ -144,7 +151,9 @@ async def append_event_log(
         mapping = {"case_column": case_column, "activity_column": activity_column,
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
-                   "delimiter": "\t" if delimiter == "t" else delimiter}
+                   "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"keep_rejected": True} if keep_rejected else {}),
+                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
         except workspace.EventLogWorkspaceError as exc:
@@ -156,6 +165,30 @@ async def append_event_log(
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(quality.quality, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quarantine")
+def event_log_quarantine(request: Request, log_id: str, batch: int | None = Query(default=None, ge=0),
+                         after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quarantine.quarantine, log_id, batch, after, limit)
+
+
+@router.post("/v1/event-logs/{log_id}/quarantine/release")
+async def event_log_quarantine_release(request: Request, log_id: str):
+    _require_dashboard(request)
+    body = await _json_body(request, "release")
+    try:
+        result = await run_in_threadpool(quarantine.release, log_id, body)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/quarantine/discard")
+async def event_log_quarantine_discard(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quarantine.discard, log_id, await _json_body(request, "discard"))
 
 
 @router.get("/v1/event-logs/{log_id}/appends")

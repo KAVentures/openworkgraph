@@ -52,6 +52,9 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "attribute_columns": list(dict.fromkeys(mapping.get("attribute_columns") or [])),
             "delimiter": mapping.get("delimiter") or ",",
         }
+        if mapping.get("naive_timestamp_offset"):
+            # An explicit decision changes what is stored, so it is part of the transform.
+            declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
     else:
         declared["mapping"] = {"mapping_version": MAPPING_VERSION, "standard": {
             "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
@@ -139,8 +142,11 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
 
 def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapping: dict[str, Any] | None,
            upload: Path, rows_accepted: int, rows_rejected: int, rejection_reasons: dict[str, int] | None,
-           duplicates_skipped: int | None = None, prefix: str | None = None) -> dict[str, Any]:
+           duplicates_skipped: int | None = None, prefix: str | None = None,
+           kept: dict[str, int] | None = None) -> dict[str, Any]:
     """Store the report for one import (batch 0) or appended batch, inside the caller's transaction."""
+    rejection_reasons = dict(rejection_reasons) if rejection_reasons is not None else None
+    assumed = (rejection_reasons or {}).pop("timestamps_with_assumed_offset", None)
     report = {
         "format": "openworkgraph.event-log-quality.v1",
         "batch": batch, "kind": kind,
@@ -151,7 +157,10 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
         "rows": {"accepted": rows_accepted, "rejected": rows_rejected,
                  "rejected_by_reason": rejection_reasons,
                  "reason_counts_can_overlap": bool(rejection_reasons),
-                 "rejected_rows_retained": False,
+                 "rejected_rows_retained": bool(kept and kept.get("retained")),
+                 **({"timestamps_with_assumed_offset": assumed} if assumed is not None else {}),
+                 **({"rejected_rows_kept_for_review": kept.get("retained", 0),
+                     "rejected_rows_over_review_limit": kept.get("not_retained", 0)} if kept is not None else {}),
                  **({"duplicates_skipped_on_append": duplicates_skipped} if duplicates_skipped is not None else {})},
         "diagnostics": diagnostics(conn, log_id, prefix),
         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE},

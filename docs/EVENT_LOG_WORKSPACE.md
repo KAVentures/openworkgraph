@@ -689,7 +689,7 @@ Each report records:
 - **Rows**: accepted and rejected rows. For CSV the rejections are broken down into missing case,
   missing activity, missing time, time without a UTC offset and unreadable time; one row can count
   under several reasons. XES and OCEL readers only report a total, and the report says so. Rejected
-  rows are never kept. Appends also record how many events were skipped as already present.
+  rows are not kept unless you choose to keep them (below). Appends also record how many events were skipped as already present.
 - **Diagnostics** (for the batch; the endpoint also gives them for the whole log):
   - duplicate events: same case objects, activity, time and resource;
   - events sharing a timestamp with another event of the same case, and the number of such cases.
@@ -711,6 +711,34 @@ before reports existed, or batches whose report could not be written, appear in
 Writing a report adds about 2 seconds per million events to an import. In the dashboard, the
 "Data quality" section under the overview shows the reports, mapping and diagnostics, and the
 import status line names the rejection reasons.
+
+## Rejected rows: keep, release or discard
+
+By default rejected rows are dropped and only counted. For CSV you can instead choose to keep them
+with the log (`keep_rejected=true` on import or append, or the checkbox under the import form). Up
+to 10,000 rejected rows per batch are kept with their mapped values (case, activity, the time as
+supplied, resource and kept attribute columns) and the reasons they were rejected; the quality
+report says how many were kept and how many were over that limit. Kept rows stay on this computer
+and are deleted with the log.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and every decision taken. |
+| `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
+| `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0}` (batch optional) deletes kept rows. |
+
+A release applies one explicit decision: the UTC offset to assume for times written without one
+(`Z` or `±HH:MM`, at most ±14:00). The kept rows that become valid under it are appended as a new
+batch through the normal append path, so events already in the log are skipped, and that batch
+gets its own quality report (`kind: quarantine_release`) whose transform records the offset. Rows
+that still fail, such as rows without a case, stay kept. Releasing does not check that the offset
+is right, and nothing is released automatically. Every release and discard is recorded with its
+counts. Appending and removing the released rows are two steps; if the second is interrupted,
+releasing again adds nothing new.
+
+The same decision can be made up front for a CSV import or append with
+`naive_timestamp_offset=+01:00`. It is part of the transform and its digest, and the report counts
+the times read with the assumed offset.
 
 ## Case filter and playback
 
