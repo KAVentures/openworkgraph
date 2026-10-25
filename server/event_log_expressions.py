@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _Strict(BaseModel):
@@ -31,6 +31,14 @@ class Arithmetic(_Strict):
     operation: Literal["add", "subtract", "multiply", "divide"]
     left: Operand
     right: Operand
+
+    @model_validator(mode="after")
+    def no_self_reference(self):
+        # Even a symbolic library template cannot ever resolve its own name to
+        # an earlier definition: analysis names must be unique.
+        if any(o.kind == "metric" and o.name == self.name for o in (self.left, self.right)):
+            raise ValueError("arithmetic cannot reference its own name")
+        return self
 
 
 def _atomic(unit: str) -> dict[str, int]:

@@ -145,6 +145,8 @@ def test_symbolic_template_validation_does_not_evaluate_or_read_sources(log, mon
     monkeypatch.setattr(workspace, '_query', no_query)
     saved = query.save_metric(log, {'metric': expr()})
     assert query.list_metrics(log)['metrics'][0]['metric'] == saved['metric']
+    with pytest.raises(workspace.EventLogWorkspaceError, match='own name'):
+        query.save_metric(log, {'metric': expr(left=ref('result'))})
 
 
 @pytest.mark.skipif(os.environ.get('OWG_SCALE_ACCEPTANCE') != '1', reason='on-demand owned scale acceptance')
