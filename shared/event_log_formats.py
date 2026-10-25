@@ -3,7 +3,7 @@
 Every format maps to one canonical, object-centric shape:
 
 * events:        (event_id, activity, timestamp UTC, resource, attributes)
-* objects:       (object_id, object_type, attributes)
+* objects:       (object_id, object_type, attributes), plus timed OCEL attribute values
 * event_objects: (event_id, object_id, qualifier)
 
 A flat log (CSV or XES) is the special case of a single object type named
@@ -26,6 +26,7 @@ MAX_ID = 200
 MAX_ACTIVITY = 200
 MAX_ATTRIBUTES = 32
 MAX_ATTRIBUTE_VALUE = 500
+MAX_OBJECT_ATTRIBUTE_VALUES = 1000   # timed attribute values kept per object (OCEL 2.0)
 MAX_OCEL_BYTES = 256 * 1024 * 1024
 CASE_TYPE = "case"
 _XES_NS = "{http://www.xes-standard.org/}"
@@ -51,6 +52,9 @@ class ObjectRecord:
     object_id: str
     object_type: str
     attributes: dict[str, str] = field(default_factory=dict)
+    # OCEL 2.0 only: every attribute value with its time, (name, UTC time, value). ``attributes`` keeps
+    # the first listed value per name, as before; this history is what changes over time.
+    history: list[tuple[str, datetime, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -58,6 +62,9 @@ class ReadStats:
     events: int = 0
     rejected_events: int = 0
     objects: int = 0
+    object_attribute_values: int = 0              # timed values kept in object histories
+    object_attribute_values_without_time: int = 0  # values whose time is missing or not timezone-qualified
+    object_attribute_values_over_limit: int = 0    # values past MAX_OBJECT_ATTRIBUTE_VALUES for one object
 
 
 def _text(value: Any, limit: int) -> str:
@@ -263,6 +270,51 @@ def _ocel_attributes(items: Any) -> dict[str, str]:
     return _attributes((item.get("name"), item.get("value")) for item in items if isinstance(item, dict))
 
 
+def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, str],
+                    stats: ReadStats) -> list[tuple[str, datetime, str]]:
+    """Timed (name, time, value) entries for the attribute names kept in ``attributes``, bounded per object."""
+    history: list[tuple[str, datetime, str]] = []
+    for key, time, value in values:
+        name = _text(key, 80)
+        if name not in attributes:
+            continue
+        stamp = parse_timestamp(time)
+        if stamp is None:
+            stats.object_attribute_values_without_time += 1
+        elif len(history) >= MAX_OBJECT_ATTRIBUTE_VALUES:
+            stats.object_attribute_values_over_limit += 1
+        else:
+            history.append((name, stamp, _text(value, MAX_ATTRIBUTE_VALUE)))
+    stats.object_attribute_values += len(history)
+    return history
+
+
+def _ocel_object(object_id: str, object_type: str, values: list[tuple[Any, Any, Any]], stats: ReadStats) -> ObjectRecord:
+    attributes = _attributes((name, value) for name, _, value in values)
+    return ObjectRecord(object_id, object_type, attributes, _object_history(values, attributes, stats))
+
+
+def _history_entries(o: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """(name, ISO time, value) for export, listing the value ``attributes`` holds first for its name so a
+    re-import keeps the same stored value. A stored value without a timed entry of its own (its time was
+    missing or not timezone-qualified, or an append kept it while adding other values) goes out at the
+    1970 origin, the OCEL convention for an initial value without a known time, never at an observed time."""
+    attributes = o.get("attributes") or {}
+    by_name: dict[str, list[tuple[datetime, str]]] = {}
+    for name, stamp, value in o.get("history") or []:
+        by_name.setdefault(name, []).append((stamp, value))
+    entries: list[tuple[str, str, str]] = []
+    for name in sorted(set(attributes) | set(by_name)):
+        timed = [(_iso(stamp), value) for stamp, value in sorted(set(by_name.get(name, [])))]
+        if name in attributes:
+            stored = attributes[name]
+            first = next((i for i, (_, v) in enumerate(timed) if v == stored), None)
+            head = timed.pop(first) if first is not None else ("1970-01-01T00:00:00Z", stored)
+            timed.insert(0, head)
+        entries.extend((name, time, value) for time, value in timed)
+    return entries
+
+
 def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
     """Read OCEL 2.0 JSON: typed objects, typed events and qualified event-to-object links."""
     stats = stats if stats is not None else ReadStats()
@@ -293,7 +345,9 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
         if object_id in types:raise EventLogFormatError("OCEL object identifiers must be unique")
         types[object_id] = object_type
         stats.objects += 1
-        yield ObjectRecord(object_id, object_type, _ocel_attributes(item.get("attributes")))
+        items = item.get("attributes") if isinstance(item.get("attributes"), list) else []
+        yield _ocel_object(object_id, object_type, [(a.get("name"), a.get("time"), a.get("value"))
+                                                    for a in items if isinstance(a, dict)], stats)
     for item in document["events"]:
         if not isinstance(item, dict):
             stats.rejected_events += 1
@@ -318,8 +372,7 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
         "objectTypes": [{"name": name, "attributes": []} for name in sorted({o["object_type"] for o in objects})],
         "eventTypes": [{"name": name, "attributes": []} for name in sorted({e["activity"] for e in events})],
         "objects": [{"id": o["object_id"], "type": o["object_type"],
-                     "attributes": [{"name": k, "time": "1970-01-01T00:00:00Z", "value": v}
-                                    for k, v in sorted((o.get("attributes") or {}).items())],
+                     "attributes": [{"name": k, "time": t, "value": v} for k, t, v in _history_entries(o)],
                      "relationships": []} for o in objects],
         "events": [{"id": e["event_id"], "type": e["activity"], "time": _iso(e["timestamp"]),
                     "attributes": [{"name": k, "value": v} for k, v in sorted((e.get("attributes") or {}).items())],
@@ -366,7 +419,10 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                         raise EventLogFormatError("OCEL object identifiers must be unique")
                     types[object_id] = object_type
                     stats.objects += 1
-                    yield ObjectRecord(object_id, object_type, _ocel_xml_attributes(element.find("attributes")))
+                    found = element.find("attributes")
+                    yield _ocel_object(object_id, object_type,
+                                       [(c.get("name"), c.get("time"), c.text or "") for c in
+                                        (found if found is not None else []) if c.tag == "attribute"], stats)
             elif section == "events" and element.tag == "event":
                 event_id, activity = _exact_key(element.get("id")), _exact_key(element.get("type"), MAX_ACTIVITY)
                 stamp = parse_timestamp(element.get("time"))
@@ -406,8 +462,8 @@ def write_ocel_xml(objects: Iterable[dict[str, Any]], events: Iterable[dict[str,
     out.write("</event-types>\n<objects>\n")
     for o in objects:
         out.write(f"<object id={quoteattr(o['object_id'])} type={quoteattr(o['object_type'])}><attributes>")
-        for key, value in sorted((o.get("attributes") or {}).items()):
-            out.write(f"<attribute name={quoteattr(key)} time=\"1970-01-01T00:00:00Z\">{escape(value)}</attribute>")
+        for key, time, value in _history_entries(o):
+            out.write(f"<attribute name={quoteattr(key)} time={quoteattr(time)}>{escape(value)}</attribute>")
         out.write("</attributes></object>\n")
     out.write("</objects>\n<events>\n")
     for e in events:

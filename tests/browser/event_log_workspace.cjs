@@ -647,7 +647,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    // Object-centric log: separate maps per object type, linked by shared events.
-   const ocel={objectTypes:[],eventTypes:[],objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],events:[
+   const ocel={objectTypes:[],eventTypes:[],objects:[{id:'o1',type:'order',attributes:[{name:'status',time:'1970-01-01T00:00:00Z',value:'open'},{name:'status',time:'2024-01-01T11:00:00Z',value:'shipped'}]},{id:'i1',type:'item'},{id:'i2',type:'item'}],events:[
      {id:'p',type:'Place order',time:'2024-01-01T08:00:00Z',relationships:[{objectId:'o1',qualifier:''},{objectId:'i1',qualifier:''},{objectId:'i2',qualifier:''}]},
      {id:'k1',type:'Pick item',time:'2024-01-01T09:00:00Z',relationships:[{objectId:'i1',qualifier:''}]},
      {id:'k2',type:'Pick item',time:'2024-01-01T10:00:00Z',relationships:[{objectId:'i2',qualifier:''}]},
@@ -692,6 +692,9 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgEventLogObjectCasesList tbody tr').count(),0,'delayed item evidence cannot repaint the order browser');
    assert.match(await page.locator('#owgEventLogObjectMap').textContent(),/Place order.*Ship/s);
    await page.locator('#owgEventLogFlattening').getByText('2 events (50.0% of the log) are linked to no order and are left out: Pick item (2).',{exact:true}).waitFor();
+   // Order status changes over time: the shipping event happened while it held another value than the stored one.
+   await page.locator('#owgEventLogObjectAttributes').getByText('status changes on 1 of 1 order objects (1 changes; most often open → shipped (1)). 1 of 2 event links happened while it held another value than the one stored value analyses use.',{exact:true}).waitFor();
+   assert.equal(await page.locator('#owgEventLogObjectMap #owgEventLogObjectAttributes').count(),0);
    // The global analysis still selects item; map evidence must explicitly select order.
    assert.equal(await page.locator('#owgEventLogCaseType').inputValue(),'item');
    await page.locator('#owgEventLogObjectGraph').getByRole('button',{name:'Inspect observed transition Place order → Ship',exact:true}).focus();
@@ -806,7 +809,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, and which object attributes change over time.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

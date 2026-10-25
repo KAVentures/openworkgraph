@@ -485,6 +485,25 @@
     return lines;
   }
 
+  // Plain-language summary of object attributes whose recorded value changes over time.
+  function attributeChangeSummary(t){
+    if(!t)return [];
+    const n=x=>Number(x).toLocaleString(),lines=[];
+    const changing=t.attributes.filter(a=>a.value_changes>0);
+    changing.slice(0,5).forEach(a=>{
+      const top=a.most_frequent_changes.slice(0,3).map(c=>c.from+' → '+c.to+' ('+n(c.changes)+')').join(', ');
+      let line=a.name+' changes on '+n(a.objects_whose_value_changes)+' of '+n(a.objects_with_values)+' '+t.object_type+' objects ('+n(a.value_changes)+' changes'+(top?'; most often '+top:'')+').';
+      const l=a.event_links;
+      if(l&&l.where_stored_value_differs_from_value_then)line+=' '+n(l.where_stored_value_differs_from_value_then)+' of '+n(l.examined)+' event links happened while it held another value than the one stored value analyses use.';
+      if(l&&l.before_first_value)line+=' '+n(l.before_first_value)+' happened before any value was recorded.';
+      if(a.times_with_several_values)line+=' '+n(a.times_with_several_values)+' times have several different values.';
+      lines.push(line);
+    });
+    if(changing.length>5)lines.push((changing.length-5)+' more changing attributes are not listed.');
+    if(!changing.length&&t.attributes.length)lines.push('The recorded attribute values of '+t.object_type+' objects do not change over time.');
+    return lines;
+  }
+
   function objectMapSection(){
     const box=section('Object-centric map');
     const generation=state.generation;
@@ -496,8 +515,17 @@
     const out=el('div');out.id='owgEventLogObjectMap';
     const shared=el('div');
     const flatOut=el('div');flatOut.id='owgEventLogFlatteningBox';
-    box.append(row,out,flatOut,shared);
-    let graph=null,flat=null;
+    const attrOut=el('div');attrOut.id='owgEventLogObjectAttributesBox';
+    box.append(row,out,flatOut,attrOut,shared);
+    let graph=null,flat=null,attrs=null;
+    const renderAttrs=()=>{
+      const type=attrs&&(attrs.object_types||[]).find(t=>t.object_type===pick.value);
+      if(!type){attrOut.replaceChildren();return;}
+      const list=el('ul');list.id='owgEventLogObjectAttributes';attributeChangeSummary(type).forEach(x=>list.appendChild(el('li',x)));
+      attrOut.replaceChildren(el('h4','Attributes of '+type.object_type+' over time'),list,
+        ...(attrs.stored_value_comparison_complete===false?[el('p','How many events see another value than the stored one is unknown within the analysis limits for this log.','muted')]:[]),
+        el('p',attrs.interpretation,'muted'));
+    };
     // Filled on its own so late diagnostics never reset an open map selection or case browser.
     const renderFlat=()=>{
       const flatType=flat&&(flat.object_types||[]).find(t=>t.object_type===pick.value);
@@ -542,7 +570,7 @@
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
       if(graph.relations_calculation_complete===false)parts.push(el('p','Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.','muted'));
       if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
-      renderFlat();parts.push(inspection.node);out.replaceChildren(...parts);
+      renderFlat();renderAttrs();parts.push(inspection.node);out.replaceChildren(...parts);
     };
     showMap.onclick=render;pick.onchange=render;
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(g=>{
@@ -554,6 +582,7 @@
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
+    getJSON(logPath('object-attributes').replace(/\?.*$/,'')).then(a=>{if(current()){attrs=a;renderAttrs();}}).catch(()=>{});
     return box;
   }
 
@@ -1890,6 +1919,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
