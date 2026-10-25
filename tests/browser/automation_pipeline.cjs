@@ -102,10 +102,61 @@ const path=require('node:path');
    await page.locator('#owgPipelineStatus').filter({hasText:'Idea deleted.'}).waitFor();
    await page.locator('#owgPipelineCounts').filter({hasText:'No ideas yet.'}).waitFor();
 
+
+   // Catalog → idea → pinned source navigation. Unsaved editor changes must
+   // never become the source of a saved-process opportunity.
+   const saved=await page.evaluate(async()=>{
+     const model={goal:'Review the selected renewal',baseline_source:'user_declared',baseline_coverage:'user_declared_design',baseline_path:['Review'],
+       activities:[{id:'review',label:'Review'}],transitions:[],entry_activity_id:'review',terminal_activity_ids:['review']};
+     return (await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({workflow_id:'renewal_review',title:'Saved renewal review',process_model:model,user_confirmed:true,expected_revision:0})})).json();
+   });
+   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+   await page.locator('#owgCatalogList').getByRole('button',{name:'Saved renewal review · r1',exact:true}).click();
+   await page.getByRole('textbox',{name:'Business goal',exact:true}).fill('UNSAVED goal must stay outside the idea');
+   await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   assert.match(await page.locator('#owgPipelineDetail').textContent(),/Review the selected renewal/);
+   assert.doesNotMatch(await page.locator('#owgPipelineDetail').textContent(),/UNSAVED/);
+   const linked=(await page.evaluate(async()=> (await fetch('/v1/automation-pipeline')).json())).ideas[0];
+   assert.deepEqual(linked.process_reference,{workflow_id:saved.workflow_id,revision:1,content_sha256:saved.content_sha256});
+   // Reopen exactly r1 (explicitly discard the unsaved editor draft).
+   page.once('dialog',dialog=>dialog.accept());
+   await page.getByRole('button',{name:'Open linked saved process',exact:true}).click();
+   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
+   assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
+   await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
+   for(const key of ['rules_based','structured_inputs','process_stability','digital_inputs','low_exception_rate'])
+     await page.locator('#owgPipelineQ_'+key).selectOption('4');
+   await page.locator('#owgPipelineCases').fill('300');await page.locator('#owgPipelineMinutes').fill('10');await page.locator('#owgPipelineShare').fill('50');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   await page.evaluate(async record=>{
+     await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({workflow_id:record.workflow_id,title:record.title,process_model:{...record.process_model,goal:'Changed renewal policy'},expected_revision:1,user_confirmed:true})});
+   },saved);
+   await page.getByRole('button',{name:'Refresh process status',exact:true}).click();
+   await page.locator('#owgPipelineProcessStatus').filter({hasText:'Process changed since this idea was created'}).waitFor();
+   await page.getByRole('button',{name:'Move to Implemented',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'linked process changed or is unavailable'}).waitFor();
+   assert.equal((await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id)).state,'approved');
+   const linkedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(linkedAudit.violations.map(v=>v.id),[]);
+   await page.evaluate(async()=>{
+     await fetch('/v1/process-catalog/forget',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({workflow_id:'renewal_review',user_confirmed:true})});
+   });
+   await page.getByRole('button',{name:'Refresh process status',exact:true}).click();
+   await page.locator('#owgPipelineProcessStatus').filter({hasText:'Linked revision is unavailable'}).waitFor();
+   assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
-   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, deletion, WCAG and mobile.');
+   console.log('Automation pipeline acceptance passed: idea → assessment gate → stale-edit refusal → approval → reassessment clears approval → fresh review → implemented, assessment snapshots, CSV export, filters, catalog pin → exact revision reopen → changed/deleted source refusal, deletion, WCAG and mobile.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

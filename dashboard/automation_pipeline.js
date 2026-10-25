@@ -66,12 +66,42 @@
       t.append(thead,body);wrap.appendChild(t);list.replaceChildren(r.ideas.length?wrap:el('div','No ideas in this view.','muted'));
     }
 
+    let detailGeneration=0;
     async function show(ideaId){
+      const generation=++detailGeneration;
       const idea=await (await api('/v1/automation-pipeline/'+encodeURIComponent(ideaId))).json();
+      if(generation!==detailGeneration)return;
       const box=el('div');box.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
       box.appendChild(el('h3',idea.title));
       if(idea.description)box.appendChild(el('div',idea.description));
       box.appendChild(el('div','State: '+STATE_LABELS[idea.state]+' · revision '+idea.revision+(idea.source.reference?' · from '+idea.source.reference:''),'muted'));
+      if(idea.process_reference){
+        const ref=idea.process_reference;
+        const source=el('div');source.id='owgPipelineProcessStatus';
+        const labels={current:'Current saved revision',changed:'Process changed since this idea was created',
+          unavailable:'Linked revision is unavailable',reference_mismatch:'Linked reference no longer matches',
+          check_failed:'Process status could not be checked'};
+        source.appendChild(el('div','Linked process: '+ref.workflow_id+' · revision '+ref.revision));
+        const message=el('div','Checking linked process…','muted');source.appendChild(message);
+        const check=button('Refresh process status','secondary');
+        const open=button('Open linked saved process','secondary');open.disabled=true;
+        open.onclick=()=>Promise.resolve(window.owgProcessCatalog?.openSaved(ref)).then(()=>{
+          document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
+        }).catch(e=>{status.textContent=e.message;});
+        const update=async()=>{
+          check.disabled=true;
+          try{
+            const result=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/process-status')).json();
+            if(generation!==detailGeneration)return;
+            message.textContent=(labels[result.status]||'Process status is unknown')+(result.latest_revision?' · latest revision '+result.latest_revision:'')+'. Checked now; decisions recheck the source.';
+            open.disabled=!['current','changed'].includes(result.status);
+          }catch(e){if(generation===detailGeneration){message.textContent='Process status could not be checked.';open.disabled=true;}}
+          finally{check.disabled=false;}
+        };
+        check.onclick=()=>update();source.append(check,open);box.appendChild(source);update();
+      }else if(idea.source.kind==='process_catalog'){
+        box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
+      }
       if(idea.score)box.appendChild(el('div','Ease '+idea.score.ease_score+'/100 · '+idea.score.modeled_hours_per_month+' modeled hours per month · '+QUADRANTS[idea.score.quadrant]+(idea.assessment.compliance_review_needed?' · needs compliance review':''),'muted'));
       if(!['implemented','rejected'].includes(idea.state)){
         const answers={};const qrow=el('div',null,'row');qrow.style.alignItems='end';
@@ -120,6 +150,11 @@
       box.append(el('h4','History'),history,remove);
       detail.replaceChildren(box);
     }
+
+    window.addEventListener('owg-pipeline-open',event=>{
+      const id=event.detail?.idea_id;if(typeof id!=='string')return;
+      refresh().then(()=>show(id)).catch(e=>{status.textContent=e.message;});
+    });
 
     add.onclick=async()=>{try{
       if(!title.value.trim())throw new Error('Name the idea.');
