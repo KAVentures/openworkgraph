@@ -153,3 +153,43 @@ Dashboard-session-only, no-store routes:
 `GET /v1/automation-pipeline/{id}/project-reports`,
 `POST` to the same path to link, and `POST …/project-reports/unlink` to remove.
 Mutations require `project_id`, `deployment_id` and `expected_revision`.
+
+## Explicit source-state check downloads
+
+**Check selected source state** selects a recorded project, one source-state
+expectation confirmed in its exact saved process, and an already-observed
+normalized `owg:r:` reference. A separate checkbox confirms this exact source
+read and receipt download; changing the record/expectation/project clears it.
+No source read occurs when opening the controls or listing export metadata.
+Existing provider opt-ins, authorized source access, retained observation,
+identity completeness and receipt freshness remain enforced by the existing
+`source_operation_receipt` adapter. Confirmation does not enable any source
+setting or recording. Unknown/refused source data remains unknown.
+
+The JSON download binds that source check to the selected idea/project/process
+and specification hash. Its receipt verifies at most a provider-defined
+operational state at the indicated time. The relationship to a reported run or
+business case is user-selected, and is not verified. Agent causality, artifact
+execution, business objectives, customer outcomes and execution authorization
+are not established. Historical saved goals can be checked; source state may
+change immediately afterward. The existing catalog check-outcome API is unchanged.
+
+Only the export ID, project ID, idea revision, time and document SHA-256 are kept
+in the existing pipeline database (at most 50 records per project). Receipt
+bodies, observed-record references, selected operations and verified-state values
+are not stored. Export history never rereads a provider. Deleting the idea clears
+this metadata; downloaded files are separate user-controlled copies. An exact
+same document reuses metadata. The cap is checked before any source read.
+
+Database locks are released across the external read. The idea revision, project
+and pinned model are checked again before an export record is committed. A stale
+or deleted context discards the new export; it cannot undo an already authorized
+in-flight read. The checksum records bytes generated for a requested check, not
+successful file delivery, current provider truth or proof of execution.
+
+All APIs require the local dashboard session and use no-store responses:
+`GET …/{idea}/projects/{project}/source-check-options` and `source-check-exports`,
+and `POST …/source-check-export` with `expected_revision`, `terminal_activity_id`,
+`expected_operation`, `resource_ref` and `source_read_and_export_confirmed:true`.
+The POST returns the JSON document with `X-OWG-Source-Export-ID` and
+`X-OWG-Document-SHA256`. These digests are local provenance, not public signatures.

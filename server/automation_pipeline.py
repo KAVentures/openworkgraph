@@ -97,6 +97,9 @@ def _connect() -> sqlite3.Connection:
     conn.execute("""CREATE TABLE IF NOT EXISTS project_report_links (
         project_id TEXT NOT NULL, deployment_id TEXT NOT NULL, linked_at TEXT NOT NULL,
         PRIMARY KEY(project_id, deployment_id))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS project_source_exports (
+        export_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, idea_revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, document_sha256 TEXT NOT NULL)""")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -283,6 +286,8 @@ def transition(idea_id: str, payload: Any) -> dict[str, Any]:
 def delete(idea_id: str) -> dict[str, Any]:
     with _LOCK, closing(_connect()) as conn, conn:
         _get(conn, idea_id)
+        conn.execute("DELETE FROM project_source_exports WHERE project_id IN "
+                     "(SELECT project_id FROM idea_projects WHERE idea_id = ?)", [str(idea_id)])
         conn.execute("DELETE FROM project_report_links WHERE project_id IN "
                      "(SELECT project_id FROM idea_projects WHERE idea_id = ?)", [str(idea_id)])
         conn.execute("DELETE FROM idea_projects WHERE idea_id = ?", [str(idea_id)])
