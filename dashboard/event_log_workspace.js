@@ -960,12 +960,21 @@
         if(r.simplifications.length){const list=el('ul');r.simplifications.forEach(n=>list.appendChild(el('li',n)));out.appendChild(list);}
         const excluded=q.cases_excluded_trace_length+q.cases_excluded_variant_limit;
         out.appendChild(el('div',r.interpretation+(excluded?' '+Number(excluded).toLocaleString()+' cases with very long or rare paths were left out of discovery.':''),'muted'));
-        const draft=button('Review as catalog draft');draft.id='owgDiscoveryDraft';
-        draft.onclick=()=>{
+        out.appendChild(el('div','Recording a source snapshot keeps its digests, selected filters, settings and coverage counts with this imported log; no graph or case copies. The snapshot is deleted with the log. Review and save the graph separately.','muted'));
+        const draft=button('Record source snapshot and review draft');draft.id='owgDiscoveryDraft';
+        draft.onclick=async()=>{
           try{
             if(!window.owgProcessCatalog?.draftDiscovered)throw new Error('Process catalog unavailable. Reopen the local dashboard.');
-            if(window.owgProcessCatalog.draftDiscovered({model:r.process_model,logName:(r.log&&r.log.name)||''}))statusLine.textContent='Opened in the process catalog as an unsaved draft.';
-          }catch(error){statusLine.textContent=error.message;}
+            draft.disabled=true;statusLine.textContent='Recording current discovery source metadata…';
+            const saved=await (await api('/v1/event-logs/'+encodeURIComponent(r.log.log_id)+'/model-discovery-draft',{
+              method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
+              body:JSON.stringify({expected_model_sha256:r.process_model_sha256,case_type:r.case_notion,
+                noise:r.settings.noise,activities:r.settings.activities,cohort:r.cohort})})).json();
+            if(generation!==state.generation)return;
+            if(window.owgProcessCatalog.draftDiscovered({model:saved.process_model,logName:(saved.log&&saved.log.name)||'',sourceReference:saved.source_snapshot.reference}))statusLine.textContent='Source snapshot recorded. Opened in the process catalog as an unsaved draft.';
+            else statusLine.textContent='Source snapshot recorded; existing catalog draft kept.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{draft.disabled=false;}
         };
         out.appendChild(draft);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
