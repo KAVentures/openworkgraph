@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     import duckdb
 
 from shared.event_log_formats import (
-    CASE_TYPE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, EventLogFormatError, EventRecord, ObjectRecord, ReadStats,
+    CASE_TYPE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES, EventLogFormatError, EventRecord,
+    ObjectRecord, ReadStats,
     read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
     write_ocel_xml, write_xes,
 )
@@ -53,6 +54,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS objects (
   log_id VARCHAR NOT NULL, object_id VARCHAR NOT NULL, object_type VARCHAR NOT NULL,
   attributes VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS object_attribute_values (
+  log_id VARCHAR NOT NULL, object_id VARCHAR NOT NULL, name VARCHAR NOT NULL, valid_from TIMESTAMP NOT NULL,
+  value VARCHAR NOT NULL
 );
 CREATE TABLE IF NOT EXISTS event_objects (
   log_id VARCHAR NOT NULL, event_id VARCHAR NOT NULL, object_id VARCHAR NOT NULL,
@@ -139,25 +144,32 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- import
 
-def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple[Path, Path, Path]:
-    paths = folder / "events.csv", folder / "objects.csv", folder / "links.csv"
+def _utc(stamp: datetime) -> str:
+    return stamp.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+
+
+def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple[Path, Path, Path, Path]:
+    paths = folder / "events.csv", folder / "objects.csv", folder / "links.csv", folder / "history.csv"
     with paths[0].open("w", newline="", encoding="utf-8") as ev, \
             paths[1].open("w", newline="", encoding="utf-8") as ob, \
-            paths[2].open("w", newline="", encoding="utf-8") as ln:
-        ew, ow, lw = csv.writer(ev), csv.writer(ob), csv.writer(ln)
+            paths[2].open("w", newline="", encoding="utf-8") as ln, \
+            paths[3].open("w", newline="", encoding="utf-8") as hi:
+        ew, ow, lw, hw = csv.writer(ev), csv.writer(ob), csv.writer(ln), csv.writer(hi)
         for record in records:
             if isinstance(record, ObjectRecord):
                 ow.writerow([record.object_id, record.object_type, json.dumps(record.attributes, ensure_ascii=False)])
+                for name, stamp, value in record.history:
+                    hw.writerow([record.object_id, name, _utc(stamp), value])
                 continue
             ew.writerow([record.event_id, record.activity,
-                         record.timestamp.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" "),
+                         _utc(record.timestamp),
                          record.resource, json.dumps(record.attributes, ensure_ascii=False)])
             for object_id, qualifier in record.objects:
                 lw.writerow([record.event_id, object_id, qualifier])
     return paths
 
 
-def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path, Path]) -> None:
+def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path, Path, Path]) -> None:
     opts = "header=false, quote='\"', escape='\"', delim=','"
     if paths[0].stat().st_size:
         conn.execute(f"""INSERT INTO events SELECT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, ''), coalesce(c4, '{{}}') FROM read_csv(?, {opts},
@@ -175,6 +187,10 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
     if paths[2].stat().st_size:
         conn.execute(f"""INSERT INTO event_objects SELECT DISTINCT ?, c0, c1, coalesce(c2, '') FROM read_csv(?, {opts},
             columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR'}})""", [log_id, str(paths[2])])
+    if paths[3].stat().st_size:
+        conn.execute(f"""INSERT INTO object_attribute_values SELECT DISTINCT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, '')
+            FROM read_csv(?, {opts}, columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR','c3':'VARCHAR'}})""",
+                     [log_id, str(paths[3])])
 
 
 MAX_QUARANTINED_ROWS = 10_000          # rejected rows kept per batch when the user asks to keep them
@@ -362,7 +378,7 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                                      mapping=mapping, upload=upload, rows_accepted=stats.events,
                                      rows_rejected=stats.rejected_events,
                                      rejection_reasons=reasons if source_format == "csv" else None, kept=kept)
-            return {**_check_log(conn, log_id), "quality": report}
+            return {**_check_log(conn, log_id), "quality": report, **_history_counts(source_format, stats)}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
@@ -426,7 +442,10 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                                     [log_id]).fetchone():
                         raise EventLogWorkspaceError(
                             "appended identifiers conflict with the saved log (for example an object with another type)")
-                for table in ("event_objects", "events", "objects"):
+                # Timed attribute values are added for new and existing objects: a newer export can carry
+                # later changes. Values the log already holds (same name, time and value) are skipped.
+                new_values, values_over_limit, values_over_names = _append_values(conn, log_id, staging)
+                for table in ("event_objects", "events", "objects", "object_attribute_values"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
                 _store_rejected(conn, log_id, batch, kept)
@@ -448,11 +467,74 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
+                    **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit,
+                                      over_names=values_over_names),
                     "appended_event_id_prefix": prefix, "quality": report}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
             conn.close()
+
+
+def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -> tuple[int, int]:
+    """Add the staged timed attribute values the log does not hold yet, keeping the per-object limit.
+
+    As on import, each attribute's stored-value entry (the earliest value equal to the stored value) is
+    exempt and the limit applies to the other values, counting those the object already has. An existing
+    object also keeps at most MAX_ATTRIBUTES attribute names (stored or timed), so an OCEL export can carry
+    every name and a re-import never drops a stored attribute. Returns (added, left out over the value
+    limit, left out over the name limit)."""
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nv AS SELECT DISTINCT s.object_id, s.name, s.valid_from, s.value
+        FROM object_attribute_values s WHERE s.log_id = ? AND NOT EXISTS (SELECT 1 FROM object_attribute_values t
+          WHERE t.log_id = ? AND t.object_id = s.object_id AND t.name = s.name AND t.valid_from = s.valid_from
+            AND t.value = s.value)""", [staging, log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvs AS SELECT o.object_id, j.key AS name,
+          json_extract_string(j.value, '$') AS stored
+        FROM objects o, json_each(o.attributes) j WHERE o.log_id = ? AND o.object_id IN (SELECT object_id FROM nv)""",
+                 [log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvn AS SELECT object_id, name FROM nvs UNION
+        SELECT object_id, name FROM object_attribute_values WHERE log_id = ? AND object_id IN (SELECT object_id FROM nv)""",
+                 [log_id])
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE nvx AS SELECT n.object_id, n.name FROM (
+          SELECT object_id, name, row_number() OVER (PARTITION BY object_id ORDER BY name) AS k
+          FROM (SELECT DISTINCT object_id, name FROM nv) WHERE (object_id, name) NOT IN (SELECT object_id, name FROM nvn)) n
+        LEFT JOIN (SELECT object_id, count(*) AS names FROM nvn GROUP BY 1) e ON e.object_id = n.object_id
+        WHERE n.k > {MAX_ATTRIBUTES} - coalesce(e.names, 0)""")
+    names_left_out = conn.execute("""DELETE FROM nv WHERE (object_id, name) IN (SELECT object_id, name FROM nvx)""").fetchone()[0]
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvo AS SELECT v.object_id,
+          count(*) - count(DISTINCT v.name) FILTER (WHERE v.value = s.stored) AS others
+        FROM object_attribute_values v LEFT JOIN nvs s ON s.object_id = v.object_id AND s.name = v.name
+        WHERE v.log_id = ? AND v.object_id IN (SELECT object_id FROM nv) GROUP BY 1""", [log_id])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE nvr AS SELECT n.*, coalesce(n.value = s.stored, false)
+          AND NOT EXISTS (SELECT 1 FROM object_attribute_values t WHERE t.log_id = ? AND t.object_id = n.object_id
+            AND t.name = n.name AND t.value = s.stored)
+          AND row_number() OVER (PARTITION BY n.object_id, n.name, n.value ORDER BY n.valid_from) = 1 AS head
+        FROM nv n LEFT JOIN nvs s ON s.object_id = n.object_id AND s.name = n.name""", [log_id])
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE nvk AS SELECT r.*, head OR row_number() OVER (
+          PARTITION BY r.object_id, head ORDER BY r.valid_from, r.name, r.value)
+          <= {MAX_OBJECT_ATTRIBUTE_VALUES} - coalesce(o.others, 0) AS keep
+        FROM nvr r LEFT JOIN nvo o ON o.object_id = r.object_id""")
+    added = conn.execute("""INSERT INTO object_attribute_values SELECT ?, object_id, name, valid_from, value
+        FROM nvk WHERE keep""", [log_id]).fetchone()[0]
+    left_out = conn.execute("SELECT count(*) FROM nvk WHERE NOT keep").fetchone()[0]
+    return added, left_out, names_left_out
+
+
+def _history_counts(source_format: str, stats: ReadStats, added: int | None = None,
+                    over_limit: int = 0, over_names: int = 0) -> dict[str, Any]:
+    """Counts of timed object attribute values read from an OCEL file (other formats have none)."""
+    if source_format not in ("ocel", "ocelxml"):
+        return {}
+    counts = {"read": stats.object_attribute_values,
+              "without_timezone_qualified_time": stats.object_attribute_values_without_time,
+              "over_per_object_limit": stats.object_attribute_values_over_limit + over_limit,
+              "per_object_limit": MAX_OBJECT_ATTRIBUTE_VALUES,
+              "per_object_limit_excludes_stored_values": True}
+    if added is not None:
+        counts["added"] = added
+        counts["over_attribute_name_limit"] = over_names
+        counts["attribute_name_limit"] = MAX_ATTRIBUTES
+    return {"object_attribute_values": counts}
 
 
 def _store_rejected(conn: duckdb.DuckDBPyConnection, log_id: str, batch: int, kept: dict[str, int] | None) -> None:
@@ -522,6 +604,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
             _check_log(conn, log_id)
             for table in ("discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
                           "metric_definitions", "saved_analyses", "signal_rules", "event_objects", "events", "objects",
+                          "object_attribute_values",
                           "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
@@ -703,7 +786,20 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
             conn = _connect()
             try:
                 _check_log(conn, log_id)
-                objects = [{"object_id": i, "object_type": t, "attributes": json.loads(a or "{}")}
+                # Refuse before writing anything: a re-import keeps MAX_ATTRIBUTES names per object.
+                if conn.execute(f"""SELECT 1 FROM (SELECT object_id, name FROM object_attribute_values WHERE log_id = ?
+                        UNION SELECT o.object_id, j.key FROM objects o, json_each(o.attributes) j WHERE o.log_id = ?)
+                        GROUP BY object_id HAVING count(*) > {MAX_ATTRIBUTES} LIMIT 1""", [log_id, log_id]).fetchone():
+                    raise EventLogWorkspaceError(
+                        f"an object has more than {MAX_ATTRIBUTES} attribute names, more than an OCEL re-import keeps; "
+                        "no OCEL file was written")
+                history: dict[str, list[tuple[str, datetime, str]]] = {}
+                for object_id, name, at, value in conn.execute(
+                        "SELECT object_id, name, valid_from, value FROM object_attribute_values WHERE log_id = ? ORDER BY 1, 2, 3, 4",
+                        [log_id]).fetchall():
+                    history.setdefault(object_id, []).append((name, at.replace(tzinfo=timezone.utc), value))
+                objects = [{"object_id": i, "object_type": t, "attributes": json.loads(a or "{}"),
+                            "history": history.get(i, [])}
                            for i, t, a in conn.execute("SELECT object_id, object_type, attributes FROM objects "
                                                        "WHERE log_id = ? ORDER BY 1", [log_id]).fetchall()]
                 links: dict[str, list[tuple[str, str]]] = {}
