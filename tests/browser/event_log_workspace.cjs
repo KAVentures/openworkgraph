@@ -45,10 +45,12 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgEventLogResource').inputValue(),'who');
    assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true,'import needs explicit local-storage consent');
    await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogKeepRejected').check();
    await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'1 rejected'}).waitFor().catch(async error=>{throw new Error('import status: '+await page.locator('#owgEventLogStatus').textContent()+' '+error.message);});
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/Imported 274 events/);
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected: 1 time without a UTC offset/);
+   assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected rows were kept for review/);
 
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
@@ -393,6 +395,23 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/skipped 1 already in the log/);
    assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/276 events/);
 
+   // The kept rejected row (C99, a time without an offset) is released under an explicit offset decision.
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgQuarantine').filter({hasText:'1 rows kept (1 time without a UTC offset)'}).waitFor();
+   assert.match(await page.locator('#owgQuarantine').textContent(),/C99Receive2024-01-05 09:00:00time without a UTC offset/);
+   await page.locator('#owgQuarantineOffset').fill('local');
+   await page.locator('#owgQuarantineRelease').click();
+   await page.locator('#owgQuarantineStatus').filter({hasText:'+01:00'}).waitFor();
+   await page.locator('#owgQuarantineOffset').fill('+01:00');
+   await page.locator('#owgQuarantineRelease').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Released 1 of 1 kept rows assuming UTC+01:00: 1 events added; 0 rows still kept.'}).waitFor();
+   assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/277 events/);
+   await page.locator('#owgQuarantine').filter({hasText:'Released with offset +01:00'}).waitFor();
+   assert.equal(await page.locator('#owgQuarantineRelease').isDisabled(),true);
+   const releaseAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgQuarantine'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(releaseAudit.violations.map(v=>v.id),[]);
+
    page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
@@ -616,7 +635,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time and a counts-only quality report, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

@@ -68,6 +68,8 @@
     const parts=Object.entries(reasons).filter(([,n])=>n>0).map(([k,n])=>Number(n).toLocaleString()+' '+(REASON_LABELS[k]||k));
     return parts.length?parts.join(', '):'reason not recorded';
   }
+  const keptText=q=>(q&&q.timestamps_with_assumed_offset?' '+Number(q.timestamps_with_assumed_offset).toLocaleString()+' times without an offset were read with the chosen offset.':'')
+    +(q&&q.rejected_rows_kept_for_review?' '+Number(q.rejected_rows_kept_for_review).toLocaleString()+' rejected rows were kept for review under Data quality.':'');
   const tieText=q=>q&&q.events_sharing_a_timestamp_in_a_case?' '+Number(q.events_sharing_a_timestamp_in_a_case).toLocaleString()+' events share a timestamp with another event of the same case; their order falls back to the event ID.':'';
 
   async function api(path,init){
@@ -107,12 +109,14 @@
     mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
     const consentLabel=el('label');consentLabel.style.cssText='display:flex;gap:6px;align-items:center;margin-top:8px';
     const consent=input('owgEventLogConsent','checkbox');consentLabel.append(consent,document.createTextNode(' Store this log on this computer until I delete it'));
+    const keepLabel=el('label');keepLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    const keep=input('owgEventLogKeepRejected','checkbox');keepLabel.append(keep,document.createTextNode(' Also keep rejected CSV rows with the log so I can review, release or discard them'));
     const importButton=button('Import log');importButton.id='owgEventLogImport';importButton.disabled=true;
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
     const importRow=el('div',null,'row');importRow.append(importButton,appendButton);
-    card.append(row,mapping,consentLabel,importRow,statusLine);
+    card.append(row,mapping,consentLabel,keepLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
@@ -147,25 +151,25 @@
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
       const q=new URLSearchParams({format:format.value,name:name.value.trim()});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);}
+      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');}
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+tieText(log.quality));
-        consent.checked=false;file.value='';name.value='';
+        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+tieText(log.quality)+keptText(log.quality));
+        consent.checked=false;keep.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     appendButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
       const q=new URLSearchParams({format:format.value});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);}
+      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');}
       appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         consent.checked=false;file.value='';
         await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+tieText(r.quality));
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+tieText(r.quality)+keptText(r.quality));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
@@ -1079,7 +1083,7 @@
     const box=section('Data quality');box.id='owgQuality';
     const out=el('div');out.id='owgQualityResults';out.setAttribute('role','status');
     const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
-    box.append(el('div','Counts only: rejected rows are not kept and no values are shown. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details);
+    box.append(el('div','Counts only: no values are shown here, and rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
     const generation=state.generation;
     getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality').then(r=>{
       if(generation!==state.generation)return;
@@ -1105,6 +1109,46 @@
         el('div','Current content digest: '+r.current.content_sha256+'. '+r.current.completeness.note,'muted'));
     }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
     return box;
+  }
+
+  // Rejected CSV rows the user chose to keep: review them, then release with an explicit offset decision or discard.
+  function quarantineBlock(){
+    const wrap=el('div');wrap.id='owgQuarantine';show(wrap,false);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/quarantine';
+    const generation=state.generation;
+    getJSON(base+'?limit=20').then(r=>{
+      if(generation!==state.generation||(!r.rows_kept&&!r.decisions.length))return;
+      show(wrap,true);
+      const offset=input('owgQuarantineOffset','text','+01:00');offset.maxLength=6;
+      const release=button('Release rows','secondary');release.id='owgQuarantineRelease';
+      const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
+      const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
+      release.disabled=discard.disabled=!r.rows_kept;
+      const row=el('div',null,'row');row.style.alignItems='end';
+      row.append(field('UTC offset to assume for times written without one',offset),release,discard);
+      wrap.append(el('h4','Rejected rows kept for review'),
+        el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
+        ...(r.rows.length?[table(['Batch','Case','Activity','Time as supplied','Why rejected'],r.rows.map(x=>[x.batch||'import',x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[]),
+        ...(r.rows_kept>r.rows.length?[el('div','Showing the first '+r.rows.length+'.','muted')]:[]),
+        row,message,
+        ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
+          d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
+      release.onclick=async()=>{
+        try{
+          const result=await (await api(base+'/release',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({naive_timestamp_offset:offset.value.trim()})})).json();
+          const d=result.decision;
+          await refreshLogs(state.logId);await analyse();
+          status('Released '+d.rows_released+' of '+d.rows_considered+' kept rows assuming UTC'+d.naive_timestamp_offset+': '+(d.events_added||0)+' events added; '+d.rows_still_kept+' rows still kept.');
+        }catch(error){message.textContent=error.message;}
+      };
+      discard.onclick=async()=>{
+        try{
+          const result=await (await api(base+'/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+          await analyse();status('Discarded '+result.decision.rows_discarded+' kept rows.');
+        }catch(error){message.textContent=error.message;}
+      };
+    }).catch(()=>{});
+    return wrap;
   }
 
   function organizationSection(){
