@@ -193,3 +193,28 @@ and `POST …/source-check-export` with `expected_revision`, `terminal_activity_
 `expected_operation`, `resource_ref` and `source_read_and_export_confirmed:true`.
 The POST returns the JSON document with `X-OWG-Source-Export-ID` and
 `X-OWG-Document-SHA256`. These digests are local provenance, not public signatures.
+
+## Read-only evidence journey
+
+**View evidence journey** shows the exact saved-process reference and its current
+availability, the opportunity revision, recorded project specification/ZIP hashes,
+explicitly linked reported specifications and source-check export metadata in one
+place. Choose a project to inspect its branch of the journey. Report availability
+and specification matches are checked afresh; historical idea revisions remain
+labelled historical. Refresh after a source or link changes.
+
+`GET /v1/automation-pipeline/{idea}/journey` requires the local dashboard session
+and returns a no-store projection of the existing bounded registries. The idea
+store is read in one snapshot; process and monitoring stores are checked
+separately, so the response is not an atomic cross-store snapshot and cannot
+authorize a decision. It neither creates associations nor reads a provider.
+An idempotent project index upgrades existing source-export metadata so one
+idea's lookup does not scan unrelated export history.
+Unrelated reports, report steps/outcomes, source-record references and receipt
+results are excluded. Source-check counts, last export time and document digest
+record that a document was produced, not that its contents verified an outcome.
+
+Dataset/cohort origin is explicitly unlinked. A reported specification match
+does not prove artifact execution, individual run/case attribution, agent
+causality or business outcomes. This view connects the existing local segments;
+it does not fill those evidence gaps or create a second evidence store.
