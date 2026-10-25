@@ -158,6 +158,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
 | `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
+| `POST /v1/event-logs/{log_id}/object-constraints` | Rules across object types: objects per event, related objects per object, and an activity only after a required activity of every related object. |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
@@ -710,6 +711,35 @@ Six rules over one million events take about 7 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_compliance.py`). These checks describe the
 imported log against rules you entered. They are not verified policy, audit evidence or legal
 compliance, and a violation may reflect missing events.
+
+### Object rules across object types
+
+Compliance rules check one case notion at a time. `POST /v1/event-logs/{log_id}/object-constraints`
+(dashboard session only) checks up to 20 rules about how object types relate, without flattening
+the log onto one of them:
+
+| Template | Checks | Counted per |
+| --- | --- | --- |
+| `event_cardinality` (`activity`, `object_type`, `min`, `max`) | every event of the activity is linked to that many objects of the type, for example every `Pay` to exactly one `invoice` | event |
+| `object_cardinality` (`object_type`, `related_type`, optional `via_activity`, `min`, `max`) | every object of the type is related to that many objects of the other type, for example every `order` to one to ten `item`s | object |
+| `synchronization` (`activity`, `object_type`, `related_type`, `required_activity`) | every event of the activity linked to an object of the type comes after an event of the required activity for each related object of the other type, for example an `order` ships only after each of its `item`s is picked | event and object pair |
+
+- **Related objects:** two objects are related when they share an event, or only an event of
+  `via_activity` when one is given. They are related through any shared event, earlier or later.
+- **Order:** events are ordered by time, then event ID. A required event at the same time with a
+  later event ID does not count as earlier.
+- **Vacuous rules:** a rule whose trigger never occurs is satisfied vacuously and counted
+  separately. So is a synchronization with no related objects. The response says whether each
+  named activity and object type occurs in the log.
+- **Results:** each rule reports `activated`, `violating`, `satisfied`, a violation rate with a
+  95% Wilson interval, and up to 50 violating events, objects or pairs with a short reason, such
+  as `3 related` or `1 related without it, 1 only later`.
+- **Work budget:** relating objects examines at most five million object pairs per rule. Beyond
+  that the rule reports `complete: false` with a fixed reason, never partial counts.
+
+In the dashboard, the object-centric map adds "Object rules" when the log has more than one
+object type. 100,000 OCEL events with 20,000 orders take under a second for three rules. Results
+describe recorded links, not verified business relationships, audit evidence or legal compliance.
 
 ## Process model discovery
 
