@@ -290,7 +290,7 @@
         const result=await (await api(queryPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!current()||ticket!==listing)return;
         nextAfter=result.next_after;
-        message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.';
+        message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases'+(spec.cohort.follows?' (case filter applied)':'')+'. Showing '+result.cases.length+' on this page.';
         list.replaceChildren(table(['Supplied case key','Events','Elapsed time','Equal-timestamp events'],result.cases.map(c=>{
           const open=button(c.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
           open.setAttribute('aria-label','Open case '+c.case_id);open.onclick=()=>openCase(c.case_id);
@@ -301,7 +301,8 @@
       finally{if(current()&&ticket===listing)browse.disabled=false;}
     }
     function start(){
-      try{spec={cohort:filters.read(),limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
+      try{const cohort=filters.read();if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
+        spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
     browse.onclick=start;first.onclick=()=>load(null);next.onclick=()=>load(nextAfter);
@@ -386,8 +387,44 @@
     clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
-    box.append(rows,controls,message);
+    box.append(rows,controls,message,filterSetBlock(activityNames));
     return box;
+  }
+
+  // Named follower-rule sets saved with the log, applied to every filtered view at once.
+  function filterSetBlock(activityNames){
+    const wrap=el('div');wrap.id='owgFilterSets';
+    const name=input('owgFilterSetName','text','Filter name');name.maxLength=120;
+    const save=button('Save active filter','secondary');save.id='owgFilterSetSave';save.disabled=!state.follows.length;
+    const message=el('div',state.follows.length?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
+    const list=el('div');list.id='owgFilterSetList';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name for the active filter',name),save);
+    wrap.append(el('h4','Saved filters'),row,message,list);
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/filter-sets';
+    const generation=state.generation;
+    async function refresh(){
+      const r=await getJSON(base());if(generation!==state.generation)return;
+      list.replaceChildren(r.filter_sets.length?table(['Filter','Rules','Notes',''],r.filter_sets.map(set=>{
+        const follows=set.cohort.follows||[],other=Object.keys(set.cohort).filter(k=>k!=='follows');
+        const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=!follows.length||other.length>0;
+        use.onclick=()=>{state.follows=follows;analyse().catch(error=>status(error.message));};
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
+        del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
+        const notes=[...(set.activities_not_in_log.length?['Not in this log: '+set.activities_not_in_log.join(', ')]:[]),
+          ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
+          ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
+        const actions=el('span');actions.append(use,' ',del);
+        return [set.name,follows.map(followText).join('; ')||'—',notes.join('. ')||'—',actions];
+      })):el('div','No saved filters yet.','muted'));
+    }
+    save.onclick=async()=>{
+      try{
+        await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,cohort:{follows:state.follows}})});
+        message.textContent='Saved "'+name.value.trim()+'".';name.value='';await refresh();
+      }catch(error){message.textContent=error.message;}
+    };
+    refresh().catch(error=>{message.textContent=error.message;});
+    return wrap;
   }
 
   function cohortSpec(values){
