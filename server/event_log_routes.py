@@ -563,9 +563,10 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
 @router.get("/v1/event-logs/{log_id}/simulation/calibration")
 def event_log_simulation_calibration(request: Request, log_id: str,
                                      case_type: str | None = Query(default=None, max_length=200),
-                                     max_paths: int = Query(default=10, ge=1, le=simulation.MAX_PATHS)):
+                                     max_paths: int = Query(default=10, ge=1, le=simulation.MAX_PATHS),
+                                     routing: str = Query(default="paths", max_length=20)):
     _require_dashboard(request)
-    return _respond(simulation.calibrate, log_id, case_type, max_paths)
+    return _respond(simulation.calibrate, log_id, case_type, max_paths, routing=routing)
 
 
 @router.post("/v1/event-logs/{log_id}/simulate")

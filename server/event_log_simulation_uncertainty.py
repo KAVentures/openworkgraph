@@ -20,6 +20,7 @@ from __future__ import annotations
 import random
 from typing import Any, Callable
 
+from . import event_log_simulation_routing as routing_model
 from .event_log_workspace import EventLogWorkspaceError
 
 MIN_REPLICATIONS = 2
@@ -75,6 +76,8 @@ def draw(base: dict[str, Any], rng: random.Random) -> dict[str, Any]:
                  "mean_minutes": min(p.get("mean_minutes", p["minutes"]) * scale, MAX_MINUTES)}
         activities[name] = p
     drawn["activities"] = activities
+    if base.get("transitions"):
+        drawn["transitions"] = routing_model.draw(base["transitions"], rng)
     return drawn
 
 

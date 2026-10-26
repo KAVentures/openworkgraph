@@ -349,6 +349,43 @@ check that the mean basis brings the held-out error for exponential times within
 offer "Measured time per activity"; switching it refills the measured minutes and leaves activities
 added by hand untouched.
 
+#### Step-by-step routing
+
+Path routing replays the most frequent complete case paths (at most 10 by default), so cases on rarer
+paths are left out of the calibration. Where variants multiply, for example optional steps in many
+combinations, the frequent paths are also the short ones and the simulation runs short.
+`"routing": "transitions"` in a scenario or held-out validation instead learns from every eligible case:
+
+- **What it learns:** which activity starts a case and, after each activity, which activity follows
+  or whether the case ends.
+- **How cases move:** each simulated case walks those shares one step at a time, so loops repeat as
+  often as the log suggests and combinations never seen as a whole can still occur.
+- **Limitation:** routing is first-order, so the next step depends only on the current activity.
+- **Calibration:** `GET …/simulation/calibration?routing=transitions` returns `transitions`, with
+  start counts and, per activity, the counts and shares of the next activity (`to: null` ends the
+  case). Arrivals and activity times then also come from every eligible case.
+- **Changing routing:** a scenario changes routing with `"transitions": [{"from": "Check", "to":
+  [{"activity": "Close", "weight": 0.95}, {"activity": "Fix", "weight": 0.05}]}]`. Each row replaces
+  one activity's next steps; `"from": null` replaces the start. New activities need minutes. Paths
+  and transitions cannot be combined.
+- **Results:** both runs report `visits_per_case`. A case that reaches the 100-step path limit is
+  stopped there and counted in `routes_cut_at_path_limit`.
+- **Random numbers:** each case walks with its own random numbers, so an unchanged scenario simulates
+  identically and changing times never changes routes.
+- **Uncertainty:** replications draw each row of shares from a Dirichlet distribution over its
+  counts.
+
+The tests check two cases:
+
+- **Rework loop:** in a loop where Fix follows Check with probability 0.3, simulated visits per case
+  match the geometric expectation (Fix 0.43, Check 1.43).
+- **Optional checks:** on a log of six optional checks, a held-out validation with path routing runs
+  about 28% short on the mean. Step-by-step routing matches the median exactly, keeps the mean within
+  15% and halves the distribution difference.
+
+The dashboard's simulation form and held-out check offer "How cases move between activities" and
+"Routing". With step-by-step routing, the routing text box is hidden and visits per case are shown.
+
 #### Uncertainty from routing and arrivals
 
 A what-if run uses the routing shares, arrival rate and activity times measured from the log as if

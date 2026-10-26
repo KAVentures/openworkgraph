@@ -17,6 +17,7 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import event_log_simulation_routing as routing_model
 from . import event_log_simulation_uncertainty as uncertainty
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
@@ -371,12 +372,17 @@ def _measure_pattern(conn, zone: str) -> dict[str, Any]:
 
 
 def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
-              pattern_zones: tuple[str, ...] = (), until: datetime | None = None) -> dict[str, Any]:
+              pattern_zones: tuple[str, ...] = (), until: datetime | None = None,
+              routing: str = "paths") -> dict[str, Any]:
     """Measure arrival rate, routing, activity times and resources from the log.
 
     ``pattern_zones`` also measures the local hour-of-week arrival pattern of the selected cases.
-    ``until`` learns only from cases whose every event is at or before that time (a held-out validation)."""
+    ``until`` learns only from cases whose every event is at or before that time (a held-out validation).
+    ``routing="transitions"`` selects every eligible case, not only the most frequent paths, and measures
+    the step-by-step transitions between activities."""
     max_paths = max(1, min(int(max_paths), MAX_PATHS))
+    if routing not in routing_model.ROUTINGS:
+        raise EventLogWorkspaceError("routing must be paths or transitions")
 
     def run(conn):
         if until is not None:
@@ -399,12 +405,16 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
         variants = conn.execute("SELECT path, n FROM simulation_paths ORDER BY n DESC, path").fetchall()
         covered = sum(n for _, n in variants)
         eligible = conn.execute("SELECT count(*) FROM simulation_case_paths").fetchone()[0]
-        conn.execute("""CREATE TEMP TABLE simulation_selected AS
-            SELECT case_id FROM simulation_case_paths JOIN simulation_paths USING(path)""")
+        if routing == "transitions":
+            conn.execute("CREATE TEMP TABLE simulation_selected AS SELECT case_id FROM simulation_case_paths")
+        else:
+            conn.execute("""CREATE TEMP TABLE simulation_selected AS
+                SELECT case_id FROM simulation_case_paths JOIN simulation_paths USING(path)""")
+        selected = conn.execute("SELECT count(*) FROM simulation_selected").fetchone()[0]
         first, last = conn.execute("""SELECT min(started), max(started) FROM simulation_case_counts
             JOIN simulation_selected USING(case_id)""").fetchone()
-        span_hours = (last - first).total_seconds() / 3600 if covered and last > first else 0
-        arrivals = round((covered - 1) / span_hours, 6) if span_hours > 0 else None
+        span_hours = (last - first).total_seconds() / 3600 if selected and last > first else 0
+        arrivals = round((selected - 1) / span_hours, 6) if span_hours > 0 else None
         rows = conn.execute(f"""SELECT activity, quantile_cont(gap, 0.5), count(gap), count(DISTINCT nullif(resource, '')), avg(gap)
             FROM (SELECT activity, resource,
                     date_diff('second', lag(ts) OVER w, ts) AS gap
@@ -418,10 +428,12 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
             "arrivals_per_hour": arrivals,
             "paths": [{"activities": p, "weight": n / covered}
                       for p, n in variants],
-            "paths_cover_cases_share": round(covered / cases, 6) if cases else 0,
-            "observed_cases": cases, "calibrated_cases": covered,
+            "paths_cover_cases_share": round(selected / cases, 6) if cases else 0,
+            "observed_cases": cases, "calibrated_cases": selected,
             "excluded_case_reasons": {"path_length_limit": too_long,
-                "activity_limit": cases - too_long - eligible, "variant_limit": eligible - covered},
+                "activity_limit": cases - too_long - eligible, "variant_limit": eligible - selected},
+            "routing": routing,
+            **({"transitions": routing_model.measure(conn)} if routing == "transitions" else {}),
             "limits": {"path_events": MAX_PATH_LENGTH, "activities": MAX_ACTIVITIES, "paths": max_paths},
             "arrival_rate_basis": "selected_complete_cases",
             "activities": {a: {"minutes": round((g or 0) / 60, 3), "mean_minutes": round((m or 0) / 60, 3),
@@ -445,13 +457,21 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
         raise EventLogWorkspaceError(f"scenario must use format {FORMAT}")
     unknown = set(spec) - {"format", "label", "arrivals_per_hour", "paths", "activities", "distribution", "cases", "seed",
                            "calendar", "scenario_calendar", "pools", "arrival_pattern", "scenario_arrival_pattern",
-                           "activity_time_basis"}
+                           "activity_time_basis", "routing", "transitions"}
     if unknown:
         raise EventLogWorkspaceError("unknown scenario fields: " + ", ".join(sorted(unknown))[:200])
     arrivals = spec.get("arrivals_per_hour", base["arrivals_per_hour"])
     if arrivals is None:
         raise EventLogWorkspaceError("the log has too few cases to measure arrivals; enter arrivals_per_hour")
     arrivals = _number(arrivals, 1e-6, 1e6, "arrivals_per_hour")
+    route_kind = spec.get("routing", "paths")
+    if route_kind not in routing_model.ROUTINGS:
+        raise EventLogWorkspaceError("routing must be paths or transitions")
+    if route_kind == "paths" and "transitions" in spec:
+        raise EventLogWorkspaceError("transitions apply only with routing transitions")
+    if route_kind == "transitions" and "paths" in spec:
+        raise EventLogWorkspaceError("with routing transitions, change transitions instead of paths")
+    steps_model = routing_model.build(base, spec.get("transitions")) if route_kind == "transitions" else None
     paths = spec.get("paths", base["paths"])
     if not isinstance(paths, list) or not 0 < len(paths) <= MAX_PATHS:
         raise EventLogWorkspaceError(f"scenario needs 1 to {MAX_PATHS} paths")
@@ -476,7 +496,8 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
         raise EventLogWorkspaceError("activity_time_basis must be median or mean")
     measured_key = "minutes" if basis == "median" else "mean_minutes"
     params: dict[str, dict[str, float]] = {}
-    for name in {a for steps, _ in routing for a in steps}:
+    names = routing_model.activities(steps_model) if steps_model else {a for steps, _ in routing for a in steps}
+    for name in names:
         known = base["activities"].get(name, {})
         given = overrides.get(name, {})
         if not isinstance(given, dict) or set(given) - {"minutes", "resources"}:
@@ -507,7 +528,7 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     return {"arrival_pattern": pattern,
             "label": label[:80], "arrivals_per_hour": arrivals, "paths": [(s, w / total) for s, w in routing],
             "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar,
-            "activity_time_basis": basis,
+            "activity_time_basis": basis, "routing": route_kind, "transitions": steps_model,
             "pools": _pools(spec.get("pools"), params)}
 
 
@@ -576,11 +597,18 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
     start, finish, route, step_arrival = {}, {}, {}, {}
     clock = 0.0
     pattern = model.get("arrival_pattern")
+    steps_model, cut = model.get("transitions"), 0
     for case in range(model["cases"]):
         # Same random number per case with or without a pattern, so runs stay paired.
         clock = pattern.next_arrival(clock, rate, rng_arrival.expovariate(1.0)) if pattern else clock + rng_arrival.expovariate(rate)
-        draw = rng_route.random()
-        route[case] = paths[next((i for i, c in enumerate(cumulative) if draw <= c), len(paths) - 1)]
+        if steps_model:
+            # Each case walks with its own random numbers, so a different route in one case never shifts others.
+            route[case], was_cut = routing_model.walk(steps_model, random.Random(model["seed"] * 1_000_003 + case),
+                                                      MAX_PATH_LENGTH)
+            cut += was_cut
+        else:
+            draw = rng_route.random()
+            route[case] = paths[next((i for i, c in enumerate(cumulative) if draw <= c), len(paths) - 1)]
         start[case] = clock
         heapq.heappush(events, (clock, seq, case, 0)); seq += 1
     completions: list[tuple[float, int, int, int, str]] = []  # (time, order, case, step, activity)
@@ -637,9 +665,16 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
     activity_rows = []
     share = calendar.weekly_share if calendar is not None else 1.0
 
+    if steps_model:
+        visits = {a: 0.0 for a in params}
+        for steps in route.values():
+            for a in steps:
+                visits[a] += 1 / model["cases"]
+    else:
+        visits = {a: sum(w * steps.count(a) for steps, w in model["paths"]) for a in params}
+
     def work_per_second(activity: str) -> float:
-        return model["arrivals_per_hour"] / 3600 * params[activity]["minutes"] * 60 * sum(
-            w * steps.count(activity) for steps, w in model["paths"])
+        return model["arrivals_per_hour"] / 3600 * params[activity]["minutes"] * 60 * visits[activity]
     team_busy, team_work = {t: 0.0 for t in size}, {t: 0.0 for t in size}
     for activity in params:
         team_busy[team[activity]] += busy[activity]
@@ -674,6 +709,8 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         "activities": activity_rows,
         **({"pools": pool_rows} if pools else {}),
         "unstable": any(r["overloaded"] for r in activity_rows),
+        **({"routes_cut_at_path_limit": cut, "visits_per_case": {a: round(v, 4) for a, v in sorted(visits.items())}}
+           if steps_model else {}),
         **({"calendar": calendar.describe(), "utilization_basis": "working_time"} if calendar is not None else {}),
         **(_arrival_counts(pattern, start) if pattern is not None else {}),
     }
@@ -761,13 +798,18 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         zones = tuple(sorted(z for z in wanted if z))
         for zone in zones:
             _zone(zone, "arrival pattern timezone")
-    base = calibrate(log_id, case_type, pattern_zones=zones)
+    route_kind = scenario.get("routing", "paths") if isinstance(scenario, dict) else "paths"
+    if route_kind not in routing_model.ROUTINGS:
+        raise EventLogWorkspaceError("routing must be paths or transitions")
+    base = calibrate(log_id, case_type, pattern_zones=zones, routing=route_kind)
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
                      "seed": scenario.get("seed", 1) if isinstance(scenario, dict) else 1}
     if isinstance(scenario, dict) and "activity_time_basis" in scenario:
         baseline_spec["activity_time_basis"] = scenario["activity_time_basis"]   # both runs measure times alike
+    if route_kind != "paths":
+        baseline_spec["routing"] = route_kind      # both runs route alike; the scenario's own transitions change it
     if isinstance(scenario, dict) and scenario.get("calendar") is not None:
         baseline_spec["calendar"] = scenario["calendar"]      # shared by both runs; scenario_calendar overrides
     if isinstance(scenario, dict) and scenario.get("arrival_pattern") is not None:
@@ -799,9 +841,13 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     return {
         "log": base["log"], "case_notion": base["case_notion"],
         "calibration": {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share", "activities",
-            "observed_cases", "calibrated_cases", "excluded_case_reasons", "limits", "arrival_rate_basis")},
+            "observed_cases", "calibrated_cases", "excluded_case_reasons", "limits", "arrival_rate_basis", "routing")
+            if k in base},
         "scenario": {"label": scenario_model["label"], "arrivals_per_hour": scenario_model["arrivals_per_hour"],
-                     "paths": [{"activities": p, "weight": round(w, 6)} for p, w in scenario_model["paths"]],
+                     "routing": scenario_model["routing"],
+                     **({"transitions": routing_model.describe(scenario_model["transitions"])}
+                        if scenario_model["transitions"] else
+                        {"paths": [{"activities": p, "weight": round(w, 6)} for p, w in scenario_model["paths"]]}),
                      "activities": scenario_model["activities"], "distribution": scenario_model["distribution"],
                      "cases": scenario_model["cases"], "seed": scenario_model["seed"],
                      "activity_time_basis": scenario_model["activity_time_basis"],
@@ -817,7 +863,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
         **({"uncertainty": spread} if spread else {}),
-        "assumptions": _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []),
+        "assumptions": _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []) + (routing_model.ASSUMPTIONS if route_kind == "transitions" else []),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
@@ -852,9 +898,12 @@ def _ks(a: list[float], b: list[float]) -> float:
 def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
     """Calibrate on the earlier cases, simulate, and compare with the cases that started after the cutoff."""
     if not isinstance(spec, dict) or set(spec) - {"holdout_share", "cases", "seed", "distribution", "calendar",
-                                                   "arrival_pattern", "activity_time_basis"}:
-        raise EventLogWorkspaceError("validation takes holdout_share, cases, seed, distribution, calendar, arrival_pattern "
-                                     "and activity_time_basis")
+                                                   "arrival_pattern", "activity_time_basis", "routing"}:
+        raise EventLogWorkspaceError("validation takes holdout_share, cases, seed, distribution, calendar, arrival_pattern, "
+                                     "activity_time_basis and routing")
+    route_kind = spec.get("routing", "paths")
+    if route_kind not in routing_model.ROUTINGS:
+        raise EventLogWorkspaceError("routing must be paths or transitions")
     share = _number(spec.get("holdout_share", 0.3), 0.05, 0.5, "holdout_share")
     if isinstance(spec.get("arrival_pattern"), dict) and spec["arrival_pattern"].get("from_log"):
         raise EventLogWorkspaceError("validation uses entered arrival weights; a pattern measured from the log would "
@@ -882,11 +931,11 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
     training, spanning, holdout, first, last, p50, p90, mean, log_end = observed["counts"]
     if holdout < 10 or training < 10:
         raise EventLogWorkspaceError("validation needs at least 10 cases finished before the cutoff and 10 started after it")
-    base = calibrate(log_id, case_type, until=cutoff)
+    base = calibrate(log_id, case_type, until=cutoff, routing=route_kind)
     if not base["paths"]:
         raise EventLogWorkspaceError("no cases finished before the cutoff fit the simulation limits")
     model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern",
-                                                 "activity_time_basis") if k in spec},
+                                                 "activity_time_basis", "routing") if k in spec},
                            base)
     samples: list[float] = []
     try:
@@ -921,7 +970,7 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
         "arrivals_per_hour": {"calibrated": base["arrivals_per_hour"],
                               "observed_held_out": round((holdout - 1) / span_hours, 6) if span_hours > 0 else None},
         "calibration": {k: base[k] for k in ("paths", "activities", "paths_cover_cases_share", "excluded_case_reasons")},
-        "activity_time_basis": model["activity_time_basis"],
+        "activity_time_basis": model["activity_time_basis"], "routing": model["routing"],
         "assumptions": VALIDATION_ASSUMPTIONS + _time_basis(list(ASSUMPTIONS) if model["calendar"] is None else
                         [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS,
                                                             model)
