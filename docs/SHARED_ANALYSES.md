@@ -4,6 +4,8 @@ This is a connected first path for #370 M2/R4: local analysis → reviewed minim
 explicit Gateway publication → authorized shared view. It does not upload event logs, enable
 organization evidence sync, expose personal evidence, run shared queries, or grant agents access.
 The existing process-sharing and company evidence scopes remain separate.
+Optional [separately shared coded cases](SHARED_ANALYSIS_CASES.md) require their own explicit
+case scopes, owner attachment and per-revision viewer grant; aggregate access never grants cases.
 
 ## Publish and inspect
 
@@ -97,7 +99,8 @@ Administrators explicitly map these scopes in `OWG_GATEWAY_OIDC_GROUP_SCOPE_MAP`
 
 No analysis scopes are enabled by default. A person with process or evidence permissions
 alone cannot read publications. Inventory queries select authorized rows before pagination;
-there is no hidden-publication total, hidden-row analysis, arbitrary query or raw case API.
+there is no hidden-publication total, hidden-row analysis or arbitrary query. Separately granted
+coded case attachments have their own bounded interfaces; these endpoints do not expose raw cases.
 Owner/admin metadata changes and immutable revision creation use row locks / SQLite immediate
 transactions and separate compare-and-swap revisions for content and access. Writes recheck
 current membership after bounded request parsing. Grant/revoke actions replace the reviewed

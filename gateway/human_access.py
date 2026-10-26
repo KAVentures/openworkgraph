@@ -26,7 +26,7 @@ _ALLOWED_STATIC_SCOPES = {
     "org:process:write",
     "org:process:review",
     "org:process:admin",
-    "org:analysis:read",
+    "org:analysis:cases:read", "org:analysis:cases:write", "org:analysis:read",
     "org:analysis:write",
     "org:analysis:admin",
     "org:evidence:read",

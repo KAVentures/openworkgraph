@@ -405,6 +405,16 @@ async def event_log_run_analysis(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/case-sharing-preview")
+async def event_log_case_sharing_preview(request: Request, log_id: str):
+    _require_dashboard(request)
+    if request.headers.get('x-owg-case-sharing-preview') != 'true':
+        raise HTTPException(403,'Explicit case-level sharing preview confirmation is required')
+    from .analysis_case_export import prepare
+    parsed = await _json_body(request, 'analysis')
+    return await run_in_threadpool(_respond, prepare, log_id, parsed)
+
+
 @router.post("/v1/event-logs/{log_id}/analysis-sharing-preview")
 async def analysis_sharing_preview(request: Request, log_id: str):
     _require_dashboard(request)
