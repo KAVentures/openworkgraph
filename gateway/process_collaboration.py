@@ -93,7 +93,7 @@ def _now():
 
 def namespace(organization_id: str) -> str:
     # Deliberately different from personal knowledge's [organization, actor].
-    return json.dumps(['organization-process-catalog', organization_id], separators=(',', ':'))
+    return json.dumps(['organization-process-catalog', organization_id, 'v2'], separators=(',', ':'))
 
 
 class OrganizationProcessStore:
@@ -104,9 +104,13 @@ class OrganizationProcessStore:
     def initialize(self):
         self.knowledge.initialize()
         with self.db.connect() as conn:
+            if not self.db.is_postgres:
+                conn.execute('BEGIN IMMEDIATE')
             for statement in _SCHEMA.split(';'):
                 if statement.strip():
                     self.db._execute(conn, statement)
+            from .process_storage_migration import migrate
+            migrate(self,conn)
 
     @staticmethod
     def require_scope(p, scope):
@@ -161,11 +165,12 @@ class OrganizationProcessStore:
         # Count the latest statement from each reviewer; an old approval does not
         # override a later request for changes or a newer process revision.
         base = ''' FROM gateway_process_reviews r WHERE r.organization_id = ? AND r.workflow_id = ?
-          AND r.revision = ? AND r.review_number = (SELECT MAX(v.review_number)
+          AND r.revision = ? AND r.content_sha256 = ? AND r.review_number = (SELECT MAX(v.review_number)
             FROM gateway_process_reviews v WHERE v.organization_id = r.organization_id
             AND v.workflow_id = r.workflow_id AND v.revision = r.revision
             AND v.reviewer_actor_id = r.reviewer_actor_id)'''
-        params = (p.organization_id, workflow_id, revision)
+        digest=self._record(conn,p,workflow_id,revision)['content_sha256']
+        params = (p.organization_id, workflow_id, revision, digest)
         counts = self.db._execute(conn, 'SELECT decision, COUNT(*)' + base + ' GROUP BY decision', params).fetchall()
         totals = {row[0]: int(row[1]) for row in counts}
         status = ('changes_requested' if totals.get('changes_requested') else
@@ -534,6 +539,8 @@ class OrganizationProcessStore:
             current = self._record(conn, p, workflow_id)
             if current['revision'] != request.expected_revision or meta['access_revision'] != request.expected_access_revision:
                 raise ProcessCollaborationError('Process or access changed; reload before deleting')
+            from .process_hierarchies import erase as erase_hierarchy
+            erase_hierarchy(self,conn,p.organization_id,workflow_id)
             cursor = self.db._execute(conn, 'DELETE FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?', (namespace(p.organization_id), workflow_id))
             for table in ('gateway_process_reviews', 'gateway_process_authors', 'gateway_process_members', 'gateway_shared_processes'):
                 self.db._execute(conn, f'DELETE FROM {table} WHERE organization_id = ? AND workflow_id = ?', (p.organization_id, workflow_id))

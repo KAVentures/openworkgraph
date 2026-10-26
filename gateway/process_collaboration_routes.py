@@ -202,4 +202,6 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet) + '\nOrganization design review: ' + detail['review']['status'] + '\nThis review is not business-policy approval or execution authority.\n',
                         media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
 
+    from .process_hierarchy_routes import add_routes
+    add_routes(router,store,human,_body,_response)
     return router
