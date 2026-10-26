@@ -72,7 +72,12 @@ def create_human_enterprise_app(
     analysis_store = AnalysisPublications(db)
     analysis_start, analysis_stop = retention_hooks(analysis_store)
     extend_lifespan(app, startup=analysis_start, shutdown=analysis_stop)
-    app.include_router(build_router(analysis_store, app.state.human_principal_dependency))
+    from .analysis_signin import AnalysisSessionStore, build_analysis_signin_router
+    analysis_sessions = AnalysisSessionStore(db,human_access)
+    extend_lifespan(app,startup=analysis_sessions.initialize)
+    analysis_signin, analysis_human = build_analysis_signin_router(app,analysis_sessions,human_access,app.state.human_principal_dependency)
+    app.include_router(analysis_signin)
+    app.include_router(build_router(analysis_store, analysis_human))
     app.state.analysis_publications = analysis_store
 
     previous_health = _take_get_endpoint(app, "/health")

@@ -5,7 +5,8 @@
 body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20px;color:#24392f;background:#f5f7f3}section{background:white;border:1px solid #b9c9bf;border-radius:10px;padding:18px;margin:16px 0}button,input,select{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}button{cursor:pointer;margin:5px 5px 5px 0;border:1px solid #6d8979;border-radius:5px;background:#edf4ee;color:#183a27}button:disabled{cursor:default;opacity:.6}label{display:block;margin:10px 0}input[type=text],input[type=password]{width:100%}p,li,td,th,h1,h2{overflow-wrap:anywhere}.scroll{overflow:auto}table{border-collapse:collapse;width:100%}th,td{padding:8px;text-align:left;border-bottom:1px solid #d1ddd5}.member{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.member input{flex:1;min-width:130px}.muted{color:#4d6256}[hidden]{display:none!important}a{color:#1c5b36}
 </style></head><body>
 <header><h1>Shared analyses</h1><p>Publish an explicitly reviewed numeric snapshot. Raw event logs and private evidence stay local. Each publication is visible to its owner and explicitly authorized analysis administrators; other people need membership.</p><a href="/processes">Shared processes</a></header>
-<section aria-labelledby="signin"><h2 id="signin">Connect</h2><p>Use a delegated access token from your company’s OIDC integration with explicit analysis permissions. Process sign-in sessions and service tokens do not grant analysis access. Credentials remain in this page’s memory.</p>
+<section aria-labelledby="signin"><h2 id="signin">Connect</h2><p>Sign in with your company account when enabled, or use a delegated access token with explicit analysis permissions. Process sign-in sessions and service tokens do not grant analysis access. Credentials remain in this page’s memory; reloading requires reconnecting.</p>
+<button id="companySignIn" hidden>Sign in with company account</button><p id="identity">Not connected.</p>
 <label>Delegated access token <input id="token" type="password" autocomplete="off" maxlength="16384"></label>
 <button id="connect">Connect</button><button id="disconnect">Disconnect and clear</button></section>
 <p id="status" role="status" aria-live="polite"></p>
@@ -31,7 +32,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <script nonce="__NONCE__">
 (()=>{'use strict';
 const $=id=>document.getElementById(id),base='/v1/human/analyses';
-let credential='',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
+let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
  node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
@@ -48,10 +49,10 @@ function sync(){
  $('days').disabled=!!selected;
  $('saveAccess').disabled=!$('accessConfirm').checked;$('delete').disabled=!$('deleteConfirm').checked;
 }
-function disconnect(){epoch++;credential='';canPublish=false;clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
+function disconnect(){epoch++;credential='';credentialScheme='Bearer';canPublish=false;listAttempt++;next=null;$('more').hidden=true;$('identity').textContent='Not connected.';clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
 async function api(path,options={}){
  const attempt=epoch,token=credential;
- const r=await fetch(path,{...options,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:'Bearer '+token}});
+ const r=await fetch(path,{...options,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:credentialScheme+' '+token}});
  const value=await r.json();if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
  if(!r.ok){if([401,403,404].includes(r.status))clearSelection();throw new Error(value.detail||'Request failed');}return value;
 }
@@ -83,8 +84,46 @@ async function open(id,revision){
  if(d.permissions.manage){const access=await api(base+'/'+id+'/access');if(attempt!==viewAttempt)return;selected.access_revision=access.access_revision;for(const m of access.members)member(m.actor_id,m.role);}
  sync();
 }
-$('connect').onclick=()=>{const value=$('token').value.trim();disconnect();credential=value;epoch++;$('token').value='';run(async()=>{await inventory();$('workspace').hidden=false;$('status').textContent='Connected to authorized analyses.';});};
-$('disconnect').onclick=disconnect;$('refresh').onclick=()=>run(async()=>{clearSelection();await inventory();});$('new').onclick=clearSelection;$('more').onclick=()=>run(()=>inventory(next));
+function previousSession(){return {value:credential,scheme:credentialScheme};}
+async function revoke(previous){
+ if(!previous.value||previous.scheme!=='OWG-Analysis-Session')return;
+ try{
+  const r=await fetch(base+'/session/logout',{method:'POST',credentials:'omit',cache:'no-store',signal:AbortSignal.timeout(10000),headers:{Authorization:previous.scheme+' '+previous.value}});
+  if(!r.ok)throw new Error('Sign-out refused');
+ }catch{throw new Error('Page cleared. Server sign-out could not be confirmed; the analysis session expires within 15 minutes.');}
+}
+async function connectIdentity(value,scheme='Bearer'){
+ const previous=previousSession();disconnect();const attempt=epoch;
+ try{
+  await revoke(previous);if(attempt!==epoch)return;
+  if(!value)throw new Error('Enter a delegated token or use company sign-in.');
+  credential=value;credentialScheme=scheme;
+  const who=await api(base+'/session/me');if(attempt!==epoch)return;
+  await inventory();if(attempt!==epoch)return;
+  $('identity').textContent='Organization '+who.organization_id+' · actor '+who.actor_id+' · '+who.scopes.join(', ');
+  $('workspace').hidden=false;$('status').textContent='Connected to authorized analyses.';
+ }catch(e){if(attempt===epoch){disconnect();$('status').textContent=e.message;}}
+}
+$('connect').onclick=()=>connectIdentity($('token').value.trim());
+$('disconnect').onclick=()=>{const previous=previousSession();disconnect();run(()=>revoke(previous));};
+$('companySignIn').onclick=()=>{
+ const previous=previousSession();disconnect();const attempt=epoch;
+ run(async()=>{await revoke(previous);if(attempt!==epoch)return;
+  const r=await fetch(base+'/sign-in',{method:'POST',credentials:'same-origin',cache:'no-store'});
+  const data=await r.json();if(attempt!==epoch)return;
+  if(!r.ok)throw new Error(typeof data.detail==='string'?data.detail:'Company sign-in is unavailable.');
+  location.assign(data.redirect_url);
+ });
+};
+{
+ const fragment=new URLSearchParams(location.hash.slice(1)),incoming=fragment.get('analysis_session'),error=fragment.get('error');
+ // Remove callback credentials synchronously before starting any API request.
+ if(fragment.has('analysis_session')||fragment.has('error'))history.replaceState(null,'',location.pathname+location.search);
+ if(incoming&&incoming.length<=100)connectIdentity(incoming,'OWG-Analysis-Session');
+ else if(error)$('status').textContent=error.slice(0,200);
+}
+fetch(base+'/sign-in/config',{credentials:'omit',cache:'no-store'}).then(r=>r.ok?r.json():null).then(d=>{$('companySignIn').hidden=d?.company_sign_in_enabled!==true;}).catch(()=>{});
+$('refresh').onclick=()=>run(async()=>{clearSelection();await inventory();});$('new').onclick=clearSelection;$('more').onclick=()=>run(()=>inventory(next));
 $('file').onchange=()=>run(async()=>{
  const file=$('file').files[0];clearFile();if(!file)return;if(file.size>128*1024)throw new Error('Snapshot file exceeds 128 KiB.');
  const attempt=fileAttempt,raw=await file.text();if(attempt!==fileAttempt)return;const doc=window.owgAnalysisSnapshotClient.validate(JSON.parse(raw));
