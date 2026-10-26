@@ -19,10 +19,11 @@ The existing process-sharing and company evidence scopes remain separate.
    they are **not anonymization**. Ranks, numeric results, counts and declared units can still
    identify people or business facts. Publish only information you are authorized to share.
 3. Open the Gateway's **Shared analyses** portal (`/analyses`), also linked from Shared
-   processes. Connect with a delegated OIDC access token that has explicit analysis scopes.
-   The credential stays in memory, is cleared from the input on Connect, and is never stored
-   in browser storage. Existing process SSO sessions, service tokens and evidence scopes do
-   not provide analysis access. Company SSO for this separate portal is not implemented.
+   processes. Use **Sign in with company account** when configured, or connect with a delegated
+   OIDC access token that has explicit analysis scopes. Credentials stay in page memory, are
+   cleared from inputs on Connect, and are never stored in browser storage. Reloading requires
+   reconnecting. Existing process SSO sessions, service tokens and evidence scopes do not
+   provide analysis access. Company sign-in does not grant per-publication membership.
 4. Choose the file and review it again; add a meaningful authorized title and retention.
    The browser rejects unexpected fields **before transfer**. The server independently
    validates bounded JSON, refuses duplicate keys and recomputes the snapshot digest.
@@ -41,6 +42,49 @@ but does not disclose it or let the Gateway replay it. Neither hash is a public 
 proof of data ownership, completeness, business intent or outcome. Source freshness is always
 `unknown_source_not_shared`; local append/delete cannot contact or recall an independently
 shared copy. There is no approval or execution-authority propagation.
+
+## Company sign-in
+
+Company sign-in is independently disabled by default. Administrators can enable it with
+`OWG_GATEWAY_ANALYSIS_SSO_ENABLED=true`, alongside the existing company OIDC configuration:
+`OWG_GATEWAY_SSO_ISSUER`, `OWG_GATEWAY_SSO_CLIENT_ID` (and client secret where required),
+`OWG_GATEWAY_PUBLIC_URL`, plus the human-access issuer/audience/JWKS configuration and an
+explicit `OWG_GATEWAY_OIDC_GROUP_SCOPE_MAP`. The SSO and human-access issuers must match.
+Register `<public URL>/sso/callback` with the provider. Production public URLs require HTTPS.
+For example, map an authorized company analysis-readers group to `org:analysis:read`, and
+approved publishers to both `org:analysis:read` and `org:analysis:write`. Do not grant
+`org:analysis:admin` merely to enable sign-in. Tenant/actor identity comes from verified
+configured claims, never email matching or a client-supplied organization.
+
+The existing authorization-code flow verifies the provider signature, issuer, client audience,
+nonce and expiry, and uses PKCE S256. Sign-in starts only from the configured same-origin portal.
+A dedicated HttpOnly, SameSite=Lax browser-binding cookie (Secure for HTTPS) and single-use
+state bind the callback to the initiating browser and portal. The generic SSO-start endpoint
+cannot initiate this privileged portal flow. An ID token is never accepted as an API token.
+
+A successful callback creates an `OWG-Analysis-Session` credential for at most 15 minutes,
+clipped to the verified ID-token expiry. Its transient URL fragment is removed before API
+requests; the session stays only in page memory. The database stores a token hash and bounded
+subject/tenant/actor/groups/issuer, not the token, email, ID token or arbitrary provider claims.
+Only `org:analysis:*` scopes survive. Current group-to-scope configuration is rechecked on each
+request; per-publication ACLs and expiry are independently rechecked by the publication store.
+Changing provider group membership requires another sign-in or the existing session's expiry;
+there is no provider push-revocation integration. Removing the configured group mapping takes
+effect on the next request. Changing deployment environment settings requires an app restart.
+
+**Disconnect and clear** immediately clears page data and revokes its server session. Identity
+switches also revoke a previous analysis session before connecting. If revocation cannot be
+confirmed, the page reports that; the server credential remains bounded by its expiry. Reloading
+or closing the page clears memory but cannot guarantee server revocation. Already served bytes
+cannot be recalled. Process/employee/admin sessions, service bearer tokens and analysis sessions
+are not interchangeable. Process sign-in remains governed by its own existing flag and table.
+
+The dedicated endpoints are `GET /v1/human/analyses/sign-in/config`,
+`POST /v1/human/analyses/sign-in`, `GET /v1/human/analyses/session/me`, and
+`POST /v1/human/analyses/session/logout`. Credentials are sent explicitly in the Authorization
+header, never as ambient API cookies. Session creation/revocation is atomically audited using
+minimal metadata. Expired session rows are cleaned on subsequent sign-ins, as in the existing
+process portal; backups follow the operator's separate policy.
 
 ## Access, revisions and retention
 
@@ -90,7 +134,7 @@ The history limit refuses new revisions; it never silently prunes an earlier rev
 Local: `POST /v1/event-logs/{id}/analysis-sharing-preview`, normalized analysis spec body,
 `X-OWG-Analysis-Sharing-Preview: true`, OWG dashboard session, no-store.
 
-Gateway delegated-human endpoints (`Cache-Control: no-store`):
+Gateway delegated-human or analysis-session endpoints (`Cache-Control: no-store`):
 
 - `GET|POST /v1/human/analyses`: authorized inventory / new publication.
 - `GET|POST /v1/human/analyses/{id}`: exact `?revision=N` / new immutable revision.
@@ -107,5 +151,7 @@ Acceptance uses owned logs and synthetic delegated identities: actual local brow
 uploaded through the portal; owner/viewer/editor, foreign tenant and service/session refusal;
 immutable history, stale writes, revoke/export/delete, retention, malformed/hidden file refusal
 before transfer, late identity responses, WCAG/mobile, and SQLite/PostgreSQL transactions.
-This is not a real-identity customer pilot. Shared raw datasets, field/case views with server-side
+Separate owned RSA/OIDC/PKCE browser acceptance covers company sign-in, read-only membership,
+cross-portal refusal, revocation, stale responses and page reload. This is not a real-identity
+customer pilot. Shared raw datasets, field/case views with server-side
 re-query, cancellable jobs, shared signal/pipeline editing and live source freshness remain open M2 work.

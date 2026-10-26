@@ -38,7 +38,7 @@ from .auth import token_hash
 from .db import GatewayDB
 
 STATE_MINUTES = 10
-PURPOSES = ("admin", "me", "join", "processes")
+PURPOSES = ("admin", "me", "join", "processes", "analyses")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS gateway_sso_states (
@@ -252,8 +252,8 @@ class SSOClient:
             "email": email,
             "name": str(claims.get("name") or "")[:120],
         }
-        # Only the dedicated process callback receives verified identity claims.
+        # Only dedicated scoped portal callbacks receive verified identity claims.
         # Existing admin/employee/invitation consumers retain their exact shape.
-        if data['purpose'] == 'processes':
+        if data['purpose'] in {'processes','analyses'}:
             identity['verified_claims'] = claims
         return data["purpose"], json.loads(data.get("context_json") or "{}"), identity
