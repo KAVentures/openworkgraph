@@ -257,3 +257,7 @@ reference diagnostics. These groupings are separate from executable process mode
 [Reviewed decision tables](PROCESS_DECISION_TABLES.md) connect existing structured
 rules to exact outgoing branches, explicit effective dates and a human-declared
 source-document digest, with minimized authorized case checks.
+
+[Benefit contribution plans](PROCESS_BENEFIT_CONTRIBUTIONS.md) link exact scenario
+revisions with explicit inclusion, modeled scopes and nonduplicated organization
+estimates; these declarations do not establish realized savings.
