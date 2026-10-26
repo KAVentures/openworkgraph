@@ -249,3 +249,7 @@ the shared editor, checks keyboard/node-to-field navigation and rule-confirmatio
 invalidation, verifies there are no automatic design writes, rejects and repairs
 an incomplete decision, then saves a new revision and checks stale-review and
 read-only access boundaries.
+
+[Versioned repository hierarchy maps](PROCESS_REPOSITORY_HIERARCHIES.md) organize
+existing exact process revisions with category/capability navigation and current
+reference diagnostics. These groupings are separate from executable process models.
