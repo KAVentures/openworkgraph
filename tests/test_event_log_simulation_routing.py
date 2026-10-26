@@ -134,8 +134,8 @@ def test_held_out_validation_reports_routes_stopped_at_the_path_limit():
     assert 100 < routes["stopped_at_path_limit"] < 1000 and routes["stopped_routes_in_comparison"]
     stopped = [a for a in checked["assumptions"] if "were stopped there" in a]
     assert stopped == [f"{routes['stopped_at_path_limit']} of 1000 simulated cases reached the 100-event path limit "
-                       "and were stopped there. They are compared as if they had finished, so the simulated cycle "
-                       "times and the fit are understated by those stopped routes."]
+                       "and were stopped there. These stopped prefixes are compared as if they had finished, which "
+                       "shortens the simulated cycle times; the fit metrics do not assess completed routes."]
     assert set(routing.ASSUMPTIONS) <= set(checked["assumptions"])
     clean = sim.validate(_rework(800), {"routing": "transitions"})
     assert clean["simulated_routes"]["stopped_at_path_limit"] == 0

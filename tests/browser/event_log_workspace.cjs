@@ -342,6 +342,15 @@ const path=require('node:path');
    await page.locator('#owgEventLogSimValidation').getByRole('columnheader',{name:'Later cases'}).waitFor();
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/Kolmogorov–Smirnov|Too few cases/);
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/cases spanning the cutoff are left out/);
+   assert.doesNotMatch(await page.locator('#owgEventLogSimValidation').textContent(),/first-order/);
+   // Step-by-step held-out check: the request carries the routing and the view states that routing is first-order.
+   await page.locator('#owgEventLogSimHoldoutRouting').selectOption('transitions');
+   const [stepCheck]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);
+   const stepResult=await stepCheck.json();
+   assert.equal(stepCheck.status(),200,JSON.stringify(stepResult));assert.equal(JSON.parse(stepCheck.request().postData()).routing,'transitions');
+   assert.equal(stepResult.routing,'transitions');assert.equal(typeof stepResult.simulated_routes.stopped_at_path_limit,'number');
+   await page.locator('#owgEventLogSimValidation').getByText(/first-order: the next activity depends only on the current one/).waitFor();
+   await page.locator('#owgEventLogSimHoldoutRouting').selectOption('paths');
    // Mean measured times: the validation request carries the basis, and the form refills measured minutes.
    await page.locator('#owgEventLogSimHoldoutBasis').selectOption('mean');
    const [meanResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);

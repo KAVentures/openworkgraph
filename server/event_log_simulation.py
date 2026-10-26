@@ -982,7 +982,8 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
                        + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else [])
                        + (routing_model.ASSUMPTIONS if stepwise else [])
                        + ([f"{stopped} of {simulated['cases_simulated']} simulated cases reached the {MAX_PATH_LENGTH}-event "
-                           "path limit and were stopped there. They are compared as if they had finished, so the "
-                           "simulated cycle times and the fit are understated by those stopped routes."] if stopped else []),
+                           "path limit and were stopped there. These stopped prefixes are compared as if they had "
+                           "finished, which shortens the simulated cycle times; the fit metrics do not assess "
+                           "completed routes."] if stopped else []),
         "simulated_not_observed": True, "forecast_or_guarantee": False, "execution_authorized": False,
     }
