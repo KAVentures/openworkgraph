@@ -875,6 +875,11 @@ async def import_process_bpmn_draft(request: Request) -> Response:
     return JSONResponse(result,headers={'Cache-Control':'no-store'})
 
 
+@app.get('/process-decision-editor.js')
+def process_decision_editor_script() -> Response:
+    return FileResponse(ROOT / 'gateway' / 'process_decision_editor.js',media_type='application/javascript')
+
+
 @app.get('/process-rule-editor.js')
 def process_rule_editor_script() -> Response:
     return FileResponse(ROOT / 'gateway' / 'process_rule_editor.js',media_type='application/javascript')
@@ -891,7 +896,7 @@ async def check_declared_process_rules(request: Request,
     try:body=RuleCaseBatch.model_validate(await _process_json(request))
     except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded case-fact check') from None
     record=_catalog_record(workflow_id,revision)
-    result=check_case_rules(record,body.cases)
+    result=check_case_rules(record,body.cases,body.as_of_date)
     latest=_catalog_record(workflow_id)
     result['latest_revision_at_check']=latest['revision']
     result['references_latest_revision_at_check']=latest['revision']==revision
@@ -987,7 +992,8 @@ async def forget_process_catalog(request: Request) -> Response:
 def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1)) -> Response:
     from .process_agent_project import build_runtime_project
     packet=_catalog_export(workflow_id, revision)
-    archive = build_runtime_project(packet)
+    try:archive = build_runtime_project(packet)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
     return Response(archive, media_type='application/zip', headers={
         'Cache-Control': 'no-store',
         'Content-Disposition': 'attachment; filename="openworkgraph-openai-agents-project.zip"',

@@ -88,6 +88,12 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
         return Response(Path(__file__).with_name('process_rule_editor.js').read_text(encoding='utf-8'),
             media_type='application/javascript',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
+    @router.get('/process-decision-editor.js', include_in_schema=False)
+    def decision_editor_script():
+        from pathlib import Path
+        return Response(Path(__file__).with_name('process_decision_editor.js').read_text(encoding='utf-8'),
+            media_type='application/javascript',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
     @router.get('/v1/human/processes')
     def inventory(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100),
                   include_archived: bool = False, p=Depends(human)):
@@ -196,7 +202,9 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
                    f'attachment; filename="owg-shared-process-r{revision}.{ {"json":"json","bpmn":"bpmn","pdd":"txt","agent-project":"zip"}[format]}"'}
         if format == 'agent-project':
             packet['organization_catalog_reference'] = {'organization_id': p.organization_id}
-            return Response(build_runtime_project(packet), media_type='application/zip', headers=headers)
+            try:archive=build_runtime_project(packet)
+            except ValueError as exc:raise HTTPException(409,str(exc)) from None
+            return Response(archive, media_type='application/zip', headers=headers)
         if format == 'json':
             return JSONResponse(packet, headers=headers)
         return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet) + '\nOrganization design review: ' + detail['review']['status'] + '\nThis review is not business-policy approval or execution authority.\n',

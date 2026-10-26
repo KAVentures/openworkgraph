@@ -78,6 +78,8 @@ def build_runtime_spec(packet: dict) -> dict:
             or packet.get('execution_authorization') is not False):
         raise ValueError('A non-authorizing saved revision and content hash are required')
     model = ProcessModel.model_validate(packet['process_model'])
+    if model.decision_tables:
+        raise ValueError('Decision tables require source-backed effective-date and UNIQUE-hit support; implementation export is unavailable for this design')
     # Explicit output allowlist: no arbitrary captured/provider fields get copied.
     spec = {key: packet[key] for key in ('workflow_id', 'revision', 'content_sha256')}
     spec.update(format='openworkgraph.agent-runtime-project.v1', process_model=model.model_dump(),
@@ -106,7 +108,7 @@ def build_runtime_project(packet: dict) -> bytes:
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     if spec.get('control_flow_contract'):
         files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
-        for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py'):
+        for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
             files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'

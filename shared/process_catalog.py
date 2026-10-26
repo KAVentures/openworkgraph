@@ -126,6 +126,16 @@ def process_bpmn(packet: dict[str, Any]) -> str:
             ET.SubElement(node,f'{{{ns}}}documentation').text=(
                 'User-declared responsibility: '+activity.responsibility_label+
                 '. Descriptive only; not verified identity or review/execution authority.')
+        for table in model.decision_tables:
+            if table.decision_activity_id == activity.id:
+                declaration=table.model_dump(mode='json')
+                declaration['decision_activity_id']='Activity_'+activity.id
+                declaration['rows']=[{'id':row.id,'flow_id':'Flow_'+str(next(
+                    i for i,e in enumerate(model.transitions,1)
+                    if e.source==activity.id and e.rule_id==row.rule_id and e.target==row.target_activity_id))}
+                    for row in table.rows]
+                ET.SubElement(node,f'{{{ns}}}documentation').text='OWG decision table v1: '+json.dumps(
+                    declaration,sort_keys=True,ensure_ascii=True,allow_nan=False)
         for condition in model.manual_review_conditions:
             if condition.activity_id == activity.id:
                 ET.SubElement(node, f'{{{ns}}}documentation').text = (
@@ -172,6 +182,12 @@ def process_document(packet: dict[str, Any]) -> str:
         lines+=['','Structured declared predicates (not policy or automatic branching):']+[
             rule.id+': '+json.dumps(rule.predicate.model_dump(),sort_keys=True,ensure_ascii=True,allow_nan=False)
             for rule in model.business_rules if rule.predicate is not None]
+    if model.decision_tables:
+        lines+=['','Declared UNIQUE decision tables (not DMN, policy certification or execution authority):',
+                'Inclusive effective start; exclusive end. A supplied-case match is not exhaustive coverage.',
+                'Agent implementation export is unavailable until source-backed table semantics are supported.']+[
+            json.dumps(table.model_dump(mode='json'),sort_keys=True,ensure_ascii=True,allow_nan=False)
+            for table in model.decision_tables]
     lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [
         f'{c.activity_id}: {c.kind} · {c.condition_label}; response: {c.response}' for c in model.manual_review_conditions]
     lines += ['', 'Declared source-state expectations:'] + [f'{e.terminal_activity_id}: {e.operation} (user-confirmed={e.user_confirmed})' for e in model.outcome_expectations]

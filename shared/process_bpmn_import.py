@@ -12,10 +12,11 @@ import re
 import json
 from xml.etree import ElementTree as ET
 
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel, ConfigDict, Field
 
 from .process_model import ProcessModel
 from .process_rule_conditions import RulePredicate
+from .process_decision_tables import DecisionTable, ID
 
 MAX_BYTES = 128 * 1024
 BPMN = 'http://www.omg.org/spec/BPMN/20100524/MODEL'
@@ -36,6 +37,36 @@ _RESPONSIBILITY = re.compile(r'^User-declared responsibility: (.+)\. '
 
 class BPMNImportError(ValueError):
     """Fixed safe errors must never echo source XML or annotation payloads."""
+
+
+class _TableRow(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    id: ID
+    flow_id: str = Field(min_length=1,max_length=200)
+
+
+class _TableDocument(DecisionTable):
+    decision_activity_id: str = Field(min_length=1,max_length=200)
+    rows: list[_TableRow] = Field(min_length=2,max_length=40)
+
+    # The semantic row/rule/target integrity is validated after flow remapping.
+    def distinct_rows(self):
+        if self.effective_until is not None and self.effective_until <= self.effective_from:
+            raise ValueError('Invalid effective interval')
+        if len({r.id for r in self.rows})!=len(self.rows) or len({r.flow_id for r in self.rows})!=len(self.rows):
+            raise ValueError('Duplicate decision row')
+        return self
+
+
+def _json_document(text):
+    def pairs(items):
+        result={}
+        for k,v in items:
+            if k in result:raise ValueError('duplicate field')
+            result[k]=v
+        return result
+    def invalid(_value):raise ValueError('nonstandard JSON')
+    return json.loads(text,object_pairs_hook=pairs,parse_constant=invalid)
 
 
 def _name(element):
@@ -86,6 +117,7 @@ def import_bpmn(raw: bytes):
     process=processes[0]
     nodes,flows,notes=[],[],[]
     manual_by_source, responsibility_by_source=[],{}
+    table_by_source={}
     typed_tasks=0
     for child in process:
         tag=_name(child)
@@ -101,7 +133,16 @@ def import_bpmn(raw: bytes):
                 if subtag=='documentation' and (descendant.text or '').strip():
                     note=descendant.text.strip()
                     manual=_MANUAL.fullmatch(note);responsibility=_RESPONSIBILITY.fullmatch(note)
-                    if manual:
+                    if note.startswith('OWG decision table'):
+                        if not note.startswith('OWG decision table v1:') or child.get('id','') in table_by_source:
+                            raise BPMNImportError('Use one complete supported decision-table declaration per decision')
+                        try:
+                            table=_TableDocument.model_validate(_json_document(note.partition(':')[2]))
+                            if table.decision_activity_id!=child.get('id',''):raise ValueError('decision differs')
+                        except (ValueError,TypeError,RecursionError):
+                            raise BPMNImportError('Decision-table documentation must use the complete bounded supported format') from None
+                        table_by_source[child.get('id','')]=table
+                    elif manual:
                         manual_by_source.append({'source_id':child.get('id',''),'kind':manual.group(1),
                             'condition_label':manual.group(2),'response':manual.group(3)})
                     elif responsibility:
@@ -193,14 +234,7 @@ def import_bpmn(raw: bytes):
             text=(child.text or '').strip()
             if text.startswith('OWG declared predicate v1:'):
                 if predicate is not None:raise BPMNImportError('A flow may declare at most one structured predicate')
-                def pairs(items):
-                    values={}
-                    for key,value in items:
-                        if key in values:raise ValueError('duplicate field')
-                        values[key]=value
-                    return values
-                def invalid(_value):raise ValueError('nonstandard JSON')
-                try:predicate=RulePredicate.model_validate(json.loads(text.partition(':')[2],object_pairs_hook=pairs,parse_constant=invalid))
+                try:predicate=RulePredicate.model_validate(_json_document(text.partition(':')[2]))
                 except (ValueError,TypeError,RecursionError):raise BPMNImportError('Structured predicate documentation must use the complete bounded supported format') from None
             else:docs.append(text)
         if len(expressions)>1:
@@ -221,6 +255,17 @@ def import_bpmn(raw: bytes):
             if predicate is not None:rule['predicate']=predicate.model_dump()
             rules.append(rule);edge['rule_id']=rule_id
         transitions.append(edge)
+    tables=[]
+    flow_map={flow.get('id'):edge for flow,edge in zip(flows,transitions)}
+    for source,document in table_by_source.items():
+        value=document.model_dump(mode='json');value['decision_activity_id']=mapping[source];value['user_confirmed']=False
+        rows=[]
+        for row in document.rows:
+            edge=flow_map.get(row.flow_id)
+            if edge is None or edge['source']!=mapping[source] or not edge.get('rule_id'):
+                raise BPMNImportError('Decision-table rows must reference outgoing conditional flows of their decision')
+            rows.append({'id':row.id,'rule_id':edge['rule_id'],'target_activity_id':edge['target']})
+        value['rows']=rows;tables.append(value)
     if len(notes)>40:raise BPMNImportError('Imported designs support at most 40 documentation notes')
     manual_conditions=[{**{key:value for key,value in item.items() if key!='source_id'},
                         'activity_id':mapping[item['source_id']]} for item in manual_by_source]
@@ -228,13 +273,14 @@ def import_bpmn(raw: bytes):
         # Unstructured documentation/placeholder labels must not disappear and
         # silently produce a planner-ready graph. This unevaluated guard remains
         # in the saved model until a human explicitly resolves the source gaps.
-        manual_conditions.append({'activity_id':mapping[entries[0]],'kind':'exception_condition',
-            'condition_label':'Review original BPMN documentation and labels','response':'pause_for_review'})
+        guard={'activity_id':mapping[entries[0]],'kind':'exception_condition',
+            'condition_label':'Review original BPMN documentation and labels','response':'pause_for_review'}
+        if guard not in manual_conditions:manual_conditions.append(guard)
     try:
         model=ProcessModel(goal='Review imported process design',baseline_source='user_declared',
             baseline_coverage='user_declared_design',baseline_path=['Imported BPMN design - no observed execution'],
             supporting_case_count=0,activities=activities,transitions=transitions,business_rules=rules,
-            manual_review_conditions=manual_conditions,
+            manual_review_conditions=manual_conditions,decision_tables=tables,
             entry_activity_id=mapping[entries[0]],terminal_activity_ids=[mapping[t] for t in terminals])
     except ValidationError:
         raise BPMNImportError('Imported graph must be connected, reachable, bounded and have valid terminal routes and supported exclusive or paired parallel branches') from None
@@ -242,6 +288,7 @@ def import_bpmn(raw: bytes):
               'rules_require_human_confirmation','task_implementations_and_permissions_not_imported']
     if any(kind in {'parallel_split','parallel_join'} for kind in source_kinds.values()):
         warnings.append('parallel_semantics_preserved_sdk_uses_serial_token_valid_schedule')
+    if tables:warnings.append('decision_tables_retained_as_unconfirmed_declarations_not_dmn_execution')
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')

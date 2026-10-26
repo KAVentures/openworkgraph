@@ -253,3 +253,7 @@ read-only access boundaries.
 [Versioned repository hierarchy maps](PROCESS_REPOSITORY_HIERARCHIES.md) organize
 existing exact process revisions with category/capability navigation and current
 reference diagnostics. These groupings are separate from executable process models.
+
+[Reviewed decision tables](PROCESS_DECISION_TABLES.md) connect existing structured
+rules to exact outgoing branches, explicit effective dates and a human-declared
+source-document digest, with minimized authorized case checks.

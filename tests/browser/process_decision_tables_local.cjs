@@ -1,0 +1,41 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-local-decisions-')),base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let logs='',browser;for(const pipe of [server.stdout,server.stderr])pipe.on('data',v=>logs=(logs+v).slice(-6000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready,logs);
+  browser=await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
+  const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
+  await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
+  const model={goal:'Review a purchase',baseline_source:'user_declared',baseline_path:['Review','Accept'],activities:[{id:'choose',label:'Review',kind:'decision'},{id:'accept',label:'Accept'},{id:'escalate',label:'Escalate'}],transitions:[{source:'choose',target:'accept',rule_id:'small'},{source:'choose',target:'escalate',rule_id:'large'}],entry_activity_id:'choose',terminal_activity_ids:['accept','escalate'],business_rules:[{id:'small',text:'Small purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'lt',expected:100}]}},{id:'large',text:'Large purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'gte',expected:100}]}}]};
+  const saved=await page.evaluate(async model=>{await window.__owgAuthReady;const r=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'Local purchase',process_model:model,user_confirmed:true})});if(!r.ok)throw new Error(await r.text());return r.json();},model);
+  await page.getByRole('button',{name:'Load saved designs',exact:true}).click();await page.getByRole('button',{name:'Local purchase · r1',exact:true}).click();
+  await page.getByRole('button',{name:'Add decision table',exact:true}).click();
+  await page.getByLabel('Effective start decision_table_1',{exact:true}).fill('2026-01-01');
+  await page.getByLabel('Source document label decision_table_1',{exact:true}).fill('Reviewed reference');
+  await page.getByLabel('Source document SHA256 decision_table_1',{exact:true}).fill('a'.repeat(64));
+  const confirm=page.getByLabel('I confirm this exact table, referenced rules, source basis and effective dates decision_table_1',{exact:true});await confirm.check();
+  await page.getByLabel('Business goal',{exact:true}).fill('Review the selected purchase');assert.equal(await confirm.isChecked(),false);await confirm.check();
+  await page.locator('#owgCatalogReviewed').check();await page.getByRole('button',{name:'Save new revision',exact:true}).click();await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 2.'}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).isDisabled());
+  const file={as_of_date:'2026-10-26',cases:[{case_id:'case_1',facts:{amount:99}},{case_id:'case_2',facts:{amount:100}},{case_id:'case_3',facts:{}}]};
+  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles({name:'cases.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(file))});
+  await page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true}).check();
+  await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click();
+  const output=page.locator('#owgCatalogRuleCheckResult');await output.getByText('3 supplied case-fact reports',{exact:true}).waitFor();
+  assert.match(await output.textContent(),/unique match → accept/);assert.match(await output.textContent(),/unique match → escalate/);assert.match(await output.textContent(),/Decision table decision_table_1 · unknown/);
+  const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download minimized rule-check report',exact:true}).click()]);
+  const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(report.process_reference.revision,2);assert.equal(report.decision_table_as_of_date,'2026-10-26');assert.equal(JSON.stringify(report).includes('amount'),false);
+  const result=await page.evaluate(async id=>{const r=await fetch('/v1/process-catalog/agent-project?'+new URLSearchParams({workflow_id:id,revision:2}));return {status:r.status,text:await r.text()};},saved.workflow_id);assert.equal(result.status,409);assert.match(result.text,/Decision tables/);
+  const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await page.addScriptTag({content:axe});assert.deepEqual(await page.evaluate(async()=>{const r=await axe.run(document.querySelector('#owgCatalogEditor'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});return r.violations.map(v=>v.id);}),[]);
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+  assert.deepEqual(errors,[]);console.log('Local decision-table browser passed: shared editor, confirmation invalidation, exact save, numeric boundary/unknown checks, minimized export, explicit runtime refusal, WCAG/mobile.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(error=>{console.error(error);process.exit(1);});

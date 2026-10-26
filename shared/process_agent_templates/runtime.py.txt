@@ -11,6 +11,8 @@ def load_spec():
 
 
 def validate_spec(spec):
+    if spec['process_model'].get('decision_tables'):
+        raise ValueError('This runtime cannot evaluate decision tables or effective policy dates')
     parallel = any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities'])
     if parallel:
         if (spec.get('control_flow_contract') != 'openworkgraph.parallel-node-firing-plan.v1'

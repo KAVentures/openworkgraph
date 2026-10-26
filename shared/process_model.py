@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, 
 
 from .process_opportunities import OpportunityScenario
 from .process_rule_conditions import RulePredicate
+from .process_decision_tables import DecisionTable, validate_tables
 
 Identifier = Annotated[str, Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')]
 ActivityLabel = Annotated[str, Field(pattern=r'^[A-Za-z][A-Za-z0-9 _-]{0,63}$')]
@@ -98,6 +99,7 @@ class ProcessModel(StructuralModel):
     activities: list[Activity] = Field(min_length=1, max_length=40)
     transitions: list[Transition] = Field(default_factory=list, max_length=100)
     business_rules: list[BusinessRule] = Field(default_factory=list, max_length=40)
+    decision_tables: list[DecisionTable] = Field(default_factory=list, max_length=12)
     entry_activity_id: Identifier
     terminal_activity_ids: list[Identifier] = Field(min_length=1, max_length=40)
     outcome_expectations: list[OutcomeExpectation] = Field(default_factory=list, max_length=40)
@@ -107,6 +109,13 @@ class ProcessModel(StructuralModel):
     observed_path_is_policy: Literal[False] = False
     execution_authorized: Literal[False] = False
     outcomes_verified: Literal[False] = False
+
+    @model_serializer(mode='wrap')
+    def preserve_models_without_tables(self, handler):
+        result = handler(self)
+        if not self.decision_tables:
+            result.pop('decision_tables', None)
+        return result
 
     @field_validator('goal')
     @classmethod
@@ -184,6 +193,7 @@ class ProcessModel(StructuralModel):
         if any(node.kind in {'parallel_split','parallel_join'} for node in self.activities):
             from .process_parallel import parallel_regions
             parallel_regions(self)
+        validate_tables(self)
         return self
 
     def linear_path(self) -> list[str] | None:

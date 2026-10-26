@@ -14,7 +14,7 @@
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
-  function changed(){clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -269,6 +269,7 @@
       let i=1;while(model.business_rules.some(r=>r.id==='rule_'+i))i++;
       model.business_rules.push({id:'rule_'+i,text:'Describe the condition or exception',user_confirmed:false});
     })));
+    window.owgProcessDecisionEditor?.render(model,host,changed);
     host.appendChild(el('h4','Unverified manual review conditions'));
     host.appendChild(el('p','These declared triggers are not evaluated. They preserve the decision and exception ledger using activity IDs; they do not authorize an automatic branch.'));
     model.manual_review_conditions=model.manual_review_conditions||[];
@@ -350,6 +351,8 @@
     })));
 
     const project=button('Download OpenAI Agents project',()=>download('agent-project'));
+    project.disabled=!!record.process_model?.decision_tables?.length;
+    if(project.disabled)actions.appendChild(el('p','Saved decision tables require source-backed effective-date and UNIQUE-hit runtime support before implementation export.'));
     actions.appendChild(project);
     ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
     actions.appendChild(button('Add screenshots to saved PDD',()=>{
@@ -373,6 +376,7 @@
   function renderRuleChecks(host){
     const section=el('section');section.append(el('h4','Check declared conditions against case facts'),
       el('p','Choose an authorized JSON file containing cases with opaque labels (case_1 etc.) and facts. Confirmed structured predicates are checked against those supplied values only; missing facts stay unknown. Optional activity_ids describe a proposed route, not proof of observed execution. No data is sent to an AI or retained. Unsaved model edits are excluded.'));
+    section.appendChild(el('p','For decision tables include an explicit as_of_date (YYYY-MM-DD) alongside cases in the JSON. Checks cover supplied cases only.'));
     const label=el('label','Choose authorized case-facts JSON '),file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Choose authorized case-facts JSON');label.appendChild(file);
     const consentLabel=el('label',' I authorize local analysis of the case facts in this selected file. '),consent=el('input');consent.type='checkbox';consentLabel.appendChild(consent);
     const run=button('Check facts against saved rules',()=>locked(async()=>{
@@ -401,7 +405,9 @@
           const row=el('li'),detail=el('details');detail.appendChild(el('summary',rule.rule_id+' · '+reasons[rule.status]));
           const clauses=el('ol');for(const condition of rule.conditions)clauses.appendChild(el('li',reasons[condition.status]+' · '+condition.reason.replaceAll('_',' ')));
           detail.appendChild(clauses);row.appendChild(detail);list.appendChild(row);
-        }group.appendChild(list);output.appendChild(group);
+        }
+        for(const table of item.decision_tables||[])list.appendChild(el('li','Decision table '+table.table_id+' · '+table.status.replaceAll('_',' ')+(table.selected_target_activity_id?' → '+table.selected_target_activity_id:'')+(table.proposed_branch_agrees===false?' · proposed branch disagrees':'')));
+        group.appendChild(list);output.appendChild(group);
       }
       output.appendChild(button('Download minimized rule-check report',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));

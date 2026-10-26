@@ -246,7 +246,7 @@ class OrganizationProcessStore:
         self.require_scope(p, 'org:process:read')
         with self.db.connect() as conn:
             detail=self._detail(conn,p,workflow_id,revision=revision)
-            result=check_case_rules(detail['process'],batch.cases)
+            result=check_case_rules(detail['process'],batch.cases,batch.as_of_date)
             result.update(organization_id=p.organization_id,
                 latest_revision_at_check=detail['latest_revision'],
                 references_latest_revision_at_check=not detail['viewing_historical_revision'],
