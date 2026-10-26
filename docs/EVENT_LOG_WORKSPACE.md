@@ -370,6 +370,10 @@ combinations, the frequent paths are also the short ones and the simulation runs
   and transitions cannot be combined.
 - **Results:** both runs report `visits_per_case`. A case that reaches the 100-step path limit is
   stopped there and counted in `routes_cut_at_path_limit`.
+- **Held-out validation:** with step-by-step routing, validation reports `simulated_routes`. It gives
+  the simulated cases and how many stopped at the path limit. Stopped routes are compared as if they
+  had finished, which shortens the simulated times, so any stops are stated in the assumptions and
+  the dashboard.
 - **Random numbers:** each case walks with its own random numbers, so an unchanged scenario simulates
   identically and changing times never changes routes.
 - **Uncertainty:** replications draw each row of shares from a Dirichlet distribution over its

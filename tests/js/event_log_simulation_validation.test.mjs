@@ -20,3 +20,10 @@ test('held-out validation is read in plain language',()=>{
   assert.match(validationText(result(false,0.01)).verdict,/consistent at the 5% level.*not a forecast guarantee/);
   assert.match(validationText(result(null,null)).verdict,/Too few cases/);
 });
+
+test('stopped step-by-step routes are stated with the held-out fit',()=>{
+  assert.equal(validationText(result(false,0.01)).stopped,null);
+  const r={...result(false,0.01),simulated_routes:{cases_simulated:1000,stopped_at_path_limit:374,path_event_limit:100,stopped_routes_in_comparison:true}};
+  assert.equal(validationText(r).stopped,'374 of 1,000 simulated cases reached the 100-event path limit and were stopped there. They are compared as if finished, so simulated times and the fit below are understated.');
+  assert.equal(validationText({...r,simulated_routes:{...r.simulated_routes,stopped_at_path_limit:0}}).stopped,null);
+});

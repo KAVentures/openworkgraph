@@ -115,6 +115,37 @@ def test_held_out_validation_and_uncertainty_accept_transition_routing():
         routing.build({"transitions": base}, None)["next"]["Check"])
 
 
+def _single_activity_runs(cases: int = 80, events: int = 100) -> str:
+    """Every case is exactly ``events`` events of A: each observed route fits the path limit."""
+    start, rows = datetime(2024, 1, 1, tzinfo=timezone.utc), ["case,activity,time"]
+    for i in range(cases):
+        t = start + timedelta(hours=3 * i)
+        rows += [f"{i},A,{(t + timedelta(minutes=k)).isoformat()}" for k in range(events)]
+    raw = "\n".join(rows).encode()
+    return workspace.import_log(BytesIO(raw), name="long", source_format="csv", mapping=MAPPING)["log_id"]
+
+
+def test_held_out_validation_reports_routes_stopped_at_the_path_limit():
+    # A follows A 99 times in 100, so many simulated walks run past 100 steps though no observed case does.
+    checked = sim.validate(_single_activity_runs(), {"routing": "transitions", "cases": 1000, "seed": 1,
+                                                     "distribution": "fixed"})
+    routes = checked["simulated_routes"]
+    assert routes["cases_simulated"] == 1000 and routes["path_event_limit"] == sim.MAX_PATH_LENGTH
+    assert 100 < routes["stopped_at_path_limit"] < 1000 and routes["stopped_routes_in_comparison"]
+    stopped = [a for a in checked["assumptions"] if "were stopped there" in a]
+    assert stopped == [f"{routes['stopped_at_path_limit']} of 1000 simulated cases reached the 100-event path limit "
+                       "and were stopped there. They are compared as if they had finished, so the simulated cycle "
+                       "times and the fit are understated by those stopped routes."]
+    assert set(routing.ASSUMPTIONS) <= set(checked["assumptions"])
+    clean = sim.validate(_rework(800), {"routing": "transitions"})
+    assert clean["simulated_routes"]["stopped_at_path_limit"] == 0
+    assert not clean["simulated_routes"]["stopped_routes_in_comparison"]
+    assert set(routing.ASSUMPTIONS) <= set(clean["assumptions"])
+    assert not any("were stopped there" in a for a in clean["assumptions"])
+    paths = sim.validate(_rework(800), {})
+    assert "simulated_routes" not in paths and not set(routing.ASSUMPTIONS) & set(paths["assumptions"])
+
+
 @pytest.mark.parametrize("spec, message", [
     ({"routing": "graph"}, "paths or transitions"),
     ({"transitions": [{"from": "Check", "to": [{"activity": "Close", "weight": 1}]}]}, "only with routing transitions"),

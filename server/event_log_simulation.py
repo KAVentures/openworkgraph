@@ -952,6 +952,8 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
 
     def relative(sim: float | None, obs: float | None) -> float | None:
         return round(sim / obs - 1, 6) if sim is not None and obs else None
+    stepwise = model["routing"] == "transitions"
+    stopped = simulated.get("routes_cut_at_path_limit", 0)
     return {
         "log": base["log"], "case_notion": base["case_notion"],
         "cutoff": cutoff.isoformat() + "Z", "holdout_share": share,
@@ -970,10 +972,17 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
         "arrivals_per_hour": {"calibrated": base["arrivals_per_hour"],
                               "observed_held_out": round((holdout - 1) / span_hours, 6) if span_hours > 0 else None},
         "calibration": {k: base[k] for k in ("paths", "activities", "paths_cover_cases_share", "excluded_case_reasons")},
+        **({"simulated_routes": {"cases_simulated": simulated["cases_simulated"],
+                                 "stopped_at_path_limit": stopped, "path_event_limit": MAX_PATH_LENGTH,
+                                 "stopped_routes_in_comparison": stopped > 0}} if stepwise else {}),
         "activity_time_basis": model["activity_time_basis"], "routing": model["routing"],
         "assumptions": VALIDATION_ASSUMPTIONS + _time_basis(list(ASSUMPTIONS) if model["calendar"] is None else
                         [a for a in ASSUMPTIONS if not a.startswith("Resources work around the clock")] + CALENDAR_ASSUMPTIONS,
                                                             model)
-                       + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else []),
+                       + (ARRIVAL_PATTERN_ASSUMPTIONS if model["arrival_pattern"] is not None else [])
+                       + (routing_model.ASSUMPTIONS if stepwise else [])
+                       + ([f"{stopped} of {simulated['cases_simulated']} simulated cases reached the {MAX_PATH_LENGTH}-event "
+                           "path limit and were stopped there. They are compared as if they had finished, so the "
+                           "simulated cycle times and the fit are understated by those stopped routes."] if stopped else []),
         "simulated_not_observed": True, "forecast_or_guarantee": False, "execution_authorized": False,
     }

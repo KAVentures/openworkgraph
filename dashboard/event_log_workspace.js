@@ -925,7 +925,9 @@
   function validationText(r){
     const c=r.cycle_time_seconds,e=c.relative_error,d=r.distribution_distance;
     const sign=x=>x===null?'—':(x>=0?'+':'−')+Math.abs(x*100).toFixed(0)+'%';
+    const routes=r.simulated_routes,stopped=routes?.stopped_at_path_limit||0;
     return {
+      stopped:stopped?Number(stopped).toLocaleString()+' of '+Number(routes.cases_simulated).toLocaleString()+' simulated cases reached the '+routes.path_event_limit+'-event path limit and were stopped there. They are compared as if finished, so simulated times and the fit below are understated.':null,
       cases:'Calibrated on '+Number(r.cases.calibration).toLocaleString()+' cases finished before '+String(r.cutoff).slice(0,10)+' and compared with the '+Number(r.cases.held_out).toLocaleString()+' cases that started after it; '+Number(r.cases.spanning_cutoff_left_out).toLocaleString()+' cases spanning the cutoff are left out.',
       rows:[['Median cycle time',duration(c.simulated.p50),duration(c.observed_held_out.p50),sign(e.p50)],
             ['90th percentile',duration(c.simulated.p90),duration(c.observed_held_out.p90),sign(e.p90)],
@@ -974,7 +976,7 @@
       try{
         const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value,activity_time_basis:basis.value,routing:holdoutRouting.value})})).json();
         const t=validationText(r);
-        out.replaceChildren(el('div',t.cases,'muted'),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
+        out.replaceChildren(el('div',t.cases,'muted'),...(t.stopped?[el('div',t.stopped,'note')]:[]),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
           (()=>{const list=el('ul');list.className='muted';r.assumptions.slice(0,4).forEach(x=>list.appendChild(el('li',x)));return list;})());
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
