@@ -1,4 +1,4 @@
-"""Human-only snapshot publication; no service-token or process-session fallback."""
+"""Human-only snapshot publication; delegated or analysis-session identity, never process/service sessions."""
 import asyncio
 import json
 
