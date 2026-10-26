@@ -83,6 +83,10 @@ def create_human_enterprise_app(
     from .analysis_case_routes import build_router as build_case_router
     app.state.analysis_case_data = CaseData(analysis_store)
     app.include_router(build_case_router(app.state.analysis_case_data, analysis_human))
+    from .analysis_case_queries import CaseQueries
+    from .analysis_case_query_routes import build_router as build_query_router
+    app.state.analysis_case_queries = CaseQueries(app.state.analysis_case_data)
+    app.include_router(build_query_router(app.state.analysis_case_queries, analysis_human))
 
     previous_health = _take_get_endpoint(app, "/health")
     previous_capabilities = _take_get_endpoint(app, "/v1/capabilities")
