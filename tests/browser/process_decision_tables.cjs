@@ -58,9 +58,9 @@ const path=require('node:path');
   // A late identity lookup must neither restore Alice nor clear the new tenant.
   await page.locator('#disconnect').click();
   let identitySeen,identityRelease;const identityHeld=new Promise(r=>identitySeen=r);
-  await page.route('**/v1/human/me',async route=>{const response=await route.fetch();identitySeen();await new Promise(r=>identityRelease=r);await route.fulfill({response});},{times:1});
+  await page.route('**/v1/human/me',async route=>{const response=await route.fetch();identitySeen();await new Promise(r=>identityRelease=r);await route.abort('failed');},{times:1});
   await page.locator('#token').fill('alice');await page.getByRole('button',{name:'Connect',exact:true}).click();await identityHeld;
-  await page.locator('#disconnect').click();await login('foreign');const identityResponse=page.waitForResponse(r=>r.url().endsWith('/v1/human/me'));identityRelease();await identityResponse;
+  await page.locator('#disconnect').click();await login('foreign');const identityResponse=page.waitForEvent('requestfailed',r=>r.url().endsWith('/v1/human/me'));identityRelease();await identityResponse;
   assert.match(await page.locator('#identity').textContent(),/Organization elsewhere/);assert.equal(await page.locator('#inventory button').count(),0);
   await page.locator('#disconnect').click();await login('alice');await open(2);await page.getByRole('button',{name:'Edit selected design',exact:true}).click();
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await page.evaluate(source=>{const s=document.createElement('script');s.nonce=document.querySelector('script[nonce]').nonce;s.textContent=source;document.head.append(s);},axe);

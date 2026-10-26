@@ -726,7 +726,7 @@
             row.appendChild(el("p","Owner actor "+item.owner_actor_id+" · exact revision hash "+item.content_sha256));
             row.appendChild(el("p",item.current_independent_design_review?"This exact active design has independent review. This grants no execution authority.":"This is not an active independently reviewed design."));
             const list=el("ul");for(const [key,label] of Object.entries(labels)){
-              const ids=item.findings[key];if(ids.length)list.appendChild(el("li",label+": "+ids.join(", ")));
+              const ids=item.findings[key]||[];if(ids.length)list.appendChild(el("li",label+": "+ids.join(", ")));
             }
             if(!list.children.length)list.appendChild(el("li","No listed declaration findings. Customer tool bindings and deployment health were not checked."));
             row.appendChild(list);row.appendChild(button("Open readiness design "+item.workflow_id,()=>open(item.workflow_id,item.revision)));host.appendChild(row);
