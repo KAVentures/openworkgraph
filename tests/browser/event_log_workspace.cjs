@@ -342,6 +342,15 @@ const path=require('node:path');
    await page.locator('#owgEventLogSimValidation').getByRole('columnheader',{name:'Later cases'}).waitFor();
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/Kolmogorov–Smirnov|Too few cases/);
    assert.match(await page.locator('#owgEventLogSimValidation').textContent(),/cases spanning the cutoff are left out/);
+   assert.doesNotMatch(await page.locator('#owgEventLogSimValidation').textContent(),/first-order/);
+   // Step-by-step held-out check: the request carries the routing and the view states that routing is first-order.
+   await page.locator('#owgEventLogSimHoldoutRouting').selectOption('transitions');
+   const [stepCheck]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);
+   const stepResult=await stepCheck.json();
+   assert.equal(stepCheck.status(),200,JSON.stringify(stepResult));assert.equal(JSON.parse(stepCheck.request().postData()).routing,'transitions');
+   assert.equal(stepResult.routing,'transitions');assert.equal(typeof stepResult.simulated_routes.stopped_at_path_limit,'number');
+   await page.locator('#owgEventLogSimValidation').getByText(/first-order: the next activity depends only on the current one/).waitFor();
+   await page.locator('#owgEventLogSimHoldoutRouting').selectOption('paths');
    // Mean measured times: the validation request carries the basis, and the form refills measured minutes.
    await page.locator('#owgEventLogSimHoldoutBasis').selectOption('mean');
    const [meanResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulation/validation')),page.locator('#owgEventLogSimValidate').click()]);
@@ -418,6 +427,18 @@ const path=require('node:path');
    await page.locator('#owgEventLogSimReplications').fill('1');await page.locator('#owgEventLogSimRun').click();
    await page.getByText('Enter 2 to 50 replications, or leave it empty.').waitFor();
    await page.locator('#owgEventLogSimReplications').fill('');
+   // Step-by-step routing from every case: no path list is sent, and visits per case are shown for both runs.
+   await page.locator('#owgEventLogSimRouting').selectOption('transitions');
+   assert.equal(await page.locator('#owgEventLogSimPaths').isHidden(),true);
+   const [routedResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const routedRequest=JSON.parse(routedResponse.request().postData());
+   assert.equal(routedRequest.routing,'transitions');assert.equal('paths' in routedRequest,false);
+   const routed=await routedResponse.json();
+   assert.equal(routedResponse.status(),200);assert.equal(routed.scenario.routing,'transitions');
+   assert.ok(Object.keys(routed.result.visits_per_case).length>0);
+   await page.getByText('Visits per case (step-by-step routing)').waitFor();
+   await page.locator('#owgEventLogSimRouting').selectOption('paths');
+   assert.equal(await page.locator('#owgEventLogSimPaths').isVisible(),true);
 
    await page.locator('#owgEventLogModel').fill('Receive > Check > Approve > Close');
    await page.locator('#owgEventLogConformanceRun').click();
@@ -860,7 +881,7 @@ const path=require('node:path');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
-   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, routing, arrival and activity-time uncertainty, and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types.');
+   console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, routing, arrival and activity-time uncertainty, step-by-step routing, and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
    await Promise.race([new Promise(resolve=>server.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);

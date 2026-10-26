@@ -925,7 +925,10 @@
   function validationText(r){
     const c=r.cycle_time_seconds,e=c.relative_error,d=r.distribution_distance;
     const sign=x=>x===null?'—':(x>=0?'+':'−')+Math.abs(x*100).toFixed(0)+'%';
+    const routes=r.simulated_routes,stopped=routes?.stopped_at_path_limit||0;
     return {
+      stopped:stopped?Number(stopped).toLocaleString()+' of '+Number(routes.cases_simulated).toLocaleString()+' simulated cases reached the '+routes.path_event_limit+'-event path limit and were stopped there. These stopped prefixes are compared as if finished, which shortens simulated times; the fit below does not assess completed routes.':null,
+      routing:r.routing==='transitions'?'Step-by-step routing is first-order: the next activity depends only on the current one, not on earlier steps.':null,
       cases:'Calibrated on '+Number(r.cases.calibration).toLocaleString()+' cases finished before '+String(r.cutoff).slice(0,10)+' and compared with the '+Number(r.cases.held_out).toLocaleString()+' cases that started after it; '+Number(r.cases.spanning_cutoff_left_out).toLocaleString()+' cases spanning the cutoff are left out.',
       rows:[['Median cycle time',duration(c.simulated.p50),duration(c.observed_held_out.p50),sign(e.p50)],
             ['90th percentile',duration(c.simulated.p90),duration(c.observed_held_out.p90),sign(e.p90)],
@@ -937,6 +940,13 @@
 
   // The measured gap that stands for an activity's time; the mean suits variable (exponential) times.
   const TIME_BASES=[['median','Median gap (robust)'],['mean','Mean gap (suits variable times)']];
+  const ROUTINGS=[['paths','Most frequent complete paths'],['transitions','Step by step, from every case']];
+  // Visits per case for each activity in both runs, with the change; step-by-step routing only.
+  function visitRows(baseline,result){
+    const b=baseline.visits_per_case||{},s=result.visits_per_case||{};
+    return [...new Set([...Object.keys(b),...Object.keys(s)])].sort().map(a=>{const x=b[a]||0,y=s[a]||0,d=y-x;
+      return [a,x.toFixed(2),y.toFixed(2),(d>0?'+':d<0?'−':'')+Math.abs(d).toFixed(2)];});
+  }
   // Replications for branch and arrival uncertainty: empty or 0 is off, otherwise 2–50.
   function simUncertainty(value){
     const text=String(value??'').trim();if(text===''||text==='0')return null;
@@ -957,16 +967,17 @@
     const share=select('owgEventLogSimHoldout',[['0.3','Latest 30% of cases'],['0.2','Latest 20% of cases'],['0.4','Latest 40% of cases']]);
     const dist=select('owgEventLogSimHoldoutDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
     const basis=select('owgEventLogSimHoldoutBasis',TIME_BASES);
+    const holdoutRouting=select('owgEventLogSimHoldoutRouting',ROUTINGS);
     const run=button('Check against later cases','secondary');run.id='owgEventLogSimValidate';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Hold out',share),field('Activity times',dist),field('Measured time per activity',basis),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Hold out',share),field('Activity times',dist),field('Measured time per activity',basis),field('Routing',holdoutRouting),run);
     const out=el('div');out.id='owgEventLogSimValidation';out.setAttribute('role','status');
     wrap.append(el('h4','Does the model reproduce later cases?'),el('div','Calibrate on earlier cases only, simulate, and compare with the cases that started afterwards.','muted'),row,out);
     run.onclick=async()=>{
       run.disabled=true;out.replaceChildren(el('div','Checking…','muted'));
       try{
-        const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value,activity_time_basis:basis.value})})).json();
+        const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value,activity_time_basis:basis.value,routing:holdoutRouting.value})})).json();
         const t=validationText(r);
-        out.replaceChildren(el('div',t.cases,'muted'),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
+        out.replaceChildren(el('div',t.cases,'muted'),...[t.routing,t.stopped].filter(Boolean).map(x=>el('div',x,'note')),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
           (()=>{const list=el('ul');list.className='muted';r.assumptions.slice(0,4).forEach(x=>list.appendChild(el('li',x)));return list;})());
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
@@ -1042,7 +1053,10 @@
         const poolRow=el('div',null,'row');poolRow.style.alignItems='end';
         poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities));
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
-        form.replaceChildren(top,calRow,arrivalRow,field('Routing: weighted lines or JSON for exact labels and weights',paths),wrap,addRowNode,poolRow,
+        const routeKind=select('owgEventLogSimRouting',ROUTINGS);
+        const pathsField=field('Routing: weighted lines or JSON for exact labels and weights',paths);
+        routeKind.onchange=()=>show(pathsField,routeKind.value==='paths');
+        form.replaceChildren(top,calRow,arrivalRow,field('How cases move between activities',routeKind),pathsField,wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
@@ -1050,6 +1064,7 @@
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
             const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000),activity_time_basis:timeBasis.value};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
+            if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;}
             const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
             if(pool)scenario.pools=pool;
             const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
@@ -1076,6 +1091,9 @@
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+              ...(r.result.visits_per_case?[el('h4','Visits per case (step-by-step routing)'),
+                table(['Activity','Baseline','Scenario','Change'],visitRows(r.baseline,r.result)),
+                ...(r.result.routes_cut_at_path_limit||r.baseline.routes_cut_at_path_limit?[el('div',(r.result.routes_cut_at_path_limit+r.baseline.routes_cut_at_path_limit)+' simulated cases reached the path-length limit and were stopped there.','note')]:[])]:[]),
               ...(r.uncertainty?[(()=>{const box=el('div');box.id='owgEventLogSimUncertainty';
                 box.append(el('h4','Uncertainty from routing and arrivals ('+r.uncertainty.replications+' replications, 95% range)'),
                   table(['Run','Median cycle time','90th percentile'],uncertaintyRows(r.uncertainty)),
@@ -2045,6 +2063,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
