@@ -8,6 +8,8 @@ def design_findings(value):
     confirmed_terminals={expectation.terminal_activity_id for expectation in model.outcome_expectations
                          if expectation.user_confirmed}
     return {
+        **({'unconfirmed_decision_table_ids':[t.id for t in model.decision_tables if not t.user_confirmed],
+            'decision_table_ids_requiring_runtime_support':[t.id for t in model.decision_tables]} if model.decision_tables else {}),
         'unconfirmed_rule_ids':[rule.id for rule in model.business_rules if not rule.user_confirmed],
         'text_only_rule_ids':[rule.id for rule in model.business_rules if rule.predicate is None],
         'structured_rule_ids_requiring_source_fact_implementation':[

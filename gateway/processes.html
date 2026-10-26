@@ -271,6 +271,7 @@
         <label><input id="ruleFactsConsent" type="checkbox" />I authorize sending this selected case-facts file to this organization's Gateway.</label>
         <button id="checkRuleFacts" disabled>Send facts for declared rule checks</button>
         <button id="clearRuleFacts">Clear case-fact results and selected file</button>
+        <p>For decision tables include an explicit <code>as_of_date</code> (YYYY-MM-DD) alongside <code>cases</code> in the JSON. Overlaps, gaps, unknown facts and inactive definitions withhold a target. Facts and reference documents remain unverified.</p>
         <div id="ruleFactsResult" role="status"></div>
       </fieldset>
       <div class="grid">
@@ -320,6 +321,7 @@
     <script nonce="__NONCE__" src="/process-hierarchy-client.js"></script>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
     <script nonce="__NONCE__" src="/process-rule-editor.js"></script>
+    <script nonce="__NONCE__" src="/process-decision-editor.js"></script>
     <script nonce="__NONCE__">
       (() => {
         "use strict";
@@ -464,7 +466,7 @@
           candidate = null,
           members = [],
           busy = false,
-          previewGeneration = 0;
+          previewGeneration = 0, identityGeneration = 0, operation = 0;
         const $ = (id) => document.getElementById(id);
         const el = (tag, text) => {
           const n = document.createElement(tag);
@@ -487,17 +489,21 @@
             return;
           }
           busy = true;
+          const ticket=++operation;
           try {
             await fn();
           } catch (error) {
-            note(error.message || "Process request failed.");
+            if(!error.staleIdentity)note(error.message || "Process request failed.");
           } finally {
-            busy = false;
+            if(ticket===operation)busy = false;
           }
         }
         async function call(path, body, options={}) {
           if (!credential)
             throw new Error("Connect your delegated identity first.");
+          const generation=identityGeneration;
+          const current=()=>{if(generation!==identityGeneration){const e=new Error("Previous identity response discarded.");e.staleIdentity=true;throw e;}};
+          try {
           const response = await fetch(path, {
             cache: "no-store",
             headers: {
@@ -507,16 +513,21 @@
             },
             ...(body ? { method: "POST", body: options.raw ? body : JSON.stringify(body) } : {}),
           });
+          current();
           if (!response.ok) {
             const data = await response.json().catch(() => ({}));
+            current();
             const error = new Error(typeof data.detail === "string" ? data.detail : "Invalid process request (" + response.status + ")");
             error.status = response.status;
             throw error;
           }
-          return response.json();
+          const data=await response.json();current();return data;
+          } catch(error) {current();throw error;}
         }
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
-        function clear() {
+        function clear(releaseBusy=false) {
+          identityGeneration++;
+          if(releaseBusy){operation++;busy=false;}
           repository.clear();
           clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
           clearShadowReview();
@@ -562,11 +573,12 @@
             "Page memory cleared. No browser credential or process cache is stored.",
           );
         }
-        $("disconnect").onclick = () =>
-          run(async () => {
+        $("disconnect").onclick = async () => {
+          let signOutGeneration;
+          try {
             const previous = credential,
               previousScheme = credentialScheme;
-            clear();
+            clear(true);signOutGeneration=identityGeneration;
             if (previous && previousScheme === "OWG-Process-Session") {
               const response = await fetch(
                 "/v1/human/processes/session/logout",
@@ -581,7 +593,8 @@
                   "Page cleared. Server sign-out could not be confirmed; the process session expires within 15 minutes.",
                 );
             }
-          });
+          } catch(error) {if(signOutGeneration===identityGeneration)note(error.message||"Page cleared; server sign-out could not be confirmed.");}
+        };
         async function connectIdentity(presented, scheme = "Bearer") {
           clear();
           credential = presented;
@@ -605,7 +618,7 @@
               who.scopes.filter((s) => s.startsWith("org:process:")).join(", ");
             await inventory();
           } catch (error) {
-            clear();
+            if(!error.staleIdentity)clear();
             throw error;
           }
         }
@@ -702,6 +715,8 @@
             Number(counts.needs_review||0)+" awaiting review · "+Number(counts.changes_requested||0)+" with changes requested."));
           const labels={unconfirmed_rule_ids:"Unconfirmed business rules",text_only_rule_ids:"Rules without structured conditions",
             structured_rule_ids_requiring_source_fact_implementation:"Structured rules awaiting implementation",
+            unconfirmed_decision_table_ids:"Unconfirmed decision tables",
+            decision_table_ids_requiring_runtime_support:"Decision tables awaiting runtime support",
             unmapped_activity_ids:"Activities without implementation suggestions",activity_ids_without_declared_responsibility:"Activities without declared responsibility",
             manual_review_activity_ids:"Activities with declared manual review conditions",terminal_ids_without_confirmed_source_expectation:"End steps without confirmed system checks"};
           const totals=el("ul");for(const [key,label] of Object.entries(labels))totals.appendChild(el("li",label+": "+Number(result.page_process_counts_with_findings[key]||0)+" design"+(result.page_process_counts_with_findings[key]===1?"":"s")+" on this page"));
@@ -997,6 +1012,7 @@
             ),
           );
           host.appendChild(rules);
+          window.owgProcessDecisionEditor?.summary(model,host);
           host.appendChild(el("h4", "Unverified manual review conditions"));
           const conditions = el("ul");
           (model.manual_review_conditions || []).forEach((c) =>
@@ -1067,7 +1083,11 @@
             host.appendChild(assumptions);
           } else host.appendChild(el("p", "No opportunity scenario declared."));
         }
-        function draftChanged() {
+        function draftChanged(invalidateTables=false) {
+          if(invalidateTables){
+            for(const t of candidate?.process_model?.decision_tables||[])t.user_confirmed=false;
+            document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});
+          }
           clearShadowReview();
           clearRuleFacts();
           $("reviewed").checked = false;
@@ -1094,7 +1114,7 @@
           input.value = value;
           input.addEventListener(options ? "change" : "input", () => {
             apply(input.value);
-            draftChanged();
+            draftChanged(true);
           });
           label.appendChild(input);
           host.appendChild(label);
@@ -1121,7 +1141,7 @@
           );
           const mutate = (fn) => {
             fn();
-            draftChanged();
+            draftChanged(true);
             editCandidate();
           };
           draftField(
@@ -1317,11 +1337,11 @@
             );
             check.addEventListener("change", () => {
               rule.user_confirmed = check.checked;
-              draftChanged();
+              draftChanged(true);
             });
             label.appendChild(check);
             row.appendChild(label);
-            window.owgProcessRuleEditor?.render(rule,row,()=>{check.checked=false;draftChanged();});
+            window.owgProcessRuleEditor?.render(rule,row,()=>{check.checked=false;draftChanged(true);});
             row.appendChild(
               button("Remove draft rule " + rule.id, () =>
                 mutate(() => {
@@ -1350,6 +1370,7 @@
               }),
             ),
           );
+          window.owgProcessDecisionEditor?.render(model,host,draftChanged);
           host.appendChild(el("h4", "Unverified manual review conditions"));
           model.manual_review_conditions = model.manual_review_conditions || [];
           model.manual_review_conditions.forEach((condition, index) => {
@@ -1710,7 +1731,8 @@
           );
           const parallel = data.process.process_model.activities.some(node =>
             ["parallel_split", "parallel_join"].includes(node.kind));
-          project.disabled = data.archived || data.review.status !== "reviewed_design";
+          const hasTables=!!data.process.process_model.decision_tables?.length;
+          project.disabled = hasTables || data.archived || data.review.status !== "reviewed_design";
           $("exports").appendChild(project);
           if (project.disabled)
             $("exports").appendChild(
@@ -1719,6 +1741,7 @@
                 "Implementation export requires an active process and independent review of this exact revision. Customer tool permissions remain separate.",
               ),
             );
+          if(hasTables)$("exports").appendChild(el("p","Decision-table designs require source-backed effective-date and UNIQUE-hit runtime support before implementation export."));
           if (parallel) $("exports").appendChild(el("p", "SDK schedules preserve every parallel branch and join, with one customer-authorized activity executed at a time."));
           renderMembers();
         }
@@ -1746,10 +1769,12 @@
           host.appendChild(el("p","Exact saved revision "+result.process_reference.revision+" · "+result.process_reference.content_sha256+
             (result.references_latest_revision_at_check?" · latest at check time.":" · historical; latest is "+result.latest_revision_at_check+".")));
           host.appendChild(el("p",Number(counts.matched||0)+" matched · "+Number(counts.not_matched||0)+" not matched · "+Number(counts.unknown||0)+" unknown. Unconfirmed/text-only definitions remain unevaluated."));
+          if(result.decision_table_coverage)host.appendChild(el("p","Table check date: "+(result.decision_table_as_of_date||"not supplied; tables withheld")+" · supplied cases only; not exhaustive coverage."));
           for(const row of result.cases){
             const group=el("details");group.appendChild(el("summary",row.case_id+" · "+(row.proposed_route_supplied?
               (row.proposed_route_structure_matches?"proposed route fits graph":"proposed route differs from graph"):"no route supplied")));
             const list=el("ul");for(const rule of row.rules)list.appendChild(el("li",rule.rule_id+" · "+words(rule.status)));
+            for(const table of row.decision_tables||[])list.appendChild(el("li","Decision table "+table.table_id+" · "+words(table.status)+(table.selected_target_activity_id?" → "+table.selected_target_activity_id:"")+(table.proposed_branch_agrees===false?" · proposed branch disagrees":"")));
             group.appendChild(list);host.appendChild(group);
           }
           host.appendChild(el("p","Caller-declared facts remain unverified. Manual review conditions are unevaluated. Model and review status are unchanged; no execution authority is granted. Only the inspection action, revision and case count were audited."));
