@@ -27,9 +27,13 @@ MAX_ATTACHMENTS = 20
 def initialize(store, conn):
     for sql in SCHEMA.split(';'):
         if sql.strip(): store.q(conn, sql)
+    from .analysis_case_queries import initialize as initialize_queries
+    initialize_queries(store,conn)
 
 
 def erase(store, conn, org, view_id):
+    from .analysis_case_queries import erase as erase_queries
+    erase_queries(store,conn,org,view_id)
     for table in ('gateway_analysis_case_grants','gateway_analysis_case_data'):
         store.q(conn, f'DELETE FROM {table} WHERE organization_id=? AND view_id=?',(org,view_id))
 
@@ -157,6 +161,8 @@ class CaseData:
             _,_,info=self.load(c,p,view_id,body.revision,owner=True,verify=False)
             if not body.user_confirmed:raise PublicationError('Confirm case dataset deletion',403)
             self.current(info,body)
+            from .analysis_case_queries import erase as erase_queries
+            erase_queries(s,c,p.organization_id,view_id,body.revision)
             s.q(c,'DELETE FROM gateway_analysis_case_grants WHERE organization_id=? AND view_id=? AND revision=?',(p.organization_id,view_id,body.revision))
             s.q(c,"UPDATE gateway_analysis_case_data SET payload='',deleted=1,access_revision=access_revision+1 WHERE organization_id=? AND view_id=? AND revision=?",(p.organization_id,view_id,body.revision))
             s.audit(c,p,'analysis.cases.deleted',view_id=view_id,revision=body.revision)

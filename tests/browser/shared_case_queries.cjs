@@ -1,0 +1,86 @@
+const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),{spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-shared-query-')),base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','shared_cases_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});let logs='',browser;
+ for(const p of [server.stdout,server.stderr])p.on('data',c=>logs=(logs+c).slice(-8000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(server.exitCode!==null)throw new Error(logs);try{if((await fetch(base+'/analyses')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const owner=await browser.newPage({acceptDownloads:true}),viewer=await browser.newPage({acceptDownloads:true}),errors=[];for(const p of [owner,viewer])p.on('pageerror',e=>errors.push(e.message));
+  async function connect(p,actor){await p.goto(base+'/analyses');await p.locator('#token').fill(actor);await p.locator('#connect').click();await p.locator('#status').filter({hasText:'Connected to authorized analyses.'}).waitFor();}
+  await connect(owner,'alice');await connect(viewer,'bob');
+  await owner.locator('#file').setInputFiles(path.join(scratch,'aggregate.json'));await owner.locator('#preview table').waitFor();await owner.locator('#title').fill('Shared case cohort');await owner.locator('#confirm').check();
+  const [made]=await Promise.all([owner.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/v1/human/analyses')),owner.locator('#publish').click()]);const wid=(await made.json()).view_id;
+  await owner.locator('#caseFile').waitFor();let uploads=0;owner.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/case-data'))uploads++;});
+  const doc=JSON.parse(await fs.readFile(path.join(scratch,'cases.json'),'utf8'));
+  await owner.locator('#caseFile').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...doc,people:['private']}))});
+  await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'cannot be uploaded'}).waitFor();assert.equal(uploads,0);
+  await owner.locator('#caseFile').setInputFiles(path.join(scratch,'cases.json'));await owner.locator('#caseConfirm').check();await owner.locator('#attachCaseData').click();
+  await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  await owner.locator('#addMember').click();await owner.locator('#members input').fill('bob');await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();await owner.locator('#status').filter({hasText:'Access updated;'}).waitFor();
+  await viewer.locator('#refresh').click();await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();await viewer.locator('#table table').waitFor();
+  await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case dataset not found'}).waitFor();
+  await owner.locator('#addCaseViewer').click();await owner.getByLabel('Case viewer actor ID').fill('bob');await owner.locator('#caseAccessConfirm').check();await owner.locator('#saveCaseAccess').click();await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case access updated'}).waitFor();
+  await viewer.locator('#refresh').click();await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  await viewer.locator('#caseWorkspace button').filter({hasText:/^C1 ·/}).click();await viewer.locator('#caseWorkspace h3').filter({hasText:'Case C1'}).waitFor();
+  await viewer.locator('#caseActivity').selectOption('A1');await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  const [download]=await Promise.all([viewer.waitForEvent('download'),viewer.locator('#exportCaseData').click()]);assert.deepEqual(JSON.parse(await fs.readFile(await download.path(),'utf8')).dataset,doc);
+  const queries=owner.locator('#sharedCaseQueries');
+  await queries.locator('#sharedQueryGroup').selectOption('repeated_activity');await queries.locator('#sharedQueryCheck').check();await queries.locator('#sharedQueryThreshold').fill('1');
+  let queryPosts=0;owner.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/case-data/query?'))queryPosts++;});
+  await queries.locator('#sharedQueryThreshold').fill('18014398509481984');await queries.locator('#sharedQueryRun').click();await queries.getByRole('status').filter({hasText:'browser-safe numeric'}).waitFor();assert.equal(queryPosts,0);
+  await queries.locator('#sharedQueryThreshold').fill('1');
+  await queries.locator('#sharedQueryAddMeasure').click();await queries.getByLabel('Measure aggregation',{exact:true}).nth(1).selectOption('avg');await queries.getByLabel('Measure value',{exact:true}).nth(1).selectOption('time_between');await queries.getByLabel('From coded activity',{exact:true}).nth(1).fill('A1');await queries.getByLabel('To coded activity',{exact:true}).nth(1).fill('A99');await queries.locator('#sharedQueryCheckSlot').selectOption('1');
+  await queries.locator('#sharedQueryRun').click();await queries.getByRole('status').filter({hasText:'Analysis computed'}).waitFor();assert.match(await queries.locator('#sharedQueryResult').textContent(),/not_evaluable/);
+  await queries.getByRole('button',{name:'Remove measure',exact:true}).nth(1).click();await queries.locator('#sharedQueryCheckSlot').selectOption('0');
+  await queries.locator('#sharedQueryRun').click();await queries.getByRole('status').filter({hasText:'Analysis computed'}).waitFor();
+  assert.match(await queries.locator('#sharedQueryResult').textContent(),/passes/);
+  await queries.locator('#sharedQueryName').fill('Shared case counts');await queries.locator('#sharedQueryConfirm').check();
+  const [saved]=await Promise.all([owner.waitForResponse(r=>r.request().method()==='POST'&&r.url().includes('/case-data/queries?')),queries.locator('#sharedQuerySave').click()]);
+  assert.equal(saved.status(),200);const queryId=(await saved.json()).query_id;
+  await queries.getByRole('status').filter({hasText:'Shared analysis saved'}).waitFor();
+  await viewer.locator('#refresh').click();await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();
+  await viewer.locator('#sharedQueryList button').filter({hasText:'Open Shared case counts'}).click();
+  await viewer.locator('#sharedCaseQueries').getByRole('status').filter({hasText:'Viewing saved revision 1 of 1'}).waitFor();
+  await viewer.locator('#sharedQueryConfirm').check();assert.equal(await viewer.locator('#sharedQuerySave').isDisabled(),true);
+  const [queryDownload]=await Promise.all([viewer.waitForEvent('download'),viewer.locator('#sharedQueryExport').click()]);const exportedQuery=JSON.parse(await fs.readFile(await queryDownload.path(),'utf8'));assert.equal(exportedQuery.query.spec.check.threshold,1);assert.equal(exportedQuery.result.matching_cases,doc.cases.length);assert.equal(exportedQuery.result.check_is_live_monitoring,false);
+  await queries.locator('#sharedQueryThreshold').fill(String(doc.cases.length+1));assert.equal(await queries.locator('#sharedQueryExport').isDisabled(),true);await queries.locator('#sharedQueryConfirm').check();await queries.locator('#sharedQuerySave').click();
+  await queries.getByRole('status').filter({hasText:'Shared analysis saved'}).waitFor();assert.match(await queries.locator('#sharedQueryResult').textContent(),/fails/);
+  await queries.locator('#sharedQueryRevision').fill('1');await queries.locator('#sharedQueryOpenRevision').click();await queries.getByRole('status').filter({hasText:'Viewing saved revision 1 of 2'}).waitFor();await queries.locator('#sharedQueryConfirm').check();assert.equal(await queries.locator('#sharedQuerySave').isDisabled(),true);
+  await queries.locator('#sharedQueryNew').click();assert.equal(await queries.locator('#sharedQueryThreshold').inputValue(),'1');assert.equal(await queries.locator('#sharedQueryName').inputValue(),'');
+  await queries.locator('#sharedQueryName').fill('Copied counts');await queries.locator('#sharedQueryConfirm').check();await queries.locator('#sharedQuerySave').click();await queries.getByRole('status').filter({hasText:'Shared analysis saved'}).waitFor();
+  await queries.locator('#sharedQueryList button').filter({hasText:'Open Shared case counts'}).click();await queries.getByRole('status').filter({hasText:'Viewing saved revision 2 of 2'}).waitFor();
+  await queries.locator('#sharedQueryRevision').fill('2');await queries.locator('#sharedQueryOpenRevision').click();await queries.getByRole('status').filter({hasText:'Viewing saved revision 2 of 2'}).waitFor();
+  await viewer.locator('#sharedQueryList button').filter({hasText:'Open Shared case counts'}).click();await viewer.locator('#sharedCaseQueries').getByRole('status').filter({hasText:'Viewing saved revision 2 of 2'}).waitFor();
+  await viewer.locator('#sharedQueryRevision').fill('1');await viewer.locator('#sharedQueryOpenRevision').click();await viewer.locator('#sharedCaseQueries').getByRole('status').filter({hasText:'Viewing saved revision 1 of 2'}).waitFor();assert.match(await viewer.locator('#sharedQueryResult').textContent(),/passes/);
+  // A saved-query response authorized for Bob cannot restore its title/results after identity changes.
+  let seenQuery,releaseQuery;const queryHeld=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Held query request not reached')),15000);seenQuery=()=>{clearTimeout(timer);resolve();};});
+  await viewer.route(url=>url.pathname==='/v1/human/analyses/'+wid+'/case-data/queries/'+queryId,async route=>{const response=await route.fetch();seenQuery();await new Promise(r=>releaseQuery=r);await route.fulfill({response});},{times:1});
+  await viewer.locator('#sharedQueryList button').filter({hasText:'Open Shared case counts'}).click();await queryHeld;
+  await viewer.locator('#disconnect').click();await viewer.locator('#token').fill('read-only');await viewer.locator('#connect').click();await viewer.locator('#status').filter({hasText:'Connected to authorized analyses.'}).waitFor();
+  const queryOld=viewer.waitForResponse(r=>new URL(r.url()).pathname==='/v1/human/analyses/'+wid+'/case-data/queries/'+queryId);releaseQuery();await queryOld;await viewer.waitForTimeout(50);
+  assert.equal(await viewer.locator('#sharedQueryResult').textContent(),'');assert.equal(await viewer.locator('#sharedQueryName').inputValue(),'');assert.equal(await viewer.locator('#sharedCaseQueries').isHidden(),true);
+  await connect(viewer,'bob');await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  // An authorized old case response must not repopulate a new identity's page.
+  let seen,release;const held=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Held case request not reached')),15000);seen=()=>{clearTimeout(timer);resolve();};});
+  await viewer.route(url=>url.pathname==='/v1/human/analyses/'+wid+'/case-data/cases/C1',async route=>{const response=await route.fetch();seen();await new Promise(r=>release=r);await route.fulfill({response});},{times:1});
+  await viewer.locator('#caseWorkspace button').filter({hasText:/^C1 ·/}).click();await held;
+  await viewer.locator('#disconnect').click();await viewer.locator('#token').fill('read-only');await viewer.locator('#connect').click();await viewer.locator('#status').filter({hasText:'Connected to authorized analyses.'}).waitFor();
+  const old=viewer.waitForResponse(r=>new URL(r.url()).pathname==='/v1/human/analyses/'+wid+'/case-data/cases/C1');release();await old;await viewer.waitForTimeout(50);
+  assert.equal(await viewer.locator('#caseWorkspace').isHidden(),true);assert.equal(await viewer.locator('#caseWorkspace ol').count(),0);
+  await connect(viewer,'bob');await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  // Any parent ACL change invalidates the separate case grant even if Bob stays a member.
+  await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();await owner.locator('#status').filter({hasText:'Access updated;'}).waitFor();
+  await viewer.locator('#refresh').click();await viewer.locator('#inventory button').filter({hasText:'Shared case cohort'}).click();await viewer.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case dataset not found'}).waitFor();
+  assert.equal(await viewer.locator('#caseWorkspace ol').count(),0);assert.equal((await viewer.request.get(base+'/v1/human/analyses/'+wid+'/case-data/export?revision=1',{headers:{Authorization:'Bearer bob'}})).status(),404);
+  assert.equal((await viewer.request.get(base+'/v1/human/analyses/'+wid+'/case-data/queries/'+queryId+'/export?parent_revision=1&revision=1',{headers:{Authorization:'Bearer bob'}})).status(),404);
+  await owner.locator('#sharedQueryList button').filter({hasText:'Open Shared case counts'}).click();await owner.locator('#sharedCaseQueries').getByRole('status').filter({hasText:'Viewing saved revision 2 of 2'}).waitFor();
+  const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await owner.evaluate(source=>{const s=document.createElement('script');s.nonce=document.querySelector('script[nonce]').nonce;s.textContent=source;document.head.append(s);},axe);assert.deepEqual((await owner.evaluate(()=>axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}))).violations,[]);
+  await owner.setViewportSize({width:390,height:844});assert(await owner.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await owner.locator('#sharedQueryDeleteConfirm').check();await owner.locator('#sharedQueryDelete').click();await owner.locator('#sharedCaseQueries').getByRole('status').filter({hasText:'Saved analysis and all its revisions deleted'}).waitFor();
+  assert.equal((await owner.request.get(base+'/v1/human/analyses/'+wid+'/case-data/queries/'+queryId+'?parent_revision=1',{headers:{Authorization:'Bearer alice'}})).status(),404);
+  await owner.locator('#caseDeleteConfirm').check();await owner.locator('#deleteCaseData').click();await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data and grants deleted'}).waitFor();assert.equal(await owner.locator('#table table').count(),1);
+  await owner.locator('#disconnect').click();assert.equal(await owner.locator('#caseWorkspace').isHidden(),true);assert.equal(await owner.locator('#caseWorkspace ol').count(),0);assert.deepEqual(errors,[]);
+  console.log('Shared query acceptance passed: typed checks, immutable saved history, viewer refusal, exports, historical read, old identity suppression, revocation and owner deletion; inherited case lifecycle: actual paired local export, hidden fields refused before transfer, exact aggregate attachment, separate grants, coded timeline/filter/export, parent-ACL invalidation, deletion preserving aggregate, clear, WCAG/mobile.');
+ }catch(e){throw new Error(e.stack+'\nServer:\n'+logs);}finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});

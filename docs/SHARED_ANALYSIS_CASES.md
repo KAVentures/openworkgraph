@@ -56,7 +56,9 @@ Transitions show the top100 types and explicitly report truncation; variants sho
 and report the total distinct-variant count. Case lists are independently paginated (up to100
 per request); a timeline contains all events in its case. Filters select whole cases, so no
 filtered timeline is a misleading prefix. Query inputs are fixed typed codes/digests, not SQL,
-Python expressions or arbitrary uploaded programs. There is no background job/cancel API.
+Python expressions or arbitrary uploaded programs. There is no background job/cancel API. Separately authorized
+[shared typed analyses and snapshot checks](SHARED_CASE_ANALYSES.md) can be saved against the
+exact case dataset; they do not monitor live sources.
 
 ## Permissions and immutable revisions
 

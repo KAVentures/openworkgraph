@@ -69,7 +69,7 @@ jobs:
       - name: Verify shared design transactions on SQLite and PostgreSQL
         env:
           OWG_PROCESS_TEST_DATABASE_URL: postgresql://owg_test:synthetic-ci-password@127.0.0.1:5432/owg_test
-        run: python -m pytest -q tests/test_process_collaboration.py tests/test_shared_analysis_publications.py tests/test_shared_analysis_cases.py tests/test_process_signin.py tests/test_analysis_signin.py tests/test_organization_process_opportunities.py tests/test_shared_process_shadow_review.py tests/test_process_responsibilities.py tests/test_process_readiness.py tests/test_fleet_recorder_status.py tests/test_fleet_sync_health.py
+        run: python -m pytest -q tests/test_process_collaboration.py tests/test_shared_analysis_publications.py tests/test_shared_analysis_cases.py tests/test_shared_case_queries.py tests/test_process_signin.py tests/test_analysis_signin.py tests/test_organization_process_opportunities.py tests/test_shared_process_shadow_review.py tests/test_process_responsibilities.py tests/test_process_readiness.py tests/test_fleet_recorder_status.py tests/test_fleet_sync_health.py
       - name: Install isolated Chromium test runtime
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 bpmn-js@18.31.0 axe-core@4.10.3
@@ -80,6 +80,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_analyses.cjs
       - name: Verify separate shared case disclosure and grants
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
+      - name: Verify shared case query history and snapshot checks
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify company sign-in and process-only browser sessions
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_signin.cjs
       - name: Verify company sign-in and analysis-only browser sessions
