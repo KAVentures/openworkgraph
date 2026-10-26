@@ -1180,3 +1180,6 @@ fingerprints. Nothing is sent to an organization until you explicitly download, 
 the file through its Shared analyses portal. [Shared analyses](SHARED_ANALYSES.md) documents
 separate scopes, per-view roles, revisions, expiry, revocation, audited export and the remaining
 shared-dataset limitations. Codes minimize labels; they do not anonymize the numeric information.
+
+The builder supports [cancellable local analysis jobs](LOCAL_ANALYSIS_JOBS.md),
+with bounded queues, deadlines, session-scoped status/results and explicit cancellation.

@@ -279,7 +279,7 @@ def _unit(measure: Measure, coverage: list[dict[str, Any]], level: str) -> str |
     return {"duration_seconds": "seconds", "events": "events", "distinct_activities": "activities"}[measure.of]
 
 
-def run(log_id: str, spec: Any) -> dict[str, Any]:
+def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
     parsed = parse(spec)
     try:
         import duckdb
@@ -370,7 +370,7 @@ def run(log_id: str, spec: Any) -> dict[str, Any]:
             "units": {label: _unit(m, metric_coverage, parsed.level) for (label, _), m in zip(measures, parsed.measures)},
         }
     try:
-        return workspace._query(log_id, parsed.case_type, execute)
+        return workspace._query(log_id, parsed.case_type, execute, **({"control": control} if control is not None else {}))
     except duckdb.OutOfMemoryException:
         raise workspace.EventLogWorkspaceError(
             'Analysis exceeds available memory; select narrower cases or another dimension. '

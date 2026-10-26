@@ -634,3 +634,7 @@ async def event_log_case_events(request: Request, log_id: str,
     _require_dashboard(request)
     spec = await _json_body(request, "case event query")
     return _respond(case_pages.events, log_id, spec, case_type)
+
+# Reuse this router's dashboard authentication and bounded JSON parser.
+from .event_log_job_routes import add_routes as _add_analysis_job_routes
+_add_analysis_job_routes(router, _require_dashboard, _json_body)

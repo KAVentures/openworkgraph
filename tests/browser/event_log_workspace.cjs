@@ -471,6 +471,9 @@ const path=require('node:path');
    await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
 
    await page.locator('#owgAnalysisDim1').selectOption('has_rework');await page.locator('#owgAnalysisMeasure2').selectOption('median:duration_seconds');
+   // Keep the established full builder/export journey on the compatible synchronous path.
+   // Dedicated analysis_jobs.cjs covers the default cancellable job path and cancellation races.
+   await page.locator('#owgAnalysisBackground').uncheck();
    await page.locator('#owgAnalysisRun').click();
    await page.locator('#owgAnalysisResults table').waitFor();
    const analysisText=await page.locator('#owgAnalysisResults').textContent();
@@ -519,6 +522,7 @@ const path=require('node:path');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgMetricList').filter({hasText:'to_approval: time from the first Receive to the first Approve'}).waitFor();
    await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:to_approval');await page.locator('#owgAnalysisMeasure2').selectOption('');
+   await page.locator('#owgAnalysisBackground').uncheck();
    await page.locator('#owgAnalysisRun').click();
    await page.locator('#owgAnalysisResults').filter({hasText:'to_approval: 54 cases have a value, 6 do not'}).waitFor();
    const caseMetricText=await page.locator('#owgAnalysisResults').textContent();
@@ -558,6 +562,7 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
    await page.locator('#owgMetricName').fill('bad_units');await page.locator('#owgMetricOperation').selectOption('add');await page.locator('#owgMetricRightUnit').fill('EUR');
    await page.locator('#owgMetricAdd').click();await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:bad_units');
+   await page.locator('#owgAnalysisBackground').uncheck();
    await page.locator('#owgAnalysisRun').click();await page.locator('#owgAnalysisStatus').filter({hasText:'identical units'}).waitFor();
    await page.getByRole('button',{name:'Remove metric bad_units',exact:true}).click();
    await page.locator('#owgMetricName').fill('zero_divide');await page.locator('#owgMetricOperation').selectOption('divide');await page.locator('#owgMetricRightValue').fill('0');await page.locator('#owgMetricRightUnit').fill('ratio');
@@ -883,6 +888,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisMeasure1').selectOption('count');
    await page.locator('#owgAnalysisMeasure2').selectOption('');
    const literalResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis'));
+   await page.locator('#owgAnalysisBackground').uncheck();
    await page.locator('#owgAnalysisRun').click();const literalResult=await(await literalResponse).json();
    assert.equal(literalResult.variant_encoding,'ordered_activity_json_array');
    assert.deepEqual(literalResult.rows,[['["A","B"]',2],['["A > B"]',1]]);
