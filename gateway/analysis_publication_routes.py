@@ -13,13 +13,13 @@ from .process_collaboration_routes import _object, _invalid_constant
 ID = r'^ana_[a-f0-9]{32}$'
 
 
-async def body(request, model):
+async def body(request, model, max_bytes=160*1024):
     if request.headers.get('content-type','').split(';')[0].strip().lower() != 'application/json':
         raise HTTPException(415,'application/json required')
     data = bytearray()
     try:
         async for part in request.stream():
-            if len(data)+len(part)>160*1024: raise HTTPException(413,'Analysis request exceeds 160 KiB')
+            if len(data)+len(part)>max_bytes: raise HTTPException(413,f'Analysis request exceeds {max_bytes//1024} KiB')
             data.extend(part)
         return model.model_validate(json.loads(data,object_pairs_hook=_object,parse_constant=_invalid_constant))
     except (ValueError,ValidationError,UnicodeError,RecursionError):

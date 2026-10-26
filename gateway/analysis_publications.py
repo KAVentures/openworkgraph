@@ -90,6 +90,8 @@ class AnalysisPublications:
         with self.db.connect() as c:
             for statement in SCHEMA.split(';'):
                 if statement.strip(): self.q(c, statement)
+            from .analysis_case_data import initialize
+            initialize(self,c)
 
     def q(self, c, sql, params=()):
         return self.db._execute(c, sql, tuple(params))
@@ -103,6 +105,8 @@ class AnalysisPublications:
                (self.now().isoformat(), p.organization_id, p.audit_id, action, json.dumps(details)))
 
     def erase(self, c, org, view_id):
+        from .analysis_case_data import erase
+        erase(self,c,org,view_id)
         for table in ('gateway_analysis_members', 'gateway_analysis_revisions', 'gateway_analysis_views'):
             self.q(c, f'DELETE FROM {table} WHERE organization_id=? AND view_id=?', (org, view_id))
 

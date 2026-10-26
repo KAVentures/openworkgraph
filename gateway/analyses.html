@@ -27,11 +27,14 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <label>Renew retention (days, 1–90; blank keeps the current expiry) <input id="renew" type="number" min="1" max="90"></label>
 <label><input id="accessConfirm" type="checkbox"> I confirm the complete member list and retention change</label><button id="saveAccess" disabled>Save access</button>
 <label><input id="deleteConfirm" type="checkbox"> Delete this publication, all retained revisions and member access</label><button id="delete" disabled>Delete publication</button></section>
+<section id="caseWorkspace" hidden></section>
 </main>
 <script nonce="__NONCE__" src="/analysis-snapshot-client.js"></script>
+<script nonce="__NONCE__" src="/analysis-cases-client.js"></script>
 <script nonce="__NONCE__">
 (()=>{'use strict';
 const $=id=>document.getElementById(id),base='/v1/human/analyses';
+let identityScopes=[],identityActor='';
 let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
@@ -41,7 +44,7 @@ function table(node,doc){
  for(const row of doc.rows){const tr=document.createElement('tr');for(const v of row)tr.append(text('td',v===null?'—':String(v)));body.append(tr);}t.append(body);node.append(t);
 }
 function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
-function clearSelection(){viewAttempt++;selected=null;$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
+function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
  $('publisher').hidden=!credential||!canPublish;
  $('publish').disabled=!snapshot||!$('confirm').checked||!!(selected&&!selected.permissions.edit);
@@ -49,15 +52,17 @@ function sync(){
  $('days').disabled=!!selected;
  $('saveAccess').disabled=!$('accessConfirm').checked;$('delete').disabled=!$('deleteConfirm').checked;
 }
-function disconnect(){epoch++;credential='';credentialScheme='Bearer';canPublish=false;listAttempt++;next=null;$('more').hidden=true;$('identity').textContent='Not connected.';clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
+function disconnect(){identityScopes=[];identityActor='';epoch++;credential='';credentialScheme='Bearer';canPublish=false;listAttempt++;next=null;$('more').hidden=true;$('identity').textContent='Not connected.';clearSelection();$('workspace').hidden=true;$('inventory').replaceChildren();$('token').value='';$('status').textContent='Disconnected; page data cleared.';}
 async function api(path,options={}){
  const attempt=epoch,token=credential;
- const r=await fetch(path,{...options,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:credentialScheme+' '+token}});
+ const {preserveSelectionOnDenied=false,...requestOptions}=options;
+ const r=await fetch(path,{...requestOptions,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:credentialScheme+' '+token}});
  const value=await r.json();if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
- if(!r.ok){if([401,403,404].includes(r.status))clearSelection();throw new Error(value.detail||'Request failed');}return value;
+ if(!r.ok){if(!preserveSelectionOnDenied&&[401,403,404].includes(r.status))clearSelection();const error=new Error(value.detail||'Request failed');error.status=r.status;throw error;}return value;
 }
 async function run(operation){const attempt=epoch;try{await operation();}catch(e){if(attempt===epoch)$('status').textContent=e.message;}}
 const post=(path,value)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
+const caseUI=window.owgAnalysisCases.create({root:$('caseWorkspace'),api:(path,options={})=>api(path,{...options,preserveSelectionOnDenied:true}),post:(path,value)=>api(path,{method:'POST',preserveSelectionOnDenied:true,headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})});
 async function inventory(after=''){
  if(!after)listAttempt++;const attempt=listAttempt;
  const r=await api(base+'?limit=20&after='+encodeURIComponent(after));if(attempt!==listAttempt)return;canPublish=r.can_publish;next=r.next_after;
@@ -82,7 +87,7 @@ async function open(id,revision){
  for(const c of d.snapshot.metric_coverage)$('coverage').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value, '+c.without_value+' without; '+c.missing_operand+' missing operand, '+c.zero_divisor+' zero divisor, '+c.non_finite+' nonfinite.'));
  $('access').hidden=!d.permissions.manage;$('members').replaceChildren();$('accessConfirm').checked=false;$('deleteConfirm').checked=false;$('renew').value='';
  if(d.permissions.manage){const access=await api(base+'/'+id+'/access');if(attempt!==viewAttempt)return;selected.access_revision=access.access_revision;for(const m of access.members)member(m.actor_id,m.role);}
- sync();
+ sync();await caseUI.open(d,identityScopes,identityActor);
 }
 function previousSession(){return {value:credential,scheme:credentialScheme};}
 async function revoke(previous){
@@ -99,6 +104,7 @@ async function connectIdentity(value,scheme='Bearer'){
   if(!value)throw new Error('Enter a delegated token or use company sign-in.');
   credential=value;credentialScheme=scheme;
   const who=await api(base+'/session/me');if(attempt!==epoch)return;
+  identityScopes=who.scopes;identityActor=who.actor_id;
   await inventory();if(attempt!==epoch)return;
   $('identity').textContent='Organization '+who.organization_id+' · actor '+who.actor_id+' · '+who.scopes.join(', ');
   $('workspace').hidden=false;$('status').textContent='Connected to authorized analyses.';
