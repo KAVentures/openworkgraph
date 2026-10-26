@@ -261,3 +261,7 @@ source-document digest, with minimized authorized case checks.
 [Benefit contribution plans](PROCESS_BENEFIT_CONTRIBUTIONS.md) link exact scenario
 revisions with explicit inclusion, modeled scopes and nonduplicated organization
 estimates; these declarations do not establish realized savings.
+
+[Shared opportunity review](SHARED_OPPORTUNITY_REVIEW.md) adds per-process
+assessment/budget context, independent named stage decisions and explicit
+reassessment when the exact source or assessment changes.

@@ -214,4 +214,6 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
     add_routes(router,store,human,_body,_response)
     from .process_benefit_routes import add_routes as benefit_routes
     benefit_routes(router,store,human,_body,_response)
+    from .process_opportunity_routes import add_routes as opportunity_routes
+    opportunity_routes(router,store,human,_body,_response)
     return router

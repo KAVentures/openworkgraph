@@ -65,6 +65,9 @@
         margin: 16px 0;
       }
       #readinessReport { overflow-wrap: anywhere; }
+      #opportunityDetail, #opportunityPipeline { min-width: 0; overflow-wrap: anywhere; }
+      #opportunityDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
+      #opportunityDetail select, #opportunityDetail button, #opportunityPipeline button { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
       #benefitDetail, #benefitInventory { min-width: 0; overflow-wrap: anywhere; }
       #benefitDetail fieldset, #benefitInventory fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
       #benefitDetail select, #benefitInventory select, #benefitDetail button, #benefitInventory button { max-width: 100%; min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; }
@@ -241,6 +244,7 @@
         </button>
       </div>
     </section>
+    <section id="opportunityPipeline" aria-label="Shared opportunity pipeline"></section>
     <section id="benefitInventory" aria-label="Scenario contribution portfolio"></section>
     <section id="repositoryInventory" aria-label="Process repository maps"></section>
     <section id="selected" hidden>
@@ -250,6 +254,7 @@
       <div id="design"></div>
       <div id="repositoryDetail"></div>
       <div id="benefitDetail"></div>
+      <div id="opportunityDetail"></div>
       <div class="actions" id="exports"></div>
       <fieldset>
         <legend>Shadow evaluation review</legend>
@@ -325,6 +330,7 @@
     </section>
     <script nonce="__NONCE__" src="/process-hierarchy-client.js"></script>
     <script nonce="__NONCE__" src="/process-benefit-client.js"></script>
+    <script nonce="__NONCE__" src="/process-opportunity-client.js"></script>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
     <script nonce="__NONCE__" src="/process-rule-editor.js"></script>
     <script nonce="__NONCE__" src="/process-decision-editor.js"></script>
@@ -532,11 +538,13 @@
         }
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});
+        const opportunity=window.owgSharedOpportunity.create({inventoryHost:$("opportunityPipeline"),detailHost:$("opportunityDetail"),call,open,onDenied:()=>{clear();note("Opportunity access changed; sign in again to refresh permissions.");}});
         function clear(releaseBusy=false) {
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
           benefits.clear();
+          opportunity.clear();
           clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
           clearShadowReview();
           clearRuleFacts();
@@ -1660,6 +1668,7 @@
         function render(data) {
           repository.select(data);
           benefits.select(data);
+          opportunity.select(data);
           clearShadowReview();
           clearRuleFacts();
           selected = data;
@@ -2037,6 +2046,7 @@
             );
             repository.clear();
             benefits.clear();
+            opportunity.clear();
             selected = null;
             $("selected").hidden = true;
             $("update").disabled = true;
