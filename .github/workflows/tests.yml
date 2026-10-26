@@ -118,6 +118,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/opportunity_alternatives.cjs
       - name: Verify the local event-log workspace import, analytics, export and deletion
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
+      - name: Verify cancellable local analysis jobs in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/analysis_jobs.cjs
       - name: Verify imported automation run reports show reported rates, drift and design comparison
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
       - name: Verify consented communications mining keeps only aggregates

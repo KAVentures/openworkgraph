@@ -1563,6 +1563,9 @@
     const hours=input('owgAnalysisHours','number','any');hours.min='0';hours.step='any';
     const endsWith=input('owgAnalysisEnds','text','any activity');
     const run=button('Run analysis');run.id='owgAnalysisRun';
+    const background=input('owgAnalysisBackground','checkbox');background.checked=true;
+    const cancel=button('Cancel analysis','secondary');cancel.id='owgAnalysisCancel';cancel.disabled=true;
+    let running=false,cancelRequested=false,job=null,attempt=0;
     const name=input('owgAnalysisName','text','Analysis name');name.maxLength=120;
     const save=button('Save analysis','secondary');save.id='owgAnalysisSave';save.disabled=true;
     const f={attr1:field('First attribute',attr1),attr2:field('Second attribute',attr2),hours:field('Only cases longer than (hours)',hours),ends:field('Only cases ending with',endsWith)};
@@ -1576,7 +1579,7 @@
     };
     level.onchange=dim1.onchange=dim2.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Analyse',level),field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run);
+    row.append(field('Analyse',level),field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run,cancel);
     // Case metrics: typed per-case values that the measures above can use.
     const names=(activityNames||[]).slice(0,500).map(a=>[a,a]);
     const mKind=select('owgMetricKind',METRIC_KINDS),mName=input('owgMetricName','text','wait_for_approval');mName.maxLength=40;
@@ -1673,7 +1676,9 @@
       sharingConsent.checked=false;sharingDownload.disabled=true;
     };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
-    box.append(row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
+    box.append(field('Run as a cancellable local job',background),
+      el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
+      row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
     async function refreshLibrary(){
@@ -1688,11 +1693,52 @@
     const generation=state.generation;
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId);
     const cell=(column,value,unit)=>value===null||value===undefined?'—':unit==='seconds'?duration(value):unit==='share'?pct(value):typeof value==='number'?Number(value).toLocaleString()+(unit&&!['cases','events','activities'].includes(unit)?' '+unit:''):String(value);
+    cancel.onclick=async()=>{
+      const cancellationAttempt=attempt;
+      cancelRequested=true;cancel.disabled=true;message.textContent='Cancellation requested; no result will be displayed.';
+      if(job)try{await api(job+'/cancel',{method:'POST',signal:AbortSignal.timeout(10000)});}catch(_){
+        if(generation===state.generation&&box.isConnected&&cancellationAttempt===attempt)message.textContent='Cancellation could not be confirmed. No result will be displayed; the local deadline still applies.';
+      }
+    };
     async function execute(spec){
-      resetSharing();prepareShare.disabled=true;prepareCases.disabled=true;
+      if(running)throw new Error('Wait for this analysis or cancel it first.');
+      const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
+      const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
+      running=true;cancelRequested=false;job=null;run.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
+      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
       if(state.caseType)spec.case_type=state.caseType;
-      const r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-      if(generation!==state.generation)return;
+      let r;
+      try{
+        if(background.checked){
+          message.textContent='Submitting local analysis…';
+          const submitted=await (await api(jobBase,{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          job=jobBase+'/'+encodeURIComponent(submitted.job_id);
+          let status=submitted;
+          while(current()&&!cancelRequested&&['queued','running'].includes(status.state)){
+            message.textContent=status.state==='queued'?'Analysis queued locally…':'Analysis running locally…';
+            await new Promise(resolve=>setTimeout(resolve,250));
+            if(!current()||cancelRequested)break;
+            status=await(await api(job,{signal:AbortSignal.timeout(10000)})).json();
+          }
+          if(!current()||cancelRequested)return;
+          if(status.state!=='succeeded')throw new Error(status.state==='timed_out'?'Analysis reached its deadline; no partial result was returned.':status.state==='cancelled'?'Analysis cancelled; no result was returned.':status.error||'Analysis failed; no partial result was returned.');
+          r=await(await api(job+'/result',{signal:AbortSignal.timeout(10000)})).json();
+          if(cancelRequested||!current())return;
+        }else{
+          message.textContent='Analysis running…';
+          r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          if(!current())return;
+        }
+      }catch(error){if(current())message.textContent=error.message;return;}
+      finally{
+        const cleanup=job;job=null;running=false;
+        // Deletion cancels unfinished work and erases retained bytes. Failure is bounded by server expiry.
+        if(cleanup)api(cleanup+'/delete',{method:'POST',signal:AbortSignal.timeout(10000)}).catch(()=>{});
+        if(current()){run.disabled=false;background.disabled=false;cancel.disabled=true;
+          if(cancelRequested)message.textContent='Analysis cancelled in this view; no result was displayed. Server cleanup requested; its deadline still applies.';}
+      }
+      if(!current())return;
+      message.textContent='Analysis complete. Static result; rerun after changing the log.';
       resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),

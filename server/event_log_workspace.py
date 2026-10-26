@@ -12,6 +12,7 @@ workflows, causes, policies or permission to act.
 from __future__ import annotations
 
 import csv
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -598,6 +599,9 @@ def list_logs() -> dict[str, Any]:
 
 
 def delete_log(log_id: str) -> dict[str, Any]:
+    from .event_log_jobs import jobs
+    # Cancel before waiting for the workspace lock held by a running query.
+    jobs.erase_log(log_id)
     with _LOCK:
         conn = _connect()
         try:
@@ -608,6 +612,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
                           "logs"):
                 conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
             conn.execute("CHECKPOINT")
+            # Cover a submission racing with the first erasure while deletion waited for this lock.
+            jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}
         finally:
             conn.close()
@@ -637,16 +643,17 @@ _CASE_EVENTS = """
 """
 
 
-def _query(log_id: str, case_type: str | None, fn) -> dict[str, Any]:
-    with _LOCK:
+def _query(log_id: str, case_type: str | None, fn, *, control=None) -> dict[str, Any]:
+    with control.workspace_lock(_LOCK) if control is not None else _LOCK:
         conn = _connect()
         try:
-            info = _check_log(conn, log_id)
-            notion = _case_type(conn, log_id, case_type)
-            # Materialize the case-notion projection once per request (temp, per connection).
-            conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {_CASE_EVENTS}", [log_id, notion])
-            result = fn(conn)
-            return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY}
+            with control.connection(conn) if control is not None else nullcontext(conn) as query_conn:
+                info = _check_log(query_conn, log_id)
+                notion = _case_type(query_conn, log_id, case_type)
+                # Materialize the case-notion projection once per request (temp, per connection).
+                query_conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {_CASE_EVENTS}", [log_id, notion])
+                result = fn(query_conn)
+                return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY}
         finally:
             conn.close()
 
