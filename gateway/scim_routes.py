@@ -3,11 +3,11 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Request
+from fastapi import APIRouter, Request
+from fastapi.routing import APIRoute
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from shared.lifespan import extend_lifespan
 from . import scim_provisioning as scim
 from .employees import EmployeeError
 
@@ -78,15 +78,22 @@ def _schema():
                            attribute('displayName'), attribute('active', 'boolean')]}
 
 
-def install(app, db, require_admin, base_url):
-    service = scim.Provisioning(db)
-    app.state.scim_provisioning = service
-    extend_lifespan(app, startup=lambda: scim.init_schema(db))
+class ProvisioningRoute(APIRoute):
+    """Keep protocol errors local to this router, including sync handlers."""
+    def get_route_handler(self):
+        handler = super().get_route_handler()
 
-    async def error_handler(request, error):
-        return _response(error.packet(), status=error.status,
-                         headers={'WWW-Authenticate': 'Bearer'} if error.status == 401 else {})
-    app.add_exception_handler(scim.Error, error_handler)
+        async def respond(request):
+            try:
+                return await handler(request)
+            except scim.Error as error:
+                return _response(error.packet(), status=error.status,
+                                 headers={'WWW-Authenticate': 'Bearer'} if error.status == 401 else {})
+        return respond
+
+
+def build_router(service, require_admin, base_url):
+    router = APIRouter(route_class=ProvisioningRoute)
 
     def authenticate(provider_id, request):
         token = _bearer(request)
@@ -108,12 +115,12 @@ def install(app, db, require_admin, base_url):
         return _response(value, status=status,
                          headers={'ETag': value['meta']['version'], 'Location': value['meta']['location']})
 
-    @app.get('/admin/scim.js')
+    @router.get('/admin/scim.js')
     def admin_client():
         return FileResponse(Path(__file__).with_name('scim_admin_client.js'), media_type='application/javascript',
                             headers={'Cache-Control': 'no-store'})
 
-    @app.get('/v1/admin/scim-providers/{organization}')
+    @router.get('/v1/admin/scim-providers/{organization}')
     def providers(organization: str, request: Request):
         require_admin(request.headers.get('authorization'))
         try:
@@ -123,7 +130,7 @@ def install(app, db, require_admin, base_url):
         return JSONResponse({'items': [{**row, 'base_url': url(request, row['provider_id'])} for row in rows]},
                             headers={'Cache-Control': 'no-store'})
 
-    @app.post('/v1/admin/scim-providers/{organization}')
+    @router.post('/v1/admin/scim-providers/{organization}')
     async def create_provider(organization: str, request: Request):
         principal = require_admin(request.headers.get('authorization'))
         body = scim._keys(await _body(request), {'label'})
@@ -134,7 +141,7 @@ def install(app, db, require_admin, base_url):
         result['provider']['base_url'] = url(request, result['provider']['provider_id'])
         return JSONResponse(result, status_code=201, headers={'Cache-Control': 'no-store'})
 
-    @app.patch('/v1/admin/scim-providers/{organization}/{provider_id}')
+    @router.patch('/v1/admin/scim-providers/{organization}/{provider_id}')
     async def configure_provider(organization: str, provider_id: str, request: Request):
         principal = require_admin(request.headers.get('authorization'))
         body = scim._keys(await _body(request), {'revision', 'enabled'})
@@ -144,7 +151,7 @@ def install(app, db, require_admin, base_url):
                                         principal.audit_id, organization=organization)
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
-    @app.post('/v1/admin/scim-providers/{organization}/{provider_id}/revoke')
+    @router.post('/v1/admin/scim-providers/{organization}/{provider_id}/revoke')
     async def revoke_provider(organization: str, provider_id: str, request: Request):
         principal = require_admin(request.headers.get('authorization'))
         body = scim._keys(await _body(request), {'revision'})
@@ -152,7 +159,7 @@ def install(app, db, require_admin, base_url):
                                         organization=organization)
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
-    @app.get('/scim/v2/{provider_id}/ServiceProviderConfig')
+    @router.get('/scim/v2/{provider_id}/ServiceProviderConfig')
     def configuration(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response({'schemas': [SPC], 'patch': {'supported': True},
@@ -163,12 +170,12 @@ def install(app, db, require_admin, base_url):
                 'description': 'Explicitly enabled organization/provider-scoped credential; not an admin or evidence grant.',
                 'specUri': 'https://www.rfc-editor.org/rfc/rfc6750', 'primary': True}]})
 
-    @app.get('/scim/v2/{provider_id}/Schemas')
+    @router.get('/scim/v2/{provider_id}/Schemas')
     def schemas(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response(_list([_schema()]))
 
-    @app.get('/scim/v2/{provider_id}/Schemas/{schema_id}')
+    @router.get('/scim/v2/{provider_id}/Schemas/{schema_id}')
     def schema(provider_id: str, schema_id: str, request: Request):
         authenticate(provider_id, request)
         if schema_id != scim.CORE:
@@ -180,17 +187,17 @@ def install(app, db, require_admin, base_url):
                 'description': 'Bounded roster Users projection; see deployment contract for supported attributes/operations.',
                 'schema': scim.CORE, 'schemaExtensions': []}
 
-    @app.get('/scim/v2/{provider_id}/ResourceTypes')
+    @router.get('/scim/v2/{provider_id}/ResourceTypes')
     def resource_types(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response(_list([user_type()]))
 
-    @app.get('/scim/v2/{provider_id}/ResourceTypes/User')
+    @router.get('/scim/v2/{provider_id}/ResourceTypes/User')
     def resource_type(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response(user_type())
 
-    @app.get('/scim/v2/{provider_id}/Users')
+    @router.get('/scim/v2/{provider_id}/Users')
     def users(provider_id: str, request: Request):
         token = _bearer(request)
         params = request.query_params
@@ -204,41 +211,43 @@ def install(app, db, require_admin, base_url):
         result['Resources'] = [resource(request, provider_id, item) for item in result['Resources']]
         return _response(result)
 
-    @app.get('/scim/v2/{provider_id}/Users/{user_id}')
+    @router.get('/scim/v2/{provider_id}/Users/{user_id}')
     def get_user(provider_id: str, user_id: str, request: Request):
         if request.query_params:
             raise scim.Error(400, 'Attribute selection is not supported', 'invalidValue')
         return user_response(request, provider_id, service.get_user(provider_id, _bearer(request), user_id))
 
-    @app.post('/scim/v2/{provider_id}/Users')
+    @router.post('/scim/v2/{provider_id}/Users')
     async def create_user(provider_id: str, request: Request):
         token = await run_in_threadpool(authenticate, provider_id, request)
         body = await _body(request)
         result = await run_in_threadpool(service.create_user, provider_id, token, body)
         return user_response(request, provider_id, result, status=201)
 
-    @app.put('/scim/v2/{provider_id}/Users/{user_id}')
+    @router.put('/scim/v2/{provider_id}/Users/{user_id}')
     async def replace_user(provider_id: str, user_id: str, request: Request):
         token = await run_in_threadpool(authenticate, provider_id, request)
         body = await _body(request)
         result = await run_in_threadpool(service.replace_user, provider_id, token, user_id, request.headers.get('if-match'), body)
         return user_response(request, provider_id, result)
 
-    @app.patch('/scim/v2/{provider_id}/Users/{user_id}')
+    @router.patch('/scim/v2/{provider_id}/Users/{user_id}')
     async def patch_user(provider_id: str, user_id: str, request: Request):
         token = await run_in_threadpool(authenticate, provider_id, request)
         body = await _body(request)
         result = await run_in_threadpool(service.patch_user, provider_id, token, user_id, request.headers.get('if-match'), body)
         return user_response(request, provider_id, result)
 
-    @app.delete('/scim/v2/{provider_id}/Users/{user_id}')
+    @router.delete('/scim/v2/{provider_id}/Users/{user_id}')
     def delete_user(provider_id: str, user_id: str, request: Request):
         if request.query_params:
             raise scim.Error(400, 'Unsupported query option', 'invalidValue')
         service.delete_user(provider_id, _bearer(request), user_id, request.headers.get('if-match'))
         return Response(status_code=204, headers={'Cache-Control': 'no-store'})
 
-    @app.api_route('/scim/v2/{provider_id}/{unsupported:path}', methods=['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+    @router.api_route('/scim/v2/{provider_id}/{unsupported:path}', methods=['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
     def unsupported(provider_id: str, unsupported: str, request: Request):
         authenticate(provider_id, request)
         raise scim.Error(404, 'Resource or operation is not supported')
+
+    return router
