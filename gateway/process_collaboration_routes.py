@@ -220,4 +220,6 @@ def build_process_router(store: OrganizationProcessStore, human) -> APIRouter:
     dependency_routes(router,store,human,_body,_response)
     from .process_implementation_routes import add_routes as implementation_routes
     implementation_routes(router,store,human,_body,_response)
+    from .shared_opportunity_project_routes import add_routes as project_routes
+    project_routes(router,store,human,_body,_response)
     return router

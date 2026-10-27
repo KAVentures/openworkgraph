@@ -539,6 +539,8 @@ class OrganizationProcessStore:
             current = self._record(conn, p, workflow_id)
             if current['revision'] != request.expected_revision or meta['access_revision'] != request.expected_access_revision:
                 raise ProcessCollaborationError('Process or access changed; reload before deleting')
+            from .shared_opportunity_projects import erase as erase_projects
+            erase_projects(self,conn,p.organization_id,workflow_id)
             from .process_implementation_plans import erase as erase_implementation
             erase_implementation(self,conn,p.organization_id,workflow_id)
             from .process_dependencies import erase as erase_dependencies
