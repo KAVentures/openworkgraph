@@ -184,7 +184,7 @@
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality));
+        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality));
         consent.checked=false;keep.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
@@ -198,12 +198,14 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         consent.checked=false;file.value='';
         await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality));keep.checked=false;
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
+    const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
+    exportFormat.onchange=()=>{const note=relationshipExportNote();if(note)status(note.trim());};
     exportButton.onclick=async()=>{
       try{
         status('Preparing export…');
@@ -211,7 +213,7 @@
         const url=URL.createObjectURL(await response.blob());
         const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv',ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-        status('Export ready.');
+        status('Export ready.'+relationshipExportNote());
       }catch(error){status(error.message);}
     };
     remove.onclick=async()=>{
@@ -269,6 +271,7 @@
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(objectMapSection());
+    if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
 
     const activityBox=section('Activities');
@@ -676,6 +679,98 @@
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
     getJSON(logPath('object-attributes').replace(/\?.*$/,'')).then(a=>{if(current()){attrs=a;renderAttrs();}}).catch(()=>{});
+    return box;
+  }
+
+  function objectRelationshipSection(){
+    const box=section('Supplied object relationships');box.id='owgObjectRelationships';box.style.minWidth='0';
+    const generation=state.generation,logId=state.logId,current=()=>box.isConnected&&generation===state.generation;
+    box.append(el('p','These directed links were supplied in the log. They are separate from shared-event associations, do not merge case histories, and do not establish causality or when a relationship was valid. Counts describe retained assertions, not executions.'));
+    const object=input('owgObjectRelationObject','text','All objects'),sourceType=input('owgObjectRelationSourceType','text','All source types'),targetType=input('owgObjectRelationTargetType','text','All target types');
+    for(const control of [object,sourceType,targetType]){control.maxLength=200;control.style.maxWidth='100%';}
+    const direction=select('owgObjectRelationDirection',[['both','Incoming and outgoing'],['outgoing','Outgoing'],['incoming','Incoming']]);direction.disabled=true;
+    const exact=input('owgObjectRelationExactQualifier','checkbox'),qualifier=input('owgObjectRelationQualifier','text','Exact relationship label');qualifier.maxLength=80;qualifier.style.maxWidth='100%';
+    const limit=select('owgObjectRelationLimit',[['25','25'],['50','50'],['100','100'],['200','200']]);limit.value='50';
+    const showRows=button('Show relationships','secondary');showRows.id='owgObjectRelationRun';
+    const previous=button('Previous page','secondary'),next=button('Next page','secondary');previous.id='owgObjectRelationPrevious';next.id='owgObjectRelationNext';previous.disabled=next.disabled=true;
+    const controls=el('div',null,'row');controls.style.alignItems='end';controls.append(field('Object ID (optional)',object),field('Direction for selected object',direction),field('Source type (optional)',sourceType),field('Target type (optional)',targetType),field('Match exact relationship label',exact),field('Relationship label (empty is a valid exact label)',qualifier),field('Rows per page',limit),showRows,previous,next);
+    const statusLine=el('p');statusLine.id='owgObjectRelationStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const groups=el('details');groups.id='owgObjectRelationGroups';groups.append(el('summary','Supplied relationship groups'));
+    const groupRows=el('div');groupRows.style.overflowX='auto';groups.append(groupRows);
+    const drawing=el('div');drawing.id='owgObjectRelationDrawing';drawing.style.maxWidth='100%';
+    const rowsOut=el('div');rowsOut.id='owgObjectRelationRows';rowsOut.style.cssText='overflow-x:auto;max-width:100%';
+    const evidence=el('div');evidence.id='owgObjectRelationEvidence';evidence.setAttribute('aria-live','polite');
+    box.append(controls,statusLine,groups,drawing,rowsOut,evidence);
+    let requestVersion=0,nextCursor=null,bookmarks=[null];
+    const base='/v1/event-logs/'+encodeURIComponent(logId);
+    const literal=value=>value===''?'(unqualified)':value.trim()!==value?JSON.stringify(value):value;
+    function scopeChanged(){requestVersion++;nextCursor=null;bookmarks=[null];previous.disabled=next.disabled=true;showRows.disabled=false;direction.disabled=object.value==='';rowsOut.replaceChildren();drawing.replaceChildren();evidence.replaceChildren();statusLine.textContent='Filters changed. Show relationships to refresh.';}
+    for(const control of [object,sourceType,targetType,direction,exact,qualifier,limit]){
+      control.addEventListener(control.tagName==='INPUT'&&control.type==='text'?'input':'change',scopeChanged);
+    }
+    async function inspect(selected,turn){
+      evidence.replaceChildren(el('h4','Current linked log events for '+literal(selected.object_id)));
+      if(!selected.observed_events){evidence.append(el('p','No retained events are linked to this object. Its supplied object relationships remain visible; no lifecycle steps are inferred.'));return;}
+      try{
+        const response=await(await api(base+'/case-events/query?case_type='+encodeURIComponent(selected.object_type),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:selected.object_id,limit:20})})).json();
+        if(!current()||turn!==requestVersion)return;
+        evidence.append(table(['Activity','Timestamp','Resource'],response.events.map(event=>[event.activity,event.timestamp,event.resource||'—'])),el('p','Showing '+response.events.length+' linked events. '+(response.ordering||'Timestamp order is not proof of causality.'),'muted'));
+      }catch(error){if(current()&&turn===requestVersion)evidence.append(el('p',error.message,'muted'));}
+    }
+    function choose(id){if(!current())return;object.value=id;direction.value='both';scopeChanged();load().catch(()=>{});}
+    function objectButton(id){const node=button(literal(id),'secondary');node.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:16rem';node.setAttribute('aria-label','Inspect object '+id);node.onclick=()=>choose(id);return node;}
+    function draw(response){
+      drawing.replaceChildren();const selected=response.selected_object;
+      if(!selected){drawing.append(el('p','Choose an object in the table to inspect its direct neighbors and linked log events.','muted'));return;}
+      const all=[...new Set(response.rows.flatMap(row=>[row.source_id,row.target_id]))].filter(id=>id!==selected.object_id),neighbors=all.slice(0,12);
+      const positions=new Map([[selected.object_id,[410,220]]]);neighbors.forEach((id,index)=>{const angle=2*Math.PI*index/Math.max(1,neighbors.length);positions.set(id,[410+300*Math.cos(angle),220+165*Math.sin(angle)]);});
+      const shown=response.rows.filter(row=>positions.has(row.source_id)&&positions.has(row.target_id)).slice(0,24);
+      const note=el('p','Direct assertions on this page: diagram shows '+shown.length+' of '+response.rows.length+' links and '+neighbors.length+' of '+all.length+' neighbor objects. The table retains every row on this page. Arrows follow supplied direction.','muted');drawing.append(note);
+      const ns='http://www.w3.org/2000/svg',svg=(name,attrs={},text)=>{const node=document.createElementNS(ns,name);Object.entries(attrs).forEach(([key,value])=>node.setAttribute(key,String(value)));if(text!==undefined)node.textContent=text;return node;};
+      const graph=svg('svg',{viewBox:'0 0 820 440',role:'group','aria-label':'Direct supplied object relationships for '+selected.object_id});graph.style.cssText='width:100%;height:auto;display:block';
+      const markerId='owgO2OArrow'+generation,defs=svg('defs'),marker=svg('marker',{id:markerId,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});marker.append(svg('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#44516b'}));defs.append(marker);graph.append(defs);
+      shown.forEach((row,index)=>{
+        const [sx,sy]=positions.get(row.source_id),[tx,ty]=positions.get(row.target_id),self=row.source_id===row.target_id;
+        const distance=Math.hypot(tx-sx,ty-sy)||1,ux=(tx-sx)/distance,uy=(ty-sy)/distance,bend=(index%3-1)*16;
+        const path=self?'M '+(sx+35)+' '+(sy-22)+' C '+(sx+100)+' '+(sy-95)+' '+(sx-100)+' '+(sy-95)+' '+(sx-35)+' '+(sy-22):'M '+(sx+ux*65)+' '+(sy+uy*24)+' Q '+((sx+tx)/2-uy*bend)+' '+((sy+ty)/2+ux*bend)+' '+(tx-ux*65)+' '+(ty-uy*24);
+        const line=svg('path',{d:path,fill:'none',stroke:'#44516b','stroke-width':1.5,'marker-end':'url(#'+markerId+')','aria-hidden':'true'});line.append(svg('title',{},row.source_id+' → '+row.target_id+' · '+literal(row.qualifier)));graph.append(line);
+        const text=svg('text',{x:self?sx:(sx+tx)/2-uy*bend,y:self?sy-75:(sy+ty)/2+ux*bend-5,'text-anchor':'middle','font-size':11,fill:'#26344d','aria-hidden':'true'},literal(row.qualifier).slice(0,30));graph.append(text);
+      });
+      for(const [id,[x,y]] of positions){
+        const group=svg('g',{role:'button',tabindex:0,'aria-label':'Inspect object '+id,'data-owg-object':id});group.style.cursor='pointer';
+        const rectangle=svg('rect',{x:x-70,y:y-22,width:140,height:44,rx:7,fill:id===selected.object_id?'#e5edff':'#f3f6fb',stroke:'#44516b','stroke-width':1.5});
+        group.append(rectangle,svg('title',{},id),svg('text',{x,y:y+4,'text-anchor':'middle','font-size':12,fill:'#172841'},literal(id).length>23?literal(id).slice(0,22)+'…':literal(id)));
+        group.onclick=()=>choose(id);group.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();choose(id);}};
+        group.onfocus=()=>rectangle.setAttribute('stroke-width','4');group.onblur=()=>rectangle.setAttribute('stroke-width','1.5');graph.append(group);
+      }
+      drawing.append(graph);
+    }
+    async function load(cursor=null){
+      const turn=++requestVersion;showRows.disabled=true;previous.disabled=next.disabled=true;
+      const spec={direction:object.value===''?'both':direction.value,limit:Number(limit.value)};
+      for(const [key,control] of [['object_id',object],['source_type',sourceType],['target_type',targetType]])if(control.value!=='')spec[key]=control.value;
+      if(exact.checked)spec.qualifier=qualifier.value;if(cursor)spec.cursor=cursor;
+      try{
+        const response=await(await api(base+'/object-relationships/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current()||turn!==requestVersion)return;
+        nextCursor=response.next_cursor;next.disabled=!nextCursor;previous.disabled=bookmarks.length<=1;
+        statusLine.textContent='Page '+bookmarks.length+': '+response.rows.length+' of '+Number(response.matching_relationships).toLocaleString()+' matching retained assertions. Static supplied links; no case joins or causal order inferred.';
+        rowsOut.replaceChildren(table(['Source object','Source type','Relationship label','Target object','Target type','Source log events','Target log events'],response.rows.map(row=>[objectButton(row.source_id),row.source_type,literal(row.qualifier),objectButton(row.target_id),row.target_type,row.source_observed_events,row.target_observed_events])));
+        draw(response);evidence.replaceChildren();if(response.selected_object)await inspect(response.selected_object,turn);
+      }catch(error){if(current()&&turn===requestVersion){rowsOut.replaceChildren();drawing.replaceChildren();evidence.replaceChildren();nextCursor=null;bookmarks=[null];statusLine.textContent=error.message;}}
+      finally{if(current()&&turn===requestVersion)showRows.disabled=false;}
+    }
+    showRows.onclick=()=>{bookmarks=[null];load().catch(()=>{});};
+    next.onclick=()=>{if(nextCursor){bookmarks.push(nextCursor);load(nextCursor).catch(()=>{});}};
+    previous.onclick=()=>{if(bookmarks.length>1){bookmarks.pop();load(bookmarks[bookmarks.length-1]).catch(()=>{});}};
+    getJSON(base+'/object-relationships').then(profile=>{
+      if(!current())return;
+      groupRows.replaceChildren(el('p','Retained assertions: '+Number(profile.retained_relationships).toLocaleString()+'. Showing '+profile.groups.length+' of '+profile.groups_total+' relationship groups'+(profile.groups_truncated?' (group view limited)':'')+'.','muted'),table(['Source type','Relationship label','Target type','Assertions','Inspect'],profile.groups.map(group=>{
+        const inspect=button('Inspect group','secondary');inspect.onclick=()=>{object.value='';sourceType.value=group.source_type;targetType.value=group.target_type;exact.checked=true;qualifier.value=group.qualifier;scopeChanged();load().catch(()=>{});};
+        return [group.source_type,literal(group.qualifier),group.target_type,group.relationships,inspect];
+      })));
+      if(requestVersion===0)load().catch(()=>{});
+    }).catch(error=>{if(current())statusLine.textContent=error.message;});
     return box;
   }
 
@@ -1413,6 +1508,8 @@
     return box;
   }
 
+  function relationshipText(profile){return profile?' Retained '+Number(profile.retained_relationships).toLocaleString()+' supplied object relationships; these do not establish case membership or causality.':'';}
+
   function identityText(identity){return identity?' Supplied source-ID matching: '+Number(identity.duplicate_source_ids_skipped||0).toLocaleString()+' repeated IDs skipped; namespace and case associations are caller-declared. Plain CSV/XES/OCEL exports omit these keys.':'';}
 
   function qualitySection(){
@@ -1444,6 +1541,7 @@
           ['Events dated after the import',Number(d.events_dated_after_import).toLocaleString()],
           ...d.case_notions.map(n=>['Single-event '+n.object_type+' cases',Number(n.single_event_cases).toLocaleString()+' of '+Number(n.cases).toLocaleString()])]),
         ...(d.attribute_coverage.length?[table(['Attribute','Events with a value','Without'],d.attribute_coverage.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()]))]:[]),
+        ...(r.current.object_relationships?[el('div','Retained supplied object assertions: '+r.current.object_relationships.retained_relationships+'. Separate whole-log relationship digest: '+r.current.object_relationships.relationships_sha256+'. This does not establish source completeness, case membership or causality.','muted')]:[]),
         ...(r.current.source_identity_map_sha256?[el('div','Current source identity map digest: '+r.current.source_identity_map_sha256,'muted')]:[]),
         el('div','Current content digest: '+r.current.content_sha256+'. '+r.current.completeness.note,'muted'));
     }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});

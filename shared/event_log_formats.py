@@ -348,9 +348,12 @@ def _xml_object_relationships(element: ET.Element) -> list[tuple[str, str]]:
     containers = element.findall("objects")
     if len(containers) > 1:
         raise EventLogFormatError("Object relationship collections must not repeat")
+    if containers and (containers[0].attrib or (containers[0].text or '').strip()):
+        raise EventLogFormatError("Unsupported XML object relationship collection semantics")
     links = []
     for child in containers[0] if containers else []:
-        if child.tag != "relationship" or set(child.attrib) - {"object-id", "qualifier"}:
+        if (child.tag != "relationship" or set(child.attrib) - {"object-id", "qualifier"}
+                or len(child) or (child.text or '').strip() or (child.tail or '').strip()):
             raise EventLogFormatError("Unsupported XML object relationship layout or semantics")
         links.append({"objectId": child.get("object-id"), "qualifier": child.get("qualifier", "")})
     return _object_relationships(links)

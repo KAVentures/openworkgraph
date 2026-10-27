@@ -31,6 +31,7 @@ from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
+from . import event_log_object_relationships as object_relationships
 from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
@@ -242,6 +243,19 @@ def event_log_object_map(request: Request, log_id: str):
     return _respond(objects.object_graph, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/object-relationships")
+def event_log_object_relationships(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(object_relationships.overview, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/object-relationships/query")
+async def event_log_object_relationship_query(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "relationship filters", strict=True)
+    return await run_in_threadpool(_respond, object_relationships.query, log_id, spec)
+
+
 @router.get("/v1/event-logs/{log_id}/object-flattening")
 def event_log_object_flattening(request: Request, log_id: str):
     _require_dashboard(request)
@@ -350,15 +364,26 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
                     automation_resources=automation_resource, limit=limit)
 
 
-async def _json_body(request: Request, what: str) -> Any:
+async def _json_body(request: Request, what: str, *, strict: bool = False) -> Any:
     if not str(request.headers.get("content-type") or "").startswith("application/json"):
         raise HTTPException(415, f"{what} must be JSON")
     body = await request.body()
     if len(body) > 65536:
         raise HTTPException(413, f"{what} is too large")
     try:
+        if strict:
+            def pairs(items):
+                result = {}
+                for key, value in items:
+                    if key in result:
+                        raise ValueError("Repeated JSON key")
+                    result[key] = value
+                return result
+            def constant(_):
+                raise ValueError("Non-finite JSON value")
+            return json.loads(body, object_pairs_hook=pairs, parse_constant=constant)
         return json.loads(body)
-    except ValueError:
+    except (ValueError, UnicodeError, RecursionError):
         raise HTTPException(422, f"{what} is not valid JSON") from None
 
 
