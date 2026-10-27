@@ -10,6 +10,10 @@ and scopes; creating an opportunity does not create another process or scenario.
 reviewed phase baselines and separate human progress/cost reports over the exact
 opportunity assessment. They do not change opportunity stage authority.
 
+[Shared agent-project lineage](SHARED_OPPORTUNITY_PROJECTS.md) connects the exact
+approved opportunity to a generated SDK archive with metadata-only history and
+source/hash checks. It grants no execution or spending authority.
+
 This complements the local automation pipeline and the separate benefit
 contribution plans. Those features keep their existing behavior. Opportunity
 approval does not change process-model approval, benefit inclusion, agent tool

@@ -80,6 +80,9 @@
       #implementationDetail { min-width: 0; overflow-wrap: anywhere; }
       #implementationDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
       #implementationDetail select, #implementationDetail button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+      #sharedProjectDetail { min-width: 0; overflow-wrap: anywhere; }
+      #sharedProjectDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
+      #sharedProjectDetail select, #sharedProjectDetail button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
       .muted {
         color: #526358;
       }
@@ -265,6 +268,7 @@
       <div id="repositoryDetail"></div>
       <div id="benefitDetail"></div>
       <div id="opportunityDetail"></div>
+      <div id="sharedProjectDetail"></div>
       <div id="dependencyDetail"></div>
       <div id="implementationDetail"></div>
       <div class="actions" id="exports"></div>
@@ -343,6 +347,7 @@
     <script nonce="__NONCE__" src="/process-hierarchy-client.js"></script>
     <script nonce="__NONCE__" src="/process-benefit-client.js"></script>
     <script nonce="__NONCE__" src="/process-opportunity-client.js"></script>
+    <script nonce="__NONCE__" src="/shared-opportunity-project-client.js"></script>
     <script nonce="__NONCE__" src="/process-dependency-client.js"></script>
     <script nonce="__NONCE__" src="/process-implementation-client.js"></script>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
@@ -547,6 +552,11 @@
             error.status = response.status;
             throw error;
           }
+          if(options.archive){
+            if(!response.headers.get('content-type')?.startsWith('application/zip'))throw new Error('Expected a project ZIP response.');
+            const bytes=await response.arrayBuffer();current();
+            return {bytes,project_id:response.headers.get('x-owg-project-id'),archive_sha256:response.headers.get('x-owg-archive-sha256'),record_sha256:response.headers.get('x-owg-project-record-sha256')};
+          }
           const data=await response.json();current();return data;
           } catch(error) {
             current();
@@ -560,6 +570,7 @@
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});
         const opportunity=window.owgSharedOpportunity.create({inventoryHost:$("opportunityPipeline"),detailHost:$("opportunityDetail"),call,open,onDenied:()=>{clear();note("Opportunity access changed; sign in again to refresh permissions.");}});
+        const sharedProjects=window.owgSharedOpportunityProjects.create({detailHost:$("sharedProjectDetail"),call,onDenied:()=>{clear();note("Project access changed; sign in again to refresh permissions.");}});
         const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
         const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
         function clear(releaseBusy=false) {
@@ -568,6 +579,7 @@
           repository.clear();
           benefits.clear();
           opportunity.clear();
+          sharedProjects.clear();
           dependencies.clear();
           implementation.clear();
           clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
@@ -1694,6 +1706,7 @@
           repository.select(data);
           benefits.select(data);
           opportunity.select(data);
+          sharedProjects.select(data);
           dependencies.select(data);
           implementation.select(data);
           clearShadowReview();
@@ -2074,6 +2087,7 @@
             repository.clear();
             benefits.clear();
             opportunity.clear();
+            sharedProjects.clear();
             dependencies.clear();
             implementation.clear();
             selected = null;
