@@ -26,15 +26,27 @@ def validate_source_suite(spec,suite,bindings):
     structured=[rule['id'] for rule in spec['process_model'].get('business_rules',[]) if rule.get('predicate') is not None]
     total_records=0
     for case in cases:
-        requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured},case['input'],bindings)
-        if not requests:raise ImplementationError('Every case needs at least one reviewed current-source invariant binding')
-        selected={(row['resource_ref'],row['source_type']) for row in requests}
+        tables=spec['process_model'].get('decision_tables',[])
+        table_decisions={table['decision_activity_id'] for table in tables}
+        non_table_rules=[edge['rule_id'] for edge in spec['process_model']['transitions']
+            if edge.get('rule_id') in structured and edge['source'] not in table_decisions]
+        requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured,
+            'non_table_structured_rule_ids':non_table_rules},case['input'],bindings)
+        decisions=[]
+        if tables:
+            from decision_runtime import decision_bindings
+            decisions,_missing_tables=decision_bindings(spec,[{'table_id':t['id'],'target_activity_ids':[]} for t in tables],case['input'],bindings)
+        if not requests and not decisions:raise ImplementationError('Every case needs at least one reviewed current-source rule or table binding')
+        selected={(row['resource_ref'],row['source_type']) for row in requests+decisions}
         if len(selected)>8:raise ImplementationError('Use at most eight selected source records per case')
         total_records+=len(selected)
         for route in case['expected']['accepted_routes']:
             checks=check_plan({**reference(spec),'activity_ids':route},spec)
             _bound,missing=source_rule_bindings(spec,checks,case['input'],bindings)
             if missing:raise ImplementationError('Expected routes require reviewed source bindings for every structured rule')
+            if tables:
+                _bound,missing_tables=decision_bindings(spec,checks.get('decision_table_routes',[]),case['input'],bindings)
+                if missing_tables:raise ImplementationError('Expected routes require reviewed source bindings for every visited table')
     return cases,total_records
 
 

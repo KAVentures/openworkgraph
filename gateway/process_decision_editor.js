@@ -6,7 +6,7 @@
   function summary(model,host){
     if(!model.decision_tables?.length)return;
     host.appendChild(el('h4','Declared decision tables'));
-    host.appendChild(el('p','UNIQUE requires exactly one matching row and no unknown competitors. Dates use an inclusive start and exclusive end. Supplied-case checks are not exhaustive policy validation. Agent implementation export is unavailable for designs with tables.'));
+    host.appendChild(el('p','UNIQUE requires exactly one matching row and no unknown competitors. Dates use an inclusive start and exclusive end. Supplied-case checks are not exhaustive policy validation. Agent projects require separate reviewed current-source bindings for every competing row and UTC effective dates.'));
     for(const table of model.decision_tables){
       const box=el('section');box.appendChild(el('h5',table.id+' · '+table.decision_activity_id+' · '+(table.user_confirmed?'user confirmed':'unconfirmed')));
       box.appendChild(el('p','Effective '+table.effective_from+' to '+(table.effective_until||'no declared end')+' · Source basis: '+table.source_basis.label+' · '+table.source_basis.document_sha256+' (human-declared digest, not independently verified)'));

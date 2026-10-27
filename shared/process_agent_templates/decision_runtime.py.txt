@@ -1,0 +1,66 @@
+"""Current-record UNIQUE route invariants. No caller facts, tool access or grants."""
+from datetime import datetime, timezone
+
+from execute import ImplementationError, pointer
+from process_source_state import SOURCE_PATHS, SOURCE_TYPES, facts_from_receipt
+
+
+def decision_bindings(spec, routes, case, bindings):
+    """A reviewed table uses ONE selected record snapshot for every competing row."""
+    from owg_model.process_model import ProcessModel
+    model=ProcessModel.model_validate(spec['process_model'])
+    tables={table.id:table for table in model.decision_tables}
+    rules={rule.id:rule for rule in model.business_rules}
+    rows=bindings.get('decision_table_checks',[])
+    if not isinstance(rows,list) or len(rows)>12:
+        raise ImplementationError('Use at most twelve explicit decision-table bindings')
+    mapped={}
+    keys={'table_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed',
+          'non_atomic_reads_reviewed','utc_effective_dates_reviewed'}
+    for row in rows:
+        if (not isinstance(row,dict) or set(row)!=keys or not isinstance(row.get('table_id'),str)
+            or row['table_id'] not in tables or row['table_id'] in mapped
+            or row.get('mode')!='unique_route_before_each_action'
+            or row.get('record_semantics_reviewed') is not True
+            or row.get('non_atomic_reads_reviewed') is not True
+            or row.get('utc_effective_dates_reviewed') is not True
+            or not isinstance(row.get('source_type'),str) or row['source_type'] not in SOURCE_TYPES):
+            raise ImplementationError('Each table needs an exact reviewed current-source UNIQUE route binding')
+        table=tables[row['table_id']]
+        if not table.user_confirmed or any(not rules[r.rule_id].user_confirmed for r in table.rows):
+            raise ImplementationError('Confirm the table and every competing row before source binding')
+        if any(c.path not in SOURCE_PATHS for r in table.rows for c in rules[r.rule_id].predicate.conditions):
+            raise ImplementationError('Every competing row must use supported current-source fact paths')
+        ref=pointer(case,row['resource_ref_pointer'])
+        import re
+        if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
+            raise ImplementationError('Select an exact observed record reference for the entire table')
+        mapped[table.id]={'table_id':table.id,'source_type':row['source_type'],'resource_ref':ref}
+    requests=[];missing=[]
+    for route in routes:
+        if route['table_id'] not in mapped:missing.append(route['table_id'])
+        else:requests.append({**mapped[route['table_id']],'target_activity_ids':list(route['target_activity_ids'])})
+    return requests,missing
+
+
+def check_decision_receipt(spec, request, receipt, *, now=None):
+    """UTC dates and receipt age share a consumer clock after the read finishes."""
+    from owg_model.process_model import ProcessModel
+    from owg_model.process_decision_tables import evaluate_table
+    model=ProcessModel.model_validate(spec['process_model'])
+    table=next(t for t in model.decision_tables if t.id==request['table_id'])
+    current=now or datetime.now(timezone.utc)
+    if current.tzinfo is None:raise ImplementationError('Decision checks need an aware current clock')
+    current=current.astimezone(timezone.utc)
+    facts=facts_from_receipt(receipt,request['resource_ref'],request['source_type'],now=current)
+    result=evaluate_table(table,{r.id:r for r in model.business_rules},facts,current.date().isoformat())
+    # Empty/invalid receipt cannot establish an existence predicate's negation.
+    if not facts and result['status'] in {'unique_match','gap','overlap'}:
+        result['status']='unknown';result['selected_target_activity_id']=None
+    target=result['selected_target_activity_id']
+    return {'table_id':table.id,'status':result['status'], 'checked_on_utc':current.date().isoformat(),
+        'selected_target_activity_id':target,
+        'route_matches':bool(target is not None and request['target_activity_ids']
+                             and all(t==target for t in request['target_activity_ids'])),
+        'record_association':'customer_selected_not_independently_established',
+        'policy_document_verified':False,'execution_authorized':False}

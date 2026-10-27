@@ -11,8 +11,12 @@ def load_spec():
 
 
 def validate_spec(spec):
-    if spec['process_model'].get('decision_tables'):
-        raise ValueError('This runtime cannot evaluate decision tables or effective policy dates')
+    tables = spec['process_model'].get('decision_tables')
+    if tables:
+        if spec.get('decision_table_contract') != 'openworkgraph.current-source-unique-decision.v1':
+            raise ValueError('Decision tables require the exported current-source UNIQUE contract')
+        from owg_model.process_model import ProcessModel
+        ProcessModel.model_validate(spec['process_model'])
     parallel = any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities'])
     if parallel:
         if (spec.get('control_flow_contract') != 'openworkgraph.parallel-node-firing-plan.v1'
@@ -77,6 +81,17 @@ def check_plan(plan, spec=None):
         # A declaration/data comparison cannot attest fresh source facts or
         # become permission for the customer executor to choose a branch.
         checks['unevaluated_structured_rule_ids'] = structured
+    if model.get('decision_tables'):
+        used_edges = ([model['transitions'][i] for i in token_checks['transition_indices']] if token_checks is not None
+                      else [edges[pair] for pair in zip(ids, ids[1:])])
+        table_decisions={table['decision_activity_id'] for table in model['decision_tables']}
+        checks['non_table_structured_rule_ids']=sorted({edge['rule_id'] for edge in used_edges
+            if edge.get('rule_id') and edge['source'] not in table_decisions
+            and next(r for r in model['business_rules'] if r['id']==edge['rule_id']).get('predicate') is not None})
+        checks['decision_table_routes'] = [
+            {'table_id': table['id'], 'target_activity_ids': [edge['target'] for edge in used_edges
+                 if edge['source'] == table['decision_activity_id']]}
+            for table in model['decision_tables'] if any(edge['source'] == table['decision_activity_id'] for edge in used_edges)]
     if token_checks is not None:
         checks.update(control_flow_contract=spec['control_flow_contract'],
                       execution_schedule=spec['execution_schedule'],

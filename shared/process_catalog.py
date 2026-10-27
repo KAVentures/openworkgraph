@@ -185,7 +185,7 @@ def process_document(packet: dict[str, Any]) -> str:
     if model.decision_tables:
         lines+=['','Declared UNIQUE decision tables (not DMN, policy certification or execution authority):',
                 'Inclusive effective start; exclusive end. A supplied-case match is not exhaustive coverage.',
-                'Agent implementation export is unavailable until source-backed table semantics are supported.']+[
+                'Agent projects require separately reviewed current-source UNIQUE bindings and UTC effective dates.']+[
             json.dumps(table.model_dump(mode='json'),sort_keys=True,ensure_ascii=True,allow_nan=False)
             for table in model.decision_tables]
     lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [

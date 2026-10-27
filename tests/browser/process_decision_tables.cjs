@@ -37,6 +37,12 @@ const path=require('node:path');
   await page.locator('#update').click();await page.locator('#status').filter({hasText:'New revision saved.'}).waitFor();
   const saved=(await api(baseURL)).process;assert.equal(saved.revision,2);assert.equal(saved.process_model.decision_tables[0].user_confirmed,true);assert.equal(saved.process_model.decision_tables[0].rows.length,2);
   assert.equal((await api(baseURL+'?revision=1')).process.content_sha256,original.content_sha256);
+  assert.equal(await page.getByRole('button',{name:'Download SDK implementation project',exact:true}).isDisabled(),true);
+  await api(baseURL+'/access',{expected_access_revision:1,members:[{actor_id:'bob',role:'reviewer'}],user_confirmed:true});
+  await api(baseURL+'/reviews',{revision:2,content_sha256:saved.content_sha256,decision:'reviewed_design',user_confirmed:true},'bob');
+  await page.locator('#disconnect').click();await login('alice');await open(2);
+  const [projectDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download SDK implementation project',exact:true}).click()]);
+  const projectBytes=await fs.readFile(await projectDownload.path());assert.equal(projectBytes.subarray(0,2).toString(),'PK');assert.ok(projectBytes.length>10000);
   const facts={as_of_date:'2026-10-26',cases:[{case_id:'case_1',facts:{amount:99}},{case_id:'case_2',facts:{amount:100}},{case_id:'case_3',facts:{}},{case_id:'case_4',facts:{amount:100},activity_ids:['choose','accept']}]};
   const runFacts=async data=>{
     await page.locator('#ruleFactsFile').setInputFiles({name:'facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(data))});

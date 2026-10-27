@@ -39,6 +39,7 @@ if SDK_AVAILABLE:
 class AgentSDKCases(unittest.TestCase):
     def test_structured_condition_is_not_an_automatic_case_fact_or_execution_grant(self):
         spec = load_spec()
+        spec['process_model'].pop('decision_tables',None)  # Replace this synthetic graph completely.
         spec['process_model'].update(activities=[{'id':'guarded','label':'Review','kind':'activity','implementation':'unmapped'},
             {'id':'done','label':'Done','kind':'end','implementation':'unmapped'}],
             transitions=[{'source':'guarded','target':'done','rule_id':'source_condition'}],

@@ -37,6 +37,10 @@ When current_source_rule_checks is present, its rule IDs and match statuses
 are limited current-source invariant checks, not business policy or permission.
 Only a matched check supports proposing that structured rule's transition;
 false, unknown, absent or unconfirmed conditions require clarification.
+When current_source_decision_checks is present, a table supports only its
+unique_match selected_target_activity_id. All competing rows use one current
+record snapshot and UTC effective dates. Other statuses require clarification.
+Table declarations and source-document hashes do not verify policy authority.
 If a branch depends on missing business facts or an unconfirmed rule, return
 needs_clarification with missing_business_inputs. Do not invent rule outcomes.
 For a parallel-node-firing contract, activity_ids is a full node firing order:
@@ -61,6 +65,8 @@ async def propose(case, *, model, spec=None, source_rule_context=None):
     payload={'process':spec,'case':case}
     if source_rule_context is not None:
         payload['current_source_rule_checks']=source_rule_context.for_model(spec,case)
+        if spec['process_model'].get('decision_tables'):
+            payload['current_source_decision_checks']=source_rule_context.tables_for_model(spec,case)
     data = json.dumps(payload, ensure_ascii=False)
     # Disable the SDK's default trace exporter: case text needs separate consent.
     result = await Runner.run(create_agent(model), data,
@@ -76,17 +82,30 @@ async def propose(case, *, model, spec=None, source_rule_context=None):
     if checks['unconfirmed_rule_ids']:
         raise ValueError('Proposed route relies on unconfirmed business rules')
     unresolved=checks.get('unevaluated_structured_rule_ids',[])
+    tables=spec['process_model'].get('decision_tables',[])
+    table_rules={row['rule_id'] for table in tables for row in table['rows']}
+    unresolved=[rule_id for rule_id in unresolved if rule_id not in table_rules
+                or rule_id in checks.get('non_table_structured_rule_ids',[])]
     if source_rule_context is not None:
         source_checks=source_rule_context.check_rules(unresolved,spec,case)
         checks['current_source_rule_checks']=source_checks
         unresolved=[row['rule_id'] for row in source_checks if row['status']!='matched']
         checks['structured_rules_unresolved_for_planning']=unresolved
-    if checks['manual_review_conditions'] or unresolved:
+    unresolved_tables=[]
+    if checks.get('decision_table_routes'):
+        if source_rule_context is None:
+            unresolved_tables=[row['table_id'] for row in checks['decision_table_routes']]
+        else:
+            table_checks=source_rule_context.check_tables(checks['decision_table_routes'],spec,case)
+            checks['current_source_decision_checks']=table_checks
+            unresolved_tables=[row['table_id'] for row in table_checks if not row['route_matches']]
+    if checks['manual_review_conditions'] or unresolved or unresolved_tables:
         # Enforce unresolved review independently of whatever the model claimed.
         pending = ['Manual review required at ' + condition['activity_id'] + ': ' + condition['condition_label']
                    for condition in checks['manual_review_conditions']]
         pending += ['Structured rule requires a reviewed case-fact implementation: ' + rule_id
                     for rule_id in unresolved]
+        pending += ['Current UNIQUE decision route requires clarification: ' + table_id for table_id in unresolved_tables]
         return {'plan': {**plan.model_dump(), 'status': 'needs_clarification',
                          'missing_business_inputs': (pending + plan.missing_business_inputs)[:40]},
                 'shadow_check': checks, 'execution_permitted': False, 'source_outcome_verified': False}

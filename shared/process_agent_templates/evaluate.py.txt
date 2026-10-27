@@ -110,12 +110,20 @@ def compare(spec, suite, results, *, source_rule_contexts=None):
             except ValueError:
                 reason = 'invalid_route'
             unresolved=checks.get('unevaluated_structured_rule_ids',[]) if checks else []
+            table_rules={row['rule_id'] for table in spec['process_model'].get('decision_tables',[]) for row in table['rows']}
+            unresolved=[rid for rid in unresolved if rid not in table_rules or rid in (checks or {}).get('non_table_structured_rule_ids',[])]
+            table_routes=(checks or {}).get('decision_table_routes',[])
+            unresolved_tables=bool(table_routes)
+            if table_routes and source_rule_contexts is not None:
+                context=source_rule_contexts.get(case['id'])
+                checked=context.check_tables(table_routes,spec,case['input']) if context is not None else []
+                unresolved_tables=len(checked)!=len(table_routes) or any(not row['route_matches'] for row in checked)
             if unresolved and source_rule_contexts is not None:
                 context=source_rule_contexts.get(case['id'])
                 verified=(context.check_rules(unresolved,spec,case['input']) if context is not None else [])
                 unresolved=[rule_id for rule_id in unresolved if not any(
                     row['rule_id']==rule_id and row['status']=='matched' for row in verified)]
-            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or unresolved):
+            if checks and (checks['unconfirmed_rule_ids'] or checks['manual_review_conditions'] or unresolved or unresolved_tables):
                 reason = 'unresolved_review_bypassed'
             if reason is None:
                 if plan['missing_business_inputs']:
