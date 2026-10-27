@@ -215,7 +215,20 @@ def employee_by_actor(db: GatewayDB, organization_id: str, actor_id: str) -> dic
 
 
 def upsert_employee(
+    db: GatewayDB, organization_id: str, *, email: str,
+    display_name: str = "", teams: Any = None,
+) -> tuple[dict[str, Any], bool]:
+    """Create/update one roster identity and its selected teams atomically."""
+    with db.connect() as conn:
+        if not db.is_postgres:
+            conn.execute("BEGIN IMMEDIATE")
+        return upsert_employee_in_transaction(db, conn, organization_id,
+                                             email=email, display_name=display_name, teams=teams)
+
+
+def upsert_employee_in_transaction(
     db: GatewayDB,
+    conn: Any,
     organization_id: str,
     *,
     email: str,
@@ -223,33 +236,32 @@ def upsert_employee(
     teams: Any = None,
 ) -> tuple[dict[str, Any], bool]:
     """Create or update an employee. Returns (employee, created)."""
-    from .human_access import set_actor_teams
+    from .human_access import set_actor_teams_in_transaction
 
     org = _org(organization_id)
     address = normalize_email(email)
     name = " ".join(str(display_name or "").split())[:120]
     team_list = _teams(teams) if teams is not None else None
     now = _now()
-    with db.connect() as conn:
-        row = _one(db, conn, "SELECT * FROM gateway_employees WHERE organization_id = ? AND email = ?", (org, address))
-        created = not row
-        if created:
-            employee_id = "emp_" + uuid.uuid4().hex[:20]
-            db._execute(
-                conn,
-                "INSERT INTO gateway_employees(employee_id, organization_id, email, display_name, actor_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
-                (employee_id, org, address, name, address, now, now),
-            )
-        else:
-            employee_id = row["employee_id"]
-            db._execute(
-                conn,
-                "UPDATE gateway_employees SET display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END, status = 'active', offboarded_at = NULL, updated_at = ? WHERE employee_id = ?",
-                (name, name, now, employee_id),
-            )
+    row = _one(db, conn, "SELECT * FROM gateway_employees WHERE organization_id = ? AND email = ?" + (" FOR UPDATE" if db.is_postgres else ""), (org, address))
+    created = not row
+    if created:
+        employee_id = "emp_" + uuid.uuid4().hex[:20]
+        db._execute(
+            conn,
+            "INSERT INTO gateway_employees(employee_id, organization_id, email, display_name, actor_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
+            (employee_id, org, address, name, address, now, now),
+        )
+    else:
+        employee_id = row["employee_id"]
+        db._execute(
+            conn,
+            "UPDATE gateway_employees SET display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END, status = 'active', offboarded_at = NULL, updated_at = ? WHERE employee_id = ?",
+            (name, name, now, employee_id),
+        )
     if team_list is not None:
-        set_actor_teams(db, org, address, team_list)
-    return get_employee(db, org, employee_id), created
+        set_actor_teams_in_transaction(db, conn, org, address, team_list)
+    return _employee_public(_one(db, conn, "SELECT * FROM gateway_employees WHERE employee_id=?", (employee_id,))), created
 
 
 def list_employees(db: GatewayDB, organization_id: str, *, include_offboarded: bool = False) -> list[dict[str, Any]]:
@@ -374,41 +386,52 @@ def revoke_enrolled_device_and_its_invitation(
 
 
 def offboard_employee(db: GatewayDB, organization_id: str, employee_id: str) -> dict[str, Any]:
-    from .human_access import set_actor_teams
+    """Disable roster/device/invitation/browser access and clear teams atomically."""
+    with db.connect() as conn:
+        if not db.is_postgres:
+            conn.execute("BEGIN IMMEDIATE")
+        return offboard_employee_in_transaction(db, conn, organization_id, employee_id)
+
+
+def offboard_employee_in_transaction(db: GatewayDB, conn: Any, organization_id: str, employee_id: str) -> dict[str, Any]:
+    from .human_access import set_actor_teams_in_transaction
 
     org = _org(organization_id)
-    employee = get_employee(db, org, employee_id)
+    row = _one(db, conn, "SELECT * FROM gateway_employees WHERE organization_id=? AND employee_id=?"
+               + (" FOR UPDATE" if db.is_postgres else ""), (org, employee_id))
+    if not row:
+        raise EmployeeError("employee not found", status_code=404)
+    employee = _employee_public(row)
     now = _now()
-    with db.connect() as conn:
-        devices = _all(
-            db, conn,
-            "SELECT DISTINCT device_id FROM access_tokens WHERE organization_id = ? AND token_type = 'device' AND actor_id = ? AND revoked_at IS NULL",
-            (org, employee["actor_id"]),
-        )
-        db._execute(
-            conn,
-            "UPDATE access_tokens SET revoked_at = ? WHERE organization_id = ? AND token_type = 'device' AND actor_id = ? AND revoked_at IS NULL",
-            (now, org, employee["actor_id"]),
-        )
-        db._execute(
-            conn,
-            "UPDATE gateway_personal_invites SET revoked_at = ? WHERE organization_id = ? AND employee_id = ? AND revoked_at IS NULL",
-            (now, org, employee_id),
-        )
-        db._execute(
-            conn,
-            "UPDATE gateway_employees SET status = 'offboarded', offboarded_at = ?, updated_at = ? WHERE employee_id = ?",
-            (now, now, employee_id),
-        )
-        # Monotonic session revocation survives clock changes and explicit
-        # reactivation. This shares the device/invitation disable transaction.
-        db._execute(conn,
-            "INSERT INTO gateway_employee_access_epochs(employee_id,generation) VALUES (?,1) "
-            "ON CONFLICT(employee_id) DO UPDATE SET generation=gateway_employee_access_epochs.generation+1",
-            (employee_id,))
-    set_actor_teams(db, org, employee["actor_id"], [])
+    devices = _all(
+        db, conn,
+        "SELECT DISTINCT device_id FROM access_tokens WHERE organization_id = ? AND token_type = 'device' AND actor_id = ? AND revoked_at IS NULL",
+        (org, employee["actor_id"]),
+    )
+    db._execute(
+        conn,
+        "UPDATE access_tokens SET revoked_at = ? WHERE organization_id = ? AND token_type = 'device' AND actor_id = ? AND revoked_at IS NULL",
+        (now, org, employee["actor_id"]),
+    )
+    db._execute(
+        conn,
+        "UPDATE gateway_personal_invites SET revoked_at = ? WHERE organization_id = ? AND employee_id = ? AND revoked_at IS NULL",
+        (now, org, employee_id),
+    )
+    db._execute(
+        conn,
+        "UPDATE gateway_employees SET status = 'offboarded', offboarded_at = ?, updated_at = ? WHERE employee_id = ?",
+        (now, now, employee_id),
+    )
+    # Monotonic session revocation survives clock changes and explicit
+    # reactivation. This shares the device/invitation disable transaction.
+    db._execute(conn,
+        "INSERT INTO gateway_employee_access_epochs(employee_id,generation) VALUES (?,1) "
+        "ON CONFLICT(employee_id) DO UPDATE SET generation=gateway_employee_access_epochs.generation+1",
+        (employee_id,))
+    set_actor_teams_in_transaction(db, conn, org, employee["actor_id"], [])
     return {
-        **get_employee(db, org, employee_id),
+        **_employee_public(_one(db, conn, "SELECT * FROM gateway_employees WHERE employee_id=?", (employee_id,))),
         "revoked_devices": [d["device_id"] for d in devices],
         "evidence_deleted": False,
     }

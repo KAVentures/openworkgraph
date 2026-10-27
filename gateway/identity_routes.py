@@ -228,6 +228,9 @@ def install_identity(
     def audit(org: str, action: str, details: dict[str, Any]) -> None:
         db.audit(organization_id=org or "*", principal_id="gateway-admin", action=action, details=details)
 
+    from .scim_routes import install as install_scim
+    install_scim(app, db, require_admin, base_url)
+
     # ---------------- admin sign-in -------------------------------------------------------------
 
     @app.get("/v1/admin/auth/state")

@@ -130,6 +130,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_parallel.cjs
       - name: Verify content-free recorder reports in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_status.cjs
+      - name: Verify scoped identity provisioning and credential lifecycle in the admin console
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
       - name: Verify content-free device sync health in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_sync_health.cjs
       - name: Verify side-by-side implementation alternatives in opportunity review
@@ -186,6 +188,7 @@ jobs:
           node --check gateway/process_benefit_client.js
           node --check gateway/process_opportunity_client.js
           node --check gateway/process_implementation_client.js
+          node --check gateway/scim_admin_client.js
           node --check gateway/shared_opportunity_project_client.js
           node --check dashboard/process_decisions.js
           node --check dashboard/agent_starter.js
