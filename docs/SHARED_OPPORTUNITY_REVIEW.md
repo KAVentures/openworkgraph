@@ -103,8 +103,8 @@ Approval and implementation reporting require all of:
 
 A process change, archive, corrupt payload, missing scenario or changed design
 review can invalidate present eligibility without rewriting old history. A
-historically **approved/implemented** record then shows effective state
-**needs_reassessment** and `current_approved_assessment: false`. It cannot progress
+latest record carrying an earlier **approved/implemented** decision then shows
+effective state **needs_reassessment** and `current_approved_assessment: false`. It cannot progress
 to implemented. Explicitly refresh the source pin, reassess and obtain a new
 independent decision. An old approved badge alone is not a current-approval claim.
 
@@ -185,3 +185,12 @@ independent benefit approval and allocation, source-backed implementation/outcom
 receipts, measured baseline/intervention/adoption/operational costs and verified
 realized value remain in #370. Synthetic fixtures do not replace real-company,
 provider, reconstruction-quality or consenting multi-team pilot acceptance.
+
+
+Historical opportunity views and exports set `viewing_historical_revision:true`
+and effective state `historical_snapshot`, with current approval false and no
+allowed transitions. This applies after reassessment, hold and implementation,
+even when the source design or assessment digest is unchanged. The stored artifact
+retains its exact recorded stage/approval. Open the latest opportunity revision
+to inspect current eligibility. Source-resolution/review blockers remain visible;
+no historical approval is presented as approval of the latest assessment.
