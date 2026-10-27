@@ -305,7 +305,9 @@ class GatewayDB:
             )
             row = cur.fetchone()
             columns = [d[0] for d in cur.description] if cur.description else None
-        data = self._row(row, columns)
+            data = self._row(row, columns)
+            if data.get('token_type') == 'device' and self._inactive_device_roster(conn, data):
+                return None
         if not data:
             return None
         try:
@@ -324,6 +326,30 @@ class GatewayDB:
             device_id=str(data.get("device_id") or ""),
             scopes=scopes,
         )
+
+    def _inactive_device_roster(self, conn, data: dict[str, Any]) -> bool:
+        """Known inactive roster identities cannot use an escaped old device key.
+
+        The core Gateway also works without the optional roster. Detect its
+        actual schema, caching only presence so a later schema install is seen.
+        No email guessing or subject normalization establishes a device binding.
+        """
+        if not getattr(self, '_employee_roster_exists', False):
+            if self.is_postgres:
+                exists = conn.execute("SELECT to_regclass('gateway_employees') IS NOT NULL AND "
+                                      "to_regclass('gateway_device_identity') IS NOT NULL").fetchone()[0]
+            else:
+                exists = conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('gateway_employees','gateway_device_identity')").fetchone()[0] == 2
+            if not exists:
+                return False
+            self._employee_roster_exists = True
+        return self._execute(conn, '''SELECT 1 FROM gateway_employees e
+            WHERE e.organization_id=? AND e.status<>'active' AND
+            (e.actor_id=? OR e.employee_id IN (SELECT employee_id FROM gateway_device_identity
+                WHERE organization_id=? AND device_id=?)) LIMIT 1''',
+            (data['organization_id'], data.get('actor_id') or '', data['organization_id'],
+             data.get('device_id') or '')).fetchone() is not None
 
     def revoke_token(self, token_id: str) -> bool:
         with self.connect() as conn:

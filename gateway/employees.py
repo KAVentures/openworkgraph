@@ -123,6 +123,35 @@ def init_employee_schema(db: GatewayDB) -> None:
     with db.connect() as conn:
         for statement in [x.strip() for x in SCHEMA.split(";") if x.strip()]:
             conn.execute(statement)
+    # Release PostgreSQL schema/index locks before waiting on lifecycle rows.
+    # Credential repair itself remains one transaction, separate from DDL.
+    with db.connect() as conn:
+        # Repair only current inactive lifecycles from older inconsistent data.
+        # Employee-first locking composes with enrollment/offboarding/rehire;
+        # recheck after locking so a concurrent fresh active lifecycle is safe.
+        inactive = db._execute(conn, "SELECT organization_id,employee_id FROM gateway_employees "
+            "WHERE status<>'active' ORDER BY organization_id,employee_id").fetchall()
+        for org, employee_id in inactive:
+            row = _lock_employee(db, conn, org, employee_id)
+            revoke_inactive_credentials_in_transaction(db, conn, row)
+
+
+def revoke_inactive_credentials_in_transaction(db: GatewayDB, conn: Any, row: dict[str, Any]) -> None:
+    """Permanently revoke an inactive lifecycle without rewriting its history.
+
+    Caller holds the employee lock. This also runs before explicit activation;
+    older missed invitations/devices must not become valid again on rehire.
+    """
+    if row['status'] == 'active':
+        return
+    now = _now()
+    db._execute(conn, '''UPDATE access_tokens SET revoked_at=? WHERE organization_id=?
+        AND token_type='device' AND revoked_at IS NULL AND (actor_id=? OR device_id IN
+        (SELECT device_id FROM gateway_device_identity WHERE organization_id=? AND employee_id=?))''',
+        (now, row['organization_id'], row['actor_id'], row['organization_id'], row['employee_id']))
+    db._execute(conn, '''UPDATE gateway_personal_invites SET revoked_at=?
+        WHERE organization_id=? AND employee_id=? AND revoked_at IS NULL''',
+        (now, row['organization_id'], row['employee_id']))
 
 
 def _org(value: str) -> str:
@@ -265,6 +294,7 @@ def upsert_employee_in_transaction(
         )
     else:
         employee_id = row["employee_id"]
+        revoke_inactive_credentials_in_transaction(db, conn, row)
         db._execute(
             conn,
             "UPDATE gateway_employees SET display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END, status = 'active', offboarded_at = NULL, updated_at = ? WHERE employee_id = ?",

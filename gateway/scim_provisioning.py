@@ -288,6 +288,8 @@ class Provisioning:
         uid, now = row['employee_id'], roster._now()
         if current['active'] and not active:
             roster.offboard_employee_in_transaction(self.db, conn, provider['organization_id'], uid)
+        elif not current['active'] and active:
+            roster.revoke_inactive_credentials_in_transaction(self.db, conn, row)
         self.db._execute(conn, '''UPDATE gateway_employees SET display_name=?,status=?,
             offboarded_at=CASE WHEN ? THEN NULL ELSE offboarded_at END,updated_at=? WHERE employee_id=?''',
             (name, 'active' if active else 'offboarded', active, now, uid))
