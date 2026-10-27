@@ -34,6 +34,7 @@ from shared.event_log_formats import (
 )
 
 from .db import DATA_DIR
+from . import event_log_source_identity as source_identity
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -98,6 +99,8 @@ CREATE TABLE IF NOT EXISTS signal_rules (
 );
 """
 
+_SCHEMA += source_identity.SCHEMA
+
 DESCRIPTIVE_ONLY = {
     "derived_from_supplied_log": True,
     "verified_business_workflow": False,
@@ -138,9 +141,12 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
                        "FROM logs WHERE log_id = ?", [log_id]).fetchone()
     if not row:
         raise EventLogWorkspaceError("unknown event log")
-    return {"log_id": row[0], "name": row[1], "source_format": row[2],
+    result = {"log_id": row[0], "name": row[1], "source_format": row[2],
             "imported_at": row[3].isoformat() + "Z", "events": row[4],
             "objects": row[5], "rejected_events": row[6]}
+    identity=source_identity.description(conn,log_id)
+    if identity:result['source_identity']=identity
+    return result
 
 
 # ---------------------------------------------------------------- import
@@ -225,6 +231,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     With ``keep_rejected`` the mapped fields of up to MAX_QUARANTINED_ROWS rejected rows are left in the
     temporary table ``rejected_rows`` for the caller to store, and the dict receives the counts."""
     offset = naive_offset(mapping)
+    identity_mode=source_identity.settings(mapping)
     delimiter = mapping.get("delimiter") or ","
     if delimiter not in {",", ";", "\t", "|"}:
         raise EventLogFormatError("unsupported delimiter")
@@ -241,7 +248,8 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     missing = [name for name in columns + ([resource] if resource else []) if name not in header]
     if missing:
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
-    q = lambda name: '"' + name.replace('"', '""') + '"'
+    if identity_mode:source_identity.validate_columns(identity_mode,header)
+    q = lambda name: 'source_rows."' + name.replace('"', '""') + '"'
     case, activity, stamp = (q(c) for c in columns)
     res = q(resource) if resource else "''"
     # Optional extra columns kept as event attributes, with the streaming reader's bounds.
@@ -260,12 +268,15 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     attrs = ("json_object(" + ", ".join(
         f"{sql_literal(key)}, left(trim(replace(coalesce({q(column)}, ''), chr(0), '')), {MAX_ATTRIBUTE_VALUE})"
         for column, key in names.items()) + ")::VARCHAR") if names else "'{}'"
+    if identity_mode and identity_mode.attributes_json_column:
+        attrs=f'try_cast({q(identity_mode.attributes_json_column)} AS JSON)::VARCHAR'
+    identity_columns=', '+identity_mode.expressions(q) if identity_mode else ''
     conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
           {case} AS case_id, {activity} AS activity,
           {timestamp_sql(stamp, offset)} AS ts,
           coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
-          row_number() OVER () AS n
-        FROM {source}""", [str(path),original_header])
+          row_number() OVER () AS n {identity_columns}
+        FROM {source} AS source_rows""", [str(path),original_header])
     if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
         OR length(resource)>200 OR regexp_matches(concat_ws('',case_id,activity,resource),?)""",
         [r'[\x00-\x1f\x7f-\x9f\x{fffe}\x{ffff}]']).fetchone()[0]:
@@ -291,6 +302,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
             reasons["unparseable_timestamp"] += unreadable
             reasons["timestamps_with_assumed_offset"] = assumed
     invalid = "case_id IS NULL OR trim(case_id) = '' OR activity IS NULL OR trim(activity) = '' OR ts IS NULL"
+    source_duplicates=source_identity.prepare_csv(conn,identity_mode,invalid) if identity_mode else 0
     if keep_rejected is not None:
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE rejected_rows AS SELECT n,
               to_json(list_filter([
@@ -311,10 +323,14 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
     conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, attributes FROM staged""",
                  [log_id])
-    conn.execute("INSERT INTO objects SELECT DISTINCT ?, case_id, ?, '{}' FROM staged", [log_id, CASE_TYPE])
-    conn.execute("INSERT INTO event_objects SELECT ?, 'e' || n, case_id, ? FROM staged", [log_id, CASE_TYPE])
+    case_type=source_identity.CASE_TYPE if identity_mode else CASE_TYPE
+    conn.execute("INSERT INTO objects SELECT DISTINCT ?, case_id, ?, '{}' FROM staged", [log_id, case_type])
+    conn.execute("INSERT INTO event_objects SELECT ?, 'e' || n, case_id, ? FROM staged", [log_id, case_type])
     objects = conn.execute("SELECT count(*) FROM objects WHERE log_id = ?", [log_id]).fetchone()[0]
+    if identity_mode:source_identity.capture_csv_keys(conn,log_id)
     conn.execute("DROP TABLE staged")
+    if identity_mode:return source_identity.SourceReadStats(events=kept,rejected_events=0,objects=objects,
+        source_identity={'input_events':total,'duplicate_source_ids_skipped':source_duplicates})
     return ReadStats(events=kept, rejected_events=total - kept, objects=objects)
 
 
@@ -323,6 +339,7 @@ def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: 
             keep_rejected: dict[str, int] | None = None) -> ReadStats:
     if source_format == "csv":
         return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons, keep_rejected)
+    if source_identity.settings(mapping):raise EventLogFormatError('Supplied source event identity mode is supported only for CSV')
     if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset"):
         raise EventLogWorkspaceError("keeping rejected rows and assuming an offset are available for CSV only")
     stats = ReadStats()
@@ -378,8 +395,10 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
             report = _record_quality(conn, log_id, batch=0, kind="import", source_format=source_format,
                                      mapping=mapping, upload=upload, rows_accepted=stats.events,
                                      rows_rejected=stats.rejected_events,
-                                     rejection_reasons=reasons if source_format == "csv" else None, kept=kept)
-            return {**_check_log(conn, log_id), "quality": report, **_history_counts(source_format, stats)}
+                                     rejection_reasons=reasons if source_format == "csv" else None, kept=kept,
+                                     **source_identity.metadata(conn,log_id,stats))
+            return {**_check_log(conn, log_id), "quality": report, **_history_counts(source_format, stats),
+                    **source_identity.metadata(conn,log_id,stats)}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
@@ -421,13 +440,16 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                 batch = conn.execute("SELECT coalesce(max(batch), 0) + 1 FROM log_appends WHERE log_id = ?",
                                      [log_id]).fetchone()[0]
                 prefix = f"a{batch}:"
-                low, high = conn.execute("SELECT min(ts), max(ts) FROM events WHERE log_id = ?", [staging]).fetchone()
-                conn.execute(f"CREATE OR REPLACE TEMP TABLE new_fp AS {_FINGERPRINT.format(window='')}", [staging])
-                conn.execute(f"CREATE OR REPLACE TEMP TABLE old_fp AS {_FINGERPRINT.format(window='AND e.ts BETWEEN ? AND ?')}",
-                             [log_id, low, high])
-                conn.execute("""CREATE OR REPLACE TEMP TABLE keep AS SELECT n.event_id FROM new_fp n
-                    WHERE NOT EXISTS (SELECT 1 FROM old_fp o WHERE o.activity = n.activity AND o.ts = n.ts
-                      AND o.resource = n.resource AND o.objs IS NOT DISTINCT FROM n.objs)""")
+                if isinstance(stats,source_identity.SourceReadStats):
+                    source_identity.choose_append(conn,log_id,staging)
+                else:
+                    low, high = conn.execute("SELECT min(ts), max(ts) FROM events WHERE log_id = ?", [staging]).fetchone()
+                    conn.execute(f"CREATE OR REPLACE TEMP TABLE new_fp AS {_FINGERPRINT.format(window='')}", [staging])
+                    conn.execute(f"CREATE OR REPLACE TEMP TABLE old_fp AS {_FINGERPRINT.format(window='AND e.ts BETWEEN ? AND ?')}",
+                                 [log_id, low, high])
+                    conn.execute("""CREATE OR REPLACE TEMP TABLE keep AS SELECT n.event_id FROM new_fp n
+                        WHERE NOT EXISTS (SELECT 1 FROM old_fp o WHERE o.activity = n.activity AND o.ts = n.ts
+                          AND o.resource = n.resource AND o.objs IS NOT DISTINCT FROM n.objs)""")
                 added = conn.execute("SELECT count(*) FROM keep").fetchone()[0]
                 conn.execute("""INSERT INTO events SELECT ?, ? || e.event_id, e.activity, e.ts, e.resource, e.attributes
                     FROM events e JOIN keep k ON k.event_id = e.event_id WHERE e.log_id = ?""", [log_id, prefix, staging])
@@ -446,9 +468,18 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                 # Timed attribute values are added for new and existing objects: a newer export can carry
                 # later changes. Values the log already holds (same name, time and value) are skipped.
                 new_values, values_over_limit, values_over_names = _append_values(conn, log_id, staging)
-                for table in ("event_objects", "events", "objects", "object_attribute_values"):
+                if isinstance(stats,source_identity.SourceReadStats):
+                    source_identity.copy_append_keys(conn,log_id,staging,prefix)
+                elif conn.execute('SELECT 1 FROM event_source_namespaces WHERE log_id=? LIMIT 1',[log_id]).fetchone():
+                    # An ID-less/OCEL append may add another case notion, but must
+                    # never add unkeyed events to the managed source_case notion.
+                    source_identity.validate_index(conn,log_id)
+                for table in ("event_source_keys", "event_source_namespaces", "event_objects", "events", "objects", "object_attribute_values"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
+                if isinstance(stats,source_identity.SourceReadStats):
+                    duplicates+=stats.source_identity['duplicate_source_ids_skipped']
+                    stats.source_identity['duplicate_source_ids_skipped']=duplicates
                 _store_rejected(conn, log_id, batch, kept)
                 conn.execute("INSERT INTO log_appends VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                              [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), source_format,
@@ -464,13 +495,15 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                                      mapping=mapping, upload=upload, rows_accepted=added,
                                      rows_rejected=stats.rejected_events,
                                      rejection_reasons=reasons if source_format == "csv" else None,
-                                     duplicates_skipped=duplicates, prefix=prefix, kept=kept)
+                                     duplicates_skipped=duplicates, prefix=prefix, kept=kept,
+                                     **source_identity.metadata(conn,log_id,stats))
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
                     **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit,
                                       over_names=values_over_names),
-                    "appended_event_id_prefix": prefix, "quality": report}
+                    "appended_event_id_prefix": prefix, "quality": report,
+                    **source_identity.metadata(conn,log_id,stats)}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
@@ -570,7 +603,8 @@ def _quality_summary(report: dict[str, Any]) -> dict[str, Any]:
             "events_sharing_a_timestamp_in_a_case": d["events_sharing_a_timestamp_in_a_case"],
             "events_without_resource": d["events_without_resource"],
             "timestamps_with_assumed_offset": report["rows"].get("timestamps_with_assumed_offset", 0),
-            "rejected_rows_kept_for_review": report["rows"].get("rejected_rows_kept_for_review", 0)}
+            "rejected_rows_kept_for_review": report["rows"].get("rejected_rows_kept_for_review", 0),
+            **({'source_identity':report['source_identity']} if 'source_identity' in report else {})}
 
 
 def append_history(log_id: str) -> dict[str, Any]:
@@ -606,7 +640,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+            for table in ("event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
                           "metric_definitions", "saved_analyses", "signal_rules", "event_objects", "events", "objects",
                           "object_attribute_values",
                           "logs"):
@@ -784,7 +818,15 @@ def case_events(log_id: str, case_type: str | None = None) -> Iterator[tuple[str
 
 
 def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | None = None) -> None:
-    if export_format == "xes":
+    if export_format == 'sourcecsv':
+        with _LOCK:
+            conn=_connect()
+            try:
+                _check_log(conn,log_id);notion=_case_type(conn,log_id,case_type)
+                source_identity.export_csv(conn,log_id,notion,out)
+            except EventLogFormatError as exc:raise EventLogWorkspaceError(str(exc)) from None
+            finally:conn.close()
+    elif export_format == "xes":
         write_xes(case_events(log_id, case_type), out)
     elif export_format == "csv":
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out)

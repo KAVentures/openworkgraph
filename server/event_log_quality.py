@@ -55,6 +55,9 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
+        identity=workspace.source_identity.settings(mapping)
+        if identity:
+            declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
     else:
         declared["mapping"] = {"mapping_version": MAPPING_VERSION, "standard": {
             "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
@@ -96,6 +99,17 @@ def content_digest(conn, log_id: str, prefix: str | None = None) -> str:
     links = _set_digest(conn, f"""SELECT sha256(concat_ws(chr(31), l.event_id, l.object_id, l.qualifier)) AS h
         FROM event_objects l WHERE l.log_id = ? {link_scope}""", [log_id, *extra])
     return hashlib.sha256(f"owg.event-log-content.v1:{events}:{links}".encode()).hexdigest()
+
+
+def source_identity_digest(conn, log_id: str, prefix: str | None = None) -> str:
+    """Separate key/case-map digest; existing event-content digests stay unchanged."""
+    where, extra = _scope(prefix)
+    return _set_digest(conn, f'''SELECT sha256(to_json([k.source_namespace,k.source_event_id,
+          n.case_namespace,l.object_id])) AS h FROM event_source_keys k
+        JOIN events e ON e.log_id=k.log_id AND e.event_id=k.event_id
+        JOIN event_source_namespaces n ON n.log_id=k.log_id AND n.source_namespace=k.source_namespace
+        JOIN event_objects l ON l.log_id=k.log_id AND l.event_id=k.event_id
+        WHERE k.log_id=? {where}''', [log_id, *extra])
 
 
 def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
@@ -143,7 +157,7 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
 def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapping: dict[str, Any] | None,
            upload: Path, rows_accepted: int, rows_rejected: int, rejection_reasons: dict[str, int] | None,
            duplicates_skipped: int | None = None, prefix: str | None = None,
-           kept: dict[str, int] | None = None) -> dict[str, Any]:
+           kept: dict[str, int] | None = None, source_identity: dict[str, Any] | None = None) -> dict[str, Any]:
     """Store the report for one import (batch 0) or appended batch, inside the caller's transaction."""
     rejection_reasons = dict(rejection_reasons) if rejection_reasons is not None else None
     assumed = (rejection_reasons or {}).pop("timestamps_with_assumed_offset", None)
@@ -168,6 +182,9 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
     if rejection_reasons is None:
         report["rows"]["rejected_by_reason_note"] = ("This reader reports only the total of rejected entries; "
                                                      "reasons are not broken down.")
+    if source_identity is not None:
+        report['source_identity']=dict(source_identity)
+        report['source_identity_map_sha256']=source_identity_digest(conn,log_id,prefix)
     conn.execute("INSERT INTO log_quality VALUES (?, ?, ?, ?)",
                  [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), _canonical(report)])
     return report
@@ -185,12 +202,14 @@ def quality(log_id: str) -> dict[str, Any]:
                 "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
+            identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
+                               if info.get('source_identity') else {})
         finally:
             conn.close()
     present = {r["batch"] for r in reports}
     # Logs imported before reports existed, or whose report could not be written, have none.
     return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
-            "current": {"content_sha256": digest, "diagnostics": current,
+            "current": {"content_sha256": digest, "diagnostics": current, **identity_digest,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 

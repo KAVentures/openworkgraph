@@ -107,6 +107,14 @@
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
     mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
+    const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
+    const useIdentity=input('owgEventLogUseIdentity','checkbox');
+    const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
+    const eventId=select('owgEventLogEventId',[]),sourceColumn=select('owgEventLogSourceColumn',[]),caseColumn=select('owgEventLogCaseNamespaceColumn',[]),jsonColumn=select('owgEventLogAttributesJson',[]);
+    const sourceNamespace=input('owgEventLogSourceNamespace','text','e.g. crm'),caseNamespace=input('owgEventLogCaseNamespace','text','Defaults to source namespace');
+    sourceNamespace.maxLength=40;caseNamespace.maxLength=40;
+    identityFields.append(field('Event ID column',eventId),field('Source namespace',sourceNamespace),field('Or source namespace column',sourceColumn),field('Case namespace (optional)',caseNamespace),field('Or case namespace column',caseColumn),field('Attribute JSON column (optional; replaces extra columns)',jsonColumn));
+    identity.append(field('Deduplicate using supplied source-event IDs',useIdentity),identityFields,el('p','Namespaces are your declarations, not verified provider identities. Different source IDs keep otherwise identical events; conflicting reuse refuses the entire file. A shared case namespace joins exact case keys across sources. Every row must be valid; rejected-row retention is incompatible. Use Source-ID CSV to preserve these keys on export.'));
     const consentLabel=el('label');consentLabel.style.cssText='display:flex;gap:6px;align-items:center;margin-top:8px';
     const consent=input('owgEventLogConsent','checkbox');consentLabel.append(consent,document.createTextNode(' Store this log on this computer until I delete it'));
     const keepLabel=el('label');keepLabel.style.cssText='display:flex;gap:6px;align-items:center';
@@ -116,10 +124,10 @@
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
     const importRow=el('div',null,'row');importRow.append(importButton,appendButton);
-    card.append(row,mapping,consentLabel,keepLabel,importRow,statusLine);
+    card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
-    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
+    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV'],['sourcecsv','Source-ID CSV (source_case only)'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const analyze=button('Analyse');analyze.id='owgEventLogAnalyze';
     const exportButton=button('Export','secondary');exportButton.id='owgEventLogExport';
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
@@ -131,7 +139,21 @@
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    const refreshImport=()=>{const ready=file.files&&file.files[0]&&consent.checked;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,format.value==='csv');};
+    let readingColumns=false;
+    const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
+      const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
+      const ready=!readingColumns&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+    for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
+      control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
+      if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
+    }
+    keep.addEventListener('change',refreshImport);
+    function csvMapping(q){
+      q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
+      if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
+      q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
+      if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
+    }
     async function readColumns(){
       const chosen=file.files&&file.files[0];if(!chosen||format.value!=='csv')return;
       const sep=delimiter.value==='t'?'\t':delimiter.value;
@@ -143,19 +165,26 @@
       cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
       cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
       setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
+      setOptions(eventId,[['','Choose a column'],...options]);
+      for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
+      eventId.value=columns.includes('source_event_id')?'source_event_id':'';
+      sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
+      caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
+      jsonColumn.value=columns.includes('attributes')?'attributes':'';
+      refreshImport();
     }
-    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}refreshImport();try{await readColumns();}catch(_){status('Could not read the column names.');}};
+    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readingColumns=true;status('Reading file columns…');refreshImport();try{await readColumns();status('File mapping ready. Review the selected columns before storing.');}catch(_){status('Could not read the column names.');}finally{readingColumns=false;refreshImport();}};
     format.onchange=()=>{refreshImport();readColumns().catch(()=>{});};
     delimiter.onchange=()=>readColumns().catch(()=>{});
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
       const q=new URLSearchParams({format:format.value,name:name.value.trim()});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');}
+      if(format.value==='csv')csvMapping(q);
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+tieText(log.quality)+keptText(log.quality));
+        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality));
         consent.checked=false;keep.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
@@ -163,13 +192,13 @@
     appendButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
       const q=new URLSearchParams({format:format.value});
-      if(format.value==='csv'){q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');}
+      if(format.value==='csv')csvMapping(q);
       appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         consent.checked=false;file.value='';
         await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+tieText(r.quality)+keptText(r.quality));keep.checked=false;
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
@@ -180,7 +209,7 @@
         status('Preparing export…');
         const response=await api(logPath('export',{format:exportFormat.value}));
         const url=URL.createObjectURL(await response.blob());
-        const link=el('a');link.href=url;link.download=state.logId+'.'+({ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
+        const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv',ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
         status('Export ready.');
       }catch(error){status(error.message);}
@@ -1384,6 +1413,8 @@
     return box;
   }
 
+  function identityText(identity){return identity?' Supplied source-ID matching: '+Number(identity.duplicate_source_ids_skipped||0).toLocaleString()+' repeated IDs skipped; namespace and case associations are caller-declared. Plain CSV/XES/OCEL exports omit these keys.':'';}
+
   function qualitySection(){
     const box=section('Data quality');box.id='owgQuality';
     const out=el('div');out.id='owgQualityResults';out.setAttribute('role','status');
@@ -1399,7 +1430,9 @@
         el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256))]);
       const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
       const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
+      if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
+        ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
@@ -1411,6 +1444,7 @@
           ['Events dated after the import',Number(d.events_dated_after_import).toLocaleString()],
           ...d.case_notions.map(n=>['Single-event '+n.object_type+' cases',Number(n.single_event_cases).toLocaleString()+' of '+Number(n.cases).toLocaleString()])]),
         ...(d.attribute_coverage.length?[table(['Attribute','Events with a value','Without'],d.attribute_coverage.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()]))]:[]),
+        ...(r.current.source_identity_map_sha256?[el('div','Current source identity map digest: '+r.current.source_identity_map_sha256,'muted')]:[]),
         el('div','Current content digest: '+r.current.content_sha256+'. '+r.current.completeness.note,'muted'));
     }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
     return box;

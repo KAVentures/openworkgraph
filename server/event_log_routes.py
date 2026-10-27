@@ -48,8 +48,19 @@ from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+
+
+def _source_identity_mapping(
+    event_id_column: str = Query(default="", max_length=200),
+    source_namespace: str = Query(default="", max_length=40),
+    source_namespace_column: str = Query(default="", max_length=200),
+    case_namespace: str = Query(default="", max_length=40),
+    case_namespace_column: str = Query(default="", max_length=200),
+    attributes_json_column: str = Query(default="", max_length=200),
+) -> dict[str, str]:
+    return {key: value for key, value in locals().items() if value}
 
 
 def _require_dashboard(request: Request) -> None:
@@ -107,6 +118,7 @@ async def import_event_log(
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
+    identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
@@ -126,6 +138,7 @@ async def import_event_log(
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
+        mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
 
@@ -141,6 +154,7 @@ async def append_event_log(
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
+    identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
@@ -159,6 +173,7 @@ async def append_event_log(
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
+        mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
         except workspace.EventLogWorkspaceError as exc:
@@ -605,7 +620,7 @@ async def event_log_simulation_validation(request: Request, log_id: str,
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|xes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|xes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
