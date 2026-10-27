@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS gateway_employees (
   UNIQUE (organization_id, email),
   UNIQUE (organization_id, actor_id)
 );
+CREATE INDEX IF NOT EXISTS idx_gateway_employee_sso ON gateway_employees(organization_id,sso_subject);
+CREATE TABLE IF NOT EXISTS gateway_employee_access_epochs (
+  employee_id TEXT PRIMARY KEY,
+  generation BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS gateway_personal_invites (
   invite_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -395,6 +400,12 @@ def offboard_employee(db: GatewayDB, organization_id: str, employee_id: str) -> 
             "UPDATE gateway_employees SET status = 'offboarded', offboarded_at = ?, updated_at = ? WHERE employee_id = ?",
             (now, now, employee_id),
         )
+        # Monotonic session revocation survives clock changes and explicit
+        # reactivation. This shares the device/invitation disable transaction.
+        db._execute(conn,
+            "INSERT INTO gateway_employee_access_epochs(employee_id,generation) VALUES (?,1) "
+            "ON CONFLICT(employee_id) DO UPDATE SET generation=gateway_employee_access_epochs.generation+1",
+            (employee_id,))
     set_actor_teams(db, org, employee["actor_id"], [])
     return {
         **get_employee(db, org, employee_id),

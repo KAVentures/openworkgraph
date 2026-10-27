@@ -35,6 +35,8 @@ class PortalSessionStore:
         self.now=now or (lambda:datetime.now(timezone.utc))
 
     def initialize(self):
+        from .employees import init_employee_schema
+        init_employee_schema(self.db)
         with self.db.connect() as conn:
             self.db._execute(conn,f'''CREATE TABLE IF NOT EXISTS {self.table} (
                 session_hash TEXT PRIMARY KEY, principal_json TEXT NOT NULL,
@@ -43,17 +45,20 @@ class PortalSessionStore:
 
     def _principal(self,claims):
         principal=principal_from_claims(self.settings,claims)
+        from .roster_access import active_identity
+        employee=active_identity(self.db,principal.organization_id,principal.actor_id)
+        if employee:principal=replace(principal,actor_id=employee['actor_id'])
         if len(principal.groups)>100 or any(len(group)>200 for group in principal.groups):
             raise ValueError('Portal identity group claims exceed their bound')
         principal=replace(principal,scopes=frozenset(s for s in principal.scopes if s.startswith(self.scope_prefix)))
         if self.scope_prefix+'read' not in principal.scopes:
             raise ValueError('Explicit organization portal read permission is required')
-        return principal
+        return principal,employee
 
     def issue(self,claims):
         if not isinstance(claims.get('iss'),str) or claims['iss'].rstrip('/') != self.settings.issuer.rstrip('/'):
             raise ValueError('The company and portal identity issuers must match')
-        principal=self._principal(claims)
+        principal,employee=self._principal(claims)
         if type(claims.get('exp')) not in {int,float}:
             raise ValueError('A verified identity expiry is required')
         now=self.now()
@@ -61,9 +66,11 @@ class PortalSessionStore:
         if expires<=now:raise ValueError('The verified company identity expired')
         token=self.prefix+secrets.token_urlsafe(32)
         # Keep only bounded identity fields; never persist ID/access tokens,
-        # email, provider responses, designs or arbitrary identity claims.
+        # extra email claims, provider responses, designs or arbitrary claims.
+        # The authorized actor identifier can itself be a roster work email.
         identity={'subject':principal.subject,'organization_id':principal.organization_id,
                   'actor_id':principal.actor_id,'groups':sorted(principal.groups),'issuer':principal.issuer}
+        if employee:identity['roster_binding']=employee['binding']
         with self.db.connect() as conn:
             self.db._execute(conn,f'DELETE FROM {self.table} WHERE expires_at <= ?',
                              (normalize_timestamp(now.isoformat()),))
@@ -85,6 +92,13 @@ class PortalSessionStore:
         value=json.loads(row[0])
         if value['issuer']!=self.settings.issuer:
             raise ValueError('Portal identity issuer changed')
+        from .roster_access import active_identity
+        employee=active_identity(self.db,value['organization_id'],value['actor_id'],value['subject'])
+        binding=value.get('roster_binding')
+        if (employee and (employee['actor_id']!=value['actor_id'] or binding!=employee['binding'])) or (binding is not None and employee is None):
+            # Legacy/unbound sessions need fresh sign-in once roster-linked.
+            # A monotonic epoch, not wall-clock time, prevents rehire revival.
+            raise ValueError('Roster identity changed; sign in again')
         # Re-evaluate the current group map on every request. No stored scope
         # list can retain permissions after the configured mapping changes.
         scopes=set()

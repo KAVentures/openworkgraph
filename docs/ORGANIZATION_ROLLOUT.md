@@ -203,7 +203,7 @@ The admin console provides:
 - **Identity & sign-in:** require verified identities, company sign-in status, bootstrap token status.
 - **Audit log:** administrative, enrollment and evidence-access activity, attributed to the named administrator.
 
-**Offboarding** an employee revokes all their computers and open invitations at once. Revoking a group invitation prevents new enrollments but does not revoke computers that already received credentials; revoke those separately.
+**Offboarding** an employee revokes all their computers and open invitations at once. It also rejects subsequent delegated human/MCP requests and process/analysis portal sessions for that exactly linked roster identity. Rehire requires fresh portal sign-in and does not restore old device credentials. See [roster human-access checks and upgrade requirements](ROSTER_HUMAN_ACCESS.md). Disable provider accounts and separate administrator/service credentials through their own controls. Revoking a group invitation prevents new enrollments but does not revoke computers that already received credentials; revoke those separately.
 
 ## Current rollout limits
 

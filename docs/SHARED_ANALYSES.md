@@ -67,7 +67,10 @@ cannot initiate this privileged portal flow. An ID token is never accepted as an
 A successful callback creates an `OWG-Analysis-Session` credential for at most 15 minutes,
 clipped to the verified ID-token expiry. Its transient URL fragment is removed before API
 requests; the session stays only in page memory. The database stores a token hash and bounded
-subject/tenant/actor/groups/issuer, not the token, email, ID token or arbitrary provider claims.
+subject/tenant/actor/groups/issuer and optional opaque roster ID/revocation generation,
+not the token, extra email claims, ID token or arbitrary provider claims. A mapped roster
+actor can itself be a work email. [Current roster checks](ROSTER_HUMAN_ACCESS.md) reject
+offboarded linked identities; old sessions do not revive after rehire.
 Only `org:analysis:*` scopes survive. Current group-to-scope configuration is rechecked on each
 request; per-publication ACLs and expiry are independently rechecked by the publication store.
 Changing provider group membership requires another sign-in or the existing session's expiry;
