@@ -2,6 +2,8 @@
 
 For CSV exports with stable event identifiers, see [supplied source-event identities](SUPPLIED_SOURCE_EVENT_IDENTITIES.md). That optional mapping keeps distinct source IDs with identical payloads, refuses conflicting ID reuse atomically, and provides a separate Source-ID CSV round trip. Ordinary mappings retain the existing payload-based append behavior.
 
+For directed OCEL object-to-object assertions, see [supplied object relationships](SUPPLIED_OCEL_OBJECT_RELATIONSHIPS.md). Import, append, local inspection and OCEL JSON/XML export preserve these separately from shared-event associations, without merging case histories.
+
 The event-log workspace imports business event logs that you export from your
 own systems and analyses them on this computer with an embedded columnar
 engine (DuckDB). It is meant for logs that are too large for the in-browser CSV
@@ -17,8 +19,8 @@ delete them.
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
-| OCEL 2.0 JSON | yes | yes | Objects, object types, events and event-to-object relationships with qualifiers. Object attribute values keep their times (below). |
-| OCEL 2.0 XML | yes | yes | The same content in the OCEL 2.0 XML layout (`.xmlocel`). Objects must precede events, as the standard requires; the file is streamed, so memory stays bounded. |
+| OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
+| OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
 object type, `case`. For an OCEL log you choose the case notion (`order`,
@@ -159,6 +161,8 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
+| `GET /v1/event-logs/{log_id}/object-relationships` | Supplied directed object assertions, with bounded type/qualifier groups. |
+| `POST /v1/event-logs/{log_id}/object-relationships/query` | Literal endpoint/type/qualifier and incoming/outgoing filters, revision-bound keyset pages, current endpoint event counts. Does not merge cases. |
 | `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
 | `POST /v1/event-logs/{log_id}/object-constraints` | Rules across object types: objects per event, related objects per object, and an activity only after a required activity of every related object. |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |

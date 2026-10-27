@@ -28,6 +28,8 @@ MAX_ATTRIBUTES = 32
 MAX_ATTRIBUTE_VALUE = 500
 MAX_OBJECT_ATTRIBUTE_VALUES = 1000   # timed attribute values kept per object besides each stored value (OCEL 2.0)
 MAX_OCEL_BYTES = 256 * 1024 * 1024
+MAX_OBJECT_RELATIONSHIPS = 10_000
+MAX_LOG_OBJECT_RELATIONSHIPS = 1_000_000
 CASE_TYPE = "case"
 _XES_NS = "{http://www.xes-standard.org/}"
 _FORBIDDEN_XML = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
@@ -55,6 +57,7 @@ class ObjectRecord:
     # OCEL 2.0 only: every attribute value with its time, (name, UTC time, value). ``attributes`` keeps
     # the first listed value per name, as before; this history is what changes over time.
     history: list[tuple[str, datetime, str]] = field(default_factory=list)
+    relationships: list[tuple[str, str]] = field(default_factory=list)  # (target object ID, literal qualifier)
 
 
 @dataclass
@@ -324,6 +327,38 @@ def _history_entries(o: dict[str, Any]) -> list[tuple[str, str, str]]:
     return entries
 
 
+def _object_relationships(value: Any) -> list[tuple[str, str]]:
+    """OCEL 2.0 directed assertions; endpoint existence is checked after staging."""
+    if not isinstance(value, list) or len(value) > MAX_OBJECT_RELATIONSHIPS:
+        raise EventLogFormatError("Object relationships must be a bounded list")
+    result = []
+    for link in value:
+        if not isinstance(link, dict) or set(link) != {"objectId", "qualifier"}:
+            raise EventLogFormatError("Object relationships require only objectId and qualifier; unsupported relationship semantics were not retained")
+        target, qualifier = _exact_key(link["objectId"]), link["qualifier"]
+        if not target or not isinstance(qualifier, str):
+            raise EventLogFormatError("Object relationships require a target identifier and string qualifier")
+        _exact_key(qualifier, 80)
+        # A whitespace-only qualifier is a literal value, not an empty ID.
+        result.append((target, qualifier))
+    return result
+
+
+def _xml_object_relationships(element: ET.Element) -> list[tuple[str, str]]:
+    containers = element.findall("objects")
+    if len(containers) > 1:
+        raise EventLogFormatError("Object relationship collections must not repeat")
+    if containers and (containers[0].attrib or (containers[0].text or '').strip()):
+        raise EventLogFormatError("Unsupported XML object relationship collection semantics")
+    links = []
+    for child in containers[0] if containers else []:
+        if (child.tag != "relationship" or set(child.attrib) - {"object-id", "qualifier"}
+                or len(child) or (child.text or '').strip() or (child.tail or '').strip()):
+            raise EventLogFormatError("Unsupported XML object relationship layout or semantics")
+        links.append({"objectId": child.get("object-id"), "qualifier": child.get("qualifier", "")})
+    return _object_relationships(links)
+
+
 def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
     """Read OCEL 2.0 JSON: typed objects, typed events and qualified event-to-object links."""
     stats = stats if stats is not None else ReadStats()
@@ -349,14 +384,19 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
         if not isinstance(item, dict):
             continue
         object_id, object_type = _exact_key(item.get("id")), _exact_key(item.get("type"))
+        relationships = _object_relationships(item.get("relationships", []))
         if not object_id or not object_type:
+            if relationships:
+                raise EventLogFormatError("An object with supplied relationships must have an identifier and type")
             continue
         if object_id in types:raise EventLogFormatError("OCEL object identifiers must be unique")
         types[object_id] = object_type
         stats.objects += 1
         items = item.get("attributes") if isinstance(item.get("attributes"), list) else []
-        yield _ocel_object(object_id, object_type, [(a.get("name"), a.get("time"), a.get("value"))
+        record = _ocel_object(object_id, object_type, [(a.get("name"), a.get("time"), a.get("value"))
                                                     for a in items if isinstance(a, dict)], stats)
+        record.relationships = relationships
+        yield record
     for item in document["events"]:
         if not isinstance(item, dict):
             stats.rejected_events += 1
@@ -382,7 +422,8 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
         "eventTypes": [{"name": name, "attributes": []} for name in sorted({e["activity"] for e in events})],
         "objects": [{"id": o["object_id"], "type": o["object_type"],
                      "attributes": [{"name": k, "time": t, "value": v} for k, t, v in _history_entries(o)],
-                     "relationships": []} for o in objects],
+                     "relationships": [{"objectId": target, "qualifier": qualifier}
+                                       for target, qualifier in o.get("relationships", [])]} for o in objects],
         "events": [{"id": e["event_id"], "type": e["activity"], "time": _iso(e["timestamp"]),
                     "attributes": [{"name": k, "value": v} for k, v in sorted((e.get("attributes") or {}).items())],
                     "relationships": [{"objectId": oid, "qualifier": q} for oid, q in e.get("objects") or []]}
@@ -423,15 +464,20 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                 continue
             if section == "objects" and element.tag == "object":
                 object_id, object_type = _exact_key(element.get("id")), _exact_key(element.get("type"))
+                relationships = _xml_object_relationships(element)
+                if relationships and (not object_id or not object_type):
+                    raise EventLogFormatError("An object with supplied relationships must have an identifier and type")
                 if object_id and object_type:
                     if object_id in types:
                         raise EventLogFormatError("OCEL object identifiers must be unique")
                     types[object_id] = object_type
                     stats.objects += 1
                     found = element.find("attributes")
-                    yield _ocel_object(object_id, object_type,
+                    record = _ocel_object(object_id, object_type,
                                        [(c.get("name"), c.get("time"), c.text or "") for c in
                                         (found if found is not None else []) if c.tag == "attribute"], stats)
+                    record.relationships = relationships
+                    yield record
             elif section == "events" and element.tag == "event":
                 event_id, activity = _exact_key(element.get("id")), _exact_key(element.get("type"), MAX_ACTIVITY)
                 stamp = parse_timestamp(element.get("time"))
@@ -473,7 +519,13 @@ def write_ocel_xml(objects: Iterable[dict[str, Any]], events: Iterable[dict[str,
         out.write(f"<object id={quoteattr(o['object_id'])} type={quoteattr(o['object_type'])}><attributes>")
         for key, time, value in _history_entries(o):
             out.write(f"<attribute name={quoteattr(key)} time={quoteattr(time)}>{escape(value)}</attribute>")
-        out.write("</attributes></object>\n")
+        out.write("</attributes>")
+        if o.get("relationships"):
+            out.write("<objects>")
+            for target, qualifier in o["relationships"]:
+                out.write(f"<relationship object-id={quoteattr(target)} qualifier={quoteattr(qualifier)}/>")
+            out.write("</objects>")
+        out.write("</object>\n")
     out.write("</objects>\n<events>\n")
     for e in events:
         out.write(f"<event id={quoteattr(e['event_id'])} type={quoteattr(e['activity'])} time={quoteattr(_iso(e['timestamp']))}><attributes>")

@@ -35,6 +35,7 @@ from shared.event_log_formats import (
 
 from .db import DATA_DIR
 from . import event_log_source_identity as source_identity
+from . import event_log_object_relationships as object_relationships
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -99,7 +100,7 @@ CREATE TABLE IF NOT EXISTS signal_rules (
 );
 """
 
-_SCHEMA += source_identity.SCHEMA
+_SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
 
 DESCRIPTIVE_ONLY = {
     "derived_from_supplied_log": True,
@@ -146,6 +147,7 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
             "objects": row[5], "rejected_events": row[6]}
     identity=source_identity.description(conn,log_id)
     if identity:result['source_identity']=identity
+    result.update(object_relationships.metadata(conn,log_id))
     return result
 
 
@@ -155,15 +157,21 @@ def _utc(stamp: datetime) -> str:
     return stamp.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
 
 
-def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple[Path, Path, Path, Path]:
-    paths = folder / "events.csv", folder / "objects.csv", folder / "links.csv", folder / "history.csv"
+def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple[Path, Path, Path, Path, Path]:
+    paths = folder / "events.csv", folder / "objects.csv", folder / "links.csv", folder / "history.csv", folder / "object-relationships.csv"
     with paths[0].open("w", newline="", encoding="utf-8") as ev, \
             paths[1].open("w", newline="", encoding="utf-8") as ob, \
             paths[2].open("w", newline="", encoding="utf-8") as ln, \
-            paths[3].open("w", newline="", encoding="utf-8") as hi:
+            paths[3].open("w", newline="", encoding="utf-8") as hi, \
+            paths[4].open("w", newline="", encoding="utf-8") as rel:
         ew, ow, lw, hw = csv.writer(ev), csv.writer(ob), csv.writer(ln), csv.writer(hi)
+        rw=csv.writer(rel);relationship_rows=0
         for record in records:
             if isinstance(record, ObjectRecord):
+                relationship_rows+=len(record.relationships)
+                if relationship_rows>object_relationships.MAX_RELATIONSHIPS:
+                    raise EventLogFormatError('The supplied object relationship count exceeds the supported limit')
+                for target,qualifier in record.relationships:rw.writerow([record.object_id,target,qualifier])
                 ow.writerow([record.object_id, record.object_type, json.dumps(record.attributes, ensure_ascii=False)])
                 for name, stamp, value in record.history:
                     hw.writerow([record.object_id, name, _utc(stamp), value])
@@ -176,7 +184,7 @@ def _stage(records: Iterator[EventRecord | ObjectRecord], folder: Path) -> tuple
     return paths
 
 
-def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path, Path, Path]) -> None:
+def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path, Path, Path, Path]) -> None:
     opts = "header=false, quote='\"', escape='\"', delim=','"
     if paths[0].stat().st_size:
         conn.execute(f"""INSERT INTO events SELECT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, ''), coalesce(c4, '{{}}') FROM read_csv(?, {opts},
@@ -198,6 +206,8 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
         conn.execute(f"""INSERT INTO object_attribute_values SELECT DISTINCT ?, c0, c1, c2::TIMESTAMP, coalesce(c3, '')
             FROM read_csv(?, {opts}, columns={{'c0':'VARCHAR','c1':'VARCHAR','c2':'VARCHAR','c3':'VARCHAR'}})""",
                      [log_id, str(paths[3])])
+
+    object_relationships.load_csv(conn,log_id,paths[4],opts)
 
 
 MAX_QUARANTINED_ROWS = 10_000          # rejected rows kept per batch when the user asks to keep them
@@ -429,6 +439,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
         conn = _connect()
         try:
             _check_log(conn, log_id)
+            object_relationships.validate_index(conn,log_id)
             upload = _receive(source, folder)
             conn.execute("BEGIN")
             try:
@@ -468,13 +479,14 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                 # Timed attribute values are added for new and existing objects: a newer export can carry
                 # later changes. Values the log already holds (same name, time and value) are skipped.
                 new_values, values_over_limit, values_over_names = _append_values(conn, log_id, staging)
+                added_relationships=object_relationships.copy_append(conn,log_id,staging)
                 if isinstance(stats,source_identity.SourceReadStats):
                     source_identity.copy_append_keys(conn,log_id,staging,prefix)
                 elif conn.execute('SELECT 1 FROM event_source_namespaces WHERE log_id=? LIMIT 1',[log_id]).fetchone():
                     # An ID-less/OCEL append may add another case notion, but must
                     # never add unkeyed events to the managed source_case notion.
                     source_identity.validate_index(conn,log_id)
-                for table in ("event_source_keys", "event_source_namespaces", "event_objects", "events", "objects", "object_attribute_values"):
+                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "event_objects", "events", "objects", "object_attribute_values"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [staging])
                 duplicates = stats.events - added
                 if isinstance(stats,source_identity.SourceReadStats):
@@ -500,6 +512,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
             return {"log": _check_log(conn, log_id), "batch": batch, "added_events": added,
                     "duplicate_events_skipped": duplicates, "rejected_events": stats.rejected_events,
                     "added_objects": new_objects, "existing_object_attributes_kept": True,
+                    **({'added_object_relationships':added_relationships} if object_relationships.count(conn,log_id) else {}),
                     **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit,
                                       over_names=values_over_names),
                     "appended_event_id_prefix": prefix, "quality": report,
@@ -640,7 +653,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+            for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
                           "metric_definitions", "saved_analyses", "signal_rules", "event_objects", "events", "objects",
                           "object_attribute_values",
                           "logs"):
@@ -842,13 +855,17 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
                     raise EventLogWorkspaceError(
                         f"an object has more than {MAX_ATTRIBUTES} attribute names, more than an OCEL re-import keeps; "
                         "no OCEL file was written")
+                try:
+                    relationships=object_relationships.export_map(conn,log_id)
+                except EventLogFormatError as exc:
+                    raise EventLogWorkspaceError(str(exc)) from None
                 history: dict[str, list[tuple[str, datetime, str]]] = {}
                 for object_id, name, at, value in conn.execute(
                         "SELECT object_id, name, valid_from, value FROM object_attribute_values WHERE log_id = ? ORDER BY 1, 2, 3, 4",
                         [log_id]).fetchall():
                     history.setdefault(object_id, []).append((name, at.replace(tzinfo=timezone.utc), value))
                 objects = [{"object_id": i, "object_type": t, "attributes": json.loads(a or "{}"),
-                            "history": history.get(i, [])}
+                            "history": history.get(i, []), "relationships":relationships.get(i,[])}
                            for i, t, a in conn.execute("SELECT object_id, object_type, attributes FROM objects "
                                                        "WHERE log_id = ? ORDER BY 1", [log_id]).fetchall()]
                 links: dict[str, list[tuple[str, str]]] = {}
