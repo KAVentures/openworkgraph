@@ -49,6 +49,8 @@ DELETE tombstones the provider resource and offboards the employee. It does **no
 
 Startup adds two tables/indexes and is idempotent. Existing manual employees, teams, SSO links, capture/consent and workflow sources are not adopted or rewritten. Older application code can ignore these additive tables, but it cannot serve provisioning requests. Keep the existing roster-offboarding protections from #411 when rolling back; an older build is not a supported way to restore revoked access. Avoid mixed-version provisioning workers until the upgrade is complete.
 
+[Legacy inactive-roster repair](LEGACY_ROSTER_AUTHORITY.md) revokes missed device/invitation credentials during roster startup and before explicit manual or SCIM rehire. It preserves current identity/evidence/history and rechecks employee status under the lifecycle lock. This repairs currently inactive persisted states; it cannot reconstruct an already-erased inactive history or supply out-of-band backup rollback protection.
+
 Owned SQLite backup/restore and PostgreSQL 17 custom pg_dump/pg_restore checks preserve provider/link/tombstone, employee, epoch, team, token, invitation and audit rows exactly, including current revocations. This is not production company recovery certification. **Restoring an older backup can restore older authority**, including credentials and generations revoked after that backup. Isolate a restored database from traffic until current identities, provider/device/browser credentials and revocations have been reconciled or rotated. This feature has no out-of-band anti-rollback authority or automatic backup scheduler.
 
 ## Verification and remaining acceptance

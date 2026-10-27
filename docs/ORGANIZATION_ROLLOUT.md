@@ -205,6 +205,8 @@ The admin console provides:
 
 **Offboarding** an employee revokes all their computers and open invitations at once. It also rejects subsequent delegated human/MCP requests and process/analysis portal sessions for that exactly linked roster identity. Rehire requires fresh portal sign-in and does not restore old device credentials. See [roster human-access checks and upgrade requirements](ROSTER_HUMAN_ACCESS.md). Disable provider accounts and separate administrator/service credentials through their own controls. Revoking a group invitation prevents new enrollments but does not revoke computers that already received credentials; revoke those separately.
 
+Upgrades also [reconcile missed credentials for currently inactive roster employees](LEGACY_ROSTER_AUTHORITY.md). Startup and explicit rehire permanently revoke remaining old device keys and personal invitations while preserving evidence and identity history. This does not reconstruct erased history or prevent an older backup from restoring older authority.
+
 ## Current rollout limits
 
 - Group invitations and managed files still rely on identity typed or derived on the computer; require personal invitations for verified identities.
