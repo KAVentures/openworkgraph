@@ -236,6 +236,11 @@ def init_human_access_schema(db: GatewayDB) -> None:
 
 
 def set_actor_teams(db: GatewayDB, organization_id: str, actor_id: str, teams: list[str]) -> list[str]:
+    with db.connect() as conn:
+        return set_actor_teams_in_transaction(db, conn, organization_id, actor_id, teams)
+
+
+def set_actor_teams_in_transaction(db: GatewayDB, conn: Any, organization_id: str, actor_id: str, teams: list[str]) -> list[str]:
     org = str(organization_id or "").strip()
     actor = str(actor_id or "").strip()
     if not org or not actor:
@@ -245,16 +250,14 @@ def set_actor_teams(db: GatewayDB, organization_id: str, actor_id: str, teams: l
     if invalid:
         raise ValueError(f"invalid team identifiers: {invalid}")
     now = normalize_timestamp(datetime.now(timezone.utc).isoformat())
-    with db.connect() as conn:
-        db._execute(conn, "DELETE FROM gateway_actor_teams WHERE organization_id = ? AND actor_id = ?", (org, actor))
-        for team in normalized:
-            db._execute(
-                conn,
-                "INSERT INTO gateway_actor_teams(organization_id, actor_id, team_id, updated_at) VALUES (?, ?, ?, ?)",
-                (org, actor, team, now),
-            )
+    db._execute(conn, "DELETE FROM gateway_actor_teams WHERE organization_id = ? AND actor_id = ?", (org, actor))
+    for team in normalized:
+        db._execute(
+            conn,
+            "INSERT INTO gateway_actor_teams(organization_id, actor_id, team_id, updated_at) VALUES (?, ?, ?, ?)",
+            (org, actor, team, now),
+        )
     return normalized
-
 
 def actor_teams(db: GatewayDB, organization_id: str, actor_id: str) -> set[str]:
     with db.connect() as conn:

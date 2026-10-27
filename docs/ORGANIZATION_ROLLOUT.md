@@ -208,7 +208,7 @@ The admin console provides:
 ## Current rollout limits
 
 - Group invitations and managed files still rely on identity typed or derived on the computer; require personal invitations for verified identities.
-- SCIM provisioning is not included; add employees by hand or CSV, or through the admin API (`POST /v1/admin/employees/{organization}` and `/import`).
+- A bounded, disabled-by-default [SCIM Users provisioning subset](SCIM_USER_PROVISIONING.md) can manage newly provisioned roster identities through an explicitly enabled organization/provider credential. Groups, complex attributes, existing-identity adoption, user-name renames and actual IdP compatibility certification are not included. Manual/CSV/admin-API roster management remains available (`POST /v1/admin/employees/{organization}` and `/import`).
 - The managed paths should be dogfooded on real macOS and Windows machines before a broad fleet rollout.
 - The browser sensor remains a separate installation/pairing surface unless IT packages/distributes the browser extension through its own browser-management policy.
 - Organization rollout does not enable collection of general typed text or clipboard contents.

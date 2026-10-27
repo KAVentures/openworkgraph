@@ -211,6 +211,8 @@ def install_identity(
     def init_schemas() -> None:
         accounts.init_admin_schema(db)
         roster.init_employee_schema(db)
+        from .scim_provisioning import init_schema as init_scim_schema
+        init_scim_schema(db)
         me_access.init_me_schema(db)
         init_sso_schema(db)
 
@@ -227,6 +229,11 @@ def install_identity(
 
     def audit(org: str, action: str, details: dict[str, Any]) -> None:
         db.audit(organization_id=org or "*", principal_id="gateway-admin", action=action, details=details)
+
+    from .scim_provisioning import Provisioning
+    from .scim_routes import build_router as build_scim_router
+    app.state.scim_provisioning = Provisioning(db)
+    app.include_router(build_scim_router(app.state.scim_provisioning, require_admin, base_url))
 
     # ---------------- admin sign-in -------------------------------------------------------------
 
