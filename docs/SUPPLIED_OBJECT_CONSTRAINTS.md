@@ -87,8 +87,10 @@ within available memory, the whole analysis refuses with a bounded error instead
 of presenting an unpinned result. Source labels/SQL are not echoed in those errors.
 
 The editor offers all retained types for this template, including those omitted
-from observed lifecycle maps because they have no events. Results show their
-basis and offer explicit local JSON/CSV downloads. CSV includes the unknown/
+from observed lifecycle maps because they have no events. It remains available
+for OCEL logs with zero supplied assertions; there is no need to create a dummy
+link to check missing declarations. Results show their basis and offer explicit
+local JSON/CSV downloads. CSV includes the unknown/
 unverified/descriptive flags and relevant input digests. Editing the pending
 rules invalidates old results/downloads, and held responses cannot repopulate an
 edited or replaced view. These downloads may include source labels and local

@@ -93,8 +93,23 @@ const path=require('node:path');
   assert.equal(await page.locator('#owgObjectRuleList tbody tr').count(),2,'keyboard adds a second reviewed rule');
   page.once('dialog',d=>d.accept());
   await Promise.all([page.waitForResponse(r=>r.url().endsWith('/delete')),page.locator('#owgEventLogDelete').click()]);
+  await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
+  // A declared object graph with zero assertions must still expose shape rules.
+  const empty=JSON.parse(JSON.stringify(payload));for(const o of empty.objects)o.relationships=[];
+  empty.objects.push({id:'unseen',type:'unobserved',attributes:[],relationships:[]});
+  await load(empty);await page.locator('#owgEventLogImport').click();await status('Imported 1 events');
+  await page.locator('#owgEventLogCaseType option[value="unobserved"]').waitFor({state:'attached'});
+  await page.locator('#owgEventLogCaseType').selectOption('order');await page.locator('#owgEventLogAnalyze').click();
+  await page.waitForFunction(()=>document.querySelector('#owgEventLogObjectMap')?.childElementCount>0);
+  assert.equal(await page.locator('#owgObjectRules').count(),1,'empty supplied graphs must remain inspectable in the editor');
+  assert.equal(await page.locator('#owgObjectRuleTemplate').inputValue(),'supplied_object_cardinality');
+  await page.locator('#owgObjectRuleRelated').selectOption('item');await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleMax').fill('1');
+  await page.locator('#owgObjectRuleAdd').click();data=await check();
+  assert.equal(data.results[0].violating,2);assert.equal(data.supplied_relationship_basis.retained_relationships,0);
+  assert.equal(data.supplied_relationship_basis.retained_objects,5);
+  page.once('dialog',d=>d.accept());await Promise.all([page.waitForResponse(r=>r.url().endsWith('/delete')),page.locator('#owgEventLogDelete').click()]);
   await page.locator('#owgEventLogManage').waitFor({state:'hidden'});assert.deepEqual(errors,[]);
-  console.log('Supplied graph constraints browser passed: unobserved types, explicit direction/qualifiers, distinct degrees, digest/revision-pinned JSON/CSV, no event joins, stale edit guard, escaping, WCAG/mobile, keyboard, assertion-only append and deletion.');
+  console.log('Supplied graph constraints browser passed: unobserved types, explicit direction/qualifiers, distinct degrees, digest/revision-pinned JSON/CSV, no event joins, stale edit guard, escaping, WCAG/mobile, keyboard, assertion-only append, empty declared graph and deletion.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

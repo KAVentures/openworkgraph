@@ -584,7 +584,7 @@
     const add=button('Add object rule','secondary');add.id='owgObjectRuleAdd';
     const run=button('Check object rules');run.id='owgObjectRuleRun';run.disabled=true;
     const f={activity:field('Activity A',activity),related:field('Related type U',relatedType),required:field('Activity B',required),via:field('Related through',via),direction:field('Supplied assertion direction',direction),exact:field('Match exact supplied qualifier',exact),qualifier:field('Supplied qualifier (empty is a valid exact label)',qualifier),min:field('At least',min),max:field('At most',max)};
-    if(types.length<2&&graph.log&&graph.log.object_relationships)template.value='supplied_object_cardinality';
+    if(types.length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
       const t=template.value,supplied=t==='supplied_object_cardinality';
       for(const control of [objectType,relatedType]){const previous=control.value;setOptions(control,supplied&&allTypes.length?allTypes:types);if([...control.options].some(o=>o.value===previous))control.value=previous;}
@@ -709,7 +709,7 @@
     showMap.onclick=render;pick.onchange=render;
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(async g=>{
       if(!current())return;
-      if(!state.objectTypes.length&&((g.object_types||[]).length>1||g.log&&g.log.object_relationships)){
+      if(!state.objectTypes.length){
         const types=await getJSON(logPath('object-types').replace(/\?.*$/,''));
         if(!current())return;
         state.objectTypes=types.object_types||[];
@@ -718,7 +718,7 @@
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
       shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]),
-        ...((g.object_types||[]).length>1||g.log&&g.log.object_relationships?[objectRuleSection(g)]:[]));
+        ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g)]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
