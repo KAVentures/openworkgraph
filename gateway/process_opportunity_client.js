@@ -35,7 +35,7 @@
   function initial(){return {process:ref(selected.process),title:'Process opportunity',description:'',coordinator_label:'',team_label:'',assessment:null};}
   async function load(ok,revision){const r=await call('/v1/human/processes/'+encodeURIComponent(selected.process.workflow_id)+'/opportunity'+(revision?'?revision='+revision:''));if(!ok())return;view=r;draft=structuredClone(r.artifact?.data||initial());dirty=false;render();message(!r.integrity_ok?'Opportunity integrity failed; an owner can erase history.':r.artifact?'Opened opportunity revision '+r.artifact.revision+'.':'No shared opportunity saved. Review the draft and explicitly share it.');}
   const writable=()=>view?.permissions.edit&&selected.permissions.edit&&(!view.artifact||view.artifact.revision===view.latest_revision)&&view.integrity_ok;
-  function invalidateInventory(){page=[];after='';list.replaceChildren();next.disabled=true;}
+  function invalidateInventory(){page=[];after='';list.replaceChildren();next.disabled=true;window.dispatchEvent(new CustomEvent('owg-shared-opportunity-changed',{detail:{workflow_id:selected?.process.workflow_id}}));}
   function changed(){dirty=true;if(confirm)confirm.checked=false;if(decisionForm)decisionForm.disabled=true;update();}
   function update(){if(save)save.disabled=!writable()||!confirm.checked;if(exportButton)exportButton.disabled=dirty||!view?.artifact||!view.integrity_ok;}
   function download(value){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-shared-opportunity.json';a.click();URL.revokeObjectURL(url);}

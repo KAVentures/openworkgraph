@@ -6,6 +6,10 @@ labels, implementation-budget context and named stage decisions to an exact
 shared process/scenario revision. It reuses current process ownership, membership
 and scopes; creating an opportunity does not create another process or scenario.
 
+[Implementation phase plans](PROCESS_IMPLEMENTATION_PLANS.md) add independently
+reviewed phase baselines and separate human progress/cost reports over the exact
+opportunity assessment. They do not change opportunity stage authority.
+
 This complements the local automation pipeline and the separate benefit
 contribution plans. Those features keep their existing behavior. Opportunity
 approval does not change process-model approval, benefit inclusion, agent tool

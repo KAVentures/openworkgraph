@@ -77,6 +77,9 @@
       .dependency-map { overflow: auto; max-width: 100%; }
       .dependency-map svg { display: block; max-width: none; }
       .dependency-map g:focus rect { stroke: #174e85; stroke-width: 4; }
+      #implementationDetail { min-width: 0; overflow-wrap: anywhere; }
+      #implementationDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
+      #implementationDetail select, #implementationDetail button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
       .muted {
         color: #526358;
       }
@@ -263,6 +266,7 @@
       <div id="benefitDetail"></div>
       <div id="opportunityDetail"></div>
       <div id="dependencyDetail"></div>
+      <div id="implementationDetail"></div>
       <div class="actions" id="exports"></div>
       <fieldset>
         <legend>Shadow evaluation review</legend>
@@ -340,6 +344,7 @@
     <script nonce="__NONCE__" src="/process-benefit-client.js"></script>
     <script nonce="__NONCE__" src="/process-opportunity-client.js"></script>
     <script nonce="__NONCE__" src="/process-dependency-client.js"></script>
+    <script nonce="__NONCE__" src="/process-implementation-client.js"></script>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
     <script nonce="__NONCE__" src="/process-rule-editor.js"></script>
     <script nonce="__NONCE__" src="/process-decision-editor.js"></script>
@@ -549,6 +554,7 @@
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});
         const opportunity=window.owgSharedOpportunity.create({inventoryHost:$("opportunityPipeline"),detailHost:$("opportunityDetail"),call,open,onDenied:()=>{clear();note("Opportunity access changed; sign in again to refresh permissions.");}});
         const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
+        const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
         function clear(releaseBusy=false) {
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
@@ -556,6 +562,7 @@
           benefits.clear();
           opportunity.clear();
           dependencies.clear();
+          implementation.clear();
           clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
           clearShadowReview();
           clearRuleFacts();
@@ -1681,6 +1688,7 @@
           benefits.select(data);
           opportunity.select(data);
           dependencies.select(data);
+          implementation.select(data);
           clearShadowReview();
           clearRuleFacts();
           selected = data;
@@ -2060,6 +2068,7 @@
             benefits.clear();
             opportunity.clear();
             dependencies.clear();
+            implementation.clear();
             selected = null;
             $("selected").hidden = true;
             $("update").disabled = true;
