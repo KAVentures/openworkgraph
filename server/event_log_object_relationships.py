@@ -51,11 +51,29 @@ def metadata(conn,log_id,*,include_digest=False):
         'counts_describe':'retained_assertion_set_not_execution_frequency',
         'relationship_preserving_formats':['ocel','ocelxml']}
     if include_digest:
-        from .event_log_quality import _set_digest
-        profile['relationships_sha256']=_set_digest(conn,'''SELECT sha256(to_json(
-            [source_object_id,target_object_id,qualifier])) AS h FROM object_relationships WHERE log_id=?''',[log_id])
+        profile['relationships_sha256']=_relationship_digest(conn,log_id)
         profile['digest_scope']='retained_whole_log_assertions'
     return {'object_relationships':profile}
+
+
+def _relationship_digest(conn,log_id):
+    from .event_log_quality import _set_digest
+    return _set_digest(conn,'''SELECT sha256(to_json([source_object_id,target_object_id,qualifier])) AS h
+        FROM object_relationships WHERE log_id=?''',[log_id])
+
+
+def snapshot(conn,log_id):
+    """Pin the exact retained graph, including the empty set; not source completeness."""
+    from .event_log_quality import _set_digest
+    validate_index(conn,log_id)
+    return {'format':FORMAT,'retained_relationships':count(conn,log_id),
+        'relationships_sha256':_relationship_digest(conn,log_id),'digest_scope':'retained_whole_log_assertions',
+        'retained_objects':conn.execute('SELECT count(*) FROM objects WHERE log_id=?',[log_id]).fetchone()[0],
+        'object_index_sha256':_set_digest(conn,'''SELECT sha256(to_json([object_id,object_type])) AS h
+            FROM objects WHERE log_id=?''',[log_id]),'object_digest_scope':'retained_object_ids_and_types',
+        'revision':_revision(conn,log_id),'revision_basis':'local_log_append_batch',
+        'basis':'caller_supplied_ocel_object_relationships','independently_verified':False,
+        'source_completeness':'unknown','relationship_validity':'unknown','execution_authorized':False}
 
 
 def load_csv(conn,log_id,path,opts):

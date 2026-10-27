@@ -809,6 +809,13 @@ compliance, and a violation may reflect missing events.
 
 ### Object rules across object types
 
+An additional [supplied-relationship shape rule](SUPPLIED_OBJECT_CONSTRAINTS.md)
+checks distinct direct neighbors in the separately retained OCEL assertion graph,
+including zero-event objects, with literal direction/qualifier filters and exact
+relationship/object-population digest pins. It does not infer case membership,
+temporal validity or verified business compliance. The existing templates below
+continue to use event links and shared-event associations.
+
 Compliance rules check one case notion at a time. `POST /v1/event-logs/{log_id}/object-constraints`
 (dashboard session only) checks up to 20 rules about how object types relate, without flattening
 the log onto one of them:
