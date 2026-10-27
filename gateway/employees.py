@@ -198,6 +198,17 @@ def get_employee(db: GatewayDB, organization_id: str, employee_id: str) -> dict[
     return _employee_public(row)
 
 
+def _lock_employee(db: GatewayDB, conn: Any, organization_id: str, employee_id: str) -> dict[str, Any]:
+    """Serialize roster/invitation/device lifecycle with employee-first locking."""
+    if not db.is_postgres and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    row = _one(db, conn, "SELECT * FROM gateway_employees WHERE organization_id=? AND employee_id=?"
+               + (" FOR UPDATE" if db.is_postgres else ""), (organization_id, employee_id))
+    if not row:
+        raise EmployeeError("employee not found", status_code=404)
+    return row
+
+
 def employee_by_email(db: GatewayDB, organization_id: str | None, email: str) -> list[dict[str, Any]]:
     address = normalize_email(email)
     with db.connect() as conn:
@@ -397,10 +408,7 @@ def offboard_employee_in_transaction(db: GatewayDB, conn: Any, organization_id: 
     from .human_access import set_actor_teams_in_transaction
 
     org = _org(organization_id)
-    row = _one(db, conn, "SELECT * FROM gateway_employees WHERE organization_id=? AND employee_id=?"
-               + (" FOR UPDATE" if db.is_postgres else ""), (org, employee_id))
-    if not row:
-        raise EmployeeError("employee not found", status_code=404)
+    row = _lock_employee(db, conn, org, employee_id)
     employee = _employee_public(row)
     now = _now()
     devices = _all(
@@ -451,9 +459,6 @@ def create_personal_invite(
     created_by: str = "",
 ) -> dict[str, Any]:
     org = _org(organization_id)
-    employee = get_employee(db, org, employee_id)
-    if employee["status"] != "active":
-        raise EmployeeError("this employee is offboarded; add them again first", status_code=409)
     days = max(1, min(int(expires_days), MAX_INVITE_DAYS))
     devices = max(1, min(int(max_devices), MAX_DEVICES_PER_INVITE))
     token = issue_token(PERSON_TOKEN_PREFIX)
@@ -461,6 +466,9 @@ def create_personal_invite(
     now = datetime.now(timezone.utc)
     expires = normalize_timestamp((now + timedelta(days=days)).isoformat())
     with db.connect() as conn:
+        employee = _employee_public(_lock_employee(db, conn, org, employee_id))
+        if employee["status"] != "active":
+            raise EmployeeError("this employee is offboarded; add them again first", status_code=409)
         db._execute(
             conn,
             """INSERT INTO gateway_personal_invites(invite_id, token_hash, organization_id, organization_name, employee_id,
@@ -520,13 +528,34 @@ def revoke_personal_invite(db: GatewayDB, organization_id: str, invite_id: str) 
         return bool(cur.rowcount)
 
 
-def _invite_row(db: GatewayDB, conn: Any, token: str, *, lock: bool = False) -> dict[str, Any]:
+def _invite_lookup(db: GatewayDB, conn: Any, column: str, value: str, *, lock: bool = False) -> dict[str, Any]:
+    if column not in {"token_hash", "invite_id"}:
+        raise ValueError("unsupported invitation lookup")
+    extra, params = "", (value,)
+    if lock:
+        if not db.is_postgres and not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        identity = _one(db, conn, f"SELECT employee_id,organization_id FROM gateway_personal_invites WHERE {column}=?", (value,))
+        if not identity:
+            return {}
+        try:
+            _lock_employee(db, conn, identity["organization_id"], identity["employee_id"])
+        except EmployeeError:
+            return {}
+        # Invitation employee/org assignment is immutable. Refuse if a corrupt
+        # or external writer changed the lookup while its employee was locked.
+        extra = " AND i.employee_id=? AND i.organization_id=?"
+        params = (value, identity["employee_id"], identity["organization_id"])
     sql = """SELECT i.*, e.email, e.display_name, e.actor_id, e.status AS employee_status
              FROM gateway_personal_invites i JOIN gateway_employees e ON e.employee_id = i.employee_id
-             WHERE i.token_hash = ?"""
+             WHERE i.""" + column + "=?" + extra
     if lock and db.is_postgres:
         sql += " FOR UPDATE OF i"
-    return _one(db, conn, sql, (token_hash(str(token or "")),))
+    return _one(db, conn, sql, params)
+
+
+def _invite_row(db: GatewayDB, conn: Any, token: str, *, lock: bool = False) -> dict[str, Any]:
+    return _invite_lookup(db, conn, "token_hash", token_hash(str(token or "")), lock=lock)
 
 
 def _usable(row: dict[str, Any]) -> bool:
@@ -562,7 +591,7 @@ def mark_invite_sso_verified(db: GatewayDB, token: str, *, verified_email: str, 
     """Record that the invited employee proved their identity with the organization's SSO."""
     email = normalize_email(verified_email)
     with db.connect() as conn:
-        row = _invite_row(db, conn, token)
+        row = _invite_row(db, conn, token, lock=True)
         if not _usable(row):
             raise EmployeeError("this invitation is no longer valid; ask your IT admin for a new one", status_code=401)
         if row["email"] != email:
@@ -581,13 +610,7 @@ def mark_invite_verified_by_id(db: GatewayDB, invite_id: str, *, verified_email:
     email = normalize_email(verified_email)
     now = _now()
     with db.connect() as conn:
-        row = _one(
-            db, conn,
-            """SELECT i.*, e.email, e.display_name, e.actor_id, e.status AS employee_status
-               FROM gateway_personal_invites i JOIN gateway_employees e ON e.employee_id = i.employee_id
-               WHERE i.invite_id = ?""",
-            (str(invite_id or ""),),
-        )
+        row = _invite_lookup(db, conn, "invite_id", str(invite_id or ""), lock=True)
         if not _usable(row):
             raise EmployeeError("this invitation is no longer valid; ask your IT admin for a new one", status_code=401)
         if row["email"] != email:
@@ -684,11 +707,11 @@ def link_device(
     linked_by: str,
 ) -> dict[str, Any]:
     org = _org(organization_id)
-    employee = get_employee(db, org, employee_id)
-    if employee["status"] != "active":
-        raise EmployeeError("this employee is offboarded", status_code=409)
     now = _now()
     with db.connect() as conn:
+        employee = _employee_public(_lock_employee(db, conn, org, employee_id))
+        if employee["status"] != "active":
+            raise EmployeeError("this employee is offboarded", status_code=409)
         tokens = _all(
             db, conn,
             "SELECT token_id, actor_id FROM access_tokens WHERE organization_id = ? AND token_type = 'device' AND device_id = ? AND revoked_at IS NULL",

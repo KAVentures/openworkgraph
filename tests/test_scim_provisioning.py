@@ -186,3 +186,57 @@ def test_provider_scope_and_cas_guard_configuration_and_audit_failure(service,pr
     assert service.list_users(*provider)['totalResults']==0
     with pytest.raises(RuntimeError):service.create_provider('acme','Will roll back','admin')
     assert len(service.list_providers('acme'))==1
+
+
+def test_replacement_omitting_active_cannot_implicitly_rehire_and_readonly_ids_cannot_retarget(service,provider):
+    made=service.create_user(*provider,user(active=False));other=service.create_user(*provider,user(userName='other@acme.test',externalId='other'))
+    replacement=user(displayName='New name');replacement.pop('active');replacement['id']=other['id'];replacement['meta']={'version':'not-authority'}
+    result=service.replace_user(*provider,made['id'],made['meta']['version'],replacement)
+    assert result['active'] is False and result['id']==made['id'] and result['displayName']=='New name'
+    assert service.get_user(*provider,other['id'])==other
+
+
+def test_two_providers_cannot_race_to_adopt_one_roster_identity(service,provider):
+    from concurrent.futures import ThreadPoolExecutor
+    second=service.create_provider('acme','Other provisioning domain','admin');pid=second['provider']['provider_id'];service.set_enabled(pid,1,True,'admin')
+    def create(credentials):
+        try:return service.create_user(*credentials,user())
+        except scim.Error as error:return error.status
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(create,[provider,(pid,second['token'])]))
+    assert sum(isinstance(result,dict) for result in results)==1 and results.count(409)==1
+    assert len(roster.list_employees(service.db,'acme',include_offboarded=True))==1
+    assert service.list_users(*provider)['totalResults']+service.list_users(pid,second['token'])['totalResults']==1
+
+
+def test_provider_capacity_is_atomic_across_simultaneous_creates(service):
+    from concurrent.futures import ThreadPoolExecutor
+    for i in range(19):service.create_provider('acme','Provider '+str(i),'admin')
+    def create(label):
+        try:return service.create_provider('acme',label,'admin')
+        except scim.Error as error:return error.status
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(create,['One','Two']))
+    assert sum(isinstance(result,dict) for result in results)==1 and results.count(409)==1
+    assert len(service.list_providers('acme'))==20
+
+
+def test_credential_revocation_serializes_before_a_queued_user_creation(service,provider,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered,release,started=Event(),Event(),Event();audit=service.audit
+    def hold(conn,org,actor,action,details):
+        audit(conn,org,actor,action,details)
+        if action=='scim.provider.revoked':
+            entered.set();assert release.wait(5)
+    monkeypatch.setattr(service,'audit',hold)
+    def create():
+        started.set()
+        try:return service.create_user(*provider,user())
+        except scim.Error as error:return error.status
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        revocation=pool.submit(service.revoke,provider[0],2,'admin')
+        try:
+            assert entered.wait(5);creation=pool.submit(create);assert started.wait(5)
+            assert not creation.done()
+        finally:release.set()
+        assert revocation.result()['revoked_at'] and creation.result()==401
+    assert roster.list_employees(service.db,'acme',include_offboarded=True)==[]

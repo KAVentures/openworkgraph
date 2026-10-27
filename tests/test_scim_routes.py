@@ -1,16 +1,23 @@
 """Independent HTTP client contract for the advertised SCIM subset."""
 from fastapi.testclient import TestClient
 import pytest
-from gateway_identity_helpers import make_app,bootstrap_owner
+from gateway_identity_helpers import bootstrap_owner,add_admin,ADMIN_TOKEN,LEGACY_ENROLL
 from gateway import scim_provisioning as scim, employees as roster
 from gateway.human_access import HumanAccessSettings
+from gateway.hardening import PooledGatewayDB,HardeningSettings
+from gateway.human_enterprise_app import create_human_enterprise_app
+from gateway.settings import GatewaySettings
+from test_process_collaboration import store
 
 @pytest.fixture
-def http(tmp_path):
+def http(store):
     class RejectOtherCredentials:
         def verify(self, token):
             raise ValueError('Owned test IdP rejects provisioning credentials')
-    app,db=make_app(tmp_path,human_access=HumanAccessSettings(issuer='https://owned-idp.test',
+    db=PooledGatewayDB(store.db.database_url,pool_min_size=0,pool_max_size=4)
+    app=create_human_enterprise_app(db=db,
+        settings=GatewaySettings(database_url=store.db.database_url,admin_token=ADMIN_TOKEN,enrollment_token=LEGACY_ENROLL),
+        hardening=HardeningSettings(),human_access=HumanAccessSettings(issuer='https://owned-idp.test',
         audience='api',jwks_url='https://owned-idp.test/keys'),verifier=RejectOtherCredentials())
     with TestClient(app) as client:
         owner,_=bootstrap_owner(client)
@@ -88,3 +95,24 @@ def test_unsupported_protocol_options_are_explicit_and_body_is_bounded(http):
     assert client.post(base+'/Bulk',headers=h,json={}).status_code==404
     assert client.post(base+'/Users',headers=h,content=b'x'*65537).status_code==413
     assert client.post(base+'/Users',headers={**h,'Content-Type':'text/plain'},content=b'{}').status_code==415
+
+
+def test_viewer_cannot_create_enable_or_revoke_provisioning_authority(http):
+    client,db,owner,h,base,pid=http
+    viewer,_,_=add_admin(client,owner,'viewer@acme.test','viewer')
+    inventory=client.get('/v1/admin/scim-providers/acme',headers=viewer)
+    assert inventory.status_code==200 and h['Authorization'][7:] not in inventory.text
+    assert client.post('/v1/admin/scim-providers/acme',headers=viewer,json={'label':'Forbidden'}).status_code==403
+    assert client.patch('/v1/admin/scim-providers/acme/'+pid,headers=viewer,json={'revision':2,'enabled':False}).status_code==403
+    assert client.post('/v1/admin/scim-providers/acme/'+pid+'/revoke',headers=viewer,json={'revision':2}).status_code==403
+    assert client.get(base+'/Users',headers=viewer).status_code==401
+    assert client.get(base+'/Users',headers=h).status_code==200
+
+
+def test_wrong_tenant_configuration_and_duplicate_authorization_cannot_change_current_provider(http):
+    client,db,owner,h,base,pid=http
+    assert client.patch('/v1/admin/scim-providers/other/'+pid,headers=owner,json={'revision':2,'enabled':False}).status_code==404
+    assert client.post('/v1/admin/scim-providers/other/'+pid+'/revoke',headers=owner,json={'revision':2}).status_code==404
+    duplicate=[('Authorization',h['Authorization']),('Authorization','Bearer wrong')]
+    assert client.get(base+'/Users',headers=duplicate).status_code==401
+    assert client.get(base+'/Users',headers=h).status_code==200

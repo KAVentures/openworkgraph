@@ -62,12 +62,29 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.locator('#signOut').click();await page.locator('#login').waitFor();await login();
   release();await completed;await page.unroute('**/v1/admin/scim-providers/acme');
   await page.waitForLoadState('networkidle');assert.ok(await page.locator('#app').isVisible());assert.equal(await page.locator('#scimOneTimeToken').count(),0);
-  await identity();page.once('dialog',d=>d.accept());await page.locator('[data-scim-revoke="'+pid+'"]').click();
+  // A completed creation whose response arrives after sign-out must not
+  // reveal the old context's one-time credential to the new view.
+  await identity();
+  let releaseCreate,createdArrived,finishedCreate,heldCredential;
+  const createGate=new Promise(r=>releaseCreate=r),createSeen=new Promise(r=>createdArrived=r),createDone=new Promise(r=>finishedCreate=r);
+  await page.route('**/v1/admin/scim-providers/acme',async route=>{
+   if(route.request().method()==='POST'){
+    const response=await route.fetch();assert.equal(response.status(),201);heldCredential=(await response.json()).token;
+    createdArrived();await createGate;await route.fulfill({response});finishedCreate();
+   }else await route.continue();
+  });
+  await page.locator('#scimLabel').fill('Held old-context creation');await page.locator('#scimCreate').click();await createSeen;
+  await page.locator('#signOut').click();await page.locator('#login').waitFor();await login();
+  releaseCreate();await createDone;await page.unroute('**/v1/admin/scim-providers/acme');await page.waitForLoadState('networkidle');
+  assert.equal(await page.locator('#scimOneTimeToken').count(),0);
+  assert.ok(!await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}})).then(text=>text.includes(heldCredential)));
+  await identity();await page.locator('#scimProviders article').filter({hasText:'Held old-context creation'}).filter({hasText:'Disabled'}).waitFor();
+  page.once('dialog',d=>d.accept());await page.locator('[data-scim-revoke="'+pid+'"]').click();
   await page.locator('#scimStatus').filter({hasText:'Credential permanently revoked'}).waitFor();
   assert.equal((await request('GET',source+'/Users',undefined,token)).status,401);
   const roster=await request('GET','/v1/admin/people/acme');assert.equal((await roster.json()).employees[0].actor_id,'operator@acme.test');
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, roster, escaped labels, WCAG/mobile, stale401/new-session guard and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);
