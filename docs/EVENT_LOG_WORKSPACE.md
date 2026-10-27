@@ -1,5 +1,7 @@
 # Event-log workspace (CSV, XES, OCEL 2.0)
 
+For CSV exports with stable event identifiers, see [supplied source-event identities](SUPPLIED_SOURCE_EVENT_IDENTITIES.md). That optional mapping keeps distinct source IDs with identical payloads, refuses conflicting ID reuse atomically, and provides a separate Source-ID CSV round trip. Ordinary mappings retain the existing payload-based append behavior.
+
 The event-log workspace imports business event logs that you export from your
 own systems and analyses them on this computer with an embedded columnar
 engine (DuckDB). It is meant for logs that are too large for the in-browser CSV
