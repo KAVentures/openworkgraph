@@ -152,3 +152,6 @@ Review status now counts only decisions whose recorded content digest matches
 the exact current record for that revision. Mismatched decisions remain in the
 review ledger but cannot approve a different payload or enable implementation
 export. Normal existing reviews retain their status without reapproval.
+
+
+For a separate consumer-to-prerequisite contract and global declared change-impact view, see [Process dependencies](PROCESS_DEPENDENCIES.md). Hierarchy groupings remain independent views and do not supply dependency edges.

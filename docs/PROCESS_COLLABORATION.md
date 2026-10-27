@@ -265,3 +265,6 @@ estimates; these declarations do not establish realized savings.
 [Shared opportunity review](SHARED_OPPORTUNITY_REVIEW.md) adds per-process
 assessment/budget context, independent named stage decisions and explicit
 reassessment when the exact source or assessment changes.
+
+
+The shared portal also supports [version-pinned process dependencies and global change-impact inspection](PROCESS_DEPENDENCIES.md). These human declarations retain separate history, cycle checks and current-source diagnostics; ordinary process review and implementation exports remain independent.

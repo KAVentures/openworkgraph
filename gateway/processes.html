@@ -71,6 +71,12 @@
       #benefitDetail, #benefitInventory { min-width: 0; overflow-wrap: anywhere; }
       #benefitDetail fieldset, #benefitInventory fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
       #benefitDetail select, #benefitInventory select, #benefitDetail button, #benefitInventory button { max-width: 100%; min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; }
+      #dependencyInventory, #dependencyDetail { min-width: 0; overflow-wrap: anywhere; }
+      #dependencyInventory fieldset, #dependencyDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
+      #dependencyInventory select, #dependencyDetail select, #dependencyInventory button, #dependencyDetail button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+      .dependency-map { overflow: auto; max-width: 100%; }
+      .dependency-map svg { display: block; max-width: none; }
+      .dependency-map g:focus rect { stroke: #174e85; stroke-width: 4; }
       .muted {
         color: #526358;
       }
@@ -246,6 +252,7 @@
     </section>
     <section id="opportunityPipeline" aria-label="Shared opportunity pipeline"></section>
     <section id="benefitInventory" aria-label="Scenario contribution portfolio"></section>
+    <section id="dependencyInventory" aria-label="Process dependency workspace"></section>
     <section id="repositoryInventory" aria-label="Process repository maps"></section>
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
@@ -255,6 +262,7 @@
       <div id="repositoryDetail"></div>
       <div id="benefitDetail"></div>
       <div id="opportunityDetail"></div>
+      <div id="dependencyDetail"></div>
       <div class="actions" id="exports"></div>
       <fieldset>
         <legend>Shadow evaluation review</legend>
@@ -331,6 +339,7 @@
     <script nonce="__NONCE__" src="/process-hierarchy-client.js"></script>
     <script nonce="__NONCE__" src="/process-benefit-client.js"></script>
     <script nonce="__NONCE__" src="/process-opportunity-client.js"></script>
+    <script nonce="__NONCE__" src="/process-dependency-client.js"></script>
     <script nonce="__NONCE__" src="/process-graph.js"></script>
     <script nonce="__NONCE__" src="/process-rule-editor.js"></script>
     <script nonce="__NONCE__" src="/process-decision-editor.js"></script>
@@ -539,12 +548,14 @@
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});
         const opportunity=window.owgSharedOpportunity.create({inventoryHost:$("opportunityPipeline"),detailHost:$("opportunityDetail"),call,open,onDenied:()=>{clear();note("Opportunity access changed; sign in again to refresh permissions.");}});
+        const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
         function clear(releaseBusy=false) {
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
           benefits.clear();
           opportunity.clear();
+          dependencies.clear();
           clearReadiness();$("readinessOwner").value="";$("readinessArchived").checked=false;
           clearShadowReview();
           clearRuleFacts();
@@ -1669,6 +1680,7 @@
           repository.select(data);
           benefits.select(data);
           opportunity.select(data);
+          dependencies.select(data);
           clearShadowReview();
           clearRuleFacts();
           selected = data;
@@ -2047,6 +2059,7 @@
             repository.clear();
             benefits.clear();
             opportunity.clear();
+            dependencies.clear();
             selected = null;
             $("selected").hidden = true;
             $("update").disabled = true;
