@@ -66,7 +66,8 @@ class SharedOpportunityStore:
         except Error:item=None;integrity=False
         if integrity and revision is not None and item is None:raise Error('Opportunity revision not found',404)
         result={'format':'openworkgraph.shared-opportunity-view.v1','organization_id':p.organization_id,'root_workflow_id':wid,'artifact':item,'integrity_ok':integrity,
-            'latest_revision':latest,'access_revision':meta['access_revision'],'owner_actor_id':meta['owner_actor_id'],
+            'latest_revision':latest,'viewing_historical_revision':item is not None and item['revision']!=latest,
+            'access_revision':meta['access_revision'],'owner_actor_id':meta['owner_actor_id'],
             'permissions':permissions,'your_actor_id':p.actor_id,'source':None,'score':None,'approval_blockers':[],
             'effective_state':'integrity_failed' if not integrity else 'not_saved','current_approved_assessment':False,'allowed_transitions':[],
             'implementation_state_is_human_self_report':True,'business_outcomes_verified':False,'execution_authorized':False,'spending_authorized':False}
@@ -74,8 +75,11 @@ class SharedOpportunityStore:
         saved=Saved.model_validate({k:v for k,v in item.items() if k not in {'revision','content_sha256'}})
         info,scenario=self.source(c,p,saved.data);reasons=self.eligibility(saved.data,info,scenario)
         result.update(source=info,score=score(saved.data,scenario),approval_blockers=reasons,effective_state=saved.state,
-            current_approved_assessment=saved.state in {'approved','implemented'} and saved.approval is not None and not reasons)
+            current_approved_assessment=item['revision']==latest and saved.state in {'approved','implemented'} and saved.approval is not None and not reasons)
         if saved.state in {'approved','implemented'} and reasons:result['effective_state']='needs_reassessment'
+        if item['revision']!=latest:
+            result['effective_state']='historical_snapshot'
+            result['approval_blockers']=[*reasons,'historical_opportunity_revision']
         if item['revision']==latest and not meta['archived']:
             for target in sorted(TRANSITIONS[saved.state]):
                 if target=='approved':

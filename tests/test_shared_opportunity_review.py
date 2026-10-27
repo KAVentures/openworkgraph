@@ -295,3 +295,25 @@ def test_reviewer_scope_without_write_can_approve_but_not_edit(store):
     opps.transition(reviewer,wid,Transition(target='approved',expected_revision=1,expected_access_revision=2,expected_assessment_sha256=a['assessment_sha256'],user_confirmed=True))
     assert opps.detail(person(),wid)['current_approved_assessment']
     with pytest.raises(ProcessCollaborationError):save(opps,store,r,expected=2,who=reviewer)
+
+
+@pytest.mark.parametrize('next_change',['equal_reassessment','edited_reassessment','on_hold','implemented'])
+def test_historical_approval_never_claims_current_latest_opportunity_status(store,next_change):
+    opps=SharedOpportunityStore(store);r=root(store);wid=r['workflow_id'];save(opps,store,r);decide(opps,store,r,'approved')
+    original=opps.detail(person(),wid)['artifact']
+    assert opps.detail(person(),wid,2)['current_approved_assessment']
+    if next_change.endswith('reassessment'):
+        value=data(r)
+        if next_change=='edited_reassessment':value.team_label='New team'
+        save(opps,store,r,value,expected=2)
+    elif next_change=='implemented':decide(opps,store,r,'implemented',who='alice',implementation_self_report_confirmed=True)
+    else:decide(opps,store,r,'on_hold')
+    historical=opps.detail(person('reader'),wid,2,exporting=True)
+    assert not historical['current_approved_assessment']
+    assert historical['viewing_historical_revision']
+    assert historical['effective_state']=='historical_snapshot'
+    assert 'historical_opportunity_revision' in historical['approval_blockers']
+    assert historical['allowed_transitions']==[] and historical['artifact']==original
+    latest=opps.detail(person('reader'),wid)
+    assert not latest['viewing_historical_revision']
+    assert latest['current_approved_assessment']==(next_change=='implemented')
