@@ -716,16 +716,10 @@ class _RosterMappingVerifier:
         actor = str(_claim(claims, self.settings.actor_claim) or "").strip()
         if not org or not actor:
             return claims
-        with self.db.connect() as conn:
-            cur = self.db._execute(
-                conn,
-                "SELECT actor_id FROM gateway_employees WHERE organization_id = ? AND status = 'active' AND (sso_subject = ? OR email = ?)",
-                (str(org), actor, actor.lower()),
-            )
-            row = cur.fetchone()
+        from .roster_access import active_identity
+        row = active_identity(self.db,str(org),actor)
         if row:
-            mapped = row[0] if not hasattr(row, "keys") else row["actor_id"]
-            _set_claim(claims, self.settings.actor_claim, str(mapped))
+            _set_claim(claims, self.settings.actor_claim, str(row['actor_id']))
         return claims
 
 

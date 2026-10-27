@@ -64,8 +64,11 @@ browser history, and retained only in page memory. No persistent browser storage
 or ambient session cookie authenticates process API requests.
 
 Server storage contains only a session hash and bounded subject, organization,
-actor, group and issuer fields, with expiry. It stores no ID/access token or
-email. Session creation and logout commit with minimized audits. Configured group
+actor, group and issuer fields, with expiry, and an optional opaque roster ID/revocation
+generation. It stores no ID/access token or extra email claim; a mapped roster actor can
+itself be a work email. [Current roster offboarding](ROSTER_HUMAN_ACCESS.md) rejects
+linked identities and prevents old browser sessions reviving after rehire.
+Session creation and logout commit with minimized audits. Configured group
 mappings are re-evaluated on each request; provider-side group changes require
 fresh sign-in or session expiry. Existing per-process collaborator changes are
 checked live. **Disconnect and clear page** revokes the server session.

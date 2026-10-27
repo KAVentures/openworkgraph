@@ -68,8 +68,11 @@ const path=require('node:path');
   // revokes the previous session and leaves no old workspace visible.
   const switcher=await signin('Alice');
   await switcher.page.locator('#token').fill('invalid-token');await switcher.page.locator('#connect').click();
-  await switcher.page.locator('#status').filter({hasText:'valid OIDC bearer token required'}).waitFor();
+  await switcher.page.locator('#status').filter({hasText:'Sign-in expired or access changed. Page data cleared; sign in again.'}).waitFor();
   assert.equal(await switcher.page.locator('#workspace').isHidden(),true);
+  assert.equal(await switcher.page.locator('#identity').textContent(),'Not connected.');
+  assert.equal(await switcher.page.locator('#token').inputValue(),'');
+  assert.equal(await switcher.page.locator('#inventory button').count(),0);
   assert.equal((await switcher.page.request.get(base+'/v1/human/analyses',{headers:{Authorization:switcher.authorization}})).status(),401);
   // A network failure cannot keep page data or falsely claim revocation.
   const failure=await signin('Bob');

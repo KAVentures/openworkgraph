@@ -548,7 +548,14 @@
             throw error;
           }
           const data=await response.json();current();return data;
-          } catch(error) {current();throw error;}
+          } catch(error) {
+            current();
+            if(error.status===401){
+              clear(true);note("Sign-in expired or access changed. Page data cleared; sign in again.");
+              error.staleIdentity=true;
+            }
+            throw error;
+          }
         }
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});

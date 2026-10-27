@@ -58,8 +58,8 @@ async function api(path,options={}){
  const attempt=epoch,token=credential;
  const {preserveSelectionOnDenied=false,...requestOptions}=options;
  const r=await fetch(path,{...requestOptions,credentials:'omit',cache:'no-store',headers:{...options.headers,Authorization:credentialScheme+' '+token}});
- const value=await r.json();if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
- if(!r.ok){if(!preserveSelectionOnDenied&&[401,403,404].includes(r.status))clearSelection();const error=new Error(value.detail||'Request failed');error.status=r.status;throw error;}return value;
+ const value=await r.json().catch(error=>{if(r.ok)throw error;return {};});if(attempt!==epoch)throw new Error('Identity changed; response discarded.');
+ if(!r.ok){if(r.status===401){disconnect();$('status').textContent='Sign-in expired or access changed. Page data cleared; sign in again.';}else if(!preserveSelectionOnDenied&&[403,404].includes(r.status))clearSelection();const error=new Error(value.detail||'Request failed');error.status=r.status;throw error;}return value;
 }
 async function run(operation){const attempt=epoch;try{await operation();}catch(e){if(attempt===epoch)$('status').textContent=e.message;}}
 const post=(path,value)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
