@@ -185,6 +185,7 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
     if source_identity is not None:
         report['source_identity']=dict(source_identity)
         report['source_identity_map_sha256']=source_identity_digest(conn,log_id,prefix)
+    report.update(workspace.object_relationships.metadata(conn,log_id,include_digest=True))
     conn.execute("INSERT INTO log_quality VALUES (?, ?, ?, ?)",
                  [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), _canonical(report)])
     return report
@@ -202,6 +203,7 @@ def quality(log_id: str) -> dict[str, Any]:
                 "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
+            relationship_metadata=workspace.object_relationships.metadata(conn,log_id,include_digest=True)
             identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
                                if info.get('source_identity') else {})
         finally:
@@ -209,7 +211,7 @@ def quality(log_id: str) -> dict[str, Any]:
     present = {r["batch"] for r in reports}
     # Logs imported before reports existed, or whose report could not be written, have none.
     return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
-            "current": {"content_sha256": digest, "diagnostics": current, **identity_digest,
+            "current": {"content_sha256": digest, "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 
