@@ -23,7 +23,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.skipif(not os.getenv('OWG_AGENT_SDK_PYTHON'),reason='Set an isolated Agents SDK interpreter for the real MCP implementation check')
-@pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True)])
+@pytest.mark.parametrize('shared_catalog,source_invariant',[(False,False),(True,False),(True,True),(True,'decision')])
 @pytest.mark.parametrize('parallel_schedule',[False,True,'nested'])
 def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source_state(tmp_path,monkeypatch,shared_catalog,source_invariant,parallel_schedule):
     sdk=os.environ['OWG_AGENT_SDK_PYTHON']
@@ -65,6 +65,24 @@ def test_customer_project_executes_exact_mcp_calls_and_checks_independent_source
             raw['business_rules'].append({'id':'needs_review','text':'Alternative needs owner clarification','user_confirmed':False})
             raw['terminal_activity_ids'].append('reject')
         else:raw['transitions'][0]['rule_id']='approved_source'
+        model=ProcessModel.model_validate(raw)
+    if source_invariant=='decision':
+        raw=model.model_dump()
+        if not parallel_schedule:
+            raw['activities'] += [{'id':'choose','label':'Current decision','kind':'decision'},
+                                  {'id':'reject','label':'Hold','kind':'end'}]
+            raw['entry_activity_id']='choose';raw['terminal_activity_ids'].append('reject')
+            raw['transitions'][0].pop('rule_id')
+            raw['transitions'] += [{'source':'choose','target':'resolve','rule_id':'approved_source'},
+                                  {'source':'choose','target':'reject','rule_id':'needs_review'}]
+            raw['business_rules'].append({'id':'needs_review','text':'Other current state','user_confirmed':True})
+        other=next(rule for rule in raw['business_rules'] if rule['id']=='needs_review')
+        other.update(user_confirmed=True,predicate={'conditions':[{'path':'/source/state','operator':'ne','expected':'merged'}]})
+        raw['decision_tables']=[{'id':'current_decision','decision_activity_id':'choose',
+            'effective_from':'2000-01-01','effective_until':'2100-01-01',
+            'source_basis':{'label':'Synthetic policy declaration','document_sha256':'d'*64},
+            'rows':[{'id':'row_'+edge['rule_id'],'rule_id':edge['rule_id'],'target_activity_id':edge['target']}
+                    for edge in raw['transitions'] if edge['source']=='choose'], 'user_confirmed':True}]
         model=ProcessModel.model_validate(raw)
     packet={'format':'openworkgraph.versioned-process-export.v1','workflow_id':'synthetic','revision':1,
         'content_sha256':'a'*64,'process_model':model.model_dump(),'execution_authorization':False}
@@ -167,6 +185,7 @@ app.router.routes.extend([Route('/v1/record-graph/state-receipt',rule_source,met
         OWG_EXECUTION_CATALOG_READ_TOKEN='SYNTHETIC_CATALOG_SECRET',
         OWG_TEST_MODEL_DIGEST=json.loads((project/'workflow.spec.json').read_text())['process_model_sha256'],
         OWG_TEST_SOURCE_INVARIANT='1' if source_invariant else '0',
+        OWG_TEST_DECISION='1' if source_invariant=='decision' else '0',
         OWG_TEST_PARALLEL_SCHEDULE='nested' if parallel_schedule=='nested' else '1' if parallel_schedule else '0')
     env['NO_PROXY']=','.join(filter(None,[env.get('NO_PROXY',''),'127.0.0.1','localhost','::1']))
     def stats():
@@ -198,6 +217,12 @@ if os.environ['OWG_TEST_SOURCE_INVARIANT']=='1':
     bindings['source_rule_checks']=[{'rule_id':'approved_source','source_type':'github_pull_request',
         'resource_ref_pointer':'/approved_record','mode':'invariant_before_each_action',
         'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
+if os.environ['OWG_TEST_DECISION']=='1':
+    bindings.pop('source_rule_checks',None)
+    bindings['decision_table_checks']=[{'table_id':'current_decision','source_type':'github_pull_request',
+        'resource_ref_pointer':'/approved_record','mode':'unique_route_before_each_action',
+        'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True,'utc_effective_dates_reviewed':True}]
+    if os.environ['OWG_TEST_PARALLEL_SCHEDULE']=='0':plan['activity_ids'].insert(0,'choose')
 bindings.update(tool_server_url=os.environ['OWG_TEST_SERVER_URL']+'/mcp',source_api_url=os.environ['OWG_TEST_SERVER_URL'],
     process_catalog_url=os.environ['OWG_TEST_SERVER_URL'])
 for name,data in [('plan.json',plan),('case.json',case),('bindings.json',bindings)]:
@@ -236,7 +261,10 @@ print(json.dumps(report))
                 proposal=json.loads(planning.stdout)
                 assert proposal['plan']['status']=='proposal' and not proposal['execution_permitted']
                 assert proposal['source_planning']['source_receipt_request_count']==1
-                assert proposal['source_planning']['rule_checks']==[{'rule_id':'approved_source','status':'matched'}]
+                if source_invariant=='decision':
+                    assert proposal['source_planning']['rule_checks']==[]
+                    assert proposal['source_planning']['decision_table_checks'][0]['route_matches']
+                else:assert proposal['source_planning']['rule_checks']==[{'rule_id':'approved_source','status':'matched'}]
                 assert 'SYNTHETIC_SOURCE_SECRET' not in planning.stdout and 'merged' not in planning.stdout
                 evaluation=run('-c',r'''
 import asyncio,json
@@ -289,7 +317,7 @@ print(json.dumps(report))
             assert observed['tool_calls']==['read_case','resolve_case','read_case']
             assert observed['resolved'] is True and observed['version']==4
             assert observed['source_reads']==2
-            assert observed['source_rule_reads']==(6 if source_invariant else 0)
+            assert observed['source_rule_reads']==(7 if source_invariant=='decision' else 6 if source_invariant else 0)
             assert report['source_rules_matched_at_completion'] is True
             exported=run('monitor.py','--journal',f"execution-journal/{report['execution_id']}.jsonl",
                          '--deployment-name','Synthetic SDK implementation','--output','monitoring.json')

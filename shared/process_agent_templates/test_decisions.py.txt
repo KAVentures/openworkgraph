@@ -1,0 +1,302 @@
+"""Synthetic competing-row/source/date/tool oracles. No real providers or writes."""
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from execute import ImplementationError, digest, prepare, review_template, execute_approved
+from decision_runtime import decision_bindings, check_decision_receipt
+from runtime import check_plan, validate_spec
+from test_execution import fixture as base_fixture, FakeTools, receipt as outcome_receipt
+from owg_model.process_model import ProcessModel
+
+
+def fixture():
+    spec,plan,case,bindings,_=base_fixture()
+    raw=spec['process_model']
+    raw['activities']=[{'id':'choose','label':'Current source decision','kind':'decision'},*raw['activities'],
+                       {'id':'hold','label':'Hold','kind':'end'}]
+    raw['entry_activity_id']='choose';raw['terminal_activity_ids'].append('hold')
+    raw['business_rules']=[{'id':rid,'text':'Reviewed current record state','user_confirmed':True,
+        'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':state}]}}
+        for rid,state in [('open_rule','open'),('merged_rule','merged')]]
+    raw['transitions']=[{'source':'choose','target':'resolve','rule_id':'open_rule'},
+                        {'source':'choose','target':'hold','rule_id':'merged_rule'},*raw['transitions']]
+    raw['decision_tables']=[{'id':'source_decision','decision_activity_id':'choose',
+        'effective_from':'2000-01-01','effective_until':'2100-01-01',
+        'source_basis':{'label':'Synthetic unverified policy digest','document_sha256':'d'*64},
+        'rows':[{'id':'row_open','rule_id':'open_rule','target_activity_id':'resolve'},
+                {'id':'row_merged','rule_id':'merged_rule','target_activity_id':'hold'}],
+        'user_confirmed':True}]
+    spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+    spec['process_model_sha256']=digest(spec['process_model'])
+    spec['decision_table_contract']='openworkgraph.current-source-unique-decision.v1'
+    plan['activity_ids'].insert(0,'choose')
+    bindings['decision_table_checks']=[{'table_id':'source_decision','source_type':'github_pull_request',
+        'resource_ref_pointer':'/record_ref','mode':'unique_route_before_each_action',
+        'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True,'utc_effective_dates_reviewed':True}]
+    return spec,plan,case,bindings
+
+
+def receipt(request,state='open',when=None):
+    from process_source_state import state_receipt
+    return state_receipt(request['resource_ref'],request['source_type'],
+        {'source':{'provider':'github','record_kind':'pull_request','state':state}},
+        (when or datetime.now(timezone.utc)).isoformat(),'source_state_reported',True)
+
+
+def intent_for(data):
+    spec,plan,case,bindings=data
+    result=review_template(spec,prepare(*data),case,bindings)
+    result.update(customer_authorization_confirmed=True,source_reads_confirmed=True,
+                  expires_at=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
+    return result
+
+
+class DecisionContracts(unittest.TestCase):
+    def request(self,data):return prepare(*data)['decision_tables'][0]
+    def test_both_alternatives_and_row_order_independent_oracle(self):
+        data=fixture();request=self.request(data);spec=data[0]
+        for state,target,matches in [('open','resolve',True),('merged','hold',False),('closed_unmerged',None,False)]:
+            for reverse in (False,True):
+                if reverse:spec['process_model']['decision_tables'][0]['rows'].reverse()
+                result=check_decision_receipt(spec,request,receipt(request,state))
+                self.assertEqual(result['selected_target_activity_id'],target)
+                self.assertEqual(result['route_matches'],matches)
+                self.assertEqual(result['status'],'gap' if target is None else 'unique_match')
+                self.assertFalse(result['policy_document_verified']);self.assertFalse(result['execution_authorized'])
+    def test_unknown_competing_row_overlap_and_invalid_receipts_cannot_pick(self):
+        data=fixture();request=self.request(data);raw=data[0]['process_model']
+        row=raw['business_rules'][1]['predicate']['conditions'][0]
+        row['path']='/source/record_kind';row['expected']='pull_request'
+        result=check_decision_receipt(data[0],request,receipt(request))
+        self.assertEqual(result['status'],'overlap');self.assertFalse(result['route_matches'])
+        row['path']='/unsupported';row['expected']='unused'
+        result=check_decision_receipt(data[0],request,receipt(request))
+        self.assertEqual(result['status'],'unknown');self.assertFalse(result['route_matches'])
+        for changes in ({'resource_ref':'owg:r:'+'e'*32},{'source_type':'jira_issue'},
+            {'source_state_verified':False},{'agent_execution_authorized':True},
+            {'verified_at':'2000-01-01T00:00:00Z'},{'verified_at':(datetime.now(timezone.utc)+timedelta(seconds=60)).isoformat()}):
+            result=check_decision_receipt(fixture()[0],request,receipt(request)|changes)
+            self.assertEqual(result['status'],'unknown');self.assertFalse(result['route_matches'])
+    def test_unknown_receipt_never_supports_negated_existence(self):
+        data=fixture();request=self.request(data)
+        rules=data[0]['process_model']['business_rules']
+        rules[0]['predicate']['conditions']=[{'path':'/source/state','operator':'not_exists','expected':None}]
+        rules[1]['predicate']['conditions']=[{'path':'/source/state','operator':'exists','expected':None}]
+        self.assertEqual(check_decision_receipt(data[0],request,None)['status'],'unknown')
+    def test_utc_start_inclusive_end_exclusive_even_with_non_utc_clock(self):
+        data=fixture();request=self.request(data)
+        data[0]['process_model']['decision_tables'][0].update(effective_from='2026-10-27',effective_until='2026-10-28')
+        for stamp,status in [('2026-10-26T23:59:59+00:00','not_yet_effective'),
+            ('2026-10-27T00:00:00+00:00','unique_match'),('2026-10-27T23:59:59+00:00','unique_match'),
+            ('2026-10-28T00:00:00+00:00','expired'),('2026-10-27T23:00:00-02:00','expired')]:
+            now=datetime.fromisoformat(stamp)
+            self.assertEqual(check_decision_receipt(data[0],request,receipt(request,when=now),now=now)['status'],status)
+    def test_missing_binding_and_source_consent_block_offline_before_io(self):
+        data=fixture();data[3]['decision_table_checks']=[]
+        self.assertIn('decision_table_source_implementation_missing',prepare(*data)['requirements'])
+        from execute import validate_intent
+        with self.assertRaises(ImplementationError):validate_intent(data[0],prepare(*data),data[2],data[3],intent_for(data))
+        data=fixture();intent=intent_for(data);intent['source_reads_confirmed']=False
+        with self.assertRaises(ImplementationError):__import__('execute').validate_intent(data[0],prepare(*data),data[2],data[3],intent)
+    def test_unreviewed_unsupported_duplicate_or_per_row_bindings_refused(self):
+        for key,value in [('mode','invariant_before_each_action'),('record_semantics_reviewed',False),
+                          ('non_atomic_reads_reviewed',False),('utc_effective_dates_reviewed',False),
+                          ('source_type','salesforce_case'),('resource_ref_pointer','/issue')]:
+            data=fixture();data[3]['decision_table_checks'][0][key]=value
+            with self.assertRaises(ImplementationError):prepare(*data)
+        data=fixture();data[3]['decision_table_checks']*=2
+        with self.assertRaises(ImplementationError):prepare(*data)
+        data=fixture();data[0]['process_model']['business_rules'][1]['predicate']['conditions'][0]['path']='/case/amount'
+        data[0]['process_model_sha256']=digest(data[0]['process_model'])
+        with self.assertRaises(ImplementationError):prepare(*data)
+    def test_unconfirmed_competitor_and_injected_contract_refused(self):
+        data=fixture();data[0].pop('decision_table_contract')
+        with self.assertRaises(ValueError):validate_spec(data[0])
+        data=fixture();data[0]['process_model']['decision_tables'][0]['user_confirmed']=False
+        data[0]['process_model_sha256']=digest(data[0]['process_model'])
+        with self.assertRaises(ImplementationError):prepare(*data)
+    def test_reused_table_rule_outside_decision_still_requires_separate_invariant_binding(self):
+        data=fixture();spec,plan,case,bindings=data
+        spec['process_model']['transitions'][-1]['rule_id']='open_rule'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        self.assertIn('structured_rule_source_fact_implementation_missing',prepare(*data)['requirements'])
+        bindings['source_rule_checks']=[{'rule_id':'open_rule','source_type':'github_pull_request',
+            'resource_ref_pointer':'/record_ref','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
+        prepared=prepare(*data)
+        self.assertEqual(prepared['requirements'],[])
+        self.assertEqual([r['rule_id'] for r in prepared['source_rules']],['open_rule'])
+
+    def test_repeated_decision_targets_must_all_agree_with_same_snapshot(self):
+        data=fixture();request=self.request(data);request['target_activity_ids']=['resolve','hold']
+        self.assertFalse(check_decision_receipt(data[0],request,receipt(request))['route_matches'])
+
+
+class DecisionExecution(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.data=fixture();self.tools=FakeTools();self.reads=[];self.state='open';self.mutation={}
+        self.folder=TemporaryDirectory();self.addCleanup(self.folder.cleanup)
+        env=patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_SECRET',
+                                    'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE_SECRET'})
+        env.start();self.addCleanup(env.stop)
+    async def source(self,base,token,request):
+        self.reads.append(deepcopy(request));return receipt(request,self.state)|self.mutation
+    async def outcomes(self,base,token,request):
+        value=outcome_receipt(request)
+        if not self.tools.resolved:value.update(operation_verified=False,availability='unknown',reason='provider_state_not_expected_operation')
+        return value
+    async def run_case(self,**options):
+        return await execute_approved(*self.data,intent_for(self.data),journal_directory=self.folder.name,
+            client_factory=lambda *args:self.tools,source_state_reader=self.source,receipt_reader=self.outcomes,**options)
+    async def test_matching_route_rechecks_before_precondition_every_action_and_completion(self):
+        result=await self.run_case()
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case','resolve_case','read_case'])
+        self.assertEqual(len(self.reads),5)
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        from monitor import report,read_journal
+        monitoring=report(self.data[0],read_journal(next(Path(self.folder.name).glob('*.jsonl'))),'Synthetic decision runtime')
+        self.assertEqual(monitoring['runs'][0]['status'],'succeeded')
+        self.assertIsNone(monitoring['runs'][0]['outcome']['verified'])
+        self.assertTrue(result['all_declared_operations_verified'])
+        self.assertFalse(result['business_objective_verified']);self.assertFalse(result['agent_causality_verified'])
+        text=''.join(p.read_text() for p in Path(self.folder.name).glob('*.jsonl'))
+        for private in ('SYNTHETIC_SECRET','SYNTHETIC_SOURCE_SECRET',self.data[2]['record_ref'],'Synthetic unverified policy'):
+            self.assertNotIn(private,text)
+    async def test_alternative_gap_unavailable_and_stale_stop_before_tools(self):
+        for state,changes in [('merged',{}),('closed_unmerged',{}),('open',{'source_state_verified':False}),
+                ('open',{'verified_at':'2000-01-01T00:00:00Z'})]:
+            self.state=state;self.mutation=changes
+            with TemporaryDirectory() as folder:
+                result=await execute_approved(*self.data,intent_for(self.data),journal_directory=folder,
+                    client_factory=lambda *args:self.tools,source_state_reader=self.source)
+                self.assertTrue(result['stopped_before_tools'])
+        self.assertFalse(self.tools.calls)
+    async def test_changed_state_after_write_precondition_prevents_write(self):
+        original=self.tools.call_tool
+        async def change(*args):
+            value=await original(*args);self.state='merged';return value
+        self.tools.call_tool=change
+        result=await self.run_case()
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case'])
+        self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertFalse(result['all_tool_results_matched'])
+    async def test_effective_date_expiring_during_tool_inventory_prevents_even_precondition(self):
+        import decision_runtime
+        day=datetime.now(timezone.utc).date()
+        table=self.data[0]['process_model']['decision_tables'][0];table['effective_until']=(day+timedelta(days=1)).isoformat()
+        self.data[0]['process_model_sha256']=digest(self.data[0]['process_model'])
+        clock=[datetime.now(timezone.utc)]
+        class Clock:
+            @staticmethod
+            def now(*args):return clock[0]
+        original=self.tools.list_tools
+        async def expire():
+            clock[0]+=timedelta(days=1);return await original()
+        self.tools.list_tools=expire
+        with patch.object(decision_runtime,'datetime',Clock):result=await self.run_case()
+        self.assertFalse(self.tools.calls)
+        self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertEqual(result['decision_table_checks'][-1]['status'],'expired')
+    async def test_completion_drift_does_not_certify_already_attempted_actions(self):
+        original=self.tools.call_tool
+        async def change(name,args):
+            value=await original(name,args)
+            if self.tools.resolved and name=='read_case':self.state='merged'
+            return value
+        self.tools.call_tool=change
+        result=await self.run_case()
+        self.assertEqual(len(self.tools.calls),3)
+        self.assertTrue(result['all_tool_results_matched']);self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertFalse(result['source_rules_matched_at_completion'])
+        from monitor import report,read_journal
+        monitoring=report(self.data[0],read_journal(next(Path(self.folder.name).glob('*.jsonl'))),'Synthetic decision runtime')
+        self.assertEqual(monitoring['runs'][0]['status'],'handed_to_human')
+    async def test_missing_credentials_and_changed_bindings_do_not_read_or_call(self):
+        with patch.dict('os.environ',{'OWG_EXECUTION_SOURCE_READ_TOKEN':''}):
+            with self.assertRaises(ImplementationError):await self.run_case()
+        old=intent_for(self.data);self.data[3]['decision_table_checks'][0]['resource_ref_pointer']='/other'
+        self.data[2]['other']='owg:r:'+'e'*32
+        with self.assertRaises(ImplementationError):
+            await execute_approved(*self.data,old,journal_directory=self.folder.name,source_state_reader=self.source)
+        self.assertFalse(self.reads);self.assertFalse(self.tools.calls)
+
+
+# Source-aware planning still invokes the real SDK Runner with a local model.
+from test_agent_sdk import SDK_AVAILABLE
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for decision-aware SDK checks')
+class DecisionPlanning(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp=DecisionExecution.asyncSetUp
+    source=DecisionExecution.source
+
+    async def propose(self,*,choose=False,advance=False,**options):
+        from test_agent_sdk import OfflineModel
+        from plan_sources import propose_with_sources
+        spec,plan,case,bindings=self.data
+        case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION';plan['missing_business_inputs']=[]
+        owner=self;clock=[datetime.now(timezone.utc)]
+        class Model(OfflineModel):
+            async def get_response(self,*args,**kwargs):
+                raw=kwargs.get('input') if 'input' in kwargs else args[1]
+                payload=json.loads(raw if isinstance(raw,str) else raw[0]['content'])
+                owner.payload=payload
+                table=payload['current_source_decision_checks'][0]
+                assert set(table)=={'table_id','status','selected_target_activity_id'}
+                assert 'provider_reported_state' not in json.dumps(payload)
+                if choose and table['selected_target_activity_id']=='hold':self.plan={**self.plan,'activity_ids':['choose','hold']}
+                if advance:clock[0]+=timedelta(seconds=121)
+                return await super().get_response(*args,**kwargs)
+        return await propose_with_sources(case,bindings,model=Model(plan),spec=spec,source_state_reader=self.source,
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,clock=lambda:clock[0],**options)
+    async def test_actual_sdk_selects_alternative_from_minimized_snapshot_and_rejects_model_disagreement(self):
+        for state in ('open','merged'):
+            self.state=state
+            result=await self.propose(choose=True)
+            self.assertEqual(result['plan']['status'],'proposal')
+            self.assertEqual(result['source_planning']['source_receipt_request_count'],1)
+            self.assertFalse(result['execution_permitted']);self.assertFalse(self.tools.calls)
+        result=await self.propose()
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        result=await self.propose(choose=True,advance=True)
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+    async def test_offline_planner_caller_facts_cannot_substitute_for_source_table_context(self):
+        from agent import propose
+        from test_agent_sdk import OfflineModel
+        spec,plan,case,bindings=self.data
+        case.update(source={'state':'open'},text='SYNTHETIC_UNTRUSTED_INSTRUCTION');plan['missing_business_inputs']=[]
+        result=await propose(case,model=OfflineModel(plan),spec=spec)
+        self.assertEqual(result['plan']['status'],'needs_clarification');self.assertFalse(self.reads)
+    async def test_source_batch_and_independent_compare_reject_expired_or_changed_context(self):
+        from evaluate_sources import evaluate_current_sources
+        from evaluate import compare
+        from plan_sources import _propose_with_source_context
+        from test_agent_sdk import OfflineModel
+        from execute import reference
+        spec,plan,case,bindings=self.data
+        case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION';plan['missing_business_inputs']=[]
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':'case_1','category':'normal','input':case,'expected':{'status':'proposal',
+                'accepted_routes':[plan['activity_ids']],'review_confirmed':True}}]}
+        report,summary=await evaluate_current_sources(spec,suite,bindings,model=OfflineModel(plan),
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['matching_case_count'],1);self.assertEqual(summary['source_receipt_request_count'],1)
+        clock=[datetime.now(timezone.utc)]
+        report,context=await _propose_with_source_context(case,bindings,model=OfflineModel(plan),spec=spec,
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,source_state_reader=self.source,clock=lambda:clock[0])
+        results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'suite_sha256':digest(suite),'results':[{'case_id':'case_1','plan':report['plan']}]}
+        clock[0]+=timedelta(seconds=121)
+        checked=compare(spec,suite,results,source_rule_contexts={'case_1':context})
+        self.assertEqual(checked['matching_case_count'],0)
+        self.assertEqual(checked['cases'][0]['reason'],'unresolved_review_bypassed')
+        changed=deepcopy(case);changed['untrusted_extra']=True
+        with self.assertRaises(ImplementationError):context.check_tables([{'table_id':'source_decision','target_activity_ids':['resolve']}],spec,changed)
+
+
+if __name__=='__main__':unittest.main()

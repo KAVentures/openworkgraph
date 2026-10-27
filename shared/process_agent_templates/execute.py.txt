@@ -139,11 +139,12 @@ def source_rule_bindings(spec,checks,case,bindings):
         raise ImplementationError('Source rule bindings must be a bounded list')
     rules={rule['id']:rule for rule in spec['process_model'].get('business_rules',[])}
     mapped={}
-    required=set(checks.get('unevaluated_structured_rule_ids',[]))
+    table_rules={row['rule_id'] for table in spec['process_model'].get('decision_tables',[]) for row in table['rows']}
+    required=(set(checks.get('unevaluated_structured_rule_ids',[]))-table_rules) | set(checks.get('non_table_structured_rule_ids',[]))
     keys={'rule_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed','non_atomic_reads_reviewed'}
     for row in rows:
         if (not isinstance(row,dict) or set(row)!=keys or not isinstance(row.get('rule_id'),str)
-            or row['rule_id'] not in rules or row['rule_id'] in mapped
+            or row['rule_id'] not in rules or row['rule_id'] in mapped or (row['rule_id'] in table_rules and row['rule_id'] not in required)
             or not isinstance(row.get('source_type'),str) or row['source_type'] not in SOURCE_TYPES
             or row.get('mode')!='invariant_before_each_action'
             or row.get('record_semantics_reviewed') is not True or row.get('non_atomic_reads_reviewed') is not True):
@@ -212,6 +213,11 @@ def prepare(spec, plan_document, case, bindings):
     source_rules,missing_source_rules=source_rule_bindings(spec,checks,case,bindings)
     if missing_source_rules:
         requirements.append('structured_rule_source_fact_implementation_missing')
+    decision_requests=[]
+    if model.get('decision_tables'):
+        from decision_runtime import decision_bindings
+        decision_requests,missing_tables=decision_bindings(spec,checks.get('decision_table_routes',[]),case,bindings)
+        if missing_tables:requirements.append('decision_table_source_implementation_missing')
     actions, humans, written = [], [], set()
     for activity_id in plan['activity_ids']:
         activity = activities[activity_id]
@@ -284,7 +290,7 @@ def prepare(spec, plan_document, case, bindings):
         outcomes.append({'terminal_activity_id': terminal, 'expected_operation': expectation['operation'], 'resource_ref': ref})
     return {'plan': plan, 'actions': actions, 'human_activity_ids': sorted(set(humans)),
             'manual_condition_ids': sorted(digest(c) for c in checks['manual_review_conditions']),
-            'outcomes': outcomes, 'source_rules':source_rules, 'requirements': sorted(set(requirements))}
+            'outcomes': outcomes, 'source_rules':source_rules, **({'decision_tables':decision_requests} if model.get('decision_tables') else {}), 'requirements': sorted(set(requirements))}
 
 
 def review_template(spec, prepared, case, bindings):
@@ -319,11 +325,11 @@ def validate_intent(spec, prepared, case, bindings, intent, *, now=None):
         raise ImplementationError('Human activities need explicit completion declarations')
     if not set(prepared['manual_condition_ids']) <= set(intent.get('manual_condition_confirmations', [])):
         raise ImplementationError('Unevaluated manual conditions require separate human resolution declarations')
-    if (prepared['outcomes'] or prepared['source_rules']) and intent.get('source_reads_confirmed') is not True:
+    if (prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables')) and intent.get('source_reads_confirmed') is not True:
         raise ImplementationError('Independent source reads require separate customer confirmation')
     if prepared['actions']:
         endpoint(bindings.get('tool_server_url'))
-    if prepared['outcomes'] or prepared['source_rules']:
+    if prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables'):
         endpoint(bindings.get('source_api_url'), source=True)
     if spec.get('organization_catalog_reference'):
         endpoint(bindings.get('process_catalog_url'))
@@ -470,7 +476,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
     catalog_token = os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN', '')
     if spec.get('organization_catalog_reference') and not catalog_token:
         raise ImplementationError('Configure a separate organization catalog read credential')
-    if (prepared['actions'] and not tool_token) or ((prepared['outcomes'] or prepared['source_rules']) and not source_token):
+    if (prepared['actions'] and not tool_token) or ((prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables')) and not source_token):
         raise ImplementationError('Configure the separate least-privilege customer tool and OWG source-read credentials')
     execution_id = digest(intent)
     folder = Path(journal_directory); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -503,6 +509,22 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now)
+        async def check_decisions():
+            if not prepared.get('decision_tables'):return
+            from decision_runtime import check_decision_receipt
+            passed=True
+            for request in prepared['decision_tables']:
+                ensure_current(intent,now)
+                try:
+                    receipt=await source_state_reader(endpoint(bindings['source_api_url'],source=True),source_token,request)
+                except Exception:receipt=None
+                summary=check_decision_receipt(spec,request,receipt,now=now)
+                result.setdefault('decision_table_checks',[]).append(summary)
+                record('decision_table_checked',**summary)
+                passed=passed and summary['route_matches']
+            ensure_current(intent,now)
+            if not passed:raise ImplementationError('Current UNIQUE decision route or effective date not established')
+
         async def check_source_rules():
             # Deliberately do not reuse dashboard reports, caller facts or a
             # prior receipt. The customer has reviewed these as invariants;
@@ -523,6 +545,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 passed=passed and status=='matched'
             ensure_current(intent,now)
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
+            await check_decisions()
         try:
             await check_catalog()
             await check_source_rules()
@@ -567,6 +590,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         ensure_current(intent, now)
                         if action['precondition']:
+                            await check_decisions()
                             condition = action['precondition']
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:

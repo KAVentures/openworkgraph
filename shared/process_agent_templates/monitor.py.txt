@@ -16,7 +16,7 @@ from runtime import validate_spec
 MAX_BYTES = 8 * 1024 * 1024
 MAX_RECORDS = 10000
 _PHASES = {
-    'started', 'catalog_checked', 'source_rule_checked', 'stopped_before_tools',
+    'started', 'catalog_checked', 'source_rule_checked', 'decision_table_checked', 'stopped_before_tools',
     'source_preflight', 'precondition_pending', 'precondition_not_established',
     'attempt_pending', 'tool_returned_expected_structure', 'tool_reported_failure',
     'uncertain', 'implementation_contract_or_intent_not_established',
@@ -108,6 +108,15 @@ def report(spec, records, deployment_name):
                 _fail()
         if phase in _STOPS or (phase == 'source_rule_checked' and row.get('status') != 'matched'):
             blocked = True
+        if phase == 'decision_table_checked':
+            tables={t['id']:t for t in spec['process_model'].get('decision_tables',[])}
+            if (not isinstance(row.get('table_id'),str) or row['table_id'] not in tables
+                    or type(row.get('route_matches')) is not bool
+                    or row.get('execution_authorized') is not False
+                    or row.get('policy_document_verified') is not False):
+                _fail()
+            if row.get('status')!='unique_match' or not row['route_matches']:
+                blocked=True
         if phase == 'catalog_checked' and row.get('current_independent_design_review') is not True:
             blocked = True
         if phase == 'stopped_before_tools':

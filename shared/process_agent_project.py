@@ -78,8 +78,6 @@ def build_runtime_spec(packet: dict) -> dict:
             or packet.get('execution_authorization') is not False):
         raise ValueError('A non-authorizing saved revision and content hash are required')
     model = ProcessModel.model_validate(packet['process_model'])
-    if model.decision_tables:
-        raise ValueError('Decision tables require source-backed effective-date and UNIQUE-hit support; implementation export is unavailable for this design')
     # Explicit output allowlist: no arbitrary captured/provider fields get copied.
     spec = {key: packet[key] for key in ('workflow_id', 'revision', 'content_sha256')}
     spec.update(format='openworkgraph.agent-runtime-project.v1', process_model=model.model_dump(),
@@ -89,6 +87,8 @@ def build_runtime_spec(packet: dict) -> dict:
     if parallel_regions(model):
         spec.update(control_flow_contract='openworkgraph.parallel-node-firing-plan.v1',
                     execution_schedule='serial_token_valid_node_order')
+    if model.decision_tables:
+        spec['decision_table_contract'] = 'openworkgraph.current-source-unique-decision.v1'
     origin = packet.get('organization_catalog_reference')
     if origin is not None:
         if (not isinstance(origin, dict) or set(origin) != {'organization_id'}
@@ -106,7 +106,10 @@ def build_runtime_project(packet: dict) -> bytes:
              for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
-    if spec.get('control_flow_contract'):
+    if model.decision_tables:
+        files['test_decisions.py'] = (_TEMPLATES / 'test_decisions.py.txt').read_text(encoding='utf-8')
+        files['decision_runtime.py'] = (_TEMPLATES / 'decision_runtime.py.txt').read_text(encoding='utf-8')
+    if spec.get('control_flow_contract') or model.decision_tables:
         files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
         for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
             files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -133,6 +136,12 @@ def build_runtime_project(packet: dict) -> bytes:
         'outcome_records':[{'terminal_activity_id':e.terminal_activity_id, 'operation':e.operation,
                             'resource_ref_pointer':None} for e in model.outcome_expectations]
     }, indent=2) + '\n'
+    if model.decision_tables:
+        example = json.loads(files['tool-bindings.example.json'])
+        example['decision_table_checks'] = [dict(table_id=t.id, source_type=None, resource_ref_pointer=None,
+            mode='unique_route_before_each_action', record_semantics_reviewed=False,
+            non_atomic_reads_reviewed=False, utc_effective_dates_reviewed=False) for t in model.decision_tables]
+        files['tool-bindings.example.json'] = json.dumps(example, indent=2) + '\n'
     files['customer-intent.example.json'] = json.dumps({
         'format':'openworkgraph.customer-execution-intent.v1', 'process_reference':process_reference,
         'spec_sha256':None, 'plan_sha256':None, 'case_sha256':None, 'bindings_sha256':None,
@@ -330,10 +339,11 @@ def build_runtime_project(packet: dict) -> bytes:
         'OWG adapters/openai_agents.py can optionally record structural traces\n'
         'when separately configured; this export enables no observation or sync.\n'
     )
-    if spec.get('control_flow_contract'):
+    if spec.get('control_flow_contract') or model.decision_tables:
         files['README.md'] = files['README.md'].replace(
             '## Offline shadow tests (no installation or model access required)',
             '## Offline shadow tests (no model access required)\n\nInstall requirements.txt for the bundled process validator.')
+    if spec.get('control_flow_contract'):
         files['README.md'] += (
             '\n## Paired parallel schedules\n\n'
             'This specification uses openworkgraph.parallel-node-firing-plan.v1.\n'
@@ -351,6 +361,21 @@ def build_runtime_project(packet: dict) -> bytes:
             'Previously generated linear projects do not gain fork/join support by\n'
             'rehashing a changed model; export a new reviewed contract and review its\n'
             'exact spec, plan, case and bindings with the authorized customer operator.\n')
+    if model.decision_tables:
+        files['README.md'] += (
+            '\n## Current-source UNIQUE decisions\n\n'
+            'Install requirements.txt before table-project tests. decision_runtime.py and owg_model/ enforce the contract.\n'
+            'Review decision_table_checks separately: one selected current-source record per whole table,\n'
+            'mode unique_route_before_each_action, record_semantics_reviewed, non_atomic_reads_reviewed and\n'
+            'utc_effective_dates_reviewed true. Only /source/provider, /source/record_kind and /source/state are supported.\n'
+            'Every competing row must be confirmed and supported. Templates remain disabled.\n'
+            'A UNIQUE match must agree with every route visit before tool operations and at completion.\n'
+            'Dates use the consumer UTC clock after the read. Caller dates/facts do not substitute for source checks.\n'
+            'Use plan_sources.py and evaluate_sources.py with separate source-read/model-sharing consents.\n'
+            'Without source context, visited tables require clarification. Policy documents and case association stay unverified.\n'
+            'Reads/writes are non-atomic; changing decisions stop later work but cannot undo effects.\n'
+            'Existing exact customer intent, shared review, service permissions, conditional writes, idempotency and\n'
+            'independent outcome checks still apply. Monitor imports remain customer reports, not verified business value.\n')
     memory = BytesIO()
     with ZipFile(memory, 'w', compression=ZIP_DEFLATED) as archive:
         for name, content in files.items():

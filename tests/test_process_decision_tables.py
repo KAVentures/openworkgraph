@@ -123,14 +123,14 @@ def test_exact_model_and_spec_hash_compatibility_without_tables():
     assert process_model_digest(model.model_dump())=='b885456de37894d281ea2a1d79a3b5cbaed2abcb448bffcfd074971a0a86e0e5'
     spec=build_runtime_spec(packet(model.model_dump()))
     assert hashlib.sha256(json.dumps(spec,sort_keys=True,allow_nan=False).encode()).hexdigest()=='9e7efd0dff9a6b9e107dd3ce9285d7b81bb0c649ce2fa689c8a2b78d0be8e40d'
-    with pytest.raises(ValueError,match='Decision tables'):build_runtime_project(record())
+    assert build_runtime_spec(record())['decision_table_contract']=='openworkgraph.current-source-unique-decision.v1'
 
 
 def test_exported_runtime_refuses_manually_injected_tables_before_planning():
     spec=importlib.util.spec_from_file_location('table_test_runtime',Path(__file__).parents[1]/'shared/process_agent_templates/runtime.py.txt',
         loader=__import__('importlib.machinery',fromlist=['SourceFileLoader']).SourceFileLoader('table_test_runtime',str(Path(__file__).parents[1]/'shared/process_agent_templates/runtime.py.txt')))
     runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
-    with pytest.raises(ValueError,match='cannot evaluate decision tables'):runtime.validate_spec({'process_model':record()['process_model']})
+    with pytest.raises(ValueError,match='exported current-source UNIQUE contract'):runtime.validate_spec({'process_model':record()['process_model']})
 
 
 def test_minimized_report_pins_exact_model_and_declared_date_and_route_disagreement():
@@ -202,7 +202,7 @@ def test_saved_revisions_review_and_declared_facts_audits_both_databases(store):
     assert next_revision['review']['status']=='needs_review'
 
 
-def test_gateway_case_transfer_and_implementation_refusal_are_explicit(tmp_path):
+def test_gateway_case_transfer_and_disabled_implementation_export_are_explicit(tmp_path):
     application=app(tmp_path)
     with TestClient(application) as client:
         headers={'Authorization':'Bearer alice'}
@@ -214,12 +214,19 @@ def test_gateway_case_transfer_and_implementation_refusal_are_explicit(tmp_path)
         authorized={**headers,'X-OWG-Case-Facts-Authorized':'true'}
         result=client.post(base+'/check-rules?revision=1',headers=authorized,json=body)
         assert result.status_code==200 and result.json()['cases'][0]['decision_tables'][0]['selected_target_activity_id']=='escalate'
-        # The independent design review does not implement unsupported semantics.
+        # Independent review permits project generation, never source binding or execution.
         client.post(base+'/access',headers=headers,json={'expected_access_revision':1,'members':[{'actor_id':'bob','role':'reviewer'}],'user_confirmed':True})
         reviewed=client.post(base+'/reviews',headers={'Authorization':'Bearer bob'},json=review(r).model_dump())
         assert reviewed.status_code==200,reviewed.text
-        refused=client.get(base+'/export?revision=1&format=agent-project',headers=headers)
-        assert refused.status_code==409 and 'Decision tables' in refused.text
+        exported=client.get(base+'/export?revision=1&format=agent-project',headers=headers)
+        assert exported.status_code==200
+        from io import BytesIO
+        from zipfile import ZipFile
+        with ZipFile(BytesIO(exported.content)) as archive:
+            bindings=json.loads(archive.read('tool-bindings.example.json'))
+            assert bindings['enabled'] is False
+            assert bindings['decision_table_checks'][0]['record_semantics_reviewed'] is False
+            assert 'decision_runtime.py' in archive.namelist()
         assert client.get(base+'/export?revision=1&format=bpmn',headers=headers).status_code==200
         script=client.get('/process-decision-editor.js')
         assert script.status_code==200 and script.headers['cache-control']=='no-store'

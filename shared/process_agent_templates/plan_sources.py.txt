@@ -18,10 +18,12 @@ from runtime import load_spec, validate_spec
 
 class SourcePlanningContext:
     """In-memory snapshots, pinned to the chosen model and case; never a grant."""
-    def __init__(self,spec,case,requests,receipts,clock):
+    def __init__(self,spec,case,requests,receipts,clock,decision_requests=None,decision_receipts=None):
         self.spec_digest=digest(spec);self.case_digest=digest(case)
         self.requests={row['rule_id']:deepcopy(row) for row in requests}
         self.receipts=deepcopy(receipts);self.clock=clock
+        self.decision_requests=deepcopy(decision_requests or [])
+        self.decision_receipts=deepcopy(decision_receipts or {})
 
     def check_rules(self,rule_ids,spec,case):
         from process_rule_conditions import evaluate_predicate
@@ -35,6 +37,26 @@ class SourcePlanningContext:
                 if facts:status=evaluate_predicate(request['predicate'],facts)['status']
             results.append({'rule_id':rule_id,'status':status})
         return results
+
+    def check_tables(self,routes,spec,case):
+        if digest(spec)!=self.spec_digest or digest(case)!=self.case_digest:
+            raise ImplementationError('Planning inputs changed after source reads')
+        from decision_runtime import check_decision_receipt
+        requests={row['table_id']:row for row in self.decision_requests}
+        checked_at=self.clock();results=[]
+        for route in routes:
+            request=requests.get(route['table_id'])
+            if request:
+                results.append(check_decision_receipt(spec,{**request,**route},
+                    self.decision_receipts.get(route['table_id']),now=checked_at))
+            else:results.append({'table_id':route['table_id'],'status':'unbound','route_matches':False,
+                                 'selected_target_activity_id':None,'execution_authorized':False})
+        return results
+
+    def tables_for_model(self,spec,case):
+        return [{key:row[key] for key in ('table_id','status','selected_target_activity_id')}
+            for row in self.check_tables([{'table_id':t['id'],'target_activity_ids':[]}
+                for t in spec['process_model'].get('decision_tables',[])],spec,case)]
 
     def for_model(self,spec,case):
         # Only rule IDs and bounded statuses cross the model boundary. No raw
@@ -58,8 +80,18 @@ async def _propose_with_source_context(case,bindings,*,model,spec=None,source_re
     rules=spec['process_model'].get('business_rules',[])
     if not isinstance(rules,list) or len(rules)>40:raise ImplementationError('Use at most 40 saved process rules')
     structured=[rule['id'] for rule in rules if rule.get('predicate') is not None]
-    requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured},case,bindings)
-    if not requests:raise ImplementationError('Bind at least one confirmed supported current-source rule')
+    tables=spec['process_model'].get('decision_tables',[])
+    table_decisions={table['decision_activity_id'] for table in tables}
+    non_table_rules=[edge['rule_id'] for edge in spec['process_model']['transitions']
+        if edge.get('rule_id') in structured and edge['source'] not in table_decisions]
+    requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured,
+        'non_table_structured_rule_ids':non_table_rules},case,bindings)
+    decision_requests=[]
+    if tables:
+        from decision_runtime import decision_bindings
+        decision_requests,_missing_tables=decision_bindings(spec,
+            [{'table_id':table['id'],'target_activity_ids':[]} for table in tables],case,bindings)
+    if not requests and not decision_requests:raise ImplementationError('Bind at least one confirmed supported current-source rule or table')
     source_base=endpoint(bindings.get('source_api_url'),source=True)
     token=os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN','')
     if not token:raise ImplementationError('Configure a separate local OWG source-read credential')
@@ -79,7 +111,15 @@ async def _propose_with_source_context(case,bindings,*,model,spec=None,source_re
             try:selected_records[key]=await source_state_reader(source_base,token,request)
             except Exception:selected_records[key]=None
         receipts[request['rule_id']]=selected_records[key]
-    context=SourcePlanningContext(spec,case,requests,receipts,clock or (lambda:datetime.now(timezone.utc)))
+    decision_receipts={}
+    for request in decision_requests:
+        key=(request['resource_ref'],request['source_type'])
+        if key not in selected_records:
+            try:selected_records[key]=await source_state_reader(source_base,token,request)
+            except Exception:selected_records[key]=None
+        decision_receipts[request['table_id']]=selected_records[key]
+    context=SourcePlanningContext(spec,case,requests,receipts,clock or (lambda:datetime.now(timezone.utc)),
+        decision_requests,decision_receipts)
     # Importing the SDK/model path happens only after consent and input checks.
     from agent import propose
     report=await propose(case,model=model,spec=spec,source_rule_context=context)
@@ -87,12 +127,18 @@ async def _propose_with_source_context(case,bindings,*,model,spec=None,source_re
     if not catalog_current:
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Current independent process review is unavailable'])
     used=report.get('shadow_check',{}).get('unevaluated_structured_rule_ids',[])
-    final_checks=context.check_rules(structured,spec,case)
+    table_rules={row['rule_id'] for table in tables for row in table['rows']}
+    used=[rule_id for rule_id in used if rule_id not in table_rules or rule_id in non_table_rules]
+    final_checks=context.check_rules([rule_id for rule_id in structured if rule_id not in table_rules or rule_id in non_table_rules],spec,case)
+    final_tables=context.check_tables(report.get('shadow_check',{}).get('decision_table_routes',[]),spec,case) if tables else []
+    if any(not row['route_matches'] for row in final_tables):
+        report['plan'].update(status='needs_clarification',missing_business_inputs=['Current UNIQUE decision route or effective date is not established'])
     if any(row['rule_id'] in used and row['status']!='matched' for row in final_checks):
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Fresh source invariants are false, unknown or no longer fresh'])
     report.update(execution_permitted=False,source_outcome_verified=False,
         source_planning={'format':'openworkgraph.current-source-planning.v1',
             'source_receipt_request_count':len(selected_records),'rule_checks':final_checks,
+            **({'decision_table_checks':final_tables} if tables else {}),
             'process_reference':reference(spec),'bindings_sha256':digest(bindings),
             'source_values_sent_to_model':False,'source_receipts_included':False,
             'catalog_review_current_at_completion':catalog_current if spec.get('organization_catalog_reference') else None,
