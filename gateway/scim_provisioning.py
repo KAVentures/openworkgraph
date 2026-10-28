@@ -83,12 +83,12 @@ def _keys(body, allowed):
 
 
 def _attributes(body):
-    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta'})
+    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta', 'groups'})
     if values.get('schemas') != [CORE]:
         raise Error(400, 'Only the core User schema is supported', 'invalidSyntax')
     # SCIM readOnly fields echoed by a client are ignored; endpoint identity is
     # authoritative. Password, email aliases, groups and extensions are refused.
-    return _validate_values({k: v for k, v in values.items() if k not in {'schemas', 'id', 'meta'}})
+    return _validate_values({k: v for k, v in values.items() if k not in {'schemas', 'id', 'meta', 'groups'}})
 
 
 def _validate_values(values):
@@ -225,17 +225,31 @@ class Provisioning:
             raise Error(404, 'User not found')
         return row
 
-    @staticmethod
-    def conditional(row, etag):
+    def user_projection(self, conn, provider, row):
+        """Include only current, direct provider-owned groups in the User view."""
+        resource = _project(row)
+        # Lazy import keeps SCIM's provider/roster model independent of the
+        # optional Group resource, which never grants access to OWG evidence.
+        from .scim_groups import user_groups
+        membership = user_groups(self.db, conn, provider, row['employee_id'])
+        if membership:
+            resource['groups'] = membership
+            digest = hashlib.sha256(json.dumps(
+                [resource['meta']['version'], membership],
+                sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            resource['meta']['version'] = 'W/"' + digest + '"'
+        return resource
+
+    def conditional(self, conn, provider, row, etag):
         if not etag:
             raise Error(428, 'Read the current User and supply its exact If-Match version')
-        if etag != _project(row)['meta']['version']:
+        if etag != self.user_projection(conn, provider, row)['meta']['version']:
             raise Error(412, 'User changed; read the current version before updating')
 
     def get_user(self, provider_id, token, uid):
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
-            return _project(self.load(conn, provider, uid))
+            return self.user_projection(conn, provider, self.load(conn, provider, uid))
 
     def list_users(self, provider_id, token, *, filter_text='', start_index=1, count=100):
         if type(start_index) is not int or start_index < 1 or type(count) is not int or not 0 <= count <= 200:
@@ -262,7 +276,7 @@ class Provisioning:
             total = roster._one(self.db, conn, 'SELECT count(*) AS n FROM gateway_scim_users l JOIN gateway_employees e ON e.employee_id=l.employee_id' + scope, params)['n']
             rows = roster._all(self.db, conn, _SELECT + scope + ' ORDER BY e.email,e.employee_id LIMIT ? OFFSET ?', (*params, count, start_index - 1))
             return {'schemas': [LIST], 'totalResults': total, 'startIndex': start_index,
-                    'itemsPerPage': len(rows), 'Resources': [_project(row) for row in rows]}
+                    'itemsPerPage': len(rows), 'Resources': [self.user_projection(conn, provider, row) for row in rows]}
 
     def create_user(self, provider_id, token, body):
         values = _attributes(body)
@@ -281,10 +295,10 @@ class Provisioning:
             if values.get('active') is False:
                 roster.offboard_employee_in_transaction(self.db, conn, org, uid)
             self.audit(conn, org, provider_id, 'scim.user.created', {'employee_id': uid, 'active': values.get('active', True)})
-            return _project(self.load(conn, provider, uid))
+            return self.user_projection(conn, provider, self.load(conn, provider, uid))
 
     def mutate(self, conn, provider, row, values):
-        current = _project(row)
+        current = self.user_projection(conn, provider, row)
         if values.get('username', current['userName']) != current['userName']:
             raise Error(400, 'userName is the stable evidence actor; renaming is not supported', 'mutability')
         name = values.get('displayname', current['displayName'])
@@ -304,7 +318,7 @@ class Provisioning:
             updated_at=? WHERE provider_id=? AND employee_id=?''', (external, now, provider['provider_id'], uid))
         self.audit(conn, provider['organization_id'], provider['provider_id'], 'scim.user.updated',
                    {'employee_id': uid, 'active': active})
-        return _project(self.load(conn, provider, uid))
+        return self.user_projection(conn, provider, self.load(conn, provider, uid))
 
     def replace_user(self, provider_id, token, uid, etag, body):
         values = _attributes(body)
@@ -316,7 +330,7 @@ class Provisioning:
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
             row = self.load(conn, provider, uid)
-            self.conditional(row, etag)
+            self.conditional(conn, provider, row, etag)
             return self.mutate(conn, provider, row, values)
 
     def patch_user(self, provider_id, token, uid, etag, body):
