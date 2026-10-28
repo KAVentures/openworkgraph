@@ -199,14 +199,34 @@ class Groups:
                     verb, path = op.get("op"), op.get("path")
                     if not isinstance(verb, str) or not isinstance(path, str):
                         raise scim.Error(400, "Explicit Group patch operation/path required", "invalidSyntax")
+                    verb = verb.lower()
+                    selected = re.fullmatch(r'members\[value eq ("(?:[^"\\]|\\.)*")\]', path, re.I)
+                    if selected:
+                        # RFC 7644 path selector subset: remove an exact direct member.
+                        if verb != "remove":
+                            raise scim.Error(400, "Only member-selector removal is supported", "invalidPath")
+                        try:
+                            uid = json.loads(selected.group(1))
+                        except ValueError:
+                            raise scim.Error(400, "Invalid member selector", "invalidPath") from None
+                        members = values.get("members", [x["value"] for x in current["members"]])
+                        values["members"] = [value for value in members if value != uid]
+                        continue
                     path = path.lower()
                     if path not in {"displayname", "externalid", "members"}:
                         raise scim.Error(400, "Unsupported Group patch path", "invalidPath")
-                    if verb.lower() == "remove":
+                    if verb == "remove":
                         if path == "displayname":
                             raise scim.Error(400, "displayName is required", "mutability")
                         values[path] = None if path == "externalid" else []
-                    elif verb.lower() in {"add", "replace"} and "value" in op:
+                    elif verb == "add" and path == "members" and "value" in op:
+                        additions = op["value"] if isinstance(op["value"], list) else [op["value"]]
+                        new_members = _values({"members": additions})["members"]
+                        previous = values.get("members", [x["value"] for x in current["members"]])
+                        values["members"] = sorted(set(previous + new_members))
+                        if len(values["members"]) > MAX_MEMBERS:
+                            raise scim.Error(400, "At most 200 direct Users are supported", "invalidValue")
+                    elif verb in {"add", "replace"} and "value" in op:
                         values.update(_values({path: op["value"]}))
                     else:
                         raise scim.Error(400, "Invalid Group patch operation", "invalidSyntax")
