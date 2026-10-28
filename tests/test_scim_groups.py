@@ -176,6 +176,35 @@ def test_user_groups_is_read_only_and_changes_user_etag(http):
     assert "groups" not in after.json() and after.headers["etag"] != updated.headers["etag"]
 
 
+def test_revoked_provider_cannot_read_or_update_groups_and_group_data_grants_no_roster_role(http):
+    client, db, owner, h, base, pid = http
+    user_response = client.post(base + "/Users", headers=h, json=user())
+    assert user_response.status_code == 201, user_response.text
+    uid = user_response.json()["id"]
+    created = client.post(base + "/Groups", headers=h,
+        json=group(displayName="System administrators",
+                   members=[{"value": uid}]))
+    assert created.status_code == 201, created.text
+    group_url = created.headers["location"]
+    # A provisioning Group must never assign an administrative team, a
+    # process ACL, or an executable capability regardless of the chosen name.
+    assert client.get("/v1/human/processes", headers=h).status_code == 401
+    with db.connect() as conn:
+        teams = db._execute(conn,
+            "SELECT count(*) FROM gateway_actor_teams WHERE organization_id=? AND actor_id=?",
+            ("acme", user_response.json()["userName"])).fetchone()[0]
+    assert teams == 0
+    revoked = client.post("/v1/admin/scim-providers/acme/" + pid + "/revoke",
+        headers=owner, json={"revision": 2})
+    assert revoked.status_code == 200, revoked.text
+    assert client.get(group_url, headers=h).status_code == 401
+    assert client.get(base + "/Groups", headers=h).status_code == 401
+    assert client.patch(group_url, headers={**h, "If-Match": created.headers["etag"]},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "replace", "path": "displayName", "value": "Forbidden"}]}).status_code == 401
+    assert client.post(base + "/Groups", headers=h, json=group()).status_code == 401
+
+
 def test_group_audit_failure_is_atomic(http, monkeypatch):
     client, db, owner, h, base, pid = http
     # Patch the same instance used by the actual enterprise app, not a new one.
