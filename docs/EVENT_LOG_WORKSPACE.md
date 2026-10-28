@@ -1209,3 +1209,5 @@ shared-dataset limitations. Codes minimize labels; they do not anonymize the num
 
 The builder supports [cancellable local analysis jobs](LOCAL_ANALYSIS_JOBS.md),
 with bounded queues, deadlines, session-scoped status/results and explicit cancellation.
+
+Selected Jira issues can also be read manually into a retained local source-ID log with separate read/retention/label consent. See [Retained Jira ingestion](RETAINED_JIRA_INGESTION.md) for scope, lifecycle, checkpoint, pagination and completeness limits.

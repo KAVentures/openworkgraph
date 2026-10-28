@@ -429,3 +429,8 @@ async def delete_local_review_intention(request: Request, work_item_ref: str):
     except ValueError:
         raise HTTPException(status_code=422, detail="invalid review reference") from None
     return {"removed": removed, "source_read_performed": False}
+
+
+# Separate retained business-log capability; existing receipt routes unchanged.
+from .jira_retained_routes import router as retained_jira_router
+router.include_router(retained_jira_router)

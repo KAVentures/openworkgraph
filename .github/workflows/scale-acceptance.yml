@@ -33,3 +33,5 @@ jobs:
         env:
           OWG_SCALE_ACCEPTANCE: "1"
         run: python -m pytest -q -s tests/test_event_log_arithmetic_metrics.py
+      - name: Verify bounded selected Jira rescan, replay and correction oracle
+        run: python scripts/benchmark_retained_jira.py 1000 30
