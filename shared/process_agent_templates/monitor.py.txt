@@ -115,7 +115,17 @@ def report(spec, records, deployment_name):
                     or row.get('execution_authorized') is not False
                     or row.get('policy_document_verified') is not False):
                 _fail()
-            if row.get('status')!='unique_match' or not row['route_matches']:
+            table=tables[row['table_id']];first_policy=table.get('hit_policy','UNIQUE')=='FIRST'
+            if first_policy:
+                if row.get('hit_policy')!='FIRST' or row.get('row_precedence')!='declared_row_order':_fail()
+                selected=next((r for r in table['rows'] if r['id']==row.get('selected_row_id')),None)
+                if row.get('status')=='first_match':
+                    if (selected is None or selected['target_activity_id']!=row.get('selected_target_activity_id')
+                        or row.get('blocking_row_id') is not None):_fail()
+                elif row.get('selected_row_id') is not None or row.get('selected_target_activity_id') is not None:_fail()
+                if row.get('status')!='unknown' and row.get('blocking_row_id') is not None:_fail()
+                if row.get('blocking_row_id') is not None and not any(r['id']==row['blocking_row_id'] for r in table['rows']):_fail()
+            if row.get('status')!=('first_match' if first_policy else 'unique_match') or not row['route_matches']:
                 blocked=True
         if phase == 'catalog_checked' and row.get('current_independent_design_review') is not True:
             blocked = True

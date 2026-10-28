@@ -41,6 +41,41 @@ def fixture():
     return spec,plan,case,bindings
 
 
+def first_fixture():
+    """Intentional overlap: current open state precedes a broader provider row."""
+    data=fixture();spec,plan,case,bindings=data
+    spec['process_model']['decision_tables'][0]['hit_policy']='FIRST'
+    spec['process_model']['business_rules'][1]['predicate']['conditions']=[
+        {'path':'/source/provider','operator':'eq','expected':'github'}]
+    spec['process_model_sha256']=digest(spec['process_model'])
+    spec['decision_table_contract']='openworkgraph.current-source-ordered-decision.v1'
+    bindings['decision_table_checks'][0].update(mode='first_route_before_each_action',row_precedence_reviewed=True)
+    return data
+
+
+def mixed_fixture():
+    data=first_fixture();spec,plan,case,bindings=data;raw=spec['process_model']
+    raw['activities'].append({'id':'choose_again','label':'Second current-source decision','kind':'decision'})
+    raw['transitions']=[e for e in raw['transitions'] if (e['source'],e['target'])!=('resolve','readback')]
+    raw['transitions'] += [{'source':'resolve','target':'choose_again'},
+        {'source':'choose_again','target':'readback','rule_id':'again_open'},
+        {'source':'choose_again','target':'hold','rule_id':'again_merged'}]
+    for rid,state in [('again_open','open'),('again_merged','merged')]:
+        raw['business_rules'].append({'id':rid,'text':'Second reviewed rule','user_confirmed':True,
+            'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':state}]}})
+    raw['decision_tables'].append({'id':'second_decision','decision_activity_id':'choose_again','hit_policy':'UNIQUE',
+        'effective_from':'2000-01-01','effective_until':'2100-01-01',
+        'source_basis':{'label':'Second declared source','document_sha256':'e'*64},
+        'rows':[{'id':'again_open_row','rule_id':'again_open','target_activity_id':'readback'},
+                {'id':'again_merged_row','rule_id':'again_merged','target_activity_id':'hold'}],
+        'user_confirmed':True})
+    spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+    spec['process_model_sha256']=digest(spec['process_model'])
+    plan['activity_ids'].insert(plan['activity_ids'].index('readback'),'choose_again')
+    bindings['decision_table_checks'].append({**fixture()[3]['decision_table_checks'][0],'table_id':'second_decision'})
+    return data
+
+
 def receipt(request,state='open',when=None):
     from process_source_state import state_receipt
     return state_receipt(request['resource_ref'],request['source_type'],
@@ -137,6 +172,53 @@ class DecisionContracts(unittest.TestCase):
         self.assertFalse(check_decision_receipt(data[0],request,receipt(request))['route_matches'])
 
 
+class FirstDecisionContracts(unittest.TestCase):
+    def request(self,data):return prepare(*data)['decision_tables'][0]
+    def test_declared_first_overlap_and_row_reordering_choose_different_targets(self):
+        data=first_fixture();request=self.request(data)
+        result=check_decision_receipt(data[0],request,receipt(request))
+        self.assertEqual(result['status'],'first_match');self.assertEqual(result['selected_row_id'],'row_open')
+        self.assertEqual(result['selected_target_activity_id'],'resolve');self.assertTrue(result['route_matches'])
+        self.assertFalse(result['policy_document_verified']);self.assertFalse(result['execution_authorized'])
+        data[0]['process_model']['decision_tables'][0]['rows'].reverse()
+        data[0]['process_model_sha256']=digest(data[0]['process_model'])
+        result=check_decision_receipt(data[0],request,receipt(request))
+        self.assertEqual(result['selected_row_id'],'row_merged');self.assertFalse(result['route_matches'])
+    def test_earlier_unknown_blocks_and_later_unknown_does_not_displace_a_hit(self):
+        for index,expected in [(0,'unknown'),(1,'first_match')]:
+            data=first_fixture();request=self.request(data)
+            data[0]['process_model']['business_rules'][index]['predicate']['conditions']=[
+                {'path':'/source/state','operator':'lt','expected':100}]
+            data[0]['process_model_sha256']=digest(data[0]['process_model'])
+            result=check_decision_receipt(data[0],request,receipt(request))
+            self.assertEqual(result['status'],expected);self.assertEqual(result['route_matches'],index==1)
+    def test_first_requires_distinct_contract_binding_and_reviewed_precedence(self):
+        for value in [False,None,1,'true']:
+            data=first_fixture();data[3]['decision_table_checks'][0]['row_precedence_reviewed']=value
+            with self.assertRaises(ImplementationError):prepare(*data)
+        data=first_fixture();data[3]['decision_table_checks'][0].pop('row_precedence_reviewed')
+        with self.assertRaises(ImplementationError):prepare(*data)
+        data=first_fixture();data[3]['decision_table_checks'][0]['mode']='unique_route_before_each_action'
+        with self.assertRaises(ImplementationError):prepare(*data)
+        data=first_fixture();data[0]['decision_table_contract']='openworkgraph.current-source-unique-decision.v1'
+        with self.assertRaises(ValueError):validate_spec(data[0])
+        data=fixture();data[3]['decision_table_checks'][0]['row_precedence_reviewed']=True
+        with self.assertRaises(ImplementationError):prepare(*data)
+    def test_caller_facts_and_unbound_paths_do_not_substitute_for_current_source(self):
+        data=first_fixture();data[3]['decision_table_checks'][0]['facts']={'source':{'state':'open'}}
+        with self.assertRaises(ImplementationError):prepare(*data)
+        data=first_fixture();data[0]['process_model']['business_rules'][1]['predicate']['conditions'][0]['path']='/case/fact'
+        data[0]['process_model_sha256']=digest(data[0]['process_model'])
+        with self.assertRaises(ImplementationError):prepare(*data)
+    def test_invalid_empty_receipt_never_selects_a_negated_first_default(self):
+        data=first_fixture();request=self.request(data)
+        data[0]['process_model']['business_rules'][0]['predicate']['conditions']=[
+            {'path':'/source/state','operator':'not_exists','expected':None}]
+        result=check_decision_receipt(data[0],request,None)
+        self.assertEqual(result['status'],'unknown');self.assertIsNone(result['selected_row_id'])
+        self.assertIsNone(result['selected_target_activity_id']);self.assertFalse(result['route_matches'])
+
+
 class DecisionExecution(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.data=fixture();self.tools=FakeTools();self.reads=[];self.state='open';self.mutation={}
@@ -226,6 +308,40 @@ class DecisionExecution(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.reads);self.assertFalse(self.tools.calls)
 
 
+class FirstDecisionExecution(DecisionExecution):
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self);self.data=first_fixture()
+    async def test_monitor_rejects_wrong_first_row_policy_or_status(self):
+        await self.run_case()
+        from monitor import report,read_journal
+        journal=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        for changes in [{'selected_row_id':'row_merged'},{'selected_target_activity_id':'hold'},
+                        {'hit_policy':'UNIQUE'},{'row_precedence':'inferred'}, {'status':'unique_match'},
+                        {'blocking_row_id':'row_merged'}]:
+            bad=deepcopy(journal);row=next(r for r in bad if r['phase']=='decision_table_checked');row.update(changes)
+            with self.assertRaises(ImplementationError):report(self.data[0],bad,'Synthetic FIRST tamper')
+
+
+class MixedDecisionExecution(unittest.IsolatedAsyncioTestCase):
+    source=DecisionExecution.source
+    outcomes=DecisionExecution.outcomes
+    run_case=DecisionExecution.run_case
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self);self.data=mixed_fixture()
+    async def test_both_policies_recheck_every_action_without_promoting_unique_bindings(self):
+        result=await self.run_case()
+        self.assertEqual(len(self.reads),10)
+        self.assertEqual({r['table_id'] for r in self.reads},{'source_decision','second_decision'})
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        from monitor import report,read_journal
+        journal=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        self.assertEqual(report(self.data[0],journal,'Synthetic mixed decisions')['runs'][0]['status'],'succeeded')
+        self.data[3]['decision_table_checks'][1]['mode']='first_route_before_each_action'
+        with self.assertRaises(ImplementationError):prepare(*self.data)
+        self.data[0]['decision_table_contract']='openworkgraph.current-source-unique-decision.v1'
+        with self.assertRaises(ValueError):validate_spec(self.data[0])
+
+
 # Source-aware planning still invokes the real SDK Runner with a local model.
 from test_agent_sdk import SDK_AVAILABLE
 
@@ -297,6 +413,11 @@ class DecisionPlanning(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(checked['cases'][0]['reason'],'unresolved_review_bypassed')
         changed=deepcopy(case);changed['untrusted_extra']=True
         with self.assertRaises(ImplementationError):context.check_tables([{'table_id':'source_decision','target_activity_ids':['resolve']}],spec,changed)
+
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for FIRST decision-aware SDK checks')
+class FirstDecisionPlanning(DecisionPlanning):
+    asyncSetUp=FirstDecisionExecution.asyncSetUp
 
 
 if __name__=='__main__':unittest.main()

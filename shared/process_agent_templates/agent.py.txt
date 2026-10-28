@@ -38,8 +38,11 @@ are limited current-source invariant checks, not business policy or permission.
 Only a matched check supports proposing that structured rule's transition;
 false, unknown, absent or unconfirmed conditions require clarification.
 When current_source_decision_checks is present, a table supports only its
-unique_match selected_target_activity_id. All competing rows use one current
-record snapshot and UTC effective dates. Other statuses require clarification.
+unique_match selected_target_activity_id for UNIQUE, or its first_match target
+for an explicitly declared FIRST policy. FIRST uses the earliest established
+match only when every earlier row is known not matched; later unknown/matching
+rows cannot change that hit. All competing rows use one current record snapshot
+and UTC effective dates. Other statuses require clarification.
 Table declarations and source-document hashes do not verify policy authority.
 If a branch depends on missing business facts or an unconfirmed rule, return
 needs_clarification with missing_business_inputs. Do not invent rule outcomes.

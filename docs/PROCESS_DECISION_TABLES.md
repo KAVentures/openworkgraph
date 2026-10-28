@@ -1,6 +1,6 @@
 # Reviewed decision tables
 
-A process designer can attach a bounded **UNIQUE** decision table to an existing
+A process designer can attach a bounded **UNIQUE** (default) or explicitly ordered **FIRST** decision table to an existing
 exclusive decision activity. Each row references the process's existing structured
 business rule and its outgoing target. This connects declared business choices to
 the graph without copying predicates or inventing conditions from observed paths.
@@ -13,7 +13,10 @@ It does not authorize automation or establish company policy.
    existing condition editor and confirm each rule after reviewing it.
 3. Choose the decision under **Decision tables**, then **Add decision table**.
    Rows are taken from its exact outgoing branches. After changing branches,
-   **Synchronize rows** explicitly rebuilds those references.
+   **Synchronize rows** explicitly rebuilds those references. For FIRST, surviving
+   row IDs and their declared order remain stable; newly added branches append last.
+   Select FIRST explicitly and use **Move up / Move down** to review precedence.
+   Policy changes and every move clear table confirmation and outer design review.
 4. Enter an effective start and optional exclusive end as `YYYY-MM-DD` calendar
    dates, plus a short source-document label and the reference document's SHA256.
    The reference document is not uploaded, fetched, retained or verified by OWG.
@@ -74,10 +77,11 @@ Each table returns one of:
 | `unconfirmed` | Table or referenced rules are not all confirmed; no rows evaluated |
 | `date_required` | No explicit case-check date; no wall-clock default |
 | `not_yet_effective` / `expired` | Outside the declared interval; no rows evaluated |
-| `overlap` | At least two rows match; row order does not break the tie |
-| `unknown` | Missing/incompatible facts leave a competing row undecidable |
+| `overlap` | UNIQUE: at least two rows match; row order does not break the tie |
+| `unknown` | UNIQUE has an undecidable competitor, or FIRST has an unresolved earlier row |
 | `gap` | Every row is known false; no implicit default branch |
-| `unique_match` | Exactly one match and all competing rows are known false |
+| `unique_match` | UNIQUE: exactly one match and all competing rows are known false |
+| `first_match` | FIRST: selected row matches and every earlier row is known false |
 | `not_on_proposed_route` / `not_evaluated_invalid_route` | Supplied route excludes the decision or does not fit the graph |
 
 Start is inclusive; end is exclusive. The date is caller-declared and not a
@@ -86,8 +90,8 @@ open interval, not a guarantee that the policy remains current. Repeated visits
 to the same decision in a proposed looping route are compared against the same
 case-fact snapshot; this does not model changing facts between visits.
 
-The report contains row/rule IDs and statuses, plus a target ID only on a unique
-match. It never echoes fact values or source-document metadata. A proposed
+The report contains row/rule IDs and statuses, plus a target ID on a unique
+match or established first match. It never echoes fact values or source-document metadata. A proposed
 branch can be compared with the match, but **no route is executed**. Boundary,
 overlap and gap tests describe only the supplied finite cases; they do not prove
 exhaustive coverage or absence of contradictions across the whole input domain.
@@ -158,8 +162,9 @@ one matching row alone cannot bypass an unsupported competing row.
 All rows of one table use **one receipt** for the customer's selected record.
 The consumer rechecks its exact identity, provider/kind, receipt scope and false
 authority flags, refresh request and freshness (at most120 seconds old, at most5
-seconds ahead). It evaluates all rows with UNIQUE semantics; false/unknown,
-missing, stale, overlapping or uncovered states cannot support a route. Even
+seconds ahead). It evaluates all rows with the declared UNIQUE or FIRST semantics.
+Missing or stale receipts, UNIQUE unknowns or overlaps, unresolved FIRST prefixes,
+and uncovered states cannot support a route. Even
 negated-existence predicates cannot turn an unavailable receipt into a match.
 Dates are checked against the consumer's current **UTC calendar date**, after
 the read returns, with inclusive start and exclusive end. No case-supplied date
@@ -219,7 +224,7 @@ real-provider/customer acceptance and competitor parity remain open.
 [Camunda's hit-policy guide](https://docs.camunda.io/docs/components/best-practices/modeling/choosing-the-dmn-hit-policy/)
 was retrieved successfully on 26 October and rechecked on 27 October 2026. It distinguishes UNIQUE (no
 overlapping matching rows) from FIRST (row-order precedence), ANY and collective
-policies. OWG deliberately supports one explicit policy using its existing typed
+policies. OWG supports bounded UNIQUE and FIRST policies using its existing typed
 predicates, and does not claim compatibility with a complete DMN/FEEL engine.
 The broader primary-source competitor comparison remains in issue #370 and
 `COMPETITOR_GAP_ASSESSMENT_2026_10.md`.
@@ -243,3 +248,66 @@ state changes after a write precondition, completion drift, minimized journals,
 real SDK planning and independent source-backed shadow comparison. The actual
 MCP transport acceptance in `test_process_customer_runtime.py` includes reviewed
 shared decision tables with linear, parallel and nested parallel schedules.
+
+## Ordered FIRST decisions
+
+FIRST selects the first matching row in the explicitly declared row order. OWG
+withholds selection when an earlier row is unknown: that row might still win.
+Later unknowns or matches cannot displace an established first hit. For example:
+
+| Ordered row states | FIRST result | UNIQUE result |
+| --- | --- | --- |
+| match, match | first row | overlap, no selection |
+| unknown, match | unknown, no selection | unknown, no selection |
+| match, unknown | first row | unknown, no selection |
+| false, match | second row | second row |
+| false, false | gap, no selection | gap, no selection |
+
+FIRST reports `first_match`, the selected row ID and target, or an unknown
+prefix's blocking row ID. Reports retain codes/IDs, never input facts. Dates,
+confirmation, exact outgoing-branch coverage and all existing size bounds still
+apply. There is no implicit default, truth coercion, or inferred business rule.
+Reordering rows or changing policy changes the exact model/revision digest and
+requires a new independent shared-design review. Imported BPMN retains the
+ordered declaration but clears confirmation; this is an OWG BPMN extension, not
+DMN XML interchange or a BPMN execution engine.
+
+Generated projects containing FIRST use the distinct contract
+`openworkgraph.current-source-ordered-decision.v1`. All-UNIQUE projects keep the
+existing `openworkgraph.current-source-unique-decision.v1` contract and binding
+shape. Every FIRST runtime binding explicitly requires
+`mode: first_route_before_each_action` and `row_precedence_reviewed: true`, as
+well as the existing record-semantics, non-atomic-read and UTC-date reviews.
+Example bindings set precedence review false and project execution disabled.
+An old UNIQUE binding cannot silently become FIRST. Mixed-policy projects use
+the ordered contract with policy-specific bindings for each table.
+
+Runtime checks use one current, customer-selected observed source record for all
+rows, with the same restricted source paths, permissions, receipt freshness,
+pre-action rechecks and completion-drift checks. Caller-supplied case facts do
+not substitute for that source. Current receipts do not independently establish
+business-policy authority or association of the selected record with a case.
+A first match neither grants a tool nor proves an operation's outcome. Invalid
+or empty receipts cannot establish a negated/default match. Journals record
+policy and row IDs, without private source values; monitoring rejects
+contradictory FIRST row/target/policy metadata.
+
+Public reference: [OMG DMN 1.4](https://www.omg.org/spec/DMN/1.4/PDF), formal/23-03-01,
+April 2023, printed pages 68–69: FIRST returns the first matching rule in rule
+order. Reviewed 28 October 2026; downloaded PDF SHA256
+`59137e89fd81e193b03b016bb53c525ceebfda2d2dbceb2cf15147d3da114e6a`.
+OWG's earlier-unknown refusal is an explicit conservative partial-fact behavior.
+ANY, PRIORITY, COLLECT, multi-output rules, reusable decision dependencies,
+FEEL, complete DMN import/export and exhaustive domain coverage remain outside
+this implementation. No proprietary implementation or interface assets are used.
+
+`test_first_decision_policy.py` checks all 6,561 eight-row three-state vectors
+against an independent prefix oracle, plus dates, review/CAS/role invalidation,
+HTTP consent/isolation, minimized exports and BPMN round trips. Portable-project
+tests run FIRST and UNIQUE with actual offline SDK planning, customer-authorized
+synthetic execution, receipt/expiry/drift guards and tampered-journal checks.
+`first_decision_policy_local.cjs` covers explicit selection, overlap, keyboard
+ordering, stable resynchronization, unknown-prefix changes, held reports and
+WCAG/mobile. The shared browser runs with `OWG_TEST_FIRST_POLICY=1` to cover the
+same shared review, tenant, export and identity boundaries as UNIQUE. These
+synthetic results certify no customer's policy or deployment.

@@ -95,7 +95,7 @@ def test_open_end_unconfirmed_table_and_rules_are_not_implicit_authority():
 
 
 @pytest.mark.parametrize('change',[
-    lambda g:g['decision_tables'][0].update(hit_policy='FIRST'),
+    lambda g:g['decision_tables'][0].update(hit_policy='COLLECT'),
     lambda g:g['decision_tables'][0].update(effective_from='2026-02-30'),
     lambda g:g['decision_tables'][0].update(effective_from='2026-1-1'),
     lambda g:g['decision_tables'][0].update(effective_until='2026-01-01'),
@@ -175,7 +175,7 @@ def test_bpmn_duplicate_corrupt_missing_flow_or_wrong_node_documents_fail_closed
     doc=next(d for d in node if (d.text or '').startswith('OWG decision table'))
     original=doc.text
     for text in [original.replace('Flow_1','Flow_999'),original.replace('Activity_choose','Activity_accept'),
-                 original.replace('"UNIQUE"','"FIRST"'),original.replace('"hit_policy":','"hit_policy":"UNIQUE","hit_policy":')]:
+                 original.replace('"UNIQUE"','"COLLECT"'),original.replace('"hit_policy":','"hit_policy":"UNIQUE","hit_policy":')]:
         doc.text=text
         with pytest.raises(BPMNImportError):import_bpmn(ET.tostring(root))
     doc.text=original;node.append(deepcopy(doc))

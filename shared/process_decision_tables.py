@@ -1,4 +1,4 @@
-"""Bounded UNIQUE decision declarations. No FEEL, source access or execution."""
+"""Bounded UNIQUE/ordered FIRST declarations. No FEEL, source access or execution."""
 from datetime import date
 import re
 from typing import Annotated, Literal
@@ -6,6 +6,12 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 ID = Annotated[str, Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')]
+UNIQUE_RUNTIME_CONTRACT='openworkgraph.current-source-unique-decision.v1'
+ORDERED_RUNTIME_CONTRACT='openworkgraph.current-source-ordered-decision.v1'
+
+
+def runtime_contract(model):
+    return ORDERED_RUNTIME_CONTRACT if any(t.hit_policy=='FIRST' for t in model.decision_tables) else UNIQUE_RUNTIME_CONTRACT
 
 
 def validate_date(value):
@@ -42,7 +48,7 @@ class DecisionRow(Declaration):
 class DecisionTable(Declaration):
     id: ID
     decision_activity_id: ID
-    hit_policy: Literal['UNIQUE'] = 'UNIQUE'
+    hit_policy: Literal['UNIQUE','FIRST'] = 'UNIQUE'
     effective_from: str
     effective_until: str | None = None
     source_basis: SourceBasis
@@ -85,12 +91,14 @@ def validate_tables(model):
 
 
 def evaluate_table(table, rules, facts, as_of_date=None):
-    """Return codes/IDs only. UNKNOWN competes with a match; no implicit default."""
+    """Return codes/IDs only; UNKNOWN withholds UNIQUE or an unresolved FIRST prefix."""
     from .process_rule_conditions import evaluate_predicate, validate_facts
     validate_facts(facts)
     result = {'table_id': table.id, 'status': 'unconfirmed', 'selected_target_activity_id': None,
-              'rows': [], 'hit_policy': 'UNIQUE', 'facts_authoritativeness_verified': False,
+              'rows': [], 'hit_policy': table.hit_policy, 'facts_authoritativeness_verified': False,
               'business_policy_compliance_verified': False, 'execution_authorized': False}
+    if table.hit_policy=='FIRST':
+        result.update(selected_row_id=None,blocking_row_id=None,row_precedence='declared_row_order')
     if not table.user_confirmed or any(not rules[r.rule_id].user_confirmed for r in table.rows):
         return result
     if as_of_date is None:
@@ -109,6 +117,19 @@ def evaluate_table(table, rules, facts, as_of_date=None):
         status = evaluate_predicate(rule.predicate, facts)['status'] if rule.predicate is not None else 'unknown'
         states.append(status)
         result['rows'].append({'row_id': row.id, 'rule_id': row.rule_id, 'status': status})
+    if table.hit_policy=='FIRST':
+        # Unknown earlier rows can still win; later unknowns cannot displace an
+        # established first hit. Evaluate all rows for bounded diagnostic codes,
+        # while only the ordered prefix determines the selected route.
+        result['status']='gap'
+        for row,state in zip(table.rows,states):
+            if state=='not_matched':continue
+            if state=='matched':
+                result.update(status='first_match',selected_row_id=row.id,
+                              selected_target_activity_id=row.target_activity_id)
+            else:result.update(status='unknown',blocking_row_id=row.id)
+            break
+        return result
     matches = states.count('matched')
     status = ('overlap' if matches > 1 else 'unknown' if 'unknown' in states
               else 'unique_match' if matches == 1 else 'gap')

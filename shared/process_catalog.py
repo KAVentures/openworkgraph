@@ -183,9 +183,11 @@ def process_document(packet: dict[str, Any]) -> str:
             rule.id+': '+json.dumps(rule.predicate.model_dump(),sort_keys=True,ensure_ascii=True,allow_nan=False)
             for rule in model.business_rules if rule.predicate is not None]
     if model.decision_tables:
-        lines+=['','Declared UNIQUE decision tables (not DMN, policy certification or execution authority):',
+        ordered=any(t.hit_policy=='FIRST' for t in model.decision_tables)
+        lines+=['','Declared '+('UNIQUE/FIRST' if ordered else 'UNIQUE')+' decision tables (not DMN, policy certification or execution authority):',
                 'Inclusive effective start; exclusive end. A supplied-case match is not exhaustive coverage.',
-                'Agent projects require separately reviewed current-source UNIQUE bindings and UTC effective dates.']+[
+                ('FIRST uses declared row order; an unresolved earlier row withholds later matches. Agent projects require separate reviewed FIRST precedence and current-source bindings.' if ordered else
+                 'Agent projects require separately reviewed current-source UNIQUE bindings and UTC effective dates.')]+[
             json.dumps(table.model_dump(mode='json'),sort_keys=True,ensure_ascii=True,allow_nan=False)
             for table in model.decision_tables]
     lines += ['', 'Unverified manual review conditions (not evaluated or executable):'] + [

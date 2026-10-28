@@ -13,10 +13,14 @@ def load_spec():
 def validate_spec(spec):
     tables = spec['process_model'].get('decision_tables')
     if tables:
-        if spec.get('decision_table_contract') != 'openworkgraph.current-source-unique-decision.v1':
-            raise ValueError('Decision tables require the exported current-source UNIQUE contract')
+        if spec.get('decision_table_contract') not in {'openworkgraph.current-source-unique-decision.v1','openworkgraph.current-source-ordered-decision.v1'}:
+            raise ValueError('Decision tables require the exported current-source UNIQUE contract or ordered FIRST contract')
         from owg_model.process_model import ProcessModel
-        ProcessModel.model_validate(spec['process_model'])
+        from owg_model.process_decision_tables import runtime_contract
+        model=ProcessModel.model_validate(spec['process_model'])
+        if spec.get('decision_table_contract') != runtime_contract(model):
+            kind='ordered FIRST' if any(t.hit_policy=='FIRST' for t in model.decision_tables) else 'UNIQUE'
+            raise ValueError('Decision tables require the exported current-source '+kind+' contract')
     parallel = any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities'])
     if parallel:
         if (spec.get('control_flow_contract') != 'openworkgraph.parallel-node-firing-plan.v1'

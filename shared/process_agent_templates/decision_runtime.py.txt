@@ -1,4 +1,4 @@
-"""Current-record UNIQUE route invariants. No caller facts, tool access or grants."""
+"""Current-record declared route invariants. No caller facts, tool access or grants."""
 from datetime import datetime, timezone
 
 from execute import ImplementationError, pointer
@@ -18,15 +18,20 @@ def decision_bindings(spec, routes, case, bindings):
     keys={'table_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed',
           'non_atomic_reads_reviewed','utc_effective_dates_reviewed'}
     for row in rows:
-        if (not isinstance(row,dict) or set(row)!=keys or not isinstance(row.get('table_id'),str)
-            or row['table_id'] not in tables or row['table_id'] in mapped
-            or row.get('mode')!='unique_route_before_each_action'
+        if (not isinstance(row,dict) or not isinstance(row.get('table_id'),str)
+            or row['table_id'] not in tables or row['table_id'] in mapped):
+            raise ImplementationError('Each table needs an exact reviewed current-source route binding')
+        table=tables[row['table_id']]
+        first=table.hit_policy=='FIRST'
+        expected=keys|({'row_precedence_reviewed'} if first else set())
+        mode='first_route_before_each_action' if first else 'unique_route_before_each_action'
+        if (set(row)!=expected or row.get('mode')!=mode
             or row.get('record_semantics_reviewed') is not True
             or row.get('non_atomic_reads_reviewed') is not True
             or row.get('utc_effective_dates_reviewed') is not True
+            or first and row.get('row_precedence_reviewed') is not True
             or not isinstance(row.get('source_type'),str) or row['source_type'] not in SOURCE_TYPES):
-            raise ImplementationError('Each table needs an exact reviewed current-source UNIQUE route binding')
-        table=tables[row['table_id']]
+            raise ImplementationError('Each table needs its exact reviewed current-source '+('FIRST precedence' if first else 'UNIQUE')+' route binding')
         if not table.user_confirmed or any(not rules[r.rule_id].user_confirmed for r in table.rows):
             raise ImplementationError('Confirm the table and every competing row before source binding')
         if any(c.path not in SOURCE_PATHS for r in table.rows for c in rules[r.rule_id].predicate.conditions):
@@ -55,12 +60,15 @@ def check_decision_receipt(spec, request, receipt, *, now=None):
     facts=facts_from_receipt(receipt,request['resource_ref'],request['source_type'],now=current)
     result=evaluate_table(table,{r.id:r for r in model.business_rules},facts,current.date().isoformat())
     # Empty/invalid receipt cannot establish an existence predicate's negation.
-    if not facts and result['status'] in {'unique_match','gap','overlap'}:
+    if not facts and result['status'] in {'unique_match','first_match','gap','overlap'}:
         result['status']='unknown';result['selected_target_activity_id']=None
+        if table.hit_policy=='FIRST':result.update(selected_row_id=None,blocking_row_id=None)
     target=result['selected_target_activity_id']
     return {'table_id':table.id,'status':result['status'], 'checked_on_utc':current.date().isoformat(),
         'selected_target_activity_id':target,
         'route_matches':bool(target is not None and request['target_activity_ids']
                              and all(t==target for t in request['target_activity_ids'])),
         'record_association':'customer_selected_not_independently_established',
-        'policy_document_verified':False,'execution_authorized':False}
+        'policy_document_verified':False,'execution_authorized':False,
+        **({'hit_policy':'FIRST','selected_row_id':result['selected_row_id'],
+            'blocking_row_id':result['blocking_row_id'],'row_precedence':'declared_row_order'} if table.hit_policy=='FIRST' else {})}

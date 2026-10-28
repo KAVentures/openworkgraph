@@ -523,7 +523,9 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 record('decision_table_checked',**summary)
                 passed=passed and summary['route_matches']
             ensure_current(intent,now)
-            if not passed:raise ImplementationError('Current UNIQUE decision route or effective date not established')
+            if not passed:
+                policy='ordered FIRST' if any(t.get('hit_policy')=='FIRST' for t in spec['process_model'].get('decision_tables',[])) else 'UNIQUE'
+                raise ImplementationError('Current '+policy+' decision route or effective date not established')
 
         async def check_source_rules():
             # Deliberately do not reuse dashboard reports, caller facts or a
