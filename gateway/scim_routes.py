@@ -8,11 +8,11 @@ from fastapi.routing import APIRoute
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import scim_provisioning as scim
+from . import scim_provisioning as scim, scim_bulk as bulk
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
-MAX_BODY = 65536
+MAX_BODY = bulk.MAX_PAYLOAD
 SPC = 'urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig'
 SCHEMA_URI = 'urn:ietf:params:scim:schemas:core:2.0:Schema'
 RESOURCE_TYPE = 'urn:ietf:params:scim:schemas:core:2.0:ResourceType'
@@ -163,7 +163,7 @@ def build_router(service, require_admin, base_url):
     def configuration(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response({'schemas': [SPC], 'patch': {'supported': True},
-            'bulk': {'supported': False, 'maxOperations': 0, 'maxPayloadSize': 0},
+            'bulk': {'supported': True, 'maxOperations': bulk.MAX_OPERATIONS, 'maxPayloadSize': MAX_BODY},
             'filter': {'supported': True, 'maxResults': 200}, 'sort': {'supported': False},
             'changePassword': {'supported': False}, 'etag': {'supported': True},
             'authenticationSchemes': [{'type': 'oauthbearertoken', 'name': 'Provider-scoped bearer',
@@ -244,6 +244,13 @@ def build_router(service, require_admin, base_url):
             raise scim.Error(400, 'Unsupported query option', 'invalidValue')
         service.delete_user(provider_id, _bearer(request), user_id, request.headers.get('if-match'))
         return Response(status_code=204, headers={'Cache-Control': 'no-store'})
+
+    @router.post('/scim/v2/{provider_id}/Bulk')
+    async def bulk_users(provider_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        result = await run_in_threadpool(bulk.execute, service, provider_id, token, body, url(request, provider_id))
+        return _response(result)
 
     @router.api_route('/scim/v2/{provider_id}/{unsupported:path}', methods=['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
     def unsupported(provider_id: str, unsupported: str, request: Request):

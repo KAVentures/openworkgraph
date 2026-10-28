@@ -34,3 +34,5 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/first_decision_policy_local.cjs
       - name: Verify shared FIRST editing, review, tenant isolation and guarded exports
         run: OWG_TEST_FIRST_POLICY=1 NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_tables.cjs
+      - name: Verify bounded SCIM bulk lifecycle and guarded admin sessions
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
