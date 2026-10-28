@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, Valid
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
 from . import event_log_workspace as workspace
+from . import event_log_signal_inbox as signal_inbox
 
 MAX_RULES = 50
 MAX_EVIDENCE_CASES = 50
@@ -222,6 +223,7 @@ def evaluate(log_id: str) -> dict[str, Any]:
             rows = conn.execute("SELECT rule_id, created_at, definition, last_state FROM signal_rules "
                                 "WHERE log_id = ? ORDER BY created_at, rule_id", [log_id]).fetchall()
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            log_basis = signal_inbox.log_basis(conn, log_id)
             signals = []
             for rule_id, created, definition, last_state in rows:
                 rule = SignalRule.model_validate_json(definition)
@@ -258,6 +260,9 @@ def evaluate(log_id: str) -> dict[str, Any]:
                                   new_cases_comparison=comparison,
                                   as_of=as_of.isoformat() + "Z" if as_of else None)
                     state = {"triggered": triggered, "case_ids": ids, "matching_cases": total}
+                # Preserve exact source revision so unchanged metrics after an
+                # append still require explicit reevaluation and fresh review.
+                state["log_basis"] = log_basis
                 # A new state is a new review event even if it later cycles
                 # back to an old value. Do not resurrect an obsolete approval.
                 if previous is None or previous != state:
