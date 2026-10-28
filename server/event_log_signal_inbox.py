@@ -129,17 +129,27 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
                         not current["triggered"]):
                     raise workspace.EventLogWorkspaceError(
                         "signal is stale or not triggered; evaluate and review again")
+                existing = conn.execute(
+                    "SELECT state_fingerprint,acknowledged_at FROM signal_reviews WHERE log_id=? AND rule_id=?",
+                    [log_id, rule_id]).fetchone()
+                if acknowledge and existing and existing[0] == current["state_fingerprint"]:
+                    # Retrying an acknowledgement must not forge a new review
+                    # time, or silently change the human's original decision.
+                    conn.execute("COMMIT")
+                    return _state(log_id, rule_id, raw["name"], when, state,
+                                  existing, basis=basis)
                 conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?",
                              [log_id, rule_id])
+                record = None
                 if acknowledge:
                     now = datetime.now(timezone.utc).replace(tzinfo=None)
                     conn.execute("""INSERT INTO signal_reviews
                         (log_id,rule_id,state_fingerprint,acknowledged_at)
                         VALUES (?,?,?,?)""", [log_id, rule_id, current["state_fingerprint"], now])
+                    record = (current["state_fingerprint"], now)
                 conn.execute("COMMIT")
-                return _state(log_id, rule_id, raw["name"], when, state,
-                    (current["state_fingerprint"], now) if acknowledge else None,
-                    basis=basis)
+                return _state(log_id, rule_id, raw["name"], when, state, record,
+                              basis=basis)
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
