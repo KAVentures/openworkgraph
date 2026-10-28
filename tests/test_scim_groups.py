@@ -3,6 +3,7 @@ import pytest
 
 from gateway import scim_groups as groups, scim_provisioning as scim, employees as roster
 from test_scim_routes import http, user
+from test_process_collaboration import store  # shared SQLite/PostgreSQL fixture used by http
 
 
 def group(**values):
