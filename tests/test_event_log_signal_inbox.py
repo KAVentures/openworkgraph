@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
@@ -12,7 +13,7 @@ import pytest
 from server import event_log_signal_inbox as inbox
 from server import event_log_signals as signals
 from server import event_log_workspace as workspace
-from test_event_log_signals import _log, _rule
+from test_event_log_signals import _log, _rule, _csv, CASES
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,6 +89,34 @@ def test_new_result_invalidates_old_review_and_rule_deletion_erases_it():
         assert conn.execute("SELECT count(*) FROM signal_reviews").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_append_of_identical_data_invalidates_old_evaluation_and_acknowledgement():
+    log = _log()
+    rule = signals.add_rule(log, _rule("Nonempty", kind="kpi",
+        metric="case_count", operator="above", threshold=0))
+    rid = rule["rule_id"]
+    signals.evaluate(log)
+    before = inbox.list_inbox(log)["items"][0]
+    assert before["status"] == "unreviewed"
+    inbox.review(log, rid, {"state_fingerprint": before["state_fingerprint"]}, acknowledge=True)
+    # Even a fully duplicate data export is a new import generation. The
+    # measured KPI may remain unchanged, but its freshness proof has changed.
+    second = workspace.append_log(log, BytesIO(_csv(CASES)), source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time", "resource_column": "who"})
+    assert second["added_events"] == 0
+    stale = inbox.list_inbox(log)["items"][0]
+    assert stale["status"] == "stale" and stale["state_fingerprint"] is None
+    assert stale["acknowledged_at"] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match="stale"):
+        inbox.review(log, rid, {"state_fingerprint": before["state_fingerprint"]}, acknowledge=True)
+    signals.evaluate(log)
+    fresh = inbox.list_inbox(log)["items"][0]
+    assert fresh["status"] == "unreviewed"
+    assert fresh["state_fingerprint"] != before["state_fingerprint"]
+    assert not fresh["acknowledged_at"]
+
 
 
 def test_clear_then_retrigger_requires_another_review():
