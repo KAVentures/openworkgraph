@@ -91,7 +91,7 @@ def test_unsupported_protocol_options_are_explicit_and_body_is_bounded(http):
     for params in [{'sortBy':'userName'},{'attributes':'userName'},{'count':'not-a-number'},{'count':201},{'startIndex':0}]:
         r=client.get(base+'/Users',headers=h,params=params)
         assert r.status_code==400 and r.json()['schemas']==[scim.ERROR],r.text
-    assert client.get(base+'/Groups',headers=h).status_code==404
+    assert client.get(base+'/Groups',headers=h).json()['totalResults']==0
     assert client.post(base+'/Bulk',headers=h,json={}).status_code==400
     assert client.post(base+'/Users',headers=h,content=b'x'*65537).status_code==413
     assert client.post(base+'/Users',headers={**h,'Content-Type':'text/plain'},content=b'{}').status_code==415
