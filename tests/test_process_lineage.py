@@ -70,8 +70,7 @@ def test_lineage_is_pinned_to_current_revision_and_does_not_expose_archived_auth
     current = lineage.detail(person(), wid)
     assert current["process"]["current"]
     store.archive(person(), wid, ProcessArchiveWrite(
-        expected_revision=root["revision"], expected_access_revision=2,
-        archived=True, user_confirmed=True))
+        expected_access_revision=2, archived=True, user_confirmed=True))
     archived = lineage.detail(person(), wid)
     assert archived["process"]["state"] == "archived"
     assert not archived["process"]["current"]
