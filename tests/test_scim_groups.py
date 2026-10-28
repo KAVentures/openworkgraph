@@ -118,8 +118,10 @@ def test_cross_provider_invalid_members_duplicate_and_stale_versions(http):
 def test_member_add_and_selected_remove_do_not_clobber_other_members(http):
     client, db, owner, h, base, pid = http
     first = client.post(base + "/Users", headers=h, json=user()).json()["id"]
-    second = client.post(base + "/Users", headers=h, json=user(userName="second@acme.test",
-        externalId="second")).json()["id"]
+    second_payload = {**user(), "userName": "second@acme.test", "externalId": "second"}
+    second_response = client.post(base + "/Users", headers=h, json=second_payload)
+    assert second_response.status_code == 201, second_response.text
+    second = second_response.json()["id"]
     created = client.post(base + "/Groups", headers=h, json=group(members=[{"value": first}]))
     assert created.status_code == 201, created.text
     loc, etag = created.headers["location"], created.headers["etag"]
