@@ -78,13 +78,30 @@ def _partial_marker_only(target, profile_id):
     return size < len(expected) and expected.startswith(marker.read_bytes())
 
 
+def _erase_owned(target):
+    marker = target / _MARKER
+    with os.scandir(target) as entries:
+        children = [Path(entry.path) for entry in entries if Path(entry.path) != marker]
+    for child in children:
+        if _redirected(child):
+            raise JiraIngestionError('jira_staging_path_unavailable')
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    # Keep proof of ownership while any projected file can still fail removal.
+    # A transient lock must not turn a retry into an unknown-owner directory.
+    marker.unlink()
+    target.rmdir()
+
+
 def clear(data_dir, profile_id):
     try:
         _parent, target = _directory(data_dir, profile_id)
         if not target.exists():
             return
         if _owned(target, profile_id):
-            shutil.rmtree(target)
+            _erase_owned(target)
         else:
             if _partial_marker_only(target, profile_id):
                 (target / _MARKER).unlink()

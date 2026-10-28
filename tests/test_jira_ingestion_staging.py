@@ -175,3 +175,20 @@ with TestClient(app) as client:
         'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'http-auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'http-config.json')}
     result=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+'\n'+result.stderr
+
+
+def test_locked_projected_file_keeps_ownership_so_cleanup_can_be_retried(monkeypatch):
+    import os
+    identifier=create();made=run(identifier,Provider());root=simulate_owned_spool(identifier)
+    marker=root/'.owg-owned-jira-staging';original_marker=marker.read_bytes();unlink=os.unlink
+    def locked(path,*args,**kwargs):
+        if Path(path).name=='upload':raise PermissionError('OWNED_SIMULATED_FILE_LOCK')
+        return unlink(path,*args,**kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(os,'unlink',locked)
+        with pytest.raises(workspace.EventLogWorkspaceError,match='event log was not deleted'):
+            workspace.delete_log(made['log_id'])
+    assert marker.read_bytes()==original_marker and (root/'owg-eventlog-owned/upload').exists()
+    assert workspace.list_logs()['logs'][0]['events']==4
+    workspace.delete_log(made['log_id'])
+    assert not root.exists() and workspace.list_logs()['logs']==[]
