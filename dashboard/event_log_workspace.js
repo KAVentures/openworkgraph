@@ -2291,9 +2291,41 @@
     const rules=el('div');rules.id='owgSignalRules';
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgSignalResults';
-    box.append(row,message,rules,evaluate,out);
+    const reviewHeading=el('h4','Review evaluated signals');
+    const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
+    const inbox=el('div');inbox.id='owgSignalInbox';
+    const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
+    box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
+    const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signal-inbox';
     const generation=state.generation;
+    async function refreshInbox(){
+      const r=await getJSON(inboxBase());if(generation!==state.generation)return;
+      const rows=(r.items||[]).map(item=>{
+        const action=el('div');
+        if(item.state_fingerprint&&item.triggered===true){
+          const acknowledged=item.status==='acknowledged';
+          const click=button(acknowledged?'Reopen':'Acknowledge','secondary');
+          click.setAttribute('aria-label',(acknowledged?'Reopen':'Acknowledge')+' signal '+item.name);
+          click.onclick=async()=>{
+            click.disabled=true;
+            try{
+              await api(inboxBase()+'/'+encodeURIComponent(item.rule_id)+'/'+(acknowledged?'reopen':'acknowledge'),{
+                method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_fingerprint:item.state_fingerprint})});
+              message.textContent=acknowledged?'Signal reopened.':'Signal acknowledged locally.';
+            }catch(error){message.textContent=error.message;}
+            finally{await refreshInbox().catch(error=>{message.textContent=error.message;});}
+          };
+          action.appendChild(click);
+        }
+        return [item.name,item.status.replace(/_/g,' '),item.evaluated_at||'not checked',
+          item.acknowledged_at||'—',action];
+      });
+      inbox.replaceChildren(
+        el('div',r.unreviewed+' signals currently require review. No automatic actions or delivery.','muted'),
+        rows.length?table(['Signal','Review status','Evaluated','Acknowledged',''],rows):el('div','No saved signals to review.','muted'));
+    }
+    reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
       rules.replaceChildren(r.rules.length?table(['Signal','Rule',''],r.rules.map(rule=>{
@@ -2302,6 +2334,7 @@
         const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold:w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
         return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
       evaluate.disabled=!r.rules.length;
+      await refreshInbox();
     }
     add.onclick=async()=>{
       try{
