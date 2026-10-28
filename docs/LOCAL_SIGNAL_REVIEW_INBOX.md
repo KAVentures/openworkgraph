@@ -17,6 +17,9 @@ or modify an alert rule.
   unchanged evaluations do not erase an acknowledgment.
 - POST to the same route ending /reopen with the same payload removes the
   acknowledgment, returning the current rule to unreviewed.
+- Any event-log append (including a duplicate-only replay) makes the prior
+  evaluation stale. The inbox then withholds its fingerprint and refuses new
+  acknowledgements until a user explicitly reevaluates the rule.
 - The review expires when the next evaluated state changes. Clearing a signal
   removes its review, so a later recurrence needs new acknowledgment even if
   the triggering state is identical.
