@@ -401,7 +401,7 @@ async def event_log_compliance(request: Request, log_id: str):
 @router.post("/v1/event-logs/{log_id}/object-constraints")
 async def event_log_object_constraints(request: Request, log_id: str):
     _require_dashboard(request)
-    spec = await _json_body(request, "object rules")
+    spec = await _json_body(request, "object rules", strict=True)
     try:
         result = await run_in_threadpool(object_constraints.check, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:

@@ -26,3 +26,7 @@ jobs:
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Verify explorer WCAG 2.1 AA and keyboard-only use
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/explorer_accessibility.cjs
+      - name: Verify supplied OCEL relationship inspection and interchange
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_object_relationships.cjs
+      - name: Verify supplied graph constraints, empty graphs and guarded exports
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/supplied_object_constraints.cjs

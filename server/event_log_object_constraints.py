@@ -11,6 +11,9 @@ types relate, without flattening the log onto one case notion:
 - ``synchronization``: every event of activity A linked to an object of type T comes after an event of
   activity B for each object of type U related to that object ("an order ships only after every one of
   its items is picked").
+- ``supplied_object_cardinality``: distinct direct neighbors in explicitly supplied OCEL assertions,
+  with direction and optional literal qualifier; includes zero-event objects and self-assertions.
+  This static graph-shape check does not infer temporal synchronization or verified business facts.
 
 Events are ordered by time, then event ID, the same tie-break as the rest of the workspace. A rule whose
 trigger never occurs is satisfied vacuously and counted separately; a synchronization with no related
@@ -22,10 +25,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+import duckdb
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
+from shared.event_log_formats import _exact_key,EventLogFormatError
 
 from . import event_log_workspace as workspace
 from .event_log_analytics import _wilson
+from . import event_log_object_relationships as supplied_relationships
 
 MAX_RULES = 20
 MAX_EXAMPLES = 50
@@ -63,7 +69,30 @@ class Synchronization(_Strict):
     required_activity: Label
 
 
-Rule = Annotated[Union[EventCardinality, ObjectCardinality, Synchronization], Field(discriminator="template")]
+class SuppliedObjectCardinality(_Strict):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    template:Literal['supplied_object_cardinality']
+    object_type:Label
+    related_type:Label
+    direction:Literal['outgoing','incoming','both']='outgoing'
+    qualifier:str|None=Field(default=None,max_length=80)
+    min:Count=0
+    max:Count|None=None
+
+    @field_validator('object_type','related_type')
+    @classmethod
+    def literal_types(cls,value):
+        if not _exact_key(value):raise ValueError('A literal object type is required')
+        return value
+
+    @field_validator('qualifier')
+    @classmethod
+    def literal_qualifier(cls,value):
+        if value is not None:_exact_key(value,80)
+        return value
+
+
+Rule = Annotated[Union[EventCardinality, ObjectCardinality, Synchronization, SuppliedObjectCardinality], Field(discriminator="template")]
 
 
 class RuleSet(_Strict):
@@ -78,7 +107,7 @@ def parse(spec: Any) -> RuleSet:
         raise workspace.EventLogWorkspaceError(
             "object rules are invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     for rule in parsed.rules:
-        if isinstance(rule, (EventCardinality, ObjectCardinality)):
+        if isinstance(rule, (EventCardinality, ObjectCardinality, SuppliedObjectCardinality)):
             if rule.max is not None and rule.max < rule.min:
                 raise workspace.EventLogWorkspaceError("a rule's max must not be below its min")
             if rule.min == 0 and rule.max is None:
@@ -96,6 +125,12 @@ def _bounds(rule) -> str:
 
 
 def describe(rule) -> str:
+    if isinstance(rule, SuppliedObjectCardinality):
+        qualifier=(' with exact qualifier '+repr(rule.qualifier)) if rule.qualifier is not None else ' across all qualifiers'
+        focus=repr(rule.object_type) if rule.object_type.strip()!=rule.object_type else rule.object_type
+        related=repr(rule.related_type) if rule.related_type.strip()!=rule.related_type else rule.related_type
+        return (f'every {focus} has {_bounds(rule)} distinct {related} neighbors '
+                f'in {rule.direction} supplied assertions{qualifier}')
     if isinstance(rule, EventCardinality):
         return f"every {rule.activity} event is linked to {_bounds(rule)} {rule.object_type} objects"
     if isinstance(rule, ObjectCardinality):
@@ -145,11 +180,37 @@ def _object_cardinality(conn, log_id: str, rule: ObjectCardinality) -> bool:
     if not _pairs_within_budget(conn):
         return False
     _relations(conn)
+    _cardinality_counts(conn,log_id,rule)
+    return True
+
+
+def _cardinality_counts(conn,log_id,rule):
     conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT o.object_id AS unit, TRUE AS activated,
           n < ? OR n > coalesce(?, 9223372036854775807) AS violated, CAST(n AS VARCHAR) || ' related' AS detail
         FROM (SELECT o.object_id, count(r.related_id) AS n FROM objects o
               LEFT JOIN rel r ON r.object_id = o.object_id
               WHERE o.log_id = ? AND o.object_type = ? GROUP BY 1) o""", [rule.min, rule.max, log_id, rule.object_type])
+
+
+def _supplied_cardinality(conn,log_id,rule):
+    branches=[];params=[]
+    for direction in (['outgoing','incoming'] if rule.direction=='both' else [rule.direction]):
+        focus,related=('s','t') if direction=='outgoing' else ('t','s')
+        exact=' AND r.qualifier=?' if rule.qualifier is not None else ''
+        branches.append(f'''SELECT {focus}.object_id,{related}.object_id AS related_id
+            FROM object_relationships r JOIN objects s ON s.log_id=r.log_id AND s.object_id=r.source_object_id
+            JOIN objects t ON t.log_id=r.log_id AND t.object_id=r.target_object_id
+            WHERE r.log_id=? AND {focus}.object_type=? AND {related}.object_type=?{exact}''')
+        params.extend([log_id,rule.object_type,rule.related_type])
+        if rule.qualifier is not None:params.append(rule.qualifier)
+    pairs=' UNION ALL '.join(branches)
+    # Bound oriented assertion candidates before materializing/deduplicating
+    # neighbors. Qualifiers/reverse/self duplicates can overestimate work, never
+    # understate it or become a partial exact result.
+    candidates=conn.execute('SELECT count(*) FROM ('+pairs+') candidate',params).fetchone()[0]
+    if candidates>MAX_RELATION_PAIRS:return False
+    conn.execute('CREATE OR REPLACE TEMP TABLE rel AS SELECT DISTINCT * FROM ('+pairs+') candidate',params)
+    _cardinality_counts(conn,log_id,rule)
     return True
 
 
@@ -178,7 +239,7 @@ def _synchronization(conn, log_id: str, rule: Synchronization) -> bool:
 
 def _unit(rule) -> str:
     return {"event_cardinality": "events", "object_cardinality": "objects",
-            "synchronization": "event_object_pairs"}[rule.template]
+            "synchronization": "event_object_pairs",'supplied_object_cardinality':'objects'}[rule.template]
 
 
 def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
@@ -195,11 +256,23 @@ def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
             known[key] = conn.execute(sql, [log_id, value]).fetchone() is not None
     summary: dict[str, Any] = {"rule": rule.model_dump(exclude_none=True), "description": describe(rule),
                                "unit": _unit(rule), **known}
+    if isinstance(rule,SuppliedObjectCardinality):
+        summary.update(relationship_basis='caller_supplied_ocel_object_relationships',
+            relation_count_basis='distinct_neighbors_not_assertion_occurrences',independently_verified=False,
+            work_budget_basis='oriented_supplied_assertion_candidates_before_neighbor_deduplication',
+            violation_rate_basis='exact_retained_focus_objects_not_population_inference',
+            business_compliance='unknown',source_completeness='unknown',relationship_validity='unknown',
+            case_membership_inferred=False,transitive_relationships_inferred=False)
     if isinstance(rule, EventCardinality):
         _event_cardinality(conn, log_id, rule)
         complete = True
     elif isinstance(rule, ObjectCardinality):
         complete = _object_cardinality(conn, log_id, rule)
+    elif isinstance(rule,SuppliedObjectCardinality):
+        try:complete = _supplied_cardinality(conn,log_id,rule)
+        except duckdb.OutOfMemoryException:
+            return summary|{'complete':False,'unknown_reason':'analysis_memory_limit',
+                'limits':{'relation_pairs':MAX_RELATION_PAIRS}}
     else:
         complete = _synchronization(conn, log_id, rule)
     if not complete:
@@ -213,21 +286,29 @@ def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
         "complete": True, "units": units, "activated": activated, "vacuously_satisfied": units - activated,
         "violating": violated, "satisfied": activated - violated,
         "violation_rate": violated / activated if activated else None,
-        "violation_rate_ci95": list(_wilson(violated, activated, 1.959964)) if activated else None,
+        "violation_rate_ci95": (list(_wilson(violated, activated, 1.959964))
+                                if activated and not isinstance(rule,SuppliedObjectCardinality) else None),
         "violating_examples": examples, "examples_truncated": violated > len(examples),
     }
 
 
 def check(log_id: str, spec: Any) -> dict[str, Any]:
     rules = parse(spec)
+    supplied=any(isinstance(rule,SuppliedObjectCardinality) for rule in rules.rules)
+    basis={}
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
+            if supplied:
+                try:basis=supplied_relationships.snapshot(conn,log_id)
+                except EventLogFormatError as error:raise workspace.EventLogWorkspaceError(str(error)) from None
+                except duckdb.OutOfMemoryException:
+                    raise workspace.EventLogWorkspaceError('The supplied graph snapshot exceeds available analysis memory. No partial result was returned.') from None
             results = [evaluate(conn, log_id, rule) for rule in rules.rules]
         finally:
             conn.close()
-    return {
+    response = {
         "log": info, "results": results,
         "rules_with_violations": sum(1 for r in results if r.get("violating")),
         "rules_unknown": sum(1 for r in results if not r["complete"]),
@@ -238,6 +319,16 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
                            "reflect missing events or links."),
         **workspace.DESCRIPTIVE_ONLY,
     }
+    if supplied:
+        response['supplied_relationship_basis']=basis
+        response['interpretation']=('Shared-event rules relate objects through recorded shared events. Supplied-relationship '
+            'cardinality rules count distinct direct neighbors in the retained caller-supplied assertion set, including '
+            'objects with no events. Missing/excess neighbors describe that retained set, not verified business '
+            'compliance or source completeness. Static assertions do not establish historical validity, causality, '
+            'case membership, temporal synchronization or execution authority.')
+        if all(isinstance(rule,SuppliedObjectCardinality) for rule in rules.rules):
+            response['ordering_basis']='not_used_for_supplied_graph_shape'
+    return response
 
 
 __all__ = ["check", "describe", "parse"]
