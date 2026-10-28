@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS gateway_scim_users (
  external_id TEXT, revision BIGINT NOT NULL, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL, deleted_at TEXT,
  PRIMARY KEY(provider_id,employee_id), UNIQUE(provider_id,external_id));
+CREATE TABLE IF NOT EXISTS gateway_scim_groups (
+ provider_id TEXT NOT NULL, group_id TEXT NOT NULL PRIMARY KEY,
+ display_name TEXT NOT NULL, external_id TEXT, members_json TEXT NOT NULL,
+ revision BIGINT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ deleted_at TEXT, UNIQUE(provider_id,external_id));
+CREATE INDEX IF NOT EXISTS idx_gateway_scim_groups_provider
+ ON gateway_scim_groups(provider_id);
 '''
 
 
