@@ -42,6 +42,43 @@ def test_lineage_resolves_exact_pins_without_promoting_business_claims(store):
     assert stale["implementation_plan"]["reference"] == reviewed["implementation_plan"]["reference"]
 
 
+def test_tampered_opportunity_never_yields_a_verified_current_link(store):
+    from gateway.process_opportunity_review import namespace as opportunity_namespace
+    root, _, _ = setup(store)
+    wid = root["workflow_id"]
+    lineage = ProcessLineage(store)
+    original = lineage.detail(person(), wid)
+    assert original["opportunity"]["reference"] is not None
+    with store.db.connect() as conn:
+        store.db._execute(conn,
+            "UPDATE workflow_knowledge SET payload=? WHERE owner=? AND workflow_id=?",
+            ('{"corrupted":true}', opportunity_namespace("acme"), wid))
+    damaged = lineage.detail(person(), wid)
+    assert damaged["process"]["current"]
+    assert damaged["opportunity"]["integrity_ok"] is False
+    assert damaged["opportunity"]["reference"] is None
+    assert not damaged["opportunity"]["pinned_process_matches_current"]
+    assert not damaged["complete_current_declared_chain"]
+    assert not damaged["execution_authorized"]
+
+
+def test_lineage_is_pinned_to_current_revision_and_does_not_expose_archived_authority(store):
+    from gateway.process_collaboration import ProcessArchiveWrite
+    root, _, _ = setup(store)
+    wid = root["workflow_id"]
+    lineage = ProcessLineage(store)
+    current = lineage.detail(person(), wid)
+    assert current["process"]["current"]
+    store.archive(person(), wid, ProcessArchiveWrite(
+        expected_revision=root["revision"], expected_access_revision=2,
+        archived=True, user_confirmed=True))
+    archived = lineage.detail(person(), wid)
+    assert archived["process"]["state"] == "archived"
+    assert not archived["process"]["current"]
+    assert not archived["complete_current_declared_chain"]
+    assert not archived["execution_authorized"]
+
+
 def test_lineage_rejects_cross_tenant_and_missing_read_scope(store):
     root, _, _ = setup(store)
     wid = root["workflow_id"]
