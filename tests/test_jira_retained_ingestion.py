@@ -439,9 +439,11 @@ def test_actual_process_exit_and_restart_recovery(tmp_path, crash_after_commit):
     import os
     import subprocess
     import sys
+    import signal
+    import time
     from pathlib import Path
     code = r'''
-import os,sys,json
+import os,sys,json,time
 from pathlib import Path
 sys.path.insert(0,'tests')
 from test_jira_retained_ingestion import Provider,ENV,REFS,HOST
@@ -451,6 +453,9 @@ provider=Provider()
 profiles.ensure_api_token=lambda:'owned-restart-key'
 profiles.resolve_resource_reference=lambda ref:dict(provider='jira',resource_kind='issue',host=HOST,resolver_locator='OWG-'+str(REFS.index(ref)+1))
 marker=Path(sys.argv[2]); stage=sys.argv[1]
+def boundary():
+    marker.with_suffix('.boundary').write_text(stage)
+    while True:time.sleep(1)
 if stage=='create':
     identifier=profiles.create(REFS,confirm_reads=True,confirm_retention=True,confirm_status_labels=True)['profile_id']
     marker.write_text(identifier)
@@ -460,13 +465,13 @@ else:
         original=profiles._put
         def crash(conn,value):
             original(conn,value)
-            if value['status']=='read_retained':os._exit(73)
+            if value['status']=='read_retained':boundary()
         profiles._put=crash
     elif stage=='after':
         original=workspace.import_log
         def crash(*args,**kwargs):
             original(*args,**kwargs)
-            os._exit(73)
+            boundary()
         workspace.import_log=crash
     elif stage=='recover-before':
         with profiles._connect() as conn:
@@ -482,13 +487,35 @@ else:
     assert len(workspace.list_logs()['logs'])==1
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path/'restart-data'),
-           'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path/'restart-auth'), 'WORKFLOW_OBSERVER_CONFIG': str(tmp_path/'restart-config.json')}
-    def stage(name, expected=0):
+           'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path/'restart-auth'), 'WORKFLOW_OBSERVER_CONFIG': str(tmp_path/'restart-config.json'), 'PYTHONFAULTHANDLER': '1'}
+    def stage(name):
         result = subprocess.run([sys.executable, '-c', code, name, str(tmp_path/'profile.txt')],
             cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=120)
-        assert result.returncode == expected, result.stdout + '\n' + result.stderr
+        assert result.returncode == 0, result.stdout + '\n' + result.stderr
     stage('create')
-    stage('after' if crash_after_commit else 'before', 73)
+    # Parent-controlled abrupt termination bypasses normal CRT/DLL teardown.
+    # The child must reach the exact intended boundary while still alive;
+    # an unexpected native exit before it is a failure, never a valid crash.
+    name = 'after' if crash_after_commit else 'before'
+    process = subprocess.Popen([sys.executable, '-u', '-c', code, name, str(tmp_path/'profile.txt')],
+        cwd=Path(__file__).resolve().parents[1], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    reached = tmp_path/'profile.boundary'
+    try:
+        deadline = time.monotonic() + 110
+        while not reached.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if process.poll() is not None:
+            stdout, stderr = process.communicate(timeout=10)
+            pytest.fail('Recovery child exited before intended boundary: ' + str(process.returncode) + '\n' + stdout + stderr)
+        assert reached.exists() and reached.read_text() == name, 'Recovery boundary was not reached'
+        process.kill()
+        stdout, stderr = process.communicate(timeout=10)
+        expected = 1 if os.name == 'nt' else -signal.SIGKILL
+        assert process.returncode == expected, stdout + '\n' + stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=10)
     stage('recover-after' if crash_after_commit else 'recover-before')
 
 
