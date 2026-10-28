@@ -474,6 +474,8 @@ else:
             boundary()
         workspace.import_log=crash
     elif stage=='recover-before':
+        spool=workspace.DATA_DIR/'jira_ingestion_staging'/identifier
+        assert spool.is_dir() and list(spool.rglob('upload')), 'Crash fixture did not leave the real projected source spool'
         with profiles._connect() as conn:
             state=profiles._get(conn,identifier)
             assert state['checkpoint'] is None and state['log_id'] is None
@@ -485,6 +487,8 @@ else:
     if stage=='recover-before':assert result['added_events']==4
     if stage=='recover-after':assert result['added_events']==0 and result['duplicate_events_skipped']==4
     assert len(workspace.list_logs()['logs'])==1
+    assert not (workspace.DATA_DIR/'jira_ingestion_staging'/identifier).exists(), 'Recovered source spool was not erased'
+    assert not list(workspace.DATA_DIR.glob('owg-eventlog-*')), 'Source upload escaped profile-owned staging'
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path/'restart-data'),
            'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path/'restart-auth'), 'WORKFLOW_OBSERVER_CONFIG': str(tmp_path/'restart-config.json'), 'PYTHONFAULTHANDLER': '1'}

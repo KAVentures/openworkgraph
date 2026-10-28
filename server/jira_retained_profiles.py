@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from . import event_log_workspace as workspace
+from . import jira_ingestion_staging as staging
 from .jira_retained_source import configuration, digest, Extractor, JiraIngestionError
 from .jira_source_evidence import _ISSUE, _REF
 from .local_auth import ensure_api_token
@@ -174,6 +175,7 @@ def change(profile_id, *, enabled=None, disconnect=False, confirmed=False):
         if not disconnect and profile['status'] == 'dataset_deleted':
             raise JiraIngestionError('retained_jira_dataset_deleted')
         if disconnect:
+            staging.clear(workspace.DATA_DIR, profile_id)
             conn.execute('BEGIN')
             try:
                 conn.execute('DELETE FROM jira_ingestion_manifest WHERE profile_id=?', [profile_id])
@@ -201,6 +203,10 @@ def forget_dataset(conn, log_id):
         profile = json.loads(row[0])
         if profile['log_id'] != log_id:
             continue
+        try:
+            staging.clear(workspace.DATA_DIR, profile['profile_id'])
+        except JiraIngestionError:
+            raise workspace.EventLogWorkspaceError('Temporary source data could not be erased; event log was not deleted') from None
         conn.execute('DELETE FROM jira_ingestion_manifest WHERE profile_id=?', [profile['profile_id']])
         profile.update(enabled=False, revision=profile['revision'] + 1, status='dataset_deleted',
                        error=None, checkpoint=None, last_success_at=None, run_id=None,
@@ -249,6 +255,7 @@ def _begin(profile_id):
             raise JiraIngestionError('jira_retry_backoff_active')
         if profile.get('lease_until', 0) > now and profile.get('run_id'):
             raise JiraIngestionError('jira_run_already_active')
+        staging.clear(workspace.DATA_DIR, profile_id)
         profile.update(status='running', error=None, run_id=secrets.token_hex(16),
                        lease_until=now + _LEASE_SECONDS, last_attempt_at=now)
         _put(conn, profile)
@@ -292,6 +299,7 @@ def _retain(profile, config, extraction):
                 raise JiraIngestionError('previously_retained_source_events_missing')
             if any(manifest[key] != value for key, value in prior.items()):
                 raise JiraIngestionError('retained_source_payload_conflict')
+        owned_staging = staging.prepare(workspace.DATA_DIR, profile['profile_id'])
         def checkpoint(conn, log_id):
             _guard(profile, config, conn=conn)
             now = time.time()
@@ -307,7 +315,7 @@ def _retain(profile, config, extraction):
                 # One set-based insert, not hundreds of thousands of Python
                 # prepared statements. The private temporary manifest contains
                 # only opaque keys/digests and disappears after this transaction.
-                with tempfile.TemporaryDirectory(prefix='owg-jira-manifest-', dir=str(workspace.DATA_DIR)) as folder:
+                with tempfile.TemporaryDirectory(prefix='owg-jira-manifest-', dir=str(owned_staging)) as folder:
                     path = Path(folder) / 'manifest.csv'
                     with path.open('w', encoding='utf-8', newline='') as output:
                         writer = csv.writer(output)
@@ -323,14 +331,16 @@ def _retain(profile, config, extraction):
             source = BytesIO(stream.getvalue().encode())
             if profile['log_id']:
                 result = workspace.append_log(profile['log_id'], source, source_format='csv',
-                                              mapping=mapping, _transaction_hook=checkpoint)
+                                              mapping=mapping, _transaction_hook=checkpoint, _staging_parent=owned_staging)
                 added, duplicates = result['added_events'], result['duplicate_events_skipped']
             else:
                 result = workspace.import_log(source, name='Selected Jira status history', source_format='csv',
-                                              mapping=mapping, _transaction_hook=checkpoint)
+                                              mapping=mapping, _transaction_hook=checkpoint, _staging_parent=owned_staging)
                 added, duplicates = result['events'], 0
         except workspace.EventLogWorkspaceError:
             raise JiraIngestionError('jira_retention_refused_inspect_dataset_quality') from None
+        finally:
+            staging.clear(workspace.DATA_DIR, profile['profile_id'])
     # Read current state, not the stale local copy, if disable/disconnect raced
     # immediately after commit. Never return a fresh success for invalid scope.
     with workspace._LOCK, _connect() as conn:

@@ -374,14 +374,15 @@ def _receive(source: IO[bytes], folder: Path) -> Path:
 
 
 def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None,
-               _transaction_hook: Callable | None = None) -> dict[str, Any]:
+               _transaction_hook: Callable | None = None,
+               _staging_parent: Path | None = None) -> dict[str, Any]:
     """Import an explicitly chosen local file. The source stream is read once."""
     if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
         raise EventLogWorkspaceError("format must be csv, xes, ocel or ocelxml")
     if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
         raise EventLogWorkspaceError("a short log name is required")
     log_id = "log_" + secrets.token_hex(8)
-    with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(DATA_DIR)) as tmp:
+    with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(_staging_parent if _staging_parent is not None else DATA_DIR)) as tmp:
         folder = Path(tmp)
         upload = _receive(source, folder)
         conn = _connect()
@@ -426,7 +427,8 @@ _FINGERPRINT = """SELECT e.event_id, e.activity, e.ts, e.resource,
 
 def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                mapping: dict[str, Any] | None = None, kind: str = "append",
-               _transaction_hook: Callable | None = None) -> dict[str, Any]:
+               _transaction_hook: Callable | None = None,
+               _staging_parent: Path | None = None) -> dict[str, Any]:
     """Add a newer export to a saved log, skipping events it already holds.
 
     An event already in the log (same activity, time, resource and linked
@@ -438,7 +440,7 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
     if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
         raise EventLogWorkspaceError("format must be csv, xes, ocel or ocelxml")
     staging = "stg_" + secrets.token_hex(8)
-    with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(DATA_DIR)) as tmp:
+    with _LOCK, tempfile.TemporaryDirectory(prefix="owg-eventlog-", dir=str(_staging_parent if _staging_parent is not None else DATA_DIR)) as tmp:
         folder = Path(tmp)
         conn = _connect()
         try:
