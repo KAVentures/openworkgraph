@@ -28,7 +28,7 @@ class Arithmetic(_Strict):
     name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")]
     kind: Literal["arithmetic"]
     expression_version: Literal["1"] = "1"
-    operation: Literal["add", "subtract", "multiply", "divide"]
+    operation: Literal["add", "subtract", "multiply", "divide", "minimum", "maximum"]
     left: Operand
     right: Operand
 
@@ -63,7 +63,7 @@ def units(metrics) -> dict[str, dict[str, int]]:
                     raise ValueError(f"arithmetic metric {metric.name!r} needs earlier metric {operand.name!r}; forward, self and cyclic references are not allowed")
                 operands.append(known[operand.name])
         left, right = operands
-        if metric.operation in {"add", "subtract"}:
+        if metric.operation in {"add", "subtract", "minimum", "maximum"}:
             if left != right:
                 raise ValueError(f"arithmetic metric {metric.name!r} can only add or subtract identical units; no conversion is performed")
             result = dict(left)
@@ -97,7 +97,13 @@ def materialize(conn, metric: Arithmetic, columns: dict[str, str], column: str) 
     conn.execute(f"CREATE OR REPLACE TEMP TABLE qexpr AS SELECT case_id, {inputs[0]} AS a, {inputs[1]} AS b FROM qc", params)
     missing, zeros = conn.execute("""SELECT count(*) FILTER (WHERE a IS NULL OR b IS NULL),
         count(*) FILTER (WHERE a IS NOT NULL AND b = 0) FROM qexpr""").fetchone()
-    sql = {"add": "a + b", "subtract": "a - b", "multiply": "a * b", "divide": "a / nullif(b, 0)"}[metric.operation]
+    sql = {"add": "a + b", "subtract": "a - b", "multiply": "a * b",
+           "divide": "a / nullif(b, 0)",
+           # DuckDB LEAST/GREATEST ignore NULL operands by default; here a
+           # missing case-metric value must remain missing, never fabricated
+           # from the other operand.
+           "minimum": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE least(a,b) END",
+           "maximum": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE greatest(a,b) END"}[metric.operation]
     conn.execute(f"UPDATE qc SET {column} = {sql} FROM qexpr WHERE qc.case_id = qexpr.case_id")
     return {"cases_with_missing_operand": missing,
             "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0}
