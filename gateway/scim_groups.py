@@ -91,6 +91,31 @@ def _project(db, conn, provider, row):
     return resource
 
 
+def user_groups(db, conn, provider, uid):
+    """Read-only SCIM Users.groups view, not a role/team/authorization source.
+
+    Memberships are direct, current-provider, current-employee-generation only.
+    Group creation/deletion/changes cannot confer or revive human access.
+    """
+    person = roster._one(db, conn, """SELECT e.status, e.organization_id, l.deleted_at
+        FROM gateway_scim_users l JOIN gateway_employees e ON e.employee_id=l.employee_id
+        WHERE l.provider_id=? AND l.employee_id=?""", (provider["provider_id"], uid))
+    if (not person or person["organization_id"] != provider["organization_id"] or
+            person["status"] != "active" or person["deleted_at"] is not None):
+        return []
+    generation = _epoch(db, conn, uid)
+    rows = roster._all(db, conn, """SELECT group_id,display_name,members_json
+        FROM gateway_scim_groups WHERE provider_id=? AND deleted_at IS NULL
+        ORDER BY display_name,group_id""", (provider["provider_id"],))
+    result = []
+    for group in rows:
+        if any(m["value"] == uid and m["epoch"] == generation
+               for m in json.loads(group["members_json"])):
+            result.append({"value": group["group_id"], "display": group["display_name"],
+                           "type": "direct"})
+    return result
+
+
 class Groups:
     def __init__(self, service):
         self.service = service
