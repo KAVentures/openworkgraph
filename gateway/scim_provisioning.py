@@ -341,8 +341,8 @@ class Provisioning:
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
             row = self.load(conn, provider, uid)
-            self.conditional(row, etag)
-            current = _project(row)
+            self.conditional(conn, provider, row, etag)
+            current = self.user_projection(conn, provider, row)
             values = {'username': current['userName'], 'displayname': current['displayName'],
                       'active': current['active'], 'externalid': current.get('externalId')}
             for operation in operations:
@@ -376,7 +376,7 @@ class Provisioning:
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
             row = self.load(conn, provider, uid)
-            self.conditional(row, etag)
+            self.conditional(conn, provider, row, etag)
             if row['status'] == 'active':
                 roster.offboard_employee_in_transaction(self.db, conn, provider['organization_id'], uid)
             now = roster._now()
