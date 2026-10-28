@@ -189,10 +189,11 @@ def test_revoked_provider_cannot_read_or_update_groups_and_group_data_grants_no_
     # A provisioning Group must never assign an administrative team, a
     # process ACL, or an executable capability regardless of the chosen name.
     assert client.get("/v1/human/processes", headers=h).status_code == 401
+    employee = roster.get_employee(db, "acme", uid)
     with db.connect() as conn:
         teams = db._execute(conn,
             "SELECT count(*) FROM gateway_actor_teams WHERE organization_id=? AND actor_id=?",
-            ("acme", user_response.json()["userName"])).fetchone()[0]
+            ("acme", employee["actor_id"])).fetchone()[0]
     assert teams == 0
     revoked = client.post("/v1/admin/scim-providers/acme/" + pid + "/revoke",
         headers=owner, json={"revision": 2})
