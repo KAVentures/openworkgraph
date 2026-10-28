@@ -153,7 +153,7 @@ from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
 
-csv = b"case,activity,time\\n1,A,2024-01-01T00:00:00Z\\n1,B,2024-01-03T00:00:00Z\\n"
+csv = b"case,activity,time\n1,A,2024-01-01T00:00:00Z\n1,B,2024-01-03T00:00:00Z\n"
 with TestClient(app) as client:
     auth = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
     made = client.post("/v1/event-logs/import?format=csv&name=signal-review&case_column=case"
