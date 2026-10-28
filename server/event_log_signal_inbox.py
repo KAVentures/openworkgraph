@@ -17,6 +17,19 @@ _RULE_ID = re.compile(r"sig_[0-9a-f]{16}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
 
 
+def log_basis(conn, log_id: str) -> list[int]:
+    """Version of the retained dataset, including no-op append batches.
+
+    A rule must be reevaluated after any authorized append before a user can
+    acknowledge it. Counts alone cannot detect an overlapping no-op append.
+    """
+    row = conn.execute("SELECT events, objects, rejected_events FROM logs WHERE log_id=?", [log_id]).fetchone()
+    if row is None:
+        raise workspace.EventLogWorkspaceError("unknown event log")
+    batch = conn.execute("SELECT COALESCE(MAX(batch),0) FROM log_appends WHERE log_id=?", [log_id]).fetchone()[0]
+    return [int(batch), *(int(value) for value in row)]
+
+
 def _hash(log_id: str, rule_id: str, state: str) -> str:
     return hashlib.sha256(json.dumps(
         [log_id, rule_id, json.loads(state)],
@@ -35,7 +48,7 @@ def _row(conn, log_id: str, rule_id: str):
     return result
 
 
-def _state(log_id, rule_id, name, last_at, state, acknowledged=None):
+def _state(log_id, rule_id, name, last_at, state, acknowledged=None, *, basis=None):
     if state is None or last_at is None:
         return {
             "rule_id": rule_id, "name": name, "status": "not_evaluated",
@@ -45,6 +58,14 @@ def _state(log_id, rule_id, name, last_at, state, acknowledged=None):
     snapshot = json.loads(state)
     if not isinstance(snapshot, dict) or type(snapshot.get("triggered")) is not bool:
         raise workspace.EventLogWorkspaceError("signal evaluation state is unavailable")
+    # A saved result is not necessarily current after another import/append.
+    # A missing basis indicates a pre-upgrade evaluation: reevaluate explicitly.
+    if basis is not None and snapshot.get("log_basis") != basis:
+        return {"rule_id": rule_id, "name": name, "status": "stale",
+                "triggered": snapshot["triggered"],
+                "evaluated_at": last_at.isoformat() + "Z",
+                "state_fingerprint": None, "acknowledged_at": None,
+                "requires_review": False}
     digest = _hash(log_id, rule_id, state)
     triggered = snapshot["triggered"]
     accepted = triggered and acknowledged is not None and acknowledged[0] == digest
@@ -69,11 +90,13 @@ def list_inbox(log_id: str) -> dict:
                 FROM signal_rules s LEFT JOIN signal_reviews r
                 ON s.log_id=r.log_id AND s.rule_id=r.rule_id
                 WHERE s.log_id=? ORDER BY s.created_at,s.rule_id""", [log_id]).fetchall()
+            basis = log_basis(conn, log_id)
             items = []
             for rule_id, definition, when, state, fingerprint, acknowledged_at in records:
                 raw = json.loads(definition)
                 items.append(_state(log_id, rule_id, raw["name"], when, state,
-                                    (fingerprint, acknowledged_at) if fingerprint else None))
+                                    (fingerprint, acknowledged_at) if fingerprint else None,
+                                    basis=basis))
         finally:
             conn.close()
     return {
@@ -100,7 +123,8 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
             try:
                 definition, when, state = _row(conn, log_id, rule_id)
                 raw = json.loads(definition)
-                current = _state(log_id, rule_id, raw["name"], when, state)
+                basis = log_basis(conn, log_id)
+                current = _state(log_id, rule_id, raw["name"], when, state, basis=basis)
                 if (current["state_fingerprint"] != body["state_fingerprint"] or
                         not current["triggered"]):
                     raise workspace.EventLogWorkspaceError(
@@ -114,7 +138,8 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
                         VALUES (?,?,?,?)""", [log_id, rule_id, current["state_fingerprint"], now])
                 conn.execute("COMMIT")
                 return _state(log_id, rule_id, raw["name"], when, state,
-                    (current["state_fingerprint"], now) if acknowledge else None)
+                    (current["state_fingerprint"], now) if acknowledge else None,
+                    basis=basis)
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
