@@ -141,6 +141,38 @@ def test_member_add_and_selected_remove_do_not_clobber_other_members(http):
 
 
 
+def test_user_groups_is_read_only_and_changes_user_etag(http):
+    client, db, owner, h, base, pid = http
+    created_user = client.post(base + "/Users", headers=h, json=user())
+    assert created_user.status_code == 201, created_user.text
+    uid = created_user.json()["id"]
+    original_etag = created_user.headers["etag"]
+    created_group = client.post(base + "/Groups", headers=h,
+        json=group(members=[{"value": uid}]))
+    assert created_group.status_code == 201, created_group.text
+    gid = created_group.json()["id"]
+    current = client.get(base + "/Users/" + uid, headers=h)
+    assert current.status_code == 200 and current.headers["etag"] != original_etag
+    assert current.json()["groups"] == [{"value": gid, "display": "Analysts", "type": "direct"}]
+    assert client.get(base + "/Users", headers=h).json()["Resources"][0]["groups"] == current.json()["groups"]
+    assert client.get(base + "/Schemas/" + scim.CORE, headers=h).json()["attributes"][-1]["mutability"] == "readOnly"
+    patch = {"schemas": [scim.PATCH], "Operations": [
+        {"op": "replace", "path": "displayName", "value": "Current"}]}
+    assert client.patch(base + "/Users/" + uid, headers={**h, "If-Match": original_etag},
+        json=patch).status_code == 412
+    # SCIM readOnly groups may be echoed but cannot be edited by a User PUT.
+    echoed = {**user(displayName="Updated"), "groups": [{"value": "injected"}]}
+    updated = client.put(base + "/Users/" + uid, headers={**h, "If-Match": current.headers["etag"]}, json=echoed)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["groups"] == current.json()["groups"]
+    assert updated.json()["displayName"] == "Updated"
+    removal = client.delete(created_group.headers["location"],
+        headers={**h, "If-Match": created_group.headers["etag"]})
+    assert removal.status_code == 204
+    after = client.get(base + "/Users/" + uid, headers=h)
+    assert "groups" not in after.json() and after.headers["etag"] != updated.headers["etag"]
+
+
 def test_group_audit_failure_is_atomic(http, monkeypatch):
     client, db, owner, h, base, pid = http
     # Patch the same instance used by the actual enterprise app, not a new one.
