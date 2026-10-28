@@ -176,10 +176,15 @@ def build_router(service, require_admin, base_url):
             return {'name': name, 'type': kind, 'multiValued': multi,
                     'required': required, 'caseExact': True, 'mutability': mutable,
                     'returned': 'default', 'uniqueness': 'none'}
+        members = attribute('members', 'complex', multi=True)
+        members['subAttributes'] = [
+            attribute('value', required=True),
+            {**attribute('type'), 'canonicalValues': ['User']},
+        ]
         return {'schemas': [SCHEMA_URI], 'id': group_module.CORE, 'name': 'Group',
                 'description': 'Provider-owned direct User membership metadata. No OWG role/team/ACL mapping; no nested groups.',
                 'attributes': [attribute('displayName', required=True),
-                               attribute('externalId'), attribute('members', 'complex', multi=True)]}
+                               attribute('externalId'), members]}
 
     @router.get('/scim/v2/{provider_id}/Schemas')
     def schemas(provider_id: str, request: Request):
