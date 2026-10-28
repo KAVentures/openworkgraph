@@ -134,7 +134,7 @@
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
     manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,remove);
     const results=el('div');results.id='owgEventLogResults';
-    card.append(manage,results);
+    card.append(manage,results,jiraSourceSection());
 
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
@@ -219,11 +219,71 @@
     remove.onclick=async()=>{
       const chosen=state.logs.find(l=>l.log_id===state.logId);if(!chosen)return;
       if(!window.confirm('Delete the event log "'+chosen.name+'" from this computer? This cannot be undone.'))return;
-      try{state.generation++;results.replaceChildren();await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});await refreshLogs('');status('Event log deleted.');}
+      try{state.generation++;results.replaceChildren();await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/delete',{method:'POST'});await refreshLogs('');document.dispatchEvent(new CustomEvent('owg:eventlog-deleted'));status('Event log deleted.');}
       catch(error){status(error.message);}
     };
     refreshImport();
     refreshLogs('').catch(()=>{});
+  }
+
+  function jiraSourceSection(){
+    const box=section('Retained Jira histories');box.id='owgJiraSource';box.style.overflowWrap='anywhere';
+    box.append(el('p','Manually read 1–8 already observed Jira issues into a local event log. Each run rescans the bounded history. Status labels, native issue IDs and source event identities are retained; authors, comments, descriptions and assignee values are excluded. Pagination is not proof of complete history. No background polling or source writes.','muted'));
+    const refs=el('textarea');refs.id='owgJiraSourceRefs';refs.rows=3;refs.maxLength=400;refs.placeholder='One owg:r: reference per line';refs.style.maxWidth='100%';
+    const read=input('owgJiraSourceRead','checkbox'),retain=input('owgJiraSourceRetain','checkbox'),labels=input('owgJiraSourceLabels','checkbox');
+    const create=button('Create selected Jira profile');create.id='owgJiraSourceCreate';create.disabled=true;
+    const refresh=button('Refresh Jira source status','secondary');refresh.id='owgJiraSourceRefresh';
+    const message=el('p');message.id='owgJiraSourceStatus';message.setAttribute('role','status');message.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgJiraSourceProfiles';
+    box.append(field('Observed Jira references',refs),field('I authorize these selected source reads',read),field('I confirm local retention until I delete the log',retain),field('I confirm retention of business status labels and source identities',labels),create,refresh,message,out);
+    let version=0,creating=false;
+    const changed=()=>{version++;read.checked=false;retain.checked=false;labels.checked=false;sync();};
+    const sync=()=>{create.disabled=creating||!refs.value.trim()||!read.checked||!retain.checked||!labels.checked;};
+    refs.addEventListener('input',changed);for(const control of [read,retain,labels])control.addEventListener('change',sync);
+    const endpoint='/v1/event-log-sources/jira';
+    const send=async(path,body,method='POST')=>(await api(endpoint+path,{method,...(body===null?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})})).json();
+    async function load(){
+      const request=++version;
+      try{
+        const result=await getJSON(endpoint);if(request!==version)return;
+        message.textContent=result.configured?'Ready for explicitly confirmed manual reads. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
+        out.replaceChildren();
+        for(const profile of result.profiles){
+          const item=el('div',null,'card');item.dataset.profileId=profile.profile_id;
+          item.append(el('h4',profile.host+' · '+profile.resource_refs.length+' selected issues'),el('p','Status: '+profile.status+(profile.error?' · '+profile.error:'')+'. Last successful read: '+(profile.last_success_at?new Date(profile.last_success_at*1000).toISOString():'none')+'. Source completeness unverified.'));
+          if(profile.checkpoint)item.append(el('p',profile.checkpoint.events+' retained projected events; '+profile.checkpoint.histories+' histories in the last successful bounded rescan.'));
+          const row=el('div',null,'row');
+          const run=button('Read and retain selected histories');run.disabled=!profile.enabled||profile.status==='running'||Date.now()<profile.retry_after*1000;
+          const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary');
+          // Lifecycle controls stay available while reading; generation fencing
+          // prevents a held old run response from replacing newer disable state.
+          const action=async(path,body,method)=>{
+            const request=++version;run.disabled=true;
+            try{const result=await send(path,body,method);if(request!==version)return;
+              if(result.log_id)await refreshLogs(result.log_id);
+              if(request!==version)return;
+              await load();
+            }catch(error){if(request===version){const refreshed=version+1;await load();if(version===refreshed)message.textContent=error.message;}}
+          };
+          run.onclick=()=>action('/'+profile.profile_id+'/run',{confirm_reads:true});
+          toggle.onclick=()=>action('/'+profile.profile_id+'/enabled',{enabled:!profile.enabled,confirmed:true});
+          disconnect.onclick=()=>{if(window.confirm('Disconnect this Jira profile? Its imported log stays on this computer until you delete it.'))action('/'+profile.profile_id,null,'DELETE');};
+          toggle.disabled=profile.status==='dataset_deleted';
+          row.append(run,toggle,disconnect);
+          if(profile.log_id&&profile.status!=='dataset_deleted'){const choose=button('Open retained log','secondary');choose.onclick=()=>refreshLogs(profile.log_id).catch(error=>{message.textContent=error.message;});row.append(choose);}
+          item.append(row);out.append(item);
+        }
+      }catch(error){if(request===version)message.textContent=error.message;}
+    }
+    create.onclick=async()=>{
+      const request=++version;creating=true;sync();
+      try{await send('',{resource_refs:refs.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),confirm_reads:read.checked,confirm_retention:retain.checked,confirm_status_labels:labels.checked});
+        if(request!==version)return;read.checked=false;retain.checked=false;labels.checked=false;await load();
+      }catch(error){if(request===version)message.textContent=error.message;}
+      finally{creating=false;sync();}
+    };
+    document.addEventListener('owg:eventlog-deleted',()=>load());
+    refresh.onclick=()=>load();load();return box;
   }
 
   async function refreshLogs(selectId){

@@ -21,7 +21,7 @@ import secrets
 import tempfile
 import threading
 from datetime import datetime, timezone
-from typing import IO, TYPE_CHECKING, Any, Iterator
+from typing import IO, TYPE_CHECKING, Any, Iterator, Callable
 
 if TYPE_CHECKING:
     import duckdb
@@ -373,7 +373,8 @@ def _receive(source: IO[bytes], folder: Path) -> Path:
     return upload
 
 
-def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None) -> dict[str, Any]:
+def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None,
+               _transaction_hook: Callable | None = None) -> dict[str, Any]:
     """Import an explicitly chosen local file. The source stream is read once."""
     if source_format not in {"csv", "xes", "ocel", "ocelxml"}:
         raise EventLogWorkspaceError("format must be csv, xes, ocel or ocelxml")
@@ -398,6 +399,8 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
                              [log_id, name.strip(), source_format, datetime.now(timezone.utc).replace(tzinfo=None),
                               stats.events, stats.objects, stats.rejected_events])
+                if _transaction_hook is not None:
+                    _transaction_hook(conn, log_id)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -422,7 +425,8 @@ _FINGERPRINT = """SELECT e.event_id, e.activity, e.ts, e.resource,
 
 
 def append_log(log_id: str, source: IO[bytes], *, source_format: str,
-               mapping: dict[str, Any] | None = None, kind: str = "append") -> dict[str, Any]:
+               mapping: dict[str, Any] | None = None, kind: str = "append",
+               _transaction_hook: Callable | None = None) -> dict[str, Any]:
     """Add a newer export to a saved log, skipping events it already holds.
 
     An event already in the log (same activity, time, resource and linked
@@ -499,6 +503,8 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                 conn.execute("""UPDATE logs SET events = (SELECT count(*) FROM events WHERE log_id = ?),
                     objects = (SELECT count(*) FROM objects WHERE log_id = ?), rejected_events = rejected_events + ?
                     WHERE log_id = ?""", [log_id, log_id, stats.rejected_events, log_id])
+                if _transaction_hook is not None:
+                    _transaction_hook(conn, log_id)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -653,11 +659,19 @@ def delete_log(log_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check_log(conn, log_id)
-            for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                          "metric_definitions", "saved_analyses", "signal_rules", "event_objects", "events", "objects",
-                          "object_attribute_values",
-                          "logs"):
-                conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
+            conn.execute("BEGIN")
+            try:
+                from .jira_retained_profiles import forget_dataset
+                forget_dataset(conn, log_id)
+                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+                              "metric_definitions", "saved_analyses", "signal_rules", "event_objects", "events", "objects",
+                              "object_attribute_values",
+                              "logs"):
+                    conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
             conn.execute("CHECKPOINT")
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
