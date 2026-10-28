@@ -2297,10 +2297,14 @@
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
-    const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signal-inbox';
+    const selectedLogId=state.logId;
+    const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const generation=state.generation;
+    let inboxRefreshId=0;
     async function refreshInbox(){
-      const r=await getJSON(inboxBase());if(generation!==state.generation)return;
+      const requestId=++inboxRefreshId;
+      const r=await getJSON(inboxBase());
+      if(generation!==state.generation||requestId!==inboxRefreshId)return;
       const rows=(r.items||[]).map(item=>{
         const action=el('div');
         if(item.state_fingerprint&&item.triggered===true){
@@ -2308,6 +2312,7 @@
           const click=button(acknowledged?'Reopen':'Acknowledge','secondary');
           click.setAttribute('aria-label',(acknowledged?'Reopen':'Acknowledge')+' signal '+item.name);
           click.onclick=async()=>{
+            if(generation!==state.generation||state.logId!==selectedLogId)return;
             click.disabled=true;
             try{
               await api(inboxBase()+'/'+encodeURIComponent(item.rule_id)+'/'+(acknowledged?'reopen':'acknowledge'),{
