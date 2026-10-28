@@ -164,7 +164,7 @@ def test_user_groups_is_read_only_and_changes_user_etag(http):
     assert client.patch(base + "/Users/" + uid, headers={**h, "If-Match": original_etag},
         json=patch).status_code == 412
     # SCIM readOnly groups may be echoed but cannot be edited by a User PUT.
-    echoed = {**user(displayName="Updated"), "groups": [{"value": "injected"}]}
+    echoed = {**user(), "displayName": "Updated", "groups": [{"value": "injected"}]}
     updated = client.put(base + "/Users/" + uid, headers={**h, "If-Match": current.headers["etag"]}, json=echoed)
     assert updated.status_code == 200, updated.text
     assert updated.json()["groups"] == current.json()["groups"]
