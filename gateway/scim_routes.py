@@ -69,13 +69,19 @@ def _list(resources):
 
 
 def _schema():
-    def attribute(name, kind='string', *, required=False, mutable='readWrite', exact=False, unique='none'):
-        return {'name': name, 'type': kind, 'multiValued': False, 'required': required,
+    def attribute(name, kind='string', *, required=False, mutable='readWrite', exact=False, unique='none', multi=False):
+        return {'name': name, 'type': kind, 'multiValued': multi, 'required': required,
                 'caseExact': exact, 'mutability': mutable, 'returned': 'default', 'uniqueness': unique}
+    groups = attribute('groups', 'complex', mutable='readOnly', multi=True)
+    groups['subAttributes'] = [
+        attribute('value', required=True),
+        attribute('display'),
+        {**attribute('type', mutable='readOnly'), 'canonicalValues': ['direct']},
+    ]
     return {'schemas': [SCHEMA_URI], 'id': scim.CORE, 'name': 'User',
-            'description': 'OWG bounded User projection; userName is a stable work-email actor. Other core/extension fields are unsupported.',
+            'description': 'OWG bounded User projection; userName is a stable work-email actor. Groups are read-only provider metadata, not access grants.',
             'attributes': [attribute('userName', required=True, mutable='immutable', unique='server'),
-                           attribute('displayName'), attribute('active', 'boolean')]}
+                           attribute('displayName'), attribute('active', 'boolean'), groups]}
 
 
 class ProvisioningRoute(APIRoute):
