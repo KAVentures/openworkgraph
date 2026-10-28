@@ -114,6 +114,33 @@ def test_cross_provider_invalid_members_duplicate_and_stale_versions(http):
         params=[("count", "1"), ("count", "2")]).status_code == 400
 
 
+def test_member_add_and_selected_remove_do_not_clobber_other_members(http):
+    client, db, owner, h, base, pid = http
+    first = client.post(base + "/Users", headers=h, json=user()).json()["id"]
+    second = client.post(base + "/Users", headers=h, json=user(userName="second@acme.test",
+        externalId="second")).json()["id"]
+    created = client.post(base + "/Groups", headers=h, json=group(members=[{"value": first}]))
+    assert created.status_code == 201, created.text
+    loc, etag = created.headers["location"], created.headers["etag"]
+    added = client.patch(loc, headers={**h, "If-Match": etag},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "add", "path": "members", "value": {"value": second}}]})
+    assert added.status_code == 200, added.text
+    assert {m["value"] for m in added.json()["members"]} == {first, second}
+    # Exact member removal, including removing an absent member, is a no-op
+    # for the other members and does not rewrite unrelated metadata.
+    removed = client.patch(loc, headers={**h, "If-Match": added.headers["etag"]},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "remove", "path": f'members[value eq "{first}"]'}]})
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["members"] == [{"value": second, "type": "User"}]
+    again = client.patch(loc, headers={**h, "If-Match": removed.headers["etag"]},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "remove", "path": f'members[value eq "{first}"]'}]})
+    assert again.status_code == 200 and again.headers["etag"] == removed.headers["etag"]
+
+
+
 def test_group_audit_failure_is_atomic(http, monkeypatch):
     client, db, owner, h, base, pid = http
     # Patch the same instance used by the actual enterprise app, not a new one.
