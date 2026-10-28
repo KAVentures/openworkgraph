@@ -36,3 +36,5 @@ jobs:
         run: OWG_TEST_FIRST_POLICY=1 NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_tables.cjs
       - name: Verify bounded SCIM bulk lifecycle and guarded admin sessions
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
+      - name: Verify overlap-aware waiting boundaries and stale-setting guards
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/waiting_boundary_attribution.cjs

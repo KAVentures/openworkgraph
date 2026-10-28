@@ -103,10 +103,11 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 FROM parsed""")
             open_starts = unmatched_starts = ignored = 0
         conn.execute("""CREATE OR REPLACE TEMP TABLE seq AS SELECT *,
-              max(en) OVER (PARTITION BY case_id ORDER BY st, en, activity
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_end,
-              lag(activity) OVER (PARTITION BY case_id ORDER BY st, en, activity) AS prev_activity
-            FROM inst""")
+              max(en) OVER prior_instances AS prev_end,
+              arg_max(activity, struct_pack(ends_at := en, starts_at := st, label := activity))
+                OVER prior_instances AS prev_activity
+            FROM inst WINDOW prior_instances AS (PARTITION BY case_id ORDER BY st, en, activity
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)""")
         conn.execute("""CREATE OR REPLACE TEMP TABLE seq2 AS SELECT *,
               CASE WHEN prev_end IS NULL THEN NULL ELSE greatest(0, epoch(st - prev_end)) END AS wait,
               CASE WHEN proc IS NULL THEN 0 ELSE greatest(0, epoch(en - greatest(st, coalesce(prev_end, st)))) END AS busy
@@ -150,7 +151,9 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
             "interpretation": ("Processing is the time between an activity instance's recorded start and end; waiting "
                                "is the time before an instance starts after the case's earlier work ended. Both come "
                                "from recorded timestamps, so waiting includes nights, weekends and unrecorded work. "
-                               "Nothing is attributed to a person."),
+                               "Hotspot sources mark the earlier instance with the latest recorded end; tied ends "
+                               "use the latest start, then the greatest activity label in lexical order as a representative. "
+                               "A timestamp boundary does not establish a causal handoff. Nothing is attributed to a person."),
         }
     return workspace._query(log_id, case_type, run)
 

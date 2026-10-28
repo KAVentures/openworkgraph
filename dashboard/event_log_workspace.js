@@ -1398,37 +1398,41 @@
 
   function waitingSection(){
     const box=section('Processing and waiting time');box.id='owgWaiting';
-    box.appendChild(el('div','Splits each activity into time spent working and time waiting before it starts, from start/complete lifecycle values or an end-time column. Waiting includes nights, weekends and work that was not recorded. Nothing is attributed to a person.','muted'));
+    box.appendChild(el('div','Separates recorded activity intervals from gaps before they start, from start/complete lifecycle values or an end-time column. Waiting includes nights, weekends and work that was not recorded. Nothing is attributed to a person.','muted'));
     const lifecycle=input('owgWaitingLifecycle','text');lifecycle.value='lifecycle:transition';lifecycle.maxLength=120;
     const end=input('owgWaitingEnd','text','for example end_time');end.maxLength=120;
     const run=button('Show processing and waiting','secondary');run.id='owgWaitingRun';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Lifecycle attribute',lifecycle),field('Or end-time attribute (with timezone)',end),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgWaitingStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgWaitingResults';
+    let requestVersion=0;
+    const invalidate=()=>{requestVersion++;out.replaceChildren();statusLine.textContent='Settings changed. Run the analysis again.';run.disabled=false;};
+    lifecycle.addEventListener('input',invalidate);end.addEventListener('input',invalidate);
     box.append(row,statusLine,out);
     run.onclick=async()=>{
-      const generation=state.generation;
+      const generation=state.generation,version=++requestVersion;
+      const current=()=>generation===state.generation&&version===requestVersion;
       try{
         run.disabled=true;out.replaceChildren();statusLine.textContent='Measuring…';
         const params={lifecycle_attribute:lifecycle.value.trim()||'lifecycle:transition'};
         if(end.value.trim())params.end_attribute=end.value.trim();
         const r=await getJSON(logPath('waiting-time',params));
-        if(generation!==state.generation)return;
+        if(!current())return;
         if(!r.available){
           statusLine.textContent=r.reason;
           if(r.attribute_names.length)out.appendChild(el('div','Attributes in this log: '+r.attribute_names.join(', '),'muted'));
           return;
         }
         const i=r.instances,f=r.flow_efficiency;
-        statusLine.textContent=Number(i.with_processing_time).toLocaleString()+' of '+Number(i.total).toLocaleString()+' activity instances have a start and an end'+(f.median===null?'.':'; in the median case, work covers '+pct(f.median)+' of the elapsed time.')+(i.unmatched_starts?' '+Number(i.unmatched_starts).toLocaleString()+' starts have no completion yet.':'');
+        statusLine.textContent=Number(i.with_processing_time).toLocaleString()+' of '+Number(i.total).toLocaleString()+' activity instances have a start and an end'+(f.median===null?'.':'; in the median case, recorded intervals cover '+pct(f.median)+' of the elapsed time.')+(i.unmatched_starts?' '+Number(i.unmatched_starts).toLocaleString()+' starts have no completion yet.':'');
         out.append(
           table(['Activity','Instances','Median processing','90th percentile processing','Median waiting before','Total waiting before','Share of all waiting'],
             r.activities.slice(0,25).map(a=>[a.activity,Number(a.instances).toLocaleString(),duration(a.processing.median_seconds),duration(a.processing.p90_seconds),duration(a.waiting_before.median_seconds),duration(a.waiting_before.total_seconds),pct(a.share_of_all_waiting)])),
           el('h4','Where cases wait'),
           table(['After','Before','Times','Median waiting','Share of all waiting'],r.waiting_hotspots.slice(0,10).map(h=>[h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting)])),
           el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-      finally{run.disabled=false;}
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }

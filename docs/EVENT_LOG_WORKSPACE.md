@@ -1002,14 +1002,24 @@ start), like Disco, ProM or Celonis with start/complete data. It takes the case 
 Overlapping work is never counted as waiting, and the case's busy time counts overlapping instances
 once. The result has, per activity, processing and waiting-before medians, 90th percentiles,
 totals and share of all waiting; the transitions with the most waiting; and flow efficiency (busy
-share of elapsed case time). In `auto` mode without lifecycle values or an end attribute it returns
-`available: false` and the attribute names found in the log.
+share of elapsed case time). A waiting hotspot's source is the earlier instance with the latest
+recorded end, using the same instance frame as the waiting amount. For example, A=[0h,10h],
+B=[1h,2h], C=[20h,21h] has a 10-hour A→C boundary gap; B's later start does not make it
+that gap's source. Tied latest ends choose the latest start, then the greatest activity label
+in lexical order as a representative. This deterministic timestamp boundary is not a causal handoff or an employee
+performance measure. Processing, waiting amounts and union-busy accounting are unchanged.
+In `auto` mode without lifecycle values or an end attribute it returns `available: false` and
+the attribute names found in the log.
 
 For CSV logs, choose the lifecycle or end-time column under "Extra columns to keep" when importing.
 Only selected columns are stored, with the same bounds as XES attributes. One million lifecycle
 events take a few seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_waiting.py`).
 Waiting comes from recorded timestamps, so it includes nights, weekends and unrecorded work, and no
-time is attributed to a person.
+time is attributed to a person. Editing the lifecycle or end-time attribute clears the old result;
+a response for earlier settings cannot overwrite a later analysis. The overlap-boundary regression
+uses independent interval oracles and the reproducible synthetic `scripts/benchmark_waiting_boundary.py`
+in lifecycle/end-attribute modes at 100,000 and 1,000,000 events. Those checks establish supplied-log
+accounting, not a latency SLA, source completeness or causal process/human performance.
 
 ## Dotted chart
 
