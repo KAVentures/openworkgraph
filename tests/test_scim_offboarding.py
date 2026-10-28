@@ -6,7 +6,8 @@ import test_process_signin as process_flow
 import test_analysis_signin as analysis_flow
 
 
-def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire_does_not_restore_them(portal):
+@pytest.mark.parametrize('mode',['single','bulk'])
+def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire_does_not_restore_them(portal,mode):
     kind,(client,app,db,idp,settings)=portal
     flow=process_flow if kind=='process' else analysis_flow
     service=app.state.scim_provisioning
@@ -26,13 +27,27 @@ def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire
     source='/scim/v2/'+pid+'/Users/'+uid
     current=client.get(source,headers={'Authorization':'Bearer '+token})
     change={'schemas':[scim.PATCH],'Operations':[{'op':'replace','path':'active','value':False}]}
-    disabled=client.patch(source,headers={'Authorization':'Bearer '+token,'If-Match':current.headers['etag'],'Content-Type':'application/scim+json'},json=change)
-    assert disabled.status_code==200,disabled.text
+    def update(version):
+        auth={'Authorization':'Bearer '+token,'Content-Type':'application/scim+json'}
+        if mode=='single':
+            response=client.patch(source,headers={**auth,'If-Match':version},json=change)
+            assert response.status_code==200,response.text
+            assert response.json()['id']==uid
+            return response.headers['etag']
+        response=client.post('/scim/v2/'+pid+'/Bulk',headers=auth,json={
+            'schemas':['urn:ietf:params:scim:api:messages:2.0:BulkRequest'],
+            'Operations':[{'method':'PATCH','path':'/Users/'+uid,'version':version,'data':change}]})
+        assert response.status_code==200,response.text
+        result=response.json()['Operations'][0]
+        assert result['status']=='200',result
+        return result['version']
+    disabled_version=update(current.headers['etag'])
     assert client.get(path,headers=headers).status_code==401
     assert db.authenticate(device['token']) is None and roster.peek_personal_invite(db,invite['token']) is None
     change['Operations'][0]['value']=True
-    active=client.patch(source,headers={'Authorization':'Bearer '+token,'If-Match':disabled.headers['etag'],'Content-Type':'application/scim+json'},json=change)
-    assert active.status_code==200 and active.json()['id']==uid
+    active_version=update(disabled_version)
+    current_user=service.get_user(pid,token,uid)
+    assert current_user['id']==uid and current_user['active'] and current_user['meta']['version']==active_version
     assert client.get(path,headers=headers).status_code==401
     assert db.authenticate(device['token']) is None and roster.peek_personal_invite(db,invite['token']) is None
     _,fresh=flow.credentials(flow.callback(client,idp,flow.start(client)))

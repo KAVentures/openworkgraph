@@ -1,6 +1,6 @@
 # Scoped Users provisioning
 
-OWG offers a **bounded SCIM 2.0 Users subset** over the existing employee roster. This is not full RFC 7643/7644 conformance or certified Entra/Okta/other-provider compatibility. Discovery advertises the implemented User projection and operations; deployers must test their own provider's mappings and conditional-update behavior before rollout. Groups, Bulk, complex attributes and user-name migration remain separate work.
+OWG offers a **bounded SCIM 2.0 Users subset** over the existing employee roster. This is not full RFC 7643/7644 conformance or certified Entra/Okta/other-provider compatibility. Discovery advertises the implemented User projection and operations; deployers must test their own provider's mappings and conditional-update behavior before rollout. Groups, complex attributes and user-name migration remain separate work.
 
 In the existing admin console, open **Identity → Identity provisioning**, create a labeled provider, copy its one-view credential into the intended identity provider, then explicitly enable it. New credentials are disabled by default. The console clears a revealed credential on navigation, refresh, provider-state changes and sign-out; it does not save it in browser storage or URLs. List/reload responses never return it again. Revocation is permanent; disabling is reversible under the current configuration revision. Existing administrator write-role checks apply to configuration. Provisioning credentials have no administrator, portal, evidence, process, device-enrollment or business-system execution authority.
 
@@ -22,7 +22,7 @@ Primary references: [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643) resource 
 | `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations under exact current If-Match |
 | `DELETE /Users/{id}` | Offboard and tombstone provisioning resource; returns empty 204 |
 
-Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. Unsupported operators, sorting, attribute selection, repeated query parameters, groups, Bulk, extensions and unsupported paths explicitly refuse. This increment does not implement `.search` or generic SCIM filtering.
+Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. Unsupported operators, sorting, attribute selection, repeated query parameters, groups, extensions and unsupported paths explicitly refuse. This increment does not implement `.search` or generic SCIM filtering.
 
 User inputs use the core User schema. Supported attributes are:
 
@@ -41,7 +41,7 @@ A provisioned User ID is the stable existing employee ID. The new tables hold pr
 
 Deactivation reuses roster offboarding: employee state, device-token revocation, open personal-invitation revocation, browser-access generation and team clearing commit together. Rehire requires explicit current active=true. It preserves the stable actor and never restores old device, invitation or browser credentials. A newly authorized company sign-in can obtain a fresh browser session. Provider externalId never populates sso_subject; existing verified company identity/group rules still apply. Provisioning never enables Observe/FullAI, enrolls a device, changes sharing/retention, grants admin/process/analysis/evidence scopes or authorizes source-system actions.
 
-Provider current-state checks, version checks, roster changes, external-ID linkage, offboarding and minimized audit share one transaction. Provider mutations lock provider then employee/link; ordinary roster changes use the same employee lock. SQLite uses the existing immediate writer transaction pattern, PostgreSQL row locks. PostgreSQL creation also serializes each organization's bounded provider inventory. A failed later operation, uniqueness check, team change or audit rolls everything back. Invitation issuance, enrollment, SSO-proof verification and device linking lock the employee before the invitation/device rows too. If issuance wins the lock, deactivation sees and revokes the resulting credentials; if deactivation wins, issuance observes inactive status and refuses. This prevents a late credential or invitation from escaping the sweep or becoming usable after rehire. Audits contain stable provider/employee IDs and action/state, not tokens, request bodies, passwords or supplied external IDs.
+Each standalone User request, including each User operation in Bulk, puts provider current-state checks, version checks, roster changes, external-ID linkage, offboarding and minimized audit in one transaction. Provider mutations lock provider then employee/link; ordinary roster changes use the same employee lock. SQLite uses the existing immediate writer transaction pattern, PostgreSQL row locks. PostgreSQL creation also serializes each organization's bounded provider inventory. Within one User request, a failed later PATCH operation, uniqueness check, team change or audit rolls that request back. Invitation issuance, enrollment, SSO-proof verification and device linking lock the employee before the invitation/device rows too. If issuance wins the lock, deactivation sees and revokes the resulting credentials; if deactivation wins, issuance observes inactive status and refuses. This prevents a late credential or invitation from escaping the sweep or becoming usable after rehire. Audits contain stable provider/employee IDs and action/state, not tokens, request bodies, passwords or supplied external IDs.
 
 DELETE tombstones the provider resource and offboards the employee. It does **not** erase employee/evidence/ownership history or other personal data. Deleted resources return 404 and disappear from provider lists; external-ID lineage remains reserved. Credential revocation refuses future provisioning requests but does not undo previously completed roster changes or offboard an entire organization.
 
@@ -58,3 +58,69 @@ Owned SQLite backup/restore and PostgreSQL 17 custom pg_dump/pg_restore checks p
 Tests cover advertised HTTP discovery/create/query/update/delete, scoped authentication, disabled/revoked providers, current versions, atomic PATCH/no-op/removal/null handling, uniqueness, malformed input, audit/team rollback, concurrent updates, manual-edit drift, tenant/provider isolation and no implicit identity adoption. Both SQLite and PostgreSQL are exercised. Owned RSA/OIDC flows for the process and analysis portals confirm deactivation blocks old browser sessions and rehire does not revive those or device/invitation credentials. The admin browser covers consented enablement, one-view credentials, escaped labels, roster effects, WCAG/mobile, permanent revocation and a held old-session 401 arriving after a fresh sign-in.
 
 Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filtering/search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
+
+## Bounded Users bulk provisioning
+
+An explicitly enabled provider can `POST /scim/v2/{provider_id}/Bulk` with
+`urn:ietf:params:scim:api:messages:2.0:BulkRequest`. ServiceProviderConfig advertises
+`bulk.supported: true`, `maxOperations: 50`, `maxPayloadSize: 65536`. The existing
+64 KiB strict UTF-8/duplicate-key/nonfinite-JSON body limit remains. The admin
+Identity page explains the batch limits, partial commits and version requirements;
+no credential or batch is saved in browser storage.
+
+Each operation uses POST `/Users`, or PUT/PATCH/DELETE `/Users/{employee_id}`.
+POST requires a request-unique `bulkId` (1–100 ASCII alphanumeric, underscore or
+dash characters). POST/PUT/PATCH require a `data` object; DELETE forbids data.
+Updates/deletes require `version` equal to the current User ETag. A missing/stale
+version returns the same 428/412 refusal as a standalone request. OWG never reads
+and inserts a fresh version on the caller's behalf. Paths cannot be external
+URLs, encoded aliases, queries, fragments or traversal. Existing User attribute,
+immutability, provider isolation, offboarding and rehire rules all still apply.
+
+The whole envelope and operation structure are validated before writes. User
+attribute errors occur within the affected operation. Operations run in declared
+order and **commit individually** using the existing roster/link/audit transaction.
+A later failure does not roll back earlier successes. By default every possible
+operation is attempted; optional `failOnErrors` (an integer 1–50) stops after that
+many item errors. Credential revocation/disable stops at the first 401, leaving
+previously committed changes intact. Every dispatched operation checks current
+provider authority within its own lifecycle transaction; revocation cannot be
+bypassed by a previously accepted batch.
+
+The HTTP 200 BulkResponse contains every processed operation's method, status,
+location (except failed POST), returned version where applicable, POST bulkId,
+and standard SCIM error body on failure. Successful bodies are omitted, reducing
+identity payload duplication. Unprocessed operations are absent. Check **each
+operation status** before treating a batch as successful. An unexpected operation
+failure returns a generic 500 item and logs a generic server-health error; its
+transaction rolls back on a failure before commit. A lost commit acknowledgment
+can leave an operation outcome uncertain. The batch is synchronous, has no durable job, and cannot
+be resumed from a server-side checkpoint. After a transport/server interruption,
+read current Users and reconcile completed changes before retrying. Repeating
+creates produces the existing 409 uniqueness refusal, never silent adoption or
+reactivation; repeating updates must use their intended exact version.
+
+A later operation may use `/Users/bulkId:{id}` to identify a User created
+successfully earlier in **that request**. This resolves identity only and still
+requires the explicit current version for mutation. Failed, forward and previous-
+request references fail; OWG never guesses a User from email/externalId. Literal
+`bulkId:` text in displayName/externalId stays literal. Bulk IDs are not persisted,
+authentication subjects, grants or idempotency keys. Groups, nested/circular
+resource references, generic bulk resources and asynchronous bulk jobs remain
+unsupported. Actual provider mappings and conditional Bulk behavior still need
+customer-controlled IdP compatibility acceptance.
+
+Primary reference: [RFC7644 §3.7](https://www.rfc-editor.org/rfc/rfc7644.html#section-3.7),
+reviewed 28 October 2026. This implements the documented bounded Users subset;
+it does not claim full SCIM or enterprise-competitor parity.
+
+Bulk verification additionally covers independent 50-user state sets, malformed
+envelopes before any writes, partial commits/retries/failOnErrors, concurrent
+same-version writers, failed audits and sanitized errors, credential revocation
+before the next operation's attribute validation, and provider/tenant isolation.
+Owned RSA/OIDC process and analysis portal flows exercise both standalone and
+Bulk deactivation/rehire: old browser/device/invitation credentials stay revoked,
+and a freshly authorized sign-in can work. The browser exercises actual partial
+Bulk commits, missing-version refusal and revoked-provider refusal alongside
+existing admin session and WCAG/mobile checks. These owned fixtures do not
+establish compatibility with a customer's IdP.

@@ -46,6 +46,24 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const active=await request('PATCH',source+'/Users/'+uid,patch,token,{'If-Match':inactive.headers.get('etag')});assert.equal(active.status,200);
   assert.equal((await active.json()).id,uid);
   await identity();
+  assert.match(await page.locator('#scimAdmin').textContent(),/50 Users operations/);
+  assert.match(await page.locator('#scimAdmin').textContent(),/Operations commit separately/);
+  const config=await(await request('GET',source+'/ServiceProviderConfig',undefined,token)).json();assert.equal(config.bulk.maxOperations,50);assert.equal(config.bulk.supported,true);
+  const schema='urn:ietf:params:scim:api:messages:2.0:BulkRequest',userSchema='urn:ietf:params:scim:schemas:core:2.0:User';
+  const newUser=(bulkId,email)=>({method:'POST',path:'/Users',bulkId,data:{schemas:[userSchema],userName:email,active:true}});
+  patch.Operations[0].value=false;
+  const batch=await request('POST',source+'/Bulk',{schemas:[schema],failOnErrors:1,Operations:[
+   newUser('created','zbulk@acme.test'),{method:'PATCH',path:'/Users/'+uid,version:active.headers.get('etag'),data:patch},
+   newUser('conflict','operator@acme.test'),newUser('skipped','unprocessed@acme.test')]},token);
+  assert.equal(batch.status,200);const bulk=(await batch.json()).Operations;
+  assert.deepEqual(bulk.map(r=>r.status),['201','200','409']);assert.equal(bulk[0].bulkId,'created');
+  const offboarded=await(await request('GET',source+'/Users/'+uid,undefined,token)).json();assert.equal(offboarded.active,false);
+  patch.Operations[0].value=true;
+  const blind=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,data:patch}]},token);
+  assert.equal((await blind.json()).Operations[0].status,'428');
+  const rehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:bulk[1].version,data:patch}]},token);
+  assert.equal((await rehire.json()).Operations[0].status,'200');
+  await identity();
   await page.evaluate(source=>{const script=document.createElement('script');script.nonce=document.querySelector('script[nonce]').nonce;script.textContent=source;document.head.append(script);},await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8'));
   const audit=await page.evaluate(()=>axe.run(document.querySelector('#scimAdmin'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
   assert.deepEqual(audit.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[]);
@@ -82,9 +100,10 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   page.once('dialog',d=>d.accept());await page.locator('[data-scim-revoke="'+pid+'"]').click();
   await page.locator('#scimStatus').filter({hasText:'Credential permanently revoked'}).waitFor();
   assert.equal((await request('GET',source+'/Users',undefined,token)).status,401);
-  const roster=await request('GET','/v1/admin/people/acme');assert.equal((await roster.json()).employees[0].actor_id,'operator@acme.test');
+  const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['operator@acme.test','zbulk@acme.test']);
+  assert.equal((await request('POST',source+'/Bulk',{schemas:[schema],Operations:[newUser('revoked','refused@acme.test')]},token)).status,401);
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, partial-commit bulk/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

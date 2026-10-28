@@ -39,7 +39,7 @@ def test_discovery_create_query_conditional_patch_and_tombstone(http):
     client,db,owner,h,base,pid=http
     config=client.get(base+'/ServiceProviderConfig',headers=h)
     assert config.status_code==200 and config.headers['content-type'].startswith('application/scim+json')
-    assert config.json()['patch']['supported'] and not config.json()['bulk']['supported']
+    assert config.json()['patch']['supported'] and config.json()['bulk']['supported']
     assert client.get(base+'/Schemas',headers=h).json()['totalResults']>=1
     assert client.get(base+'/ResourceTypes',headers=h).json()['Resources'][0]['schema']==scim.CORE
     created=client.post(base+'/Users',headers=h,json=user());assert created.status_code==201,created.text
@@ -92,7 +92,7 @@ def test_unsupported_protocol_options_are_explicit_and_body_is_bounded(http):
         r=client.get(base+'/Users',headers=h,params=params)
         assert r.status_code==400 and r.json()['schemas']==[scim.ERROR],r.text
     assert client.get(base+'/Groups',headers=h).status_code==404
-    assert client.post(base+'/Bulk',headers=h,json={}).status_code==404
+    assert client.post(base+'/Bulk',headers=h,json={}).status_code==400
     assert client.post(base+'/Users',headers=h,content=b'x'*65537).status_code==413
     assert client.post(base+'/Users',headers={**h,'Content-Type':'text/plain'},content=b'{}').status_code==415
 
