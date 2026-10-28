@@ -43,6 +43,8 @@ def test_inbox_review_is_explicit_state_pinned_and_silent():
 
     reviewed = inbox.review(log, rule_id, {"state_fingerprint": fingerprint}, acknowledge=True)
     assert reviewed["status"] == "acknowledged" and reviewed["acknowledged_at"]
+    repeat = inbox.review(log, rule_id, {"state_fingerprint": fingerprint}, acknowledge=True)
+    assert repeat == reviewed, "A retry must not rewrite the human's acknowledgement time"
     again = signals.evaluate(log)
     assert again["triggered"] == 1
     assert inbox.list_inbox(log)["items"][0]["status"] == "acknowledged"
