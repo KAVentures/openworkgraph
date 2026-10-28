@@ -258,9 +258,9 @@ def evaluate(log_id: str) -> dict[str, Any]:
                                   new_cases_comparison=comparison,
                                   as_of=as_of.isoformat() + "Z" if as_of else None)
                     state = {"triggered": triggered, "case_ids": ids, "matching_cases": total}
-                # Clearing a signal revokes any previous acknowledgement. If the
-                # same state triggers again later, it must be reviewed anew.
-                if not triggered:
+                # A new state is a new review event even if it later cycles
+                # back to an old value. Do not resurrect an obsolete approval.
+                if previous is None or previous != state:
                     conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
                              [now, json.dumps(state), log_id, rule_id])
