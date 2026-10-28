@@ -41,7 +41,7 @@ def _path(name: str) -> str:
 
 def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto",
                  lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
-                 cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                 cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
     if mode not in MODES:
         raise workspace.EventLogWorkspaceError("mode must be auto, lifecycle or end_attribute")
     lifecycle_path = _path(lifecycle_attribute)
@@ -49,6 +49,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
     if mode == "end_attribute" and not end_path:
         raise workspace.EventLogWorkspaceError("Name the attribute that holds each event's end time")
     chosen = cohorts.parse_cohort(cohort)
+    from . import event_log_calendar_metrics as calendars
+    calendar = calendars.parse(working_calendar) if working_calendar is not None else None
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
@@ -112,6 +114,10 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               CASE WHEN prev_end IS NULL THEN NULL ELSE greatest(0, epoch(st - prev_end)) END AS wait,
               CASE WHEN proc IS NULL THEN 0 ELSE greatest(0, epoch(en - greatest(st, coalesce(prev_end, st)))) END AS busy
             FROM seq""")
+        calendar_result = calendars.measure(conn,calendar) if calendar is not None else None
+        if calendar_result is not None:
+            calendar_result['case_filter_sha256']=calendars.digest(cohorts.describe(chosen))
+            calendar_result['instance_settings_sha256']=calendars.digest({**base['settings'],'mode_used':used})
         kinds = dict(conn.execute("SELECT kind, count(*) FROM inst GROUP BY kind").fetchall())
         total_wait = conn.execute("SELECT coalesce(sum(wait), 0) FROM seq2").fetchone()[0] or 0
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
@@ -130,6 +136,7 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
             return {"median_seconds": median, "p90_seconds": p90, "mean_seconds": mean}
         return {
             **base, "available": True, "events": events,
+            **({"working_calendar":calendar_result} if calendar_result is not None else {}),
             "instances": {"total": sum(kinds.values()), "with_processing_time": kinds.get("paired", 0),
                           "complete_without_start": kinds.get("complete_only", 0),
                           "without_lifecycle_or_end": kinds.get("no_lifecycle", 0) + kinds.get("no_end_time", 0),

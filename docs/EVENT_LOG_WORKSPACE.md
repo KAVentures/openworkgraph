@@ -987,6 +987,9 @@ with both estimators take about 18 seconds, including the import, in the scale a
 
 ## Processing and waiting time
 
+An optional [declared working-calendar lens](WORKING_CALENDAR_ANALYSIS.md) adds schedule-adjusted
+aggregates alongside elapsed metrics, with explicit assumptions and guarded local downloads.
+
 `GET /v1/event-logs/{log_id}/waiting-time` splits elapsed time into processing (an activity
 instance's recorded start to end) and waiting (from the end of the case's earlier work to the next
 start), like Disco, ProM or Celonis with start/complete data. It takes the case filters and:

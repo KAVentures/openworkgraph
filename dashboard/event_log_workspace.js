@@ -1405,18 +1405,31 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Lifecycle attribute',lifecycle),field('Or end-time attribute (with timezone)',end),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgWaitingStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgWaitingResults';
-    let requestVersion=0;
-    const invalidate=()=>{requestVersion++;out.replaceChildren();statusLine.textContent='Settings changed. Run the analysis again.';run.disabled=false;};
-    lifecycle.addEventListener('input',invalidate);end.addEventListener('input',invalidate);
-    box.append(row,statusLine,out);
+    const enabled=input('owgWaitingCalendarEnabled','checkbox');
+    const days=select('owgWaitingCalendarDays',[['mon','Monday'],['tue','Tuesday'],['wed','Wednesday'],['thu','Thursday'],['fri','Friday'],['sat','Saturday'],['sun','Sunday']]);
+    days.multiple=true;days.size=4;for(const option of days.options)option.selected=['mon','tue','wed','thu','fri'].includes(option.value);
+    const from=input('owgWaitingCalendarFrom','text','HH:MM');from.value='09:00';from.maxLength=5;
+    const until=input('owgWaitingCalendarUntil','text','HH:MM or 24:00');until.value='17:00';until.maxLength=5;
+    const zone=input('owgWaitingCalendarZone','text','IANA time zone');zone.value='UTC';zone.maxLength=64;
+    const holidays=el('textarea');holidays.id='owgWaitingCalendarHolidays';holidays.rows=2;holidays.maxLength=6000;
+    const calendarFields=el('div',null,'row');calendarFields.append(field('Calendar working days',days),field('Calendar opens',from),field('Calendar closes',until),field('Calendar time zone',zone),field('Calendar holidays (YYYY-MM-DD)',holidays));show(calendarFields,false);
+    const exportReport=button('Download calendar and elapsed aggregates','secondary');exportReport.id='owgWaitingCalendarExport';exportReport.disabled=true;show(exportReport,false);
+    let artifact=null,requestVersion=0;
+    const invalidate=()=>{requestVersion++;out.replaceChildren();statusLine.textContent='Settings changed. Run the analysis again.';run.disabled=false;artifact=null;exportReport.disabled=true;};
+    for(const control of [lifecycle,end,days,from,until,zone,holidays])control.addEventListener('input',invalidate);
+    enabled.addEventListener('change',()=>{show(calendarFields,enabled.checked);show(exportReport,enabled.checked);invalidate();});
+    exportReport.onclick=()=>{if(artifact&&enabled.checked)download('working-calendar-aggregates.json',JSON.stringify(artifact,null,2),'application/json');};
+    box.append(field('Add a declared working-calendar lens',enabled),calendarFields,row,statusLine,out,exportReport);
     run.onclick=async()=>{
       const generation=state.generation,version=++requestVersion;
       const current=()=>generation===state.generation&&version===requestVersion;
       try{
-        run.disabled=true;out.replaceChildren();statusLine.textContent='Measuring…';
+        run.disabled=true;artifact=null;exportReport.disabled=true;out.replaceChildren();statusLine.textContent='Measuring…';
         const params={lifecycle_attribute:lifecycle.value.trim()||'lifecycle:transition'};
         if(end.value.trim())params.end_attribute=end.value.trim();
-        const r=await getJSON(logPath('waiting-time',params));
+        const cal=enabled.checked?simCalendar({days:'every_day',from:from.value,to:until.value,timezone:zone.value,holidays:holidays.value}):null;
+        if(cal){const selected=[...days.selectedOptions].map(o=>o.value);if(!selected.length)throw new Error('Choose at least one calendar working day.');cal.hours=Object.fromEntries(selected.map(day=>[day,cal.hours[day]]));}
+        const r=cal?await (await api(logPath('waiting-time'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,working_calendar:cal})})).json():await getJSON(logPath('waiting-time',params));
         if(!current())return;
         if(!r.available){
           statusLine.textContent=r.reason;
@@ -1431,6 +1444,20 @@
           el('h4','Where cases wait'),
           table(['After','Before','Times','Median waiting','Share of all waiting'],r.waiting_hotspots.slice(0,10).map(h=>[h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting)])),
           el('div',r.interpretation,'muted'));
+        if(r.working_calendar?.available){
+          const c=r.working_calendar,flow=c.flow_efficiency;
+          out.append(el('h4','Declared working-calendar lens'),
+            el('p','Calendar: '+c.calendar.timezone+'. '+c.instances_crossing_closed_time+' recorded intervals cross closed time. These are schedule-adjusted intervals; actual labor, staffing and policy remain unverified. Elapsed metrics above retain all recorded time.'),
+            table(['Activity','Median scheduled processing','Median scheduled gap','Total scheduled gap'],c.activities.slice(0,25).map(a=>[a.activity,duration(a.processing.median_seconds),duration(a.waiting_before.median_seconds),duration(a.waiting_before.total_seconds)])),
+            el('p','Calendar flow efficiency: '+(flow.median===null?'undefined':pct(flow.median))+'. '+flow.cases_with_zero_calendar_span+' cases have no scheduled span. '+c.interpretation));
+          artifact={format:'openworkgraph.working-calendar-aggregate-export.v1',
+            log_reference:{log_id:r.log.log_id,case_notion:r.case_notion,imported_at:r.log.imported_at,events:r.log.events,objects:r.log.objects},
+            settings:r.settings,mode_used:r.mode_used,working_calendar:c,
+            elapsed:{activities:r.activities,waiting_hotspots:r.waiting_hotspots,flow_efficiency:r.flow_efficiency,instances:r.instances},
+            activity_labels_included:true,raw_events_exported:false,raw_case_ids_exported:false,resource_names_exported:false,execution_authorized:false};
+          exportReport.disabled=false;
+          out.appendChild(el('p','Aggregate downloads include activity labels and your declared schedule. Raw events, case IDs and resource fields are excluded.','muted'));
+        }else if(r.working_calendar){out.appendChild(el('p',r.working_calendar.reason||'No calendar intervals are available.'));}
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current())run.disabled=false;}
     };
