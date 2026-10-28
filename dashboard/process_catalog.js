@@ -351,7 +351,7 @@
     })));
 
     const project=button('Download OpenAI Agents project',()=>download('agent-project'));
-    if(record.process_model?.decision_tables?.length)actions.appendChild(el('p','Decision-table projects need separately reviewed current-source UNIQUE bindings and UTC effective dates before execution.'));
+    if(record.process_model?.decision_tables?.length)actions.appendChild(el('p','Decision-table projects need separately reviewed current-source '+(record.process_model.decision_tables.some(t=>t.hit_policy==='FIRST')?'UNIQUE/FIRST bindings, declared FIRST row precedence':'UNIQUE bindings')+' and UTC effective dates before execution.'));
     actions.appendChild(project);
     ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
     actions.appendChild(button('Add screenshots to saved PDD',()=>{

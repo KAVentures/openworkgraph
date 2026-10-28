@@ -5,6 +5,7 @@ const {spawn}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 (async()=>{
+ const firstPolicy=process.env.OWG_TEST_FIRST_POLICY==='1';
  const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-decision-')),base='http://127.0.0.1:8791';
  const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_collaboration_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8791'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
  let logs='',browser;for(const pipe of [server.stdout,server.stderr])pipe.on('data',v=>logs=(logs+v).slice(-6000));
@@ -13,6 +14,7 @@ const path=require('node:path');
  try{
   let ready=false;for(let i=0;i<100;i++){try{if((await fetch(base+'/processes')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert.ok(ready,logs);
   const model={goal:'Review an authorized purchase',baseline_source:'user_declared',baseline_path:['Review','Accept'],activities:[{id:'choose',label:'Review',kind:'decision'},{id:'accept',label:'Accept'},{id:'escalate',label:'Escalate'}],transitions:[{source:'choose',target:'accept',rule_id:'small'},{source:'choose',target:'escalate',rule_id:'large'}],entry_activity_id:'choose',terminal_activity_ids:['accept','escalate'],business_rules:[{id:'small',text:'Small purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'lt',expected:100}]}},{id:'large',text:'Large purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'gte',expected:100}]}}]};
+  if(firstPolicy)model.business_rules[1].predicate.conditions[0].path='/other_amount';
   const original=(await api('/v1/human/processes',{title:'Purchase design',process_model:model,user_confirmed:true,organization_sharing_confirmed:true})).process,baseURL='/v1/human/processes/'+original.workflow_id;
   browser=await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
   const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -22,7 +24,12 @@ const path=require('node:path');
   await page.getByRole('button',{name:'Edit selected design',exact:true}).click();
   await page.getByLabel('Decision activity for new table',{exact:true}).selectOption('choose');
   await page.getByRole('button',{name:'Add decision table',exact:true}).click();
-  const confirm=page.getByLabel('I confirm this exact table, referenced rules, source basis and effective dates decision_table_1',{exact:true});
+  if(firstPolicy){
+    const old=page.getByLabel('I confirm this exact table, referenced rules, source basis and effective dates decision_table_1',{exact:true});await old.check();
+    await page.getByLabel('Hit policy decision_table_1',{exact:true}).selectOption('FIRST');
+    assert.equal(await page.locator('input[data-table-confirmation]').isChecked(),false);
+  }
+  const confirm=page.getByLabel('I confirm this exact table, referenced rules, source basis and effective dates'+(firstPolicy?', and declared row precedence':'')+' decision_table_1',{exact:true});
   await page.getByLabel('Effective start decision_table_1',{exact:true}).fill('2026-01-01');
   await page.getByLabel('Exclusive effective end decision_table_1',{exact:true}).fill('2027-01-01');
   await page.getByLabel('Source document label decision_table_1',{exact:true}).fill('Purchase policy <script>not code</script>');
@@ -30,8 +37,13 @@ const path=require('node:path');
   await confirm.check();await page.getByLabel('Source document label decision_table_1',{exact:true}).fill('Purchase policy');assert.equal(await confirm.isChecked(),false);
   await confirm.check();await page.getByLabel('Draft rule small',{exact:true}).fill('Small purchase amended');assert.equal(await confirm.isChecked(),false);
   await page.getByLabel('I confirm declared rule small',{exact:true}).check();await confirm.check();
+  if(firstPolicy){
+    await page.getByRole('button',{name:'Move row row_1 down in decision_table_1',exact:true}).click();assert.equal(await confirm.isChecked(),false);
+    await page.getByRole('button',{name:'Synchronize rows decision_table_1',exact:true}).click();assert.equal(await page.locator('[data-order-row]').first().getAttribute('data-order-row'),'row_2');
+    await page.getByRole('button',{name:'Move row row_1 up in decision_table_1',exact:true}).click();await confirm.check();
+  }
   await page.getByRole('button',{name:'Review edited design',exact:true}).click();
-  assert.match(await page.locator('#preview').textContent(),/decision_table_1 · choose · user confirmed/);
+  assert.match(await page.locator('#preview').textContent(),(firstPolicy?/decision_table_1 · choose · FIRST · user confirmed/:/decision_table_1 · choose · user confirmed/));
   assert.equal((await api(baseURL)).process.revision,1,'preview is not a model write');
   await page.locator('#reviewed').check();await page.locator('#sharing').check();
   await page.locator('#update').click();await page.locator('#status').filter({hasText:'New revision saved.'}).waitFor();
@@ -44,14 +56,16 @@ const path=require('node:path');
   const [projectDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download SDK implementation project',exact:true}).click()]);
   const projectBytes=await fs.readFile(await projectDownload.path());assert.equal(projectBytes.subarray(0,2).toString(),'PK');assert.ok(projectBytes.length>10000);
   const facts={as_of_date:'2026-10-26',cases:[{case_id:'case_1',facts:{amount:99}},{case_id:'case_2',facts:{amount:100}},{case_id:'case_3',facts:{}},{case_id:'case_4',facts:{amount:100},activity_ids:['choose','accept']}]};
+  if(firstPolicy)for(const c of facts.cases)if('amount' in c.facts)c.facts.other_amount=200;
   const runFacts=async data=>{
     await page.locator('#ruleFactsFile').setInputFiles({name:'facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(data))});
     assert.equal(await page.locator('#ruleFactsConsent').isChecked(),false);assert.equal(await page.locator('#checkRuleFacts').isDisabled(),true);
     await page.locator('#ruleFactsConsent').check();await page.locator('#checkRuleFacts').click();await page.locator('#ruleFactsResult h3').waitFor();
   };
   await runFacts(facts);const report=page.locator('#ruleFactsResult');
-  assert.match(await report.textContent(),/unique match → accept/);assert.match(await report.textContent(),/unique match → escalate/);assert.match(await report.textContent(),/unknown/);assert.match(await report.textContent(),/proposed branch disagrees/);
+  assert.match(await report.textContent(),(firstPolicy?/first match → accept/:/unique match → accept/));assert.match(await report.textContent(),(firstPolicy?/first match → escalate/:/unique match → escalate/));assert.match(await report.textContent(),/unknown/);assert.match(await report.textContent(),/proposed branch disagrees/);
   const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download minimized shared rule-check report',exact:true}).click()]);const artifact=JSON.parse(await fs.readFile(await download.path(),'utf8'));
+  if(firstPolicy){assert.equal(artifact.cases[0].decision_tables[0].selected_row_id,'row_1');assert.equal(artifact.cases[2].decision_tables[0].blocking_row_id,'row_1');}
   assert.equal(artifact.process_reference.content_sha256,saved.content_sha256);assert.equal(artifact.cases[1].decision_tables[0].selected_target_activity_id,'escalate');assert.equal(artifact.facts_retained,false);assert.equal(JSON.stringify(artifact).includes('amount'),false);
   await runFacts({...facts,as_of_date:'2027-01-01'});assert.match(await report.textContent(),/expired/);
   const withoutDate={cases:facts.cases};await runFacts(withoutDate);assert.match(await report.textContent(),/date required/);
@@ -73,6 +87,6 @@ const path=require('node:path');
   assert.deepEqual(await page.evaluate(async()=>{const r=await axe.run(document.querySelector('#preview'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});return r.violations.map(v=>v.id);}),[]);
   await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
   await page.getByRole('button',{name:'Remove table decision_table_1',exact:true}).click();await page.getByRole('button',{name:'Review edited design',exact:true}).click();assert.doesNotMatch(await page.locator('#preview').textContent(),/Declared decision tables/);
-  assert.deepEqual(errors,[]);console.log('Decision-table browser passed: explicit editing/confirmation reset, exact revision, boundary/unknown/expiry/date checks, minimized exports, held identity, reader isolation, WCAG/mobile and removal.');
+  assert.deepEqual(errors,[]);console.log((firstPolicy?'FIRST ':'UNIQUE ')+'Decision-table browser passed: explicit editing/confirmation reset, exact revision, boundary/unknown/expiry/date checks, minimized exports, held identity, reader isolation, WCAG/mobile and removal.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});

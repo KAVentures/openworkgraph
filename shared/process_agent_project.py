@@ -88,7 +88,8 @@ def build_runtime_spec(packet: dict) -> dict:
         spec.update(control_flow_contract='openworkgraph.parallel-node-firing-plan.v1',
                     execution_schedule='serial_token_valid_node_order')
     if model.decision_tables:
-        spec['decision_table_contract'] = 'openworkgraph.current-source-unique-decision.v1'
+        from .process_decision_tables import runtime_contract
+        spec['decision_table_contract'] = runtime_contract(model)
     origin = packet.get('organization_catalog_reference')
     if origin is not None:
         if (not isinstance(origin, dict) or set(origin) != {'organization_id'}
@@ -139,8 +140,9 @@ def build_runtime_project(packet: dict) -> bytes:
     if model.decision_tables:
         example = json.loads(files['tool-bindings.example.json'])
         example['decision_table_checks'] = [dict(table_id=t.id, source_type=None, resource_ref_pointer=None,
-            mode='unique_route_before_each_action', record_semantics_reviewed=False,
-            non_atomic_reads_reviewed=False, utc_effective_dates_reviewed=False) for t in model.decision_tables]
+            mode='first_route_before_each_action' if t.hit_policy=='FIRST' else 'unique_route_before_each_action', record_semantics_reviewed=False,
+            non_atomic_reads_reviewed=False, utc_effective_dates_reviewed=False,
+            **({'row_precedence_reviewed':False} if t.hit_policy=='FIRST' else {})) for t in model.decision_tables]
         files['tool-bindings.example.json'] = json.dumps(example, indent=2) + '\n'
     files['customer-intent.example.json'] = json.dumps({
         'format':'openworkgraph.customer-execution-intent.v1', 'process_reference':process_reference,
@@ -362,14 +364,17 @@ def build_runtime_project(packet: dict) -> bytes:
             'rehashing a changed model; export a new reviewed contract and review its\n'
             'exact spec, plan, case and bindings with the authorized customer operator.\n')
     if model.decision_tables:
+        ordered=any(t.hit_policy=='FIRST' for t in model.decision_tables)
         files['README.md'] += (
-            '\n## Current-source UNIQUE decisions\n\n'
+            ('\n## Current-source ordered decisions (UNIQUE/FIRST)\n\n' if ordered else '\n## Current-source UNIQUE decisions\n\n')+
             'Install requirements.txt before table-project tests. decision_runtime.py and owg_model/ enforce the contract.\n'
             'Review decision_table_checks separately: one selected current-source record per whole table,\n'
-            'mode unique_route_before_each_action, record_semantics_reviewed, non_atomic_reads_reviewed and\n'
+            +('mode first_route_before_each_action for FIRST with row_precedence_reviewed true, or unique_route_before_each_action for UNIQUE;\nrecord_semantics_reviewed, non_atomic_reads_reviewed and\n' if ordered else
+              'mode unique_route_before_each_action, record_semantics_reviewed, non_atomic_reads_reviewed and\n')+
             'utc_effective_dates_reviewed true. Only /source/provider, /source/record_kind and /source/state are supported.\n'
             'Every competing row must be confirmed and supported. Templates remain disabled.\n'
-            'A UNIQUE match must agree with every route visit before tool operations and at completion.\n'
+            +('FIRST uses explicit row order: an earlier unknown withholds later matches; later unknowns cannot displace an established hit.\nThe policy-selected route must agree with every route visit before tool operations and at completion.\n' if ordered else
+              'A UNIQUE match must agree with every route visit before tool operations and at completion.\n')+
             'Dates use the consumer UTC clock after the read. Caller dates/facts do not substitute for source checks.\n'
             'Use plan_sources.py and evaluate_sources.py with separate source-read/model-sharing consents.\n'
             'Without source context, visited tables require clarification. Policy documents and case association stay unverified.\n'

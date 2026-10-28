@@ -72,6 +72,7 @@ def check_case_rules(record,cases,as_of_date=None):
                 if route is not None and (not route_valid or table.decision_activity_id not in route):
                     check.update(status='not_evaluated_invalid_route' if not route_valid else 'not_on_proposed_route',
                                  rows=[],selected_target_activity_id=None)
+                    if table.hit_policy=='FIRST':check.update(selected_row_id=None,blocking_row_id=None)
                 elif route_valid and check['selected_target_activity_id'] is not None:
                     # A looping route may visit a decision repeatedly: all chosen
                     # targets must agree with the same caller-supplied case facts.

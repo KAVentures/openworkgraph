@@ -30,3 +30,7 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_object_relationships.cjs
       - name: Verify supplied graph constraints, empty graphs and guarded exports
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/supplied_object_constraints.cjs
+      - name: Verify local FIRST precedence, review invalidation and guarded reports
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/first_decision_policy_local.cjs
+      - name: Verify shared FIRST editing, review, tenant isolation and guarded exports
+        run: OWG_TEST_FIRST_POLICY=1 NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_tables.cjs
