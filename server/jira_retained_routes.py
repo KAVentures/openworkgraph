@@ -17,7 +17,7 @@ def _require_dashboard(request: Request):
 router = APIRouter(prefix='/v1/event-log-sources/jira', dependencies=[Depends(_require_dashboard)])
 
 
-async def _body(request, keys):
+async def _body(request, keys, alternatives=()):
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
         raise HTTPException(415, 'JSON source request required')
     body = bytearray()
@@ -31,7 +31,7 @@ async def _body(request, keys):
         raise HTTPException(422, 'Invalid Jira profile JSON') from None
     finally:
         body.clear()
-    if not isinstance(value, dict) or set(value) != set(keys):
+    if not isinstance(value, dict) or set(value) not in (set(keys), *(set(k) for k in alternatives)):
         raise HTTPException(422, 'Exact Jira profile fields required')
     return value
 
@@ -51,7 +51,10 @@ async def list_profiles():
 
 @router.post('')
 async def create_profile(request: Request):
-    body = await _body(request, ('resource_refs', 'confirm_reads', 'confirm_retention', 'confirm_status_labels'))
+    confirmations = ('confirm_reads', 'confirm_retention', 'confirm_status_labels')
+    body = await _body(request, ('resource_refs', *confirmations), alternatives=[('issue_keys', *confirmations)])
+    if 'issue_keys' in body:
+        return await _respond(profiles.create_native, body.pop('issue_keys'), **body)
     return await _respond(profiles.create, body.pop('resource_refs'), **body)
 
 

@@ -79,12 +79,39 @@ def _scope(refs, host):
     return keys
 
 
+def native_selection_enabled():
+    return os.environ.get('OWG_JIRA_NATIVE_CASE_INGESTION_ENABLED') == 'true'
+
+
+def _native_scope(keys):
+    if not native_selection_enabled():
+        raise JiraIngestionError('native_jira_case_selection_disabled')
+    if (not isinstance(keys, list) or not 1 <= len(keys) <= 8
+            or any(not isinstance(key, str) or not _ISSUE.fullmatch(key) for key in keys)
+            or len(set(keys)) != len(keys)):
+        raise JiraIngestionError('select_one_to_eight_distinct_exact_jira_keys')
+    return list(keys)
+
+
+def _profile_scope(profile, host):
+    basis = profile.get('selection_basis', 'observed_refs')
+    if basis == 'observed_refs':
+        return _scope(profile['resource_refs'], host)
+    if basis == 'native_issue_keys' and profile['resource_refs'] == []:
+        return _native_scope(profile['issue_keys'])
+    raise JiraIngestionError('invalid_jira_profile_selection_basis')
+
+
 def _public(profile, now):
     allowed = ('profile_id', 'host', 'resource_refs', 'enabled', 'revision', 'log_id',
                'status', 'error', 'last_attempt_at', 'last_success_at', 'retry_after', 'checkpoint')
     result = {k: profile[k] for k in allowed if k in profile}
     if result['status'] == 'running' and profile.get('lease_until', 0) <= now:
         result['status'] = 'interrupted'
+    basis = profile.get('selection_basis', 'observed_refs')
+    result.update(selection_basis=basis, selected_case_count=len(profile['issue_keys']))
+    if basis == 'native_issue_keys':
+        result['selected_issue_keys'] = list(profile['issue_keys'])
     result.update(provider='jira', manual_runs_only=True, source_completeness_verified=False,
                   business_outcomes_verified=False, execution_authorized=False,
                   alert_eligible=False, credential_values_included=False)
@@ -102,18 +129,21 @@ def status():
         profiles = [_public(json.loads(row[0]), now) for row in conn.execute(
             'SELECT definition FROM jira_ingestion_profiles ORDER BY profile_id').fetchall()]
     return {'format': 'openworkgraph.retained-jira-profiles.v1', 'configured': configured,
-            'profiles': profiles, 'manual_runs_only': True, 'credentials_exposed': False}
+            'profiles': profiles, 'manual_runs_only': True, 'credentials_exposed': False,
+            'native_case_selection_configured': configured and native_selection_enabled()}
 
 
-def create(refs, *, confirm_reads, confirm_retention, confirm_status_labels):
+def _create(refs, *, issue_keys=None, confirm_reads, confirm_retention, confirm_status_labels):
     if not all(v is True for v in (confirm_reads, confirm_retention, confirm_status_labels)):
         raise JiraIngestionError('separate_jira_read_retention_and_label_confirmation_required')
     config = configuration(os.environ)
-    keys = _scope(refs, config[0])
+    basis = 'observed_refs' if issue_keys is None else 'native_issue_keys'
+    keys = _scope(refs, config[0]) if basis == 'observed_refs' else _native_scope(issue_keys)
     profile_id = 'jira_' + secrets.token_hex(12)
     profile = {'profile_id': profile_id, 'host': config[0], 'cloud_id': config[1],
                'credential_reference': 'environment:OWG_JIRA_OAUTH_ACCESS_TOKEN',
-               'configuration_binding': _binding(config), 'resource_refs': refs, 'issue_keys': keys,
+               'configuration_binding': _binding(config), 'resource_refs': list(refs or []), 'issue_keys': keys,
+               'selection_basis': basis,
                'enabled': True, 'revision': 1, 'log_id': None, 'account_binding': None,
                'status': 'ready', 'error': None, 'last_attempt_at': None,
                'last_success_at': None, 'retry_after': 0, 'checkpoint': None}
@@ -122,6 +152,18 @@ def create(refs, *, confirm_reads, confirm_retention, confirm_status_labels):
             raise JiraIngestionError('jira_profile_limit_reached')
         _put(conn, profile)
     return _public(profile, time.time())
+
+
+def create(refs, *, confirm_reads, confirm_retention, confirm_status_labels):
+    return _create(refs, confirm_reads=confirm_reads, confirm_retention=confirm_retention,
+                   confirm_status_labels=confirm_status_labels)
+
+
+def create_native(issue_keys, *, confirm_reads, confirm_retention, confirm_status_labels):
+    # None must not fall back to the observed-ref mode through _create's default.
+    keys = _native_scope(issue_keys)
+    return _create([], issue_keys=keys, confirm_reads=confirm_reads,
+                   confirm_retention=confirm_retention, confirm_status_labels=confirm_status_labels)
 
 
 def change(profile_id, *, enabled=None, disconnect=False, confirmed=False):
@@ -170,7 +212,7 @@ def _check_configuration(profile, config):
     current = configuration(os.environ)
     if current != config or not hmac.compare_digest(profile['configuration_binding'], _binding(current)):
         raise JiraIngestionError('jira_configuration_changed_recreate_profile')
-    if _scope(profile['resource_refs'], current[0]) != profile['issue_keys']:
+    if _profile_scope(profile, current[0]) != profile['issue_keys']:
         raise JiraIngestionError('observed_jira_scope_changed')
 
 

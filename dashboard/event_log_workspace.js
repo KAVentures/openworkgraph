@@ -228,32 +228,38 @@
 
   function jiraSourceSection(){
     const box=section('Retained Jira histories');box.id='owgJiraSource';box.style.overflowWrap='anywhere';
-    box.append(el('p','Manually read 1–8 already observed Jira issues into a local event log. Each run rescans the bounded history. Status labels, native issue IDs and source event identities are retained; authors, comments, descriptions and assignee values are excluded. Pagination is not proof of complete history. No background polling or source writes.','muted'));
+    box.append(el('p','Manually read 1–8 selected Jira issues into a local event log. Use observed references, or explicitly authorized issue keys without desktop capture. Each run rescans the bounded history. Status labels, native issue IDs and source event identities are retained; authors, comments, descriptions and assignee values are excluded. Pagination is not proof of complete history. No background polling or source writes.','muted'));
+    const basis=select('owgJiraSourceBasis',[['observed_refs','Observed Jira references'],['native_issue_keys','Selected Jira issue keys (separate admin opt-in)']]);
     const refs=el('textarea');refs.id='owgJiraSourceRefs';refs.rows=3;refs.maxLength=400;refs.placeholder='One owg:r: reference per line';refs.style.maxWidth='100%';
     const read=input('owgJiraSourceRead','checkbox'),retain=input('owgJiraSourceRetain','checkbox'),labels=input('owgJiraSourceLabels','checkbox');
     const create=button('Create selected Jira profile');create.id='owgJiraSourceCreate';create.disabled=true;
     const refresh=button('Refresh Jira source status','secondary');refresh.id='owgJiraSourceRefresh';
     const message=el('p');message.id='owgJiraSourceStatus';message.setAttribute('role','status');message.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgJiraSourceProfiles';
-    box.append(field('Observed Jira references',refs),field('I authorize these selected source reads',read),field('I confirm local retention until I delete the log',retain),field('I confirm retention of business status labels and source identities',labels),create,refresh,message,out);
-    let version=0,creating=false;
+    const scopeField=field('Observed Jira references',refs);
+    box.append(field('Selection basis',basis),scopeField,el('p','Profile selection identifiers remain until disconnect. Imported events and their checkpoint are erased when you delete the log.','muted'),field('I authorize these selected source reads',read),field('I confirm local retention until I delete the log',retain),field('I confirm retention of business status labels and source identities',labels),create,refresh,message,out);
+    let version=0,capabilityVersion=0,creating=false,nativeReady=false;
     const changed=()=>{version++;read.checked=false;retain.checked=false;labels.checked=false;sync();};
-    const sync=()=>{create.disabled=creating||!refs.value.trim()||!read.checked||!retain.checked||!labels.checked;};
+    const sync=()=>{create.disabled=creating||!refs.value.trim()||!read.checked||!retain.checked||!labels.checked||(basis.value==='native_issue_keys'&&!nativeReady);};
+    basis.addEventListener('change',()=>{refs.value='';scopeField.querySelector('label').textContent=basis.value==='native_issue_keys'?'Exact Jira issue keys':'Observed Jira references';refs.placeholder=basis.value==='native_issue_keys'?'One exact key per line, e.g. OWG-123':'One owg:r: reference per line';changed();if(basis.value==='native_issue_keys'&&!nativeReady)message.textContent='An administrator must separately authorize native issue-key ingestion.';});
     refs.addEventListener('input',changed);for(const control of [read,retain,labels])control.addEventListener('change',sync);
     const endpoint='/v1/event-log-sources/jira';
     const send=async(path,body,method='POST')=>(await api(endpoint+path,{method,...(body===null?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})})).json();
     async function load(){
-      const request=++version;
+      const request=++version,capability=++capabilityVersion;
       try{
-        const result=await getJSON(endpoint);if(request!==version)return;
-        message.textContent=result.configured?'Ready for explicitly confirmed manual reads. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
+        const result=await getJSON(endpoint);
+        if(capability===capabilityVersion){nativeReady=result.native_case_selection_configured===true;sync();}
+        if(request!==version)return;
+        message.textContent=result.configured&&basis.value==='native_issue_keys'&&!nativeReady?'An administrator must separately authorize native issue-key ingestion.':result.configured?'Ready for explicitly confirmed manual reads. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
         out.replaceChildren();
         for(const profile of result.profiles){
           const item=el('div',null,'card');item.dataset.profileId=profile.profile_id;
-          item.append(el('h4',profile.host+' · '+profile.resource_refs.length+' selected issues'),el('p','Status: '+profile.status+(profile.error?' · '+profile.error:'')+'. Last successful read: '+(profile.last_success_at?new Date(profile.last_success_at*1000).toISOString():'none')+'. Source completeness unverified.'));
+          item.append(el('h4',profile.host+' · '+(profile.selected_case_count??profile.resource_refs.length)+' selected issues'),el('p','Status: '+profile.status+(profile.error?' · '+profile.error:'')+'. Last successful read: '+(profile.last_success_at?new Date(profile.last_success_at*1000).toISOString():'none')+'. Source completeness unverified.'));
+          item.append(el('p',profile.selection_basis==='native_issue_keys'?'Selection: exact Jira keys · '+profile.selected_issue_keys.join(', '):'Selection: observed references · '+profile.resource_refs.join(', ')));
           if(profile.checkpoint)item.append(el('p',profile.checkpoint.events+' retained projected events; '+profile.checkpoint.histories+' histories in the last successful bounded rescan.'));
           const row=el('div',null,'row');
-          const run=button('Read and retain selected histories');run.disabled=!profile.enabled||profile.status==='running'||Date.now()<profile.retry_after*1000;
+          const run=button('Read and retain selected histories');run.disabled=!profile.enabled||profile.status==='running'||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
           const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary');
           // Lifecycle controls stay available while reading; generation fencing
           // prevents a held old run response from replacing newer disable state.
@@ -277,7 +283,7 @@
     }
     create.onclick=async()=>{
       const request=++version;creating=true;sync();
-      try{await send('',{resource_refs:refs.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),confirm_reads:read.checked,confirm_retention:retain.checked,confirm_status_labels:labels.checked});
+      try{const selected=refs.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);await send('',{[basis.value==='native_issue_keys'?'issue_keys':'resource_refs']:selected,confirm_reads:read.checked,confirm_retention:retain.checked,confirm_status_labels:labels.checked});
         if(request!==version)return;read.checked=false;retain.checked=false;labels.checked=false;await load();
       }catch(error){if(request===version)message.textContent=error.message;}
       finally{creating=false;sync();}

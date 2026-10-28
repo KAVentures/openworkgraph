@@ -42,3 +42,5 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/working_calendar_analysis.cjs
       - name: Verify selected Jira retention, lifecycle and guarded workspace paths
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_retained_ingestion.cjs
+      - name: Verify native selected Jira cases without observed desktop evidence
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_native_case_ingestion.cjs
