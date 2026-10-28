@@ -62,6 +62,39 @@ def test_finite_typed_constants_and_arithmetic(log, operation, value, expected):
     assert r['rows'] == [[expected]] and r['metrics'][-1]['unit'] == 'EUR'
 
 
+@pytest.mark.parametrize(('operation', 'expected'), [
+    ('minimum', 11.0),  # 8 for a, 3 for b; c is missing
+    ('maximum', 23.0),  # 15 for a, 8 for b; c is missing
+])
+def test_same_unit_extrema_preserve_missing_values_and_provenance(log, operation, expected):
+    r = run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'EUR'))])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit'] == 'EUR' and metric['unit_powers'] == {'EUR': 1}
+    assert metric['cases_with_value'] == 2
+    assert metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+    assert metric['cases_with_non_finite_value'] == 0
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize('operation', ['minimum', 'maximum'])
+def test_extrema_require_exact_matching_units_before_reading_dataset(log, operation, monkeypatch):
+    def no_query(*args, **kwargs):
+        pytest.fail('a dimensionally invalid extrema metric accessed the dataset')
+    monkeypatch.setattr(workspace, '_query', no_query)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, expr(operation=operation, right=constant(1.0, 'USD'))])
+
+
+def test_extrema_support_existing_typed_metric_dependencies(log):
+    # A computed per-case quantity is still typed and can be compared to a
+    # declared bound without inventing values for zero/missing dependencies.
+    bounded = expr(operation='minimum', left=ref('per_item'), right=constant(8.0, 'EUR/events'))
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, COUNT, expr('per_item'), bounded])
+
+
 def test_dimensional_cancellation_and_compound_unit_addition(log):
     ratio = expr('per_item')
     restored = expr(operation='multiply', left=ref('per_item'), right=ref('items'))
