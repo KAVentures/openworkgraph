@@ -82,7 +82,12 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         if window == "cases":
             for i, w in enumerate(windows):
                 w["window"] = f"cases {i * int(window_cases) + 1}–{i * int(window_cases) + w['cases']}"
-        tested = [i for i in range(len(buckets) - 1) if buckets[i][1] >= min_cases and buckets[i + 1][1] >= min_cases]
+        # The statistical test operates on dcase, not every eligible case in
+        # dw. Requiring support from the full population could admit a test
+        # with fewer than min_cases actual sampled cases on either side.
+        tested = [i for i in range(len(buckets) - 1)
+                  if sampled_by_window.get(i, 0) >= min_cases
+                  and sampled_by_window.get(i + 1, 0) >= min_cases]
         boundaries = []
         if tested:
             conn.execute("CREATE OR REPLACE TEMP TABLE pairs (pair INTEGER)")
