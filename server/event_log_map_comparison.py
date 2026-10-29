@@ -86,8 +86,12 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
         paths.sort(key=lambda p: (not p["ci_excludes_zero"], -abs(p["case_share_difference"]), p["from"], p["to"]))
 
         def side(t, n):
-            acts = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id) FROM {t}
-                GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_MAP_ACTIVITIES}""").fetchall()
+            # Fetch one extra ranked activity to distinguish an exactly-full
+            # display from an actually truncated one without scanning all names.
+            ranked = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id) FROM {t}
+                GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_MAP_ACTIVITIES + 1}""").fetchall()
+            activities_truncated = len(ranked) > MAX_MAP_ACTIVITIES
+            acts = ranked[:MAX_MAP_ACTIVITIES]
             kept = {a for a, _, _ in acts}
             edges = conn.execute(f"""SELECT src, dst, count(*), count(DISTINCT case_id), quantile_cont(gap, 0.5)
                 FROM {t}_dfg GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2""").fetchall()
@@ -100,7 +104,7 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
                                      "median_elapsed_gap_seconds": m}
                                     for s, d, x, c, m in edges if s in kept and d in kept][:4096],
                     "start_activities": {a: n for a, n in starts if a in kept},
-                    "activities_truncated": len(acts) == MAX_MAP_ACTIVITIES}
+                    "activities_truncated": activities_truncated}
         return {
             "cohorts": [cohorts.describe(first), cohorts.describe(second)],
             "cases": [na, nb], "overlapping_cases": overlap,
