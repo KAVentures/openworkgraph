@@ -9,11 +9,11 @@ Supported:
 - Patch paths displayName, externalId and members support replacement; adding direct members appends without dropping existing ones. Removing members clears the list, and removing an exact members[value eq "id"] selector removes only that member. A PATCH is atomic.
 - Resource versions include effective members. The read-only Users.groups projection lists current provider-owned direct groups, and the User ETag changes with that projection. No-op updates keep the version. Deleted groups are retained as tombstones.
 - Each membership captures the employee offboarding generation. An offboarded, deleted, foreign-provider or later-rehired User is omitted and cannot silently regain an old link. Current provider approval is needed to re-add them.
+- Mixed [Users/Groups Bulk](SCIM_GROUP_BULK.md) supports successful earlier User creates in direct member values and the supported removal selector; no arbitrary value or URL rewriting.
 - Group operations use the existing provider credential, revocation, database transaction and minimized audit. No name automatically maps to a team, authorization scope, evidence permission or execution grant.
 
-Not implemented (remain open under #433/#412):
+Not implemented (broader acceptance remains under #412):
 - Nested groups and generic SCIM filtering/attribute selection.
-- Groups inside Bulk (the existing endpoint still handles Users only).
 - Admin mappings from provider groups into OWG teams or scopes.
 - Verified real Entra/Okta/other IdP compatibility, mixed-worker migrations, company deployment and broader standards conformance.
 
