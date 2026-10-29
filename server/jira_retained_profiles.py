@@ -105,10 +105,14 @@ def _profile_scope(profile, host):
 
 def _public(profile, now):
     allowed = ('profile_id', 'host', 'resource_refs', 'enabled', 'revision', 'log_id',
-               'status', 'error', 'last_attempt_at', 'last_success_at', 'retry_after', 'checkpoint')
+               'status', 'error', 'last_attempt_at', 'last_success_at', 'retry_after', 'checkpoint',
+               'credential_generation', 'credential_check_status', 'credential_check_error',
+               'credential_check_attempt_at', 'credential_verified_at')
     result = {k: profile[k] for k in allowed if k in profile}
-    if result['status'] == 'running' and profile.get('lease_until', 0) <= now:
+    if result['status'] in {'running', 'checking_credentials'} and profile.get('lease_until', 0) <= now:
         result['status'] = 'interrupted'
+        if profile.get('credential_check_status') == 'checking':
+            result['credential_check_status'] = 'interrupted'
     basis = profile.get('selection_basis', 'observed_refs')
     result.update(selection_basis=basis, selected_case_count=len(profile['issue_keys']))
     if basis == 'native_issue_keys':
@@ -167,6 +171,14 @@ def create_native(issue_keys, *, confirm_reads, confirm_retention, confirm_statu
                    confirm_retention=confirm_retention, confirm_status_labels=confirm_status_labels)
 
 
+def _interrupt_credential_check(profile):
+    if profile.get('credential_check_status') == 'checking':
+        profile.update(credential_check_status='interrupted',
+                       credential_check_error='jira_credential_check_invalidated')
+    profile.pop('credential_check_previous_status', None)
+    profile.pop('credential_check_previous_error', None)
+
+
 def change(profile_id, *, enabled=None, disconnect=False, confirmed=False):
     if not disconnect and (type(enabled) is not bool or (enabled and confirmed is not True)):
         raise JiraIngestionError('explicit_jira_enable_confirmation_required')
@@ -185,6 +197,7 @@ def change(profile_id, *, enabled=None, disconnect=False, confirmed=False):
                 conn.execute('ROLLBACK')
                 raise
             return {'disconnected': True, 'retained_log_id': profile['log_id'], 'retained_dataset_deleted': False}
+        _interrupt_credential_check(profile)
         profile.update(enabled=enabled, revision=profile['revision'] + 1,
                        run_id=None, lease_until=0, status='ready' if enabled else 'disabled', error=None)
         _put(conn, profile)
@@ -208,6 +221,7 @@ def forget_dataset(conn, log_id):
         except JiraIngestionError:
             raise workspace.EventLogWorkspaceError('Temporary source data could not be erased; event log was not deleted') from None
         conn.execute('DELETE FROM jira_ingestion_manifest WHERE profile_id=?', [profile['profile_id']])
+        _interrupt_credential_check(profile)
         profile.update(enabled=False, revision=profile['revision'] + 1, status='dataset_deleted',
                        error=None, checkpoint=None, last_success_at=None, run_id=None,
                        lease_until=0, retry_after=0)
@@ -256,6 +270,7 @@ def _begin(profile_id):
         if profile.get('lease_until', 0) > now and profile.get('run_id'):
             raise JiraIngestionError('jira_run_already_active')
         staging.clear(workspace.DATA_DIR, profile_id)
+        _interrupt_credential_check(profile)
         profile.update(status='running', error=None, run_id=secrets.token_hex(16),
                        lease_until=now + _LEASE_SECONDS, last_attempt_at=now)
         _put(conn, profile)
