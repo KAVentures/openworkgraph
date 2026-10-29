@@ -72,6 +72,7 @@ def _list(resources):
 
 
 def _schema():
+    from .scim_user_names import FIELDS as NAME_FIELDS
     def attribute(name, kind='string', *, required=False, mutable='readWrite', exact=False, unique='none', multi=False):
         return {'name': name, 'type': kind, 'multiValued': multi, 'required': required,
                 'caseExact': exact, 'mutability': mutable, 'returned': 'default', 'uniqueness': unique}
@@ -81,10 +82,13 @@ def _schema():
         attribute('display'),
         {**attribute('type', mutable='readOnly'), 'canonicalValues': ['direct']},
     ]
+    name = attribute('name', 'complex')
+    name['description'] = 'Optional provider-owned name; never changes roster email, actor, displayName or SSO identity.'
+    name['subAttributes'] = [attribute(key) for key in NAME_FIELDS]
     return {'schemas': [SCHEMA_URI], 'id': scim.CORE, 'name': 'User',
             'description': 'OWG bounded User projection; userName is a stable work-email actor. Groups are read-only provider metadata, not access grants.',
             'attributes': [attribute('userName', required=True, mutable='immutable', unique='server'),
-                           attribute('displayName'), attribute('active', 'boolean'), groups]}
+                           attribute('displayName'), attribute('active', 'boolean'), name, groups]}
 
 
 class ProvisioningRoute(APIRoute):

@@ -8,6 +8,7 @@ import re
 
 from . import scim_provisioning as scim
 from .scim_groups import CORE as GROUP
+from .scim_user_names import FIELDS as NAME_FIELDS
 
 SEARCH = 'urn:ietf:params:scim:api:messages:2.0:SearchRequest'
 MAX_PATHS = 32
@@ -17,7 +18,7 @@ _COMMON = {'schemas': None, 'id': None, 'externalid': None,
            'meta': {'resourcetype', 'created', 'lastmodified', 'version', 'location'}}
 _FIELDS = {
     scim.CORE: {**_COMMON, 'username': None, 'displayname': None, 'active': None,
-                'groups': {'value', 'display', 'type'}},
+                'groups': {'value', 'display', 'type'}, 'name': {key.lower() for key in NAME_FIELDS}},
     GROUP: {**_COMMON, 'displayname': None, 'members': {'value', 'type'}},
 }
 

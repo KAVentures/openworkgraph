@@ -60,6 +60,8 @@ def init_schema(db):
         for statement in SCHEMA.split(';'):
             if statement.strip():
                 conn.execute(statement)
+        from .scim_user_names import SCHEMA as USER_NAMES_SCHEMA
+        conn.execute(USER_NAMES_SCHEMA)
 
 
 def _text(value, maximum, *, blank=False):
@@ -96,7 +98,7 @@ def _keys(body, allowed):
 
 
 def _attributes(body):
-    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta', 'groups'})
+    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta', 'groups', 'name'})
     if values.get('schemas') != [CORE]:
         raise Error(400, 'Only the core User schema is supported', 'invalidSyntax')
     # SCIM readOnly fields echoed by a client are ignored; endpoint identity is
@@ -107,7 +109,10 @@ def _attributes(body):
 
 def _validate_values(values):
     for key, value in values.items():
-        if key == 'active':
+        if key == 'name':
+            from .scim_user_names import normalize
+            values[key] = normalize(value)
+        elif key == 'active':
             if not isinstance(value, bool):
                 raise Error(400, 'active must be a JSON boolean', 'invalidValue')
         elif key == 'username':
@@ -124,8 +129,10 @@ def _validate_values(values):
 
 _SELECT = '''SELECT e.*, l.external_id AS provider_external_id,
  l.revision AS resource_revision, l.created_at AS provisioned_at,
- l.updated_at AS provision_updated_at, l.deleted_at AS provision_deleted_at
- FROM gateway_scim_users l JOIN gateway_employees e ON e.employee_id=l.employee_id'''
+ l.updated_at AS provision_updated_at, l.deleted_at AS provision_deleted_at,
+ n.name_json AS provider_name_json
+ FROM gateway_scim_users l JOIN gateway_employees e ON e.employee_id=l.employee_id
+ LEFT JOIN gateway_scim_user_names n ON n.provider_id=l.provider_id AND n.employee_id=l.employee_id'''
 
 
 def _project(row):
@@ -133,6 +140,10 @@ def _project(row):
                 'displayName': row['display_name'], 'active': row['status'] == 'active'}
     if row['provider_external_id'] is not None:
         resource['externalId'] = row['provider_external_id']
+    from .scim_user_names import stored
+    name = stored(row.get('provider_name_json'))
+    if name:
+        resource['name'] = name
     basis = [resource, row['updated_at'], row['resource_revision'], row['provision_deleted_at']]
     digest = hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     dates = [row['updated_at'], row['provision_updated_at']]
@@ -293,6 +304,9 @@ class Provisioning:
             self.db._execute(conn, '''INSERT INTO gateway_scim_users
                 (provider_id,employee_id,external_id,revision,created_at,updated_at)
                 VALUES (?,?,?,1,?,?)''', (provider_id, uid, values.get('externalid'), now, now))
+            from .scim_user_names import save as save_name
+            if values.get('name'):
+                save_name(self.db, conn, provider_id, uid, values['name'])
             if values.get('active') is False:
                 roster.offboard_employee_in_transaction(self.db, conn, org, uid)
             self.audit(conn, org, provider_id, 'scim.user.created', {'employee_id': uid, 'active': values.get('active', True)})
@@ -305,16 +319,22 @@ class Provisioning:
         name = values.get('displayname', current['displayName'])
         active = values.get('active', current['active'])
         external = values.get('externalid', current.get('externalId'))
-        if (name, active, external) == (current['displayName'], current['active'], current.get('externalId')):
+        structured_name = values.get('name', current.get('name', {}))
+        roster_changed = (name, active, external) != (current['displayName'], current['active'], current.get('externalId'))
+        if not roster_changed and structured_name == current.get('name', {}):
             return current
         uid, now = row['employee_id'], roster._now()
         if current['active'] and not active:
             roster.offboard_employee_in_transaction(self.db, conn, provider['organization_id'], uid)
         elif not current['active'] and active:
             roster.revoke_inactive_credentials_in_transaction(self.db, conn, row)
-        self.db._execute(conn, '''UPDATE gateway_employees SET display_name=?,status=?,
-            offboarded_at=CASE WHEN ? THEN NULL ELSE offboarded_at END,updated_at=? WHERE employee_id=?''',
-            (name, 'active' if active else 'offboarded', active, now, uid))
+        if roster_changed:
+            self.db._execute(conn, '''UPDATE gateway_employees SET display_name=?,status=?,
+                offboarded_at=CASE WHEN ? THEN NULL ELSE offboarded_at END,updated_at=? WHERE employee_id=?''',
+                (name, 'active' if active else 'offboarded', active, now, uid))
+        from .scim_user_names import save as save_name
+        if structured_name != current.get('name', {}):
+            save_name(self.db, conn, provider['provider_id'], uid, structured_name)
         self.db._execute(conn, '''UPDATE gateway_scim_users SET external_id=?,revision=revision+1,
             updated_at=? WHERE provider_id=? AND employee_id=?''', (external, now, provider['provider_id'], uid))
         self.audit(conn, provider['organization_id'], provider['provider_id'], 'scim.user.updated',
@@ -327,6 +347,7 @@ class Provisioning:
             raise Error(400, 'userName is required', 'invalidValue')
         values.setdefault('displayname', '')
         values.setdefault('externalid', None)
+        values.setdefault('name', {})
         # Omitted active preserves status: replacement is never implicit rehire.
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
@@ -349,7 +370,8 @@ class Provisioning:
                 self.conditional(conn, provider, row, etag)
             current = self.user_projection(conn, provider, row)
             values = {'username': current['userName'], 'displayname': current['displayName'],
-                      'active': current['active'], 'externalid': current.get('externalId')}
+                      'active': current['active'], 'externalid': current.get('externalId'),
+                      'name': current.get('name', {})}
             for operation in operations:
                 op = _keys(operation, {'op', 'path', 'value'})
                 verb = op.get('op', '')
@@ -359,6 +381,12 @@ class Provisioning:
                 if not isinstance(path, str):
                     raise Error(400, 'Invalid patch path', 'invalidPath')
                 path, verb = path.lower(), verb.lower()
+                from .scim_user_names import patch as patch_name
+                if path == 'name' or path.startswith('name.'):
+                    if verb != 'remove' and 'value' not in op:
+                        raise Error(400, 'A patch value is required', 'invalidSyntax')
+                    values['name'] = patch_name(values['name'], path, verb, op.get('value'))
+                    continue
                 if verb == 'remove':
                     if not path:
                         raise Error(400, 'A remove path is required', 'noTarget')
@@ -374,6 +402,8 @@ class Provisioning:
                         changed = {path: op['value']}
                     else:
                         changed = _keys(op['value'], set(values))
+                    if 'name' in changed:
+                        changed['name'] = patch_name(values['name'], 'name', verb, changed['name'])
                     values.update(_validate_values(changed))
             result = self.mutate(conn, provider, row, values)
             if unversioned:
