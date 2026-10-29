@@ -1678,29 +1678,40 @@
         futureReference&&futureReference.basis==='current_query'?'current query':'current query (legacy reference not recorded)';
       const futureAt=futureReference&&typeof futureReference.at==='string'?futureReference.at:'not recorded';
       const futureCount=d.events_dated_after_reference===undefined?d.events_dated_after_import:d.events_dated_after_reference;
+      const coverage=Array.isArray(d.attribute_coverage)?d.attribute_coverage:[];
+      const totalKeys=Number.isSafeInteger(d.attribute_coverage_total_keys)&&
+        d.attribute_coverage_total_keys>=coverage.length?d.attribute_coverage_total_keys:null;
+      const coverageNote=d.attribute_coverage_truncated===true?
+        'Showing '+coverage.length.toLocaleString()+' of '+(totalKeys===null?'an unknown number of':totalKeys.toLocaleString())+' attribute keys; omitted keys are not absent.':
+        d.attribute_coverage_truncated===false&&totalKeys!==null?
+        'Showing all '+totalKeys.toLocaleString()+' attribute keys in the supplied rows.':
+        'Showing up to '+coverage.length.toLocaleString()+' attribute keys; whether more were omitted was not recorded (legacy server).';
       const reports=r.reports.map(p=>[p.batch===0?'Import':'Append '+p.batch,p.transform.format,Number(p.rows.accepted).toLocaleString(),
         Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
         p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
-        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256))]);
+        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256)),el('code',short(p.content_sha256_v2))]);
       const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
       const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
-        table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content'],reports),
+        table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
         table(['Diagnostic (whole log)','Events'],[
-          ['Duplicate events (same case, activity, time and resource)',Number(d.duplicate_events).toLocaleString()],
+          ['Duplicate event payloads (including attributes and qualified links; IDs excluded)',Number(d.duplicate_events).toLocaleString()],
           ['Events sharing a timestamp within a case',Number(d.events_sharing_a_timestamp_in_a_case).toLocaleString()+' in '+Number(d.cases_with_shared_timestamps).toLocaleString()+' cases; order falls back to the event ID'],
           ['Events without a resource',Number(d.events_without_resource).toLocaleString()],
           ['Events without a case',Number(d.events_without_case).toLocaleString()],
           ['Events dated after reference ('+futureBasis+')',Number(futureCount).toLocaleString()+'; UTC reference: '+futureAt],
           ...d.case_notions.map(n=>['Single-event '+n.object_type+' cases',Number(n.single_event_cases).toLocaleString()+' of '+Number(n.cases).toLocaleString()])]),
-        ...(d.attribute_coverage.length?[table(['Attribute','Events with a value','Without'],d.attribute_coverage.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()]))]:[]),
+        el('div',coverageNote,'muted'),
+        ...(coverage.length?[table(['Attribute','Events with a value','Without'],coverage.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()]))]:[]),
         ...(r.current.object_relationships?[el('div','Retained supplied object assertions: '+r.current.object_relationships.retained_relationships+'. Separate whole-log relationship digest: '+r.current.object_relationships.relationships_sha256+'. This does not establish source completeness, case membership or causality.','muted')]:[]),
         ...(r.current.source_identity_map_sha256?[el('div','Current source identity map digest: '+r.current.source_identity_map_sha256,'muted')]:[]),
-        el('div','Current content digest: '+r.current.content_sha256+'. '+r.current.completeness.note,'muted'));
+        el('div','Current content digest v1: '+r.current.content_sha256+'. '+
+          (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
+          ' '+r.current.completeness.note,'muted'));
     }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
     return box;
   }
