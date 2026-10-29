@@ -59,7 +59,7 @@ def test_activity_names_containing_arrow_do_not_collide_as_drift_edges():
             rows.append(f"m{month}c{i},{first},{day.isoformat()}")
             rows.append(f"m{month}c{i},{second},{(day + timedelta(hours=1)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="arrow-paths",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="arrow-paths",
         source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time"})["log_id"]
