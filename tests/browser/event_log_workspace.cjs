@@ -73,6 +73,39 @@ const path=require('node:path');
    assert.ok(futureText.includes(Number(qualityPayload.current.diagnostics.events_dated_after_reference).toLocaleString()),
      'visible count matches the current API count');
    assert.doesNotMatch(qualityText,/Events dated after the import/,'live data must not be labeled import-time');
+   const currentV2=qualityPayload.current.content_sha256_v2;
+   assert.match(currentV2,/^[0-9a-f]{64}$/,'current quality response supplies the delimiter-safe digest');
+   assert.ok(qualityText.includes('Current content digest v2 (delimiter-safe): '+currentV2),
+     'the full v2 digest is visible, not only the delimiter-ambiguous v1 digest');
+   assert.match(qualityText,/Duplicate event payloads \(including attributes and qualified links; IDs excluded\)/,
+     'duplicate label describes the current exact payload-and-link comparison');
+   assert.ok(qualityText.includes('Showing all '+qualityPayload.current.diagnostics.attribute_coverage_total_keys.toLocaleString()+
+     ' attribute keys in the supplied rows.'),'the displayed key count agrees with the real API');
+   const reportHeader=page.locator('#owgQualityResults table').first();
+   assert.equal(await reportHeader.getByRole('columnheader',{name:'Content v2'}).count(),1);
+   assert.equal(await reportHeader.locator('tbody tr').first().locator('td').last().textContent(),
+     qualityPayload.reports[0].content_sha256_v2.slice(0,12)+'…','the import row shows its own v2 digest');
+
+   // Synthetic response only: exercise the capped-key disclosure without creating
+   // a large source log. Backend DuckDB tests separately establish the real 35-key count.
+   const qualityPattern='**/v1/event-logs/*/quality';
+   await page.route(qualityPattern,async route=>{
+     const response=await route.fetch(),payload=await response.json();
+     payload.current.diagnostics.attribute_coverage=Array.from({length:32},(_,i)=>({
+       attribute:'fixture_'+i,events_with_value:1,events_without_value:273
+     }));
+     payload.current.diagnostics.attribute_coverage_total_keys=35;
+     payload.current.diagnostics.attribute_coverage_truncated=true;
+     await route.fulfill({response,json:payload});
+   });
+   const truncatedQuality=page.waitForResponse(response=>response.status()===200&&
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
+   await page.locator('#owgEventLogAnalyze').click();
+   await truncatedQuality;
+   await page.locator('#owgQuality summary').click();
+   await page.locator('#owgQualityResults').getByText('Showing 32 of 35 attribute keys; omitted keys are not absent.').waitFor();
+   assert.match(await page.locator('#owgQualityResults').textContent(),/fixture_31/);
+   await page.unroute(qualityPattern);
 
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
    assert.equal(await page.locator('#owgMapDrawing').count(),1);
