@@ -148,6 +148,54 @@ def test_duplicate_diagnostic_requires_matching_attributes_and_qualified_links()
         conn.close()
 
 
+
+def test_qualified_links_do_not_inflate_case_sizes_or_shared_timestamp_ties():
+    """Multiple qualifiers for one event-object pair still represent one event."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.execute("INSERT INTO objects VALUES (?, ?, ?, ?)",
+                     ["log_qualifiers", "case-1", "case", "{}"])
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-1", "Start", stamp, "", "{}"])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_qualifiers", "e-1", "case-1", "primary"),
+            ("log_qualifiers", "e-1", "case-1", "secondary"),
+        ])
+        one = quality.diagnostics(conn, "log_qualifiers")
+        assert one["events"] == 1
+        assert one["case_notions"] == [
+            {"object_type": "case", "cases": 1, "single_event_cases": 1}]
+        assert one["events_sharing_a_timestamp_in_a_case"] == 0
+        assert one["cases_with_shared_timestamps"] == 0
+
+        # A second event at another time changes case size, not tied order.
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-2", "Review", stamp + timedelta(hours=1), "", "{}"])
+        conn.execute("INSERT INTO event_objects VALUES (?, ?, ?, ?)",
+                     ["log_qualifiers", "e-2", "case-1", "primary"])
+        two = quality.diagnostics(conn, "log_qualifiers")
+        assert two["case_notions"][0]["single_event_cases"] == 0
+        assert two["events_sharing_a_timestamp_in_a_case"] == 0
+
+        # Two distinct events at the same time do constitute a tie.
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-3", "Finish", stamp + timedelta(hours=1), "", "{}"])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_qualifiers", "e-3", "case-1", "primary"),
+            ("log_qualifiers", "e-3", "case-1", "secondary"),
+        ])
+        three = quality.diagnostics(conn, "log_qualifiers")
+        assert three["events_sharing_a_timestamp_in_a_case"] == 2
+        assert three["cases_with_shared_timestamps"] == 1
+        assert three["case_notions"] == [
+            {"object_type": "case", "cases": 1, "single_event_cases": 0}]
+        assert three["duplicate_events"] == 0
+        assert "primary" not in str(three) and "secondary" not in str(three)
+    finally:
+        conn.close()
+
+
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))
