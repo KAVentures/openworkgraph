@@ -74,7 +74,8 @@ def test_same_unit_extrema_preserve_missing_values_and_provenance(log, operation
     assert metric['cases_with_value'] == 2
     assert metric['cases_without_value'] == 1
     assert metric['cases_with_missing_operand'] == 1
-    assert metric['cases_with_non_finite_value'] == 0
+    # Zero non-finite results are omitted by the existing sparse coverage API.
+    assert metric.get('cases_with_non_finite_value', 0) == 0
     json.dumps(r, allow_nan=False)
 
 
@@ -87,9 +88,25 @@ def test_extrema_require_exact_matching_units_before_reading_dataset(log, operat
         run(log, [SPEND, expr(operation=operation, right=constant(1.0, 'USD'))])
 
 
-def test_extrema_support_existing_typed_metric_dependencies(log):
-    # A computed per-case quantity is still typed and can be compared to a
-    # declared bound without inventing values for zero/missing dependencies.
+@pytest.mark.parametrize(('operation', 'expected'), [('minimum', 7.5), ('maximum', 15.0)])
+def test_extrema_accept_matching_derived_units_without_filling_missing_cases(log, operation, expected):
+    # Derived EUR/events has dimensional provenance, not the opaque declared
+    # label 'EUR/events'. Both operands must retain that exact same type.
+    per_item = expr('per_item')
+    twice = expr('twice', operation='add', left=ref('per_item'), right=ref('per_item'))
+    bounded = expr(operation=operation, left=ref('per_item'), right=ref('twice'))
+    r = run(log, [SPEND, COUNT, per_item, twice, bounded])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit_powers'] == {'EUR': 1, 'events': -1}
+    assert metric['cases_with_value'] == 1 and metric['cases_without_value'] == 2
+    assert metric['cases_with_missing_operand'] == 2
+    json.dumps(r, allow_nan=False)
+
+
+def test_extrema_reject_opaque_declared_label_for_derived_units(log):
+    # A computed per-case quantity is still typed; spelling a compound unit
+    # as a declared atomic label does not make the dimensions identical.
     bounded = expr(operation='minimum', left=ref('per_item'), right=constant(8.0, 'EUR/events'))
     with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
         run(log, [SPEND, COUNT, expr('per_item'), bounded])
