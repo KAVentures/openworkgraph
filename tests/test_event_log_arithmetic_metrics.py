@@ -62,6 +62,148 @@ def test_finite_typed_constants_and_arithmetic(log, operation, value, expected):
     assert r['rows'] == [[expected]] and r['metrics'][-1]['unit'] == 'EUR'
 
 
+@pytest.mark.parametrize(('operation', 'expected'), [
+    ('average', 17.0),  # (15+8)/2 + (3+8)/2; c stays missing
+    ('absolute_difference', 12.0),  # |15-8| + |3-8|
+])
+def test_pairwise_same_unit_values_and_missingness(log, operation, expected):
+    r = run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'EUR'))])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit'] == 'EUR' and metric['unit_powers'] == {'EUR': 1}
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+    assert metric.get('cases_with_non_finite_value', 0) == 0
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize('operation', ['average', 'absolute_difference'])
+def test_pairwise_mismatched_units_fail_before_dataset_access(log, operation, monkeypatch):
+    def no_query(*args, **kwargs):
+        pytest.fail('invalid pairwise units accessed the dataset')
+    monkeypatch.setattr(workspace, '_query', no_query)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'USD'))])
+
+
+@pytest.mark.parametrize(('operation', 'expected'), [
+    ('average', 13.5), ('absolute_difference', 9.0),
+])
+def test_pairwise_matching_derived_units_and_null_propagation(log, operation, expected):
+    per_item = expr('per_item', right=constant(2.0, 'events'))
+    twice = expr('twice', operation='add', left=ref('per_item'), right=ref('per_item'))
+    bounded = expr(operation=operation, left=ref('per_item'), right=ref('twice'))
+    r = run(log, [SPEND, per_item, twice, bounded])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit_powers'] == {'EUR': 1, 'events': -1}
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+
+
+def test_pairwise_average_avoids_intermediate_overflow_and_preserves_null():
+    import duckdb
+    from server import event_log_expressions as expressions
+
+    conn = duckdb.connect(':memory:')
+    try:
+        conn.execute('CREATE TEMP TABLE qc (case_id VARCHAR, x DOUBLE, y DOUBLE, result DOUBLE)')
+        conn.execute("INSERT INTO qc VALUES ('a', 1e308, 1e308, NULL), ('b', NULL, 1e308, NULL)")
+        metric = expressions.Arithmetic.model_validate(
+            expr(operation='average', left=ref('x'), right=ref('y')))
+        coverage = expressions.materialize(conn, metric, {'x': 'x', 'y': 'y'}, 'result')
+        values = conn.execute('SELECT result FROM qc ORDER BY case_id').fetchall()
+        assert values == [(1e308,), (None,)]
+        assert coverage == {'cases_with_missing_operand': 1, 'cases_with_zero_divisor': 0}
+    finally:
+        conn.close()
+
+
+def test_pairwise_average_preserves_equal_subnormal_values_and_signs():
+    import duckdb
+    from server import event_log_expressions as expressions
+
+    tiny = float.fromhex('0x0.0000000000001p-1022')
+    conn = duckdb.connect(':memory:')
+    try:
+        conn.execute('CREATE TEMP TABLE qc (case_id VARCHAR, x DOUBLE, y DOUBLE, result DOUBLE)')
+        conn.executemany('INSERT INTO qc VALUES (?, ?, ?, NULL)', [
+            ('a', tiny, tiny), ('b', -tiny, -tiny),
+            ('c', 1e308, 1e308), ('d', None, tiny),
+        ])
+        metric = expressions.Arithmetic.model_validate(
+            expr(operation='average', left=ref('x'), right=ref('y')))
+        coverage = expressions.materialize(conn, metric, {'x': 'x', 'y': 'y'}, 'result')
+        assert conn.execute('SELECT result FROM qc ORDER BY case_id').fetchall() == [
+            (tiny,), (-tiny,), (1e308,), (None,),
+        ]
+        assert coverage == {'cases_with_missing_operand': 1, 'cases_with_zero_divisor': 0}
+    finally:
+        conn.close()
+
+
+def test_pairwise_absolute_difference_nonfinite_is_not_reported_as_a_value(log):
+    r = run(log, [expr(operation='absolute_difference',
+                       left=constant(1e308), right=constant(-1e308))])
+    metric = r['metrics'][-1]
+    assert r['rows'] == [[None]]
+    assert metric['cases_with_value'] == 0
+    assert metric['cases_with_non_finite_value'] == 3
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize(('operation', 'expected'), [
+    ('minimum', 11.0),  # 8 for a, 3 for b; c is missing
+    ('maximum', 23.0),  # 15 for a, 8 for b; c is missing
+])
+def test_same_unit_extrema_preserve_missing_values_and_provenance(log, operation, expected):
+    r = run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'EUR'))])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit'] == 'EUR' and metric['unit_powers'] == {'EUR': 1}
+    assert metric['cases_with_value'] == 2
+    assert metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+    # Zero non-finite results are omitted by the existing sparse coverage API.
+    assert metric.get('cases_with_non_finite_value', 0) == 0
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize('operation', ['minimum', 'maximum'])
+def test_extrema_require_exact_matching_units_before_reading_dataset(log, operation, monkeypatch):
+    def no_query(*args, **kwargs):
+        pytest.fail('a dimensionally invalid extrema metric accessed the dataset')
+    monkeypatch.setattr(workspace, '_query', no_query)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, expr(operation=operation, right=constant(1.0, 'USD'))])
+
+
+@pytest.mark.parametrize(('operation', 'expected'), [('minimum', 9.0), ('maximum', 18.0)])
+def test_extrema_accept_matching_derived_units_without_filling_missing_cases(log, operation, expected):
+    # Keep the analysis within the public four-metric limit. Dividing the
+    # event-attribute spend by an explicitly typed event count creates a
+    # derived EUR/events dimension without consuming a fifth metric slot.
+    # The missing spend on case c must remain missing in both extrema.
+    per_item = expr('per_item', right=constant(2, 'events'))
+    twice = expr('twice', operation='add', left=ref('per_item'), right=ref('per_item'))
+    bounded = expr(operation=operation, left=ref('per_item'), right=ref('twice'))
+    r = run(log, [SPEND, per_item, twice, bounded])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit_powers'] == {'EUR': 1, 'events': -1}
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+    json.dumps(r, allow_nan=False)
+
+
+def test_extrema_reject_opaque_declared_label_for_derived_units(log):
+    # A computed per-case quantity is still typed; spelling a compound unit
+    # as a declared atomic label does not make the dimensions identical.
+    bounded = expr(operation='minimum', left=ref('per_item'), right=constant(8.0, 'EUR/events'))
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, COUNT, expr('per_item'), bounded])
+
+
 def test_dimensional_cancellation_and_compound_unit_addition(log):
     ratio = expr('per_item')
     restored = expr(operation='multiply', left=ref('per_item'), right=ref('items'))

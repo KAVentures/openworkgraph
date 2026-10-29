@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -41,6 +42,38 @@ def _import(text=BAD, mapping=MAPPING, fmt="csv"):
     return workspace.import_log(BytesIO(text.encode()), name="q", source_format=fmt, mapping=mapping)
 
 
+def _without_digest_values(value):
+    """Inspect the disclosure surface without treating SHA-256 hex as plaintext.
+
+    Short source identifiers can appear by chance inside a 64-digit digest.
+    Only known digest *fields* are masked; unexpected source text in any other
+    field must remain visible to the counts-only assertion.
+    """
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            if key.endswith(("sha256", "sha256_v2")):
+                assert isinstance(item, str) and len(item) == 64
+                assert all(char in "0123456789abcdef" for char in item)
+                cleaned[key] = "<sha256>"
+            else:
+                cleaned[key] = _without_digest_values(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_without_digest_values(item) for item in value]
+    return value
+
+
+def test_counts_only_assertion_masks_only_digest_fields():
+    # A random digest containing an event identifier is not a plaintext leak;
+    # the same identifier in an unexpected metadata field still is.
+    sample = {"content_sha256_v2": "c4" + "0" * 62,
+              "diagnostics": {"unexpected_sample": "north"}}
+    checked = _without_digest_values(sample)
+    assert checked["content_sha256_v2"] == "<sha256>"
+    assert checked["diagnostics"]["unexpected_sample"] == "north"
+
+
 def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     made = _import()
     assert made["events"] == 6 and made["rejected_events"] == 5
@@ -59,14 +92,160 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     coverage = {a["attribute"]: a for a in d["attribute_coverage"]}
     assert coverage["region"] == {"attribute": "region", "events_with_value": 5, "events_without_value": 1}
     assert report["completeness"]["historical_completeness"] == "unknown"
-    serialized = str(report)
-    assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized   # counts only
+    serialized = str(_without_digest_values(report))
+    assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized  # counts only
+
+
+def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_false_and_zero():
+    """JSON null and empty strings are absent; false and zero are valid values."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_coverage", "event-1", "Review", stamp, "", 
+             '{"nullable":null,"blank":"","flag":false,"count":0}'),
+            ("log_coverage", "event-2", "Done", stamp + timedelta(seconds=1), "",
+             '{"nullable":"known","blank":"filled"}'),
+        ])
+        result = quality.diagnostics(conn, "log_coverage")
+    finally:
+        conn.close()
+    coverage = {item["attribute"]: item for item in result["attribute_coverage"]}
+    assert result["events"] == 2
+    for attribute in ("nullable", "blank", "flag", "count"):
+        assert coverage[attribute] == {
+            "attribute": attribute, "events_with_value": 1, "events_without_value": 1
+        }
+
+
+
+def test_attribute_coverage_reports_omitted_keys_without_exposing_values():
+    """A capped top-32 list must not imply the other source keys were absent."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        many = {f"k_{i:02d}": i for i in range(35)}
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_many_keys", "e-1", "Review", stamp, "", json.dumps(many)),
+            ("log_many_keys", "e-2", "Done", stamp + timedelta(seconds=1), "",
+             json.dumps({"k_33": False, "k_34": 0})),
+            ("log_exact_cap", "e-1", "Review", stamp, "",
+             json.dumps({f"a_{i:02d}": i for i in range(32)})),
+            ("log_no_keys", "e-1", "Review", stamp, "", "{}"),
+        ])
+        many_report = quality.diagnostics(conn, "log_many_keys")
+        at_cap = quality.diagnostics(conn, "log_exact_cap")
+        empty = quality.diagnostics(conn, "log_no_keys")
+    finally:
+        conn.close()
+
+    rows = many_report["attribute_coverage"]
+    names = [row["attribute"] for row in rows]
+    assert many_report["events"] == 2
+    assert many_report["attribute_coverage_total_keys"] == 35
+    assert many_report["attribute_coverage_truncated"] is True
+    assert len(rows) == quality.MAX_ATTRIBUTES_REPORTED == 32
+    assert names[:2] == ["k_33", "k_34"]
+    assert names[2:] == [f"k_{i:02d}" for i in range(30)]
+    assert rows[0]["events_with_value"] == 2
+    assert rows[1]["events_with_value"] == 2
+    assert rows[2]["events_with_value"] == 1
+    assert rows[2]["events_without_value"] == 1
+    assert "k_30" not in names and "k_31" not in names and "k_32" not in names
+    # Source values never appear in these counts-only summaries.
+    assert "Review" not in str(many_report) and "Done" not in str(many_report)
+
+    assert at_cap["attribute_coverage_total_keys"] == 32
+    assert at_cap["attribute_coverage_truncated"] is False
+    assert len(at_cap["attribute_coverage"]) == 32
+    assert empty["attribute_coverage_total_keys"] == 0
+    assert empty["attribute_coverage_truncated"] is False
+    assert empty["attribute_coverage"] == []
+
+
+def test_duplicate_diagnostic_requires_matching_attributes_and_qualified_links():
+    """Coincident activity/time/case is not an exact duplicate of stored content."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.execute("INSERT INTO objects VALUES (?, ?, ?, ?)",
+                     ["log_duplicates", "case-1", "case", "{}"])
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_duplicates", "e-1", "Review", stamp, "r", '{"channel":"web"}'),
+            ("log_duplicates", "e-2", "Review", stamp, "r", '{"channel":"phone"}'),
+            ("log_duplicates", "e-3", "Review", stamp, "r", '{"channel":"web"}'),
+            ("log_duplicates", "e-4", "Review", stamp, "r", '{"channel":"web"}'),
+        ])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_duplicates", "e-1", "case-1", "primary"),
+            ("log_duplicates", "e-2", "case-1", "primary"),
+            ("log_duplicates", "e-3", "case-1", "secondary"),
+            ("log_duplicates", "e-4", "case-1", "primary"),
+        ])
+        result = quality.diagnostics(conn, "log_duplicates")
+        assert result["events"] == 4
+        assert result["events_sharing_a_timestamp_in_a_case"] == 4
+        assert result["duplicate_events"] == 1  # only e-1 and e-4 match
+        assert "phone" not in str(result) and "primary" not in str(result)
+        conn.execute("UPDATE events SET attributes = ? WHERE log_id = ? AND event_id = ?",
+                     ['{"channel":"other"}', "log_duplicates", "e-4"])
+        assert quality.diagnostics(conn, "log_duplicates")["duplicate_events"] == 0
+    finally:
+        conn.close()
+
+
+
+def test_qualified_links_do_not_inflate_case_sizes_or_shared_timestamp_ties():
+    """Multiple qualifiers for one event-object pair still represent one event."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.execute("INSERT INTO objects VALUES (?, ?, ?, ?)",
+                     ["log_qualifiers", "case-1", "case", "{}"])
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-1", "Start", stamp, "", "{}"])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_qualifiers", "e-1", "case-1", "primary"),
+            ("log_qualifiers", "e-1", "case-1", "secondary"),
+        ])
+        one = quality.diagnostics(conn, "log_qualifiers")
+        assert one["events"] == 1
+        assert one["case_notions"] == [
+            {"object_type": "case", "cases": 1, "single_event_cases": 1}]
+        assert one["events_sharing_a_timestamp_in_a_case"] == 0
+        assert one["cases_with_shared_timestamps"] == 0
+
+        # A second event at another time changes case size, not tied order.
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-2", "Review", stamp + timedelta(hours=1), "", "{}"])
+        conn.execute("INSERT INTO event_objects VALUES (?, ?, ?, ?)",
+                     ["log_qualifiers", "e-2", "case-1", "primary"])
+        two = quality.diagnostics(conn, "log_qualifiers")
+        assert two["case_notions"][0]["single_event_cases"] == 0
+        assert two["events_sharing_a_timestamp_in_a_case"] == 0
+
+        # Two distinct events at the same time do constitute a tie.
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_qualifiers", "e-3", "Finish", stamp + timedelta(hours=1), "", "{}"])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_qualifiers", "e-3", "case-1", "primary"),
+            ("log_qualifiers", "e-3", "case-1", "secondary"),
+        ])
+        three = quality.diagnostics(conn, "log_qualifiers")
+        assert three["events_sharing_a_timestamp_in_a_case"] == 2
+        assert three["cases_with_shared_timestamps"] == 1
+        assert three["case_notions"] == [
+            {"object_type": "case", "cases": 1, "single_event_cases": 0}]
+        assert three["duplicate_events"] == 0
+        assert "primary" not in str(three) and "secondary" not in str(three)
+    finally:
+        conn.close()
 
 
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))
-    for key in ("source_sha256", "content_sha256"):
+    for key in ("source_sha256", "content_sha256", "content_sha256_v2"):
         assert a[key] == b[key]
     assert a["transform"] == b["transform"] and len(a["content_sha256"]) == 64
     assert a["transform"]["mapping"]["mapping_version"] == quality.MAPPING_VERSION
@@ -93,6 +272,7 @@ def test_appended_batches_get_their_own_report_and_whole_log_diagnostics_move():
     assert batch["rows"]["duplicates_skipped_on_append"] == 1 and batch["diagnostics"]["events"] == 1
     assert result["current"]["diagnostics"]["events"] == 7 and result["batches_without_report"] == []
     assert result["current"]["content_sha256"] != result["reports"][0]["content_sha256"]
+    assert result["current"]["content_sha256_v2"] != result["reports"][0]["content_sha256_v2"]
 
 
 def test_xes_reports_total_rejections_without_inventing_reasons_and_delete_removes_reports():
@@ -152,6 +332,42 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_v2_content_digest_distinguishes_delimiter_collisions_without_changing_v1():
+    """A separator in source-owned identity/activity must not alias another row."""
+    import duckdb
+
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE events (log_id VARCHAR, event_id VARCHAR, activity VARCHAR, "
+                     "ts TIMESTAMP, resource VARCHAR, attributes VARCHAR)")
+        conn.execute("CREATE TABLE event_objects (log_id VARCHAR, event_id VARCHAR, "
+                     "object_id VARCHAR, qualifier VARCHAR)")
+        timestamp = "2024-01-01 00:00:00"
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("left", "a\x1fb", "c", timestamp, "r", "{}"),
+            ("right", "a", "b\x1fc", timestamp, "r", "{}"),
+        ])
+        # v1 joins adjacent untrusted fields with the same byte that may occur
+        # inside either field. Preserve it for historical references, but do
+        # not rely on it as a collision-resistant encoding of field boundaries.
+        assert quality.content_digest(conn, "left") == quality.content_digest(conn, "right")
+        assert quality.content_digest_v2(conn, "left") != quality.content_digest_v2(conn, "right")
+        assert quality.content_digest_v2(conn, "left") == quality.content_digest_v2(conn, "left")
+        conn.execute("INSERT INTO event_objects VALUES (?, ?, ?, ?)", ["left", "a\x1fb", "o", None])
+        assert quality.content_digest_v2(conn, "left") != quality.content_digest_v2(conn, "right")
+    finally:
+        conn.close()
+
+
+def test_v2_digest_is_additive_to_saved_quality_and_current_report():
+    made = _import()
+    report = quality.quality(made["log_id"])
+    assert len(report["reports"][0]["content_sha256_v2"]) == 64
+    assert report["reports"][0]["content_sha256_v2"] == report["current"]["content_sha256_v2"]
+    assert report["reports"][0]["content_sha256"] == report["current"]["content_sha256"]
+    assert report["reports"][0]["content_sha256_v2"] != report["reports"][0]["content_sha256"]
 
 
 @pytest.mark.skipif(not os.environ.get("OWG_SCALE_ACCEPTANCE"), reason="scale acceptance runs on demand")

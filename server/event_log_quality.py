@@ -101,6 +101,23 @@ def content_digest(conn, log_id: str, prefix: str | None = None) -> str:
     return hashlib.sha256(f"owg.event-log-content.v1:{events}:{links}".encode()).hexdigest()
 
 
+def content_digest_v2(conn, log_id: str, prefix: str | None = None) -> str:
+    """Delimiter-safe digest over all stored event fields and event-object links.
+
+    This is additive: v1 remains stable for existing saved provenance references.
+    JSON arrays encode field boundaries and NULLs unambiguously, unlike v1's
+    concat_ws(chr(31), ...) representation of untrusted source strings.
+    """
+    where, extra = _scope(prefix)
+    events = _set_digest(conn, f"""SELECT sha256(to_json([e.event_id, e.activity,
+            strftime(e.ts, '%Y-%m-%dT%H:%M:%S.%f'), e.resource, e.attributes])) AS h
+        FROM events e WHERE e.log_id = ? {where}""", [log_id, *extra])
+    link_scope = "AND starts_with(l.event_id, ?)" if prefix else ""
+    links = _set_digest(conn, f"""SELECT sha256(to_json([l.event_id, l.object_id, l.qualifier])) AS h
+        FROM event_objects l WHERE l.log_id = ? {link_scope}""", [log_id, *extra])
+    return hashlib.sha256(f"owg.event-log-content.v2:{events}:{links}".encode()).hexdigest()
+
+
 def source_identity_digest(conn, log_id: str, prefix: str | None = None) -> str:
     """Separate key/case-map digest; existing event-content digests stay unchanged."""
     where, extra = _scope(prefix)
@@ -119,24 +136,39 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
     events, first, last, no_resource, future = conn.execute(
         "SELECT count(*), min(ts), max(ts), count(*) FILTER (WHERE resource = ''), count(*) FILTER (WHERE ts > ?) FROM qe",
         [datetime.now(timezone.utc).replace(tzinfo=None)]).fetchone()
-    conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, o.object_type
+    conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, eo.qualifier, o.object_type
         FROM event_objects eo JOIN qe USING (event_id)
         JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
     unlinked = conn.execute("SELECT count(*) FROM qe WHERE event_id NOT IN (SELECT event_id FROM qlinks)").fetchone()[0]
-    notions = conn.execute("""SELECT object_type, count(DISTINCT object_id),
-          count(DISTINCT object_id) FILTER (WHERE n = 1) FROM (
-            SELECT object_type, object_id, count(*) OVER (PARTITION BY object_id) AS n FROM qlinks)
-        GROUP BY 1 ORDER BY 2 DESC, 1""").fetchall()
+    # A source event may link to the same object with multiple qualifiers.
+    # Case sizes and timestamp ties count distinct events, not relationship rows.
+    notions = conn.execute("""SELECT object_type, count(*) AS cases,
+          count(*) FILTER (WHERE n = 1) AS single_event_cases FROM (
+            SELECT object_type, object_id, count(DISTINCT event_id) AS n
+            FROM qlinks GROUP BY object_type, object_id)
+        GROUP BY object_type ORDER BY cases DESC, object_type""").fetchall()
     tied_events, tied_cases = conn.execute("""SELECT coalesce(sum(n), 0), count(DISTINCT object_id) FROM (
-          SELECT l.object_id, q.ts, count(*) AS n FROM qlinks l JOIN qe q USING (event_id)
-          GROUP BY 1, 2 HAVING count(*) > 1)""").fetchone()
+          SELECT l.object_id, q.ts, count(DISTINCT l.event_id) AS n
+          FROM qlinks l JOIN qe q USING (event_id)
+          GROUP BY 1, 2 HAVING count(DISTINCT l.event_id) > 1)""").fetchone()
+    # Duplicate diagnostics compare stored content and qualified links, not just
+    # same-time activity/case coincidence. Event IDs themselves are excluded.
     duplicates = conn.execute("""SELECT coalesce(sum(n - 1), 0) FROM (SELECT count(*) AS n FROM (
-          SELECT q.event_id, q.activity, q.ts, q.resource,
-                 list(l.object_id ORDER BY l.object_id) FILTER (WHERE l.object_id IS NOT NULL) AS objs
-          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4)
-        GROUP BY activity, ts, resource, objs HAVING count(*) > 1)""").fetchone()[0]
-    attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.value <> '""') FROM qe, json_each(qe.attributes) j
-        GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
+          SELECT q.event_id, q.activity, q.ts, q.resource, q.attributes,
+                 list(to_json([l.object_id, l.qualifier])::VARCHAR
+                      ORDER BY l.object_id, l.qualifier)
+                      FILTER (WHERE l.object_id IS NOT NULL) AS links
+          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
+        GROUP BY activity, ts, resource, attributes, links HAVING count(*) > 1)""").fetchone()[0]
+    # A bounded top-N list must disclose omitted keys; otherwise readers may
+    # mistake an incomplete list for all available source attributes. The
+    # window count runs over grouped keys before LIMIT, without a second scan.
+    attributes = conn.execute(f"""SELECT j.key,
+          count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') AS populated,
+          count(*) OVER () AS total_keys
+        FROM qe, json_each(qe.attributes) j
+        GROUP BY j.key ORDER BY populated DESC, j.key LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
+    attribute_total_keys = int(attributes[0][2]) if attributes else 0
     return {
         "events": events,
         "first_event_at": first.isoformat() + "Z" if first else None,
@@ -150,7 +182,9 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
         "tied_order": "events with the same time in a case are ordered by event identifier, not by observation",
         "events_dated_after_import": future,
         "attribute_coverage": [{"attribute": k, "events_with_value": n, "events_without_value": events - n}
-                               for k, n in attributes],
+                               for k, n, _ in attributes],
+        "attribute_coverage_total_keys": attribute_total_keys,
+        "attribute_coverage_truncated": attribute_total_keys > len(attributes),
     }
 
 
@@ -168,6 +202,7 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
         "transform": transform(source_format, mapping),
         "source_sha256": source_digest(upload),
         "content_sha256": content_digest(conn, log_id, prefix),
+        "content_sha256_v2": content_digest_v2(conn, log_id, prefix),
         "rows": {"accepted": rows_accepted, "rejected": rows_rejected,
                  "rejected_by_reason": rejection_reasons,
                  "reason_counts_can_overlap": bool(rejection_reasons),
@@ -203,6 +238,7 @@ def quality(log_id: str) -> dict[str, Any]:
                 "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
+            digest_v2 = content_digest_v2(conn, log_id)
             relationship_metadata=workspace.object_relationships.metadata(conn,log_id,include_digest=True)
             identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
                                if info.get('source_identity') else {})
@@ -211,9 +247,10 @@ def quality(log_id: str) -> dict[str, Any]:
     present = {r["batch"] for r in reports}
     # Logs imported before reports existed, or whose report could not be written, have none.
     return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
-            "current": {"content_sha256": digest, "diagnostics": current, **identity_digest, **relationship_metadata,
+            "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
+                        "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "record", "transform", "content_digest", "diagnostics", "MAPPING_VERSION"]
+__all__ = ["quality", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]

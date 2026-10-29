@@ -469,6 +469,16 @@ const path=require('node:path');
    assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/C0\b/);assert.match(signalText,/first check/);
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
+   // Manual reviews belong to the current evaluated state. They do not grant
+   // business-action authority and cannot occur before an explicit check.
+   const reviewPanel=page.locator('#owgSignalInbox');
+   await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).click();
+   await reviewPanel.getByText('acknowledged',{exact:true}).waitFor();
+   assert.match(await reviewPanel.textContent(),/No automatic actions or delivery/);
+   await reviewPanel.getByRole('button',{name:'Reopen signal Skipped approval'}).click();
+   await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
+   await page.locator('#owgSignalReviewRefresh').click();
+   await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).waitFor();
 
    await page.locator('#owgAnalysisDim1').selectOption('has_rework');await page.locator('#owgAnalysisMeasure2').selectOption('median:duration_seconds');
    // Keep the established full builder/export journey on the compatible synchronous path.
