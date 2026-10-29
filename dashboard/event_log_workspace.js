@@ -1702,7 +1702,7 @@
           ['Duplicate event payloads (including attributes and qualified links; IDs excluded)',Number(d.duplicate_events).toLocaleString()],
           ['Events sharing a timestamp within a case',Number(d.events_sharing_a_timestamp_in_a_case).toLocaleString()+' in '+Number(d.cases_with_shared_timestamps).toLocaleString()+' cases; order falls back to the event ID'],
           ['Events without a resource',Number(d.events_without_resource).toLocaleString()],
-          ['Events without a case',Number(d.events_without_case).toLocaleString()],
+          ['Events without any retained object link',Number(d.events_without_case).toLocaleString()],
           ['Events dated after reference ('+futureBasis+')',Number(futureCount).toLocaleString()+'; UTC reference: '+futureAt],
           ...d.case_notions.map(n=>['Single-event '+n.object_type+' cases',Number(n.single_event_cases).toLocaleString()+' of '+Number(n.cases).toLocaleString()])]),
         el('div',coverageNote,'muted'),
