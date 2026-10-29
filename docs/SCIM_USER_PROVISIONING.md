@@ -123,3 +123,8 @@ and a freshly authorized sign-in can work. The browser exercises actual partial
 Bulk commits, missing-version refusal and revoked-provider refusal alongside
 existing admin session and WCAG/mobile checks. These owned fixtures do not
 establish compatibility with a customer's IdP.
+
+Existing manual roster employees can be assigned only by the separate explicit
+[writable-admin review and confirmation](SCIM_EMPLOYEE_ASSIGNMENT.md). Ordinary
+SCIM POST still refuses automatic adoption, and assignments cannot transfer an
+existing provider linkage or resurrect a tombstone.

@@ -23,6 +23,57 @@
   const path='/v1/admin/scim-providers/'+encodeURIComponent(options.organization);
   function forget(){secret.replaceChildren();secret.hidden=true;}
   function say(value){if(valid())status.textContent=value;}
+  function assignmentForm(row,item){
+   const open=el('button','Assign existing employee');open.dataset.scimAssign=item.provider_id;open.disabled=!options.canWrite;
+   const form=el('div');form.hidden=true;
+   let preview=null,sequence=0;
+   const prefix='scimAssign-'+item.provider_id;
+   const people=el('input');people.type='email';people.maxLength=512;people.required=true;people.id=prefix+'-employee';people.style.maxWidth='100%';
+   const label=el('label','Existing employee email');label.htmlFor=people.id;
+   const external=el('input');external.id=prefix+'-external';external.maxLength=200;
+   const externalLabel=el('label','Provider external ID (optional)');externalLabel.htmlFor=external.id;
+   const review=el('button','Review assignment');review.disabled=true;
+   const details=el('p');details.setAttribute('role','status');
+   const confirm=el('input');confirm.type='checkbox';confirm.id=prefix+'-confirm';confirm.disabled=true;
+   const confirmLabel=el('label','Allow this provider to deactivate and reactivate this employee');confirmLabel.htmlFor=confirm.id;
+   const commit=el('button','Confirm assignment');commit.disabled=true;
+   const cancel=el('button','Cancel assignment');
+   const check=el('div');check.className='check';check.append(confirm,confirmLabel);
+   form.append(label,people,externalLabel,external,review,details,check,commit,cancel);row.append(open,form);
+   const active=()=>valid()&&row.isConnected&&!form.hidden;
+   function reset(){sequence++;preview=null;confirm.checked=false;confirm.disabled=true;commit.disabled=true;review.disabled=!people.value;details.textContent='';}
+   people.addEventListener('input',()=>{reset();review.disabled=!people.value;});
+   external.addEventListener('input',reset);
+   confirm.addEventListener('change',()=>{commit.disabled=!preview||!confirm.checked||!options.canWrite;});
+   cancel.addEventListener('click',()=>{reset();form.hidden=true;open.disabled=!options.canWrite;});
+   open.addEventListener('click',()=>{
+    if(!valid()||!options.canWrite)return;
+    reset();open.disabled=true;form.hidden=false;forget();people.focus();
+   });
+   review.addEventListener('click',async()=>{
+    if(!active()||!people.value||!people.reportValidity()||!options.canWrite)return;
+    reset();const own=sequence,employee=people.value;review.disabled=true;
+    try{
+     const value=await options.api('POST',path+'/'+encodeURIComponent(item.provider_id)+'/assignment-preview',{userName:employee});
+     if(!active()||own!==sequence||employee!==people.value)return;
+     preview=value;confirm.disabled=false;
+     details.textContent='Assign '+value.employee.email+' ('+value.employee.status+') to '+value.provider_label+'. '+
+      (value.provider_enabled?'The provider is enabled. ':'The provider is disabled; its lifecycle authority starts when enabled. ')+
+      'The employee keeps their identity, SSO link, current status and manual teams. This permits future provider deactivation and rehire. It does not start recording or share evidence.';
+    }catch(error){if(active()&&own===sequence)details.textContent=error.message;}
+    finally{if(active()&&own===sequence)review.disabled=!people.value;}
+   });
+   commit.addEventListener('click',async()=>{
+    if(!active()||!options.canWrite||!preview||!confirm.checked)return;
+    const own=sequence,value=preview,employee=preview.employee.employee_id;commit.disabled=true;confirm.disabled=true;
+    try{
+     await options.api('POST',path+'/'+encodeURIComponent(item.provider_id)+'/assignments/'+encodeURIComponent(employee),
+      {revision:value.provider_revision,employeeVersion:value.employee_version,externalId:external.value,confirmAssignment:true});
+     if(!active()||own!==sequence)return;
+     reset();form.hidden=true;open.disabled=!options.canWrite;say('Existing employee assigned. Identity and current status are unchanged; the selected provider now controls future provisioning lifecycle.');
+    }catch(error){if(active()&&own===sequence){reset();details.textContent=error.message+' Review the current employee before retrying.';}}
+   });
+  }
   async function load(){
    const response=await options.api('GET',path);if(!valid())return;
    list.replaceChildren();
@@ -54,7 +105,7 @@
       catch(error){say(error.message);if(valid())await load().catch(()=>{});}
      });controls.append(toggle,revoke);
     }
-    row.append(controls);list.append(row);
+    row.append(controls);if(!item.revoked_at)assignmentForm(row,item);list.append(row);
    }
   }
   create.addEventListener('click',async()=>{
