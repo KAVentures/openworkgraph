@@ -31,6 +31,10 @@ MAX_OCEL_BYTES = 256 * 1024 * 1024
 MAX_OBJECT_RELATIONSHIPS = 10_000
 MAX_LOG_OBJECT_RELATIONSHIPS = 1_000_000
 CASE_TYPE = "case"
+# Python str.strip() whitespace that _exact_key permits after its control-
+# character check. Other str.strip() whitespace is a forbidden control; do
+# not relax identifier validation or normalize nonblank literal source IDs.
+RESOURCE_PRESENCE_WHITESPACE = " \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 _XES_NS = "{http://www.xes-standard.org/}"
 _FORBIDDEN_XML = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 
