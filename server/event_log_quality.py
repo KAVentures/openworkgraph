@@ -136,7 +136,7 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
     events, first, last, no_resource, future = conn.execute(
         "SELECT count(*), min(ts), max(ts), count(*) FILTER (WHERE resource = ''), count(*) FILTER (WHERE ts > ?) FROM qe",
         [datetime.now(timezone.utc).replace(tzinfo=None)]).fetchone()
-    conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, o.object_type
+    conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, eo.qualifier, o.object_type
         FROM event_objects eo JOIN qe USING (event_id)
         JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
     unlinked = conn.execute("SELECT count(*) FROM qe WHERE event_id NOT IN (SELECT event_id FROM qlinks)").fetchone()[0]
@@ -147,11 +147,15 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
     tied_events, tied_cases = conn.execute("""SELECT coalesce(sum(n), 0), count(DISTINCT object_id) FROM (
           SELECT l.object_id, q.ts, count(*) AS n FROM qlinks l JOIN qe q USING (event_id)
           GROUP BY 1, 2 HAVING count(*) > 1)""").fetchone()
+    # Duplicate diagnostics compare stored content and qualified links, not just
+    # same-time activity/case coincidence. Event IDs themselves are excluded.
     duplicates = conn.execute("""SELECT coalesce(sum(n - 1), 0) FROM (SELECT count(*) AS n FROM (
-          SELECT q.event_id, q.activity, q.ts, q.resource,
-                 list(l.object_id ORDER BY l.object_id) FILTER (WHERE l.object_id IS NOT NULL) AS objs
-          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4)
-        GROUP BY activity, ts, resource, objs HAVING count(*) > 1)""").fetchone()[0]
+          SELECT q.event_id, q.activity, q.ts, q.resource, q.attributes,
+                 list(to_json([l.object_id, l.qualifier])::VARCHAR
+                      ORDER BY l.object_id, l.qualifier)
+                      FILTER (WHERE l.object_id IS NOT NULL) AS links
+          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
+        GROUP BY activity, ts, resource, attributes, links HAVING count(*) > 1)""").fetchone()[0]
     attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') FROM qe, json_each(qe.attributes) j
         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
     return {
