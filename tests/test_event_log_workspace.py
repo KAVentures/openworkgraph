@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from server import event_log_workspace as workspace
+from server import event_log_quality as quality
 from shared import event_log_formats as formats
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,7 +90,7 @@ def test_bulk_csv_blank_resources_match_streaming_reader_and_quality_counts():
     assert expected == ["", "", " worker ", "worker"]
     log = _import(text, "csv", mapping=MAPPING)
     assert log["events"] == 4 and log["rejected_events"] == 0
-    assert log["quality"]["diagnostics"]["events_without_resource"] == 2
+    assert quality.quality(log["log_id"])["reports"][0]["diagnostics"]["events_without_resource"] == 2
     conn = workspace._connect()
     try:
         stored = [row[0] for row in conn.execute(
