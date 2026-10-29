@@ -164,6 +164,33 @@ def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_fals
 
 
 
+def test_attribute_coverage_counts_distinct_events_with_duplicate_json_keys():
+    """Repeated keys in supplied JSON must not inflate per-event coverage."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_repeated_keys", "e-1", "Review", stamp, "", '{"tag":"a","tag":"b"}'),
+            ("log_repeated_keys", "e-2", "Review", stamp + timedelta(seconds=1), "",
+             '{"tag":"","tag":"filled"}'),
+            ("log_repeated_keys", "e-3", "Review", stamp + timedelta(seconds=2), "",
+             '{"tag":null,"tag":""}'),
+            ("log_repeated_keys", "e-4", "Review", stamp + timedelta(seconds=3), "", "{}"),
+        ])
+        result = quality.diagnostics(conn, "log_repeated_keys")
+    finally:
+        conn.close()
+
+    assert result["events"] == 4
+    assert result["attribute_coverage_total_keys"] == 1
+    assert result["attribute_coverage_truncated"] is False
+    assert result["attribute_coverage"] == [
+        {"attribute": "tag", "events_with_value": 2, "events_without_value": 2}
+    ]
+    # The report exposes only the key and counts, never supplied values.
+    assert "filled" not in str(result) and '"a"' not in str(result)
+
+
 def test_attribute_coverage_reports_omitted_keys_without_exposing_values():
     """A capped top-32 list must not imply the other source keys were absent."""
     conn = workspace._connect()
