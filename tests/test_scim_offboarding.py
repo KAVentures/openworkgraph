@@ -6,15 +6,18 @@ import test_process_signin as process_flow
 import test_analysis_signin as analysis_flow
 
 
-@pytest.mark.parametrize('mode',['single','bulk'])
+@pytest.mark.parametrize('mode',['single','bulk','assigned'])
 def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire_does_not_restore_them(portal,mode):
     kind,(client,app,db,idp,settings)=portal
     flow=process_flow if kind=='process' else analysis_flow
     service=app.state.scim_provisioning
     provision=service.create_provider('acme','Owned test IdP','fixture-admin');pid=provision['provider']['provider_id'];token=provision['token']
     service.set_enabled(pid,1,True,'fixture-admin')
-    made=service.create_user(pid,token,{'schemas':[scim.CORE],'userName':'person@acme.test','displayName':'Owned person','externalId':'NOT_AN_OIDC_SUBJECT'})
-    uid=made['id']
+    if mode=='assigned':
+        uid=roster.upsert_employee(db,'acme',email='person@acme.test',display_name='Owned person')[0]['employee_id']
+    else:
+        made=service.create_user(pid,token,{'schemas':[scim.CORE],'userName':'person@acme.test','displayName':'Owned person','externalId':'NOT_AN_OIDC_SUBJECT'})
+        uid=made['id']
     # This explicit owned fixture establishes an existing verified SSO link.
     # Provisioning must never infer it from the supplied externalId.
     with db.connect() as conn:db._execute(conn,'UPDATE gateway_employees SET sso_subject=? WHERE employee_id=?',('actor-a',uid))
@@ -24,12 +27,23 @@ def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire
     _,headers=flow.credentials(flow.callback(client,idp,flow.start(client)))
     path='/v1/human/'+('processes' if kind=='process' else 'analyses')
     assert client.get(path,headers=headers).status_code==200
+    if mode=='assigned':
+        from gateway.scim_assignment import Assignments
+        assignment=Assignments(service)
+        preview=assignment.preview('acme',pid,uid)
+        assignment.assign('acme',pid,uid,{'revision':preview['provider_revision'],
+            'employeeVersion':preview['employee_version'],'confirmAssignment':True,
+            'externalId':'NOT_AN_OIDC_SUBJECT'},'fixture-admin')
+        # Assignment itself preserves the old verified identity and credentials.
+        assert client.get(path,headers=headers).status_code==200
+        assert db.authenticate(device['token']) is not None
+        assert roster.peek_personal_invite(db,invite['token']) is not None
     source='/scim/v2/'+pid+'/Users/'+uid
     current=client.get(source,headers={'Authorization':'Bearer '+token})
     change={'schemas':[scim.PATCH],'Operations':[{'op':'replace','path':'active','value':False}]}
     def update(version):
         auth={'Authorization':'Bearer '+token,'Content-Type':'application/scim+json'}
-        if mode=='single':
+        if mode!='bulk':
             response=client.patch(source,headers={**auth,'If-Match':version},json=change)
             assert response.status_code==200,response.text
             assert response.json()['id']==uid

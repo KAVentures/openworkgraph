@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import scim_provisioning as scim, scim_bulk as bulk, scim_groups as group_module
 from . import scim_query as query
+from .scim_assignment import Assignments
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
@@ -102,6 +103,7 @@ class ProvisioningRoute(APIRoute):
 def build_router(service, require_admin, base_url):
     router = APIRouter(route_class=ProvisioningRoute)
     groups = group_module.Groups(service)
+    assignments = Assignments(service)
 
     def authenticate(provider_id, request):
         token = _bearer(request)
@@ -166,6 +168,32 @@ def build_router(service, require_admin, base_url):
         result = await run_in_threadpool(service.revoke, provider_id, body.get('revision'), principal.audit_id,
                                         organization=organization)
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+    @router.post('/v1/admin/scim-providers/{organization}/{provider_id}/assignment-preview')
+    async def assignment_email_preview(organization: str, provider_id: str, request: Request):
+        require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Preview options belong in the request body', 'invalidValue')
+        body = scim._keys(await _body(request), {'username'})
+        value = await run_in_threadpool(assignments.preview_email, organization, provider_id, body.get('username'))
+        return JSONResponse(value, headers={'Cache-Control': 'no-store'})
+
+    @router.get('/v1/admin/scim-providers/{organization}/{provider_id}/assignments/{employee_id}')
+    def assignment_preview(organization: str, provider_id: str, employee_id: str, request: Request):
+        require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Assignment previews do not accept query options', 'invalidValue')
+        return JSONResponse(assignments.preview(organization, provider_id, employee_id),
+                            headers={'Cache-Control': 'no-store'})
+
+    @router.post('/v1/admin/scim-providers/{organization}/{provider_id}/assignments/{employee_id}')
+    async def assign_employee(organization: str, provider_id: str, employee_id: str, request: Request):
+        principal = require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Assignments do not accept query options', 'invalidValue')
+        body = await _body(request)
+        item = await run_in_threadpool(assignments.assign, organization, provider_id, employee_id, body, principal.audit_id)
+        return user_response(request, provider_id, item, status=201)
 
     @router.get('/scim/v2/{provider_id}/ServiceProviderConfig')
     def configuration(provider_id: str, request: Request):

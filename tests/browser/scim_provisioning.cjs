@@ -37,6 +37,44 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const toggle=page.locator('[data-scim-toggle="'+pid+'"]');assert.ok(await toggle.isDisabled());
   await page.locator('#scimConsent-'+pid).check();await toggle.click();
   await page.locator('#scimStatus').filter({hasText:'Provider enabled.'}).waitFor();assert.ok(await page.locator('#scimCredential').isHidden());
+  const manualResponse=await request('POST','/v1/admin/employees/acme',{email:'manual@acme.test',display_name:'Manual worker',teams:['ops']});
+  assert.equal(manualResponse.status,200);const manual=await manualResponse.json();
+  const assignmentRow=page.locator('article[data-provider="'+pid+'"]'),assignmentPrefix='#scimAssign-'+pid;
+  await assignmentRow.getByRole('button',{name:'Assign existing employee',exact:true}).click();
+  await page.locator(assignmentPrefix+'-employee').fill('manual@acme.test');
+  await page.locator(assignmentPrefix+'-external').fill('native-manual');
+  const reviewAssignment=assignmentRow.getByRole('button',{name:'Review assignment',exact:true});
+  const confirmAssignment=assignmentRow.getByRole('button',{name:'Confirm assignment',exact:true});
+  assert.ok(await confirmAssignment.isDisabled());
+  const assignmentUrl='/v1/admin/scim-providers/acme/'+pid+'/assignment-preview';
+  let releasePreview,previewArrived,previewFinished;
+  const previewGate=new Promise(r=>releasePreview=r),previewSeen=new Promise(r=>previewArrived=r),previewDone=new Promise(r=>previewFinished=r);
+  await page.route('**'+assignmentUrl,async route=>{
+   if(route.request().method()==='POST'){const response=await route.fetch();previewArrived();await previewGate;await route.fulfill({response});previewFinished();}
+   else await route.continue();
+  });
+  await reviewAssignment.click();await previewSeen;
+  await page.locator(assignmentPrefix+'-external').fill('native-manual-current');
+  releasePreview();await previewDone;await page.unroute('**'+assignmentUrl);await page.waitForLoadState('networkidle');
+  assert.ok(await page.locator(assignmentPrefix+'-confirm').isDisabled(),'edited form rejects held preview');
+  assert.ok(await confirmAssignment.isDisabled());
+  await reviewAssignment.click();
+  await assignmentRow.getByRole('status').filter({hasText:'Assign manual@acme.test'}).waitFor();
+  assert.ok(await confirmAssignment.isDisabled(),'preview alone never assigns lifecycle authority');
+  // A concurrent ordinary roster update must invalidate the reviewed state.
+  assert.equal((await request('POST','/v1/admin/employees/acme',{email:'manual@acme.test',display_name:'Updated manual worker'})).status,200);
+  await page.locator(assignmentPrefix+'-confirm').check();await confirmAssignment.click();
+  await assignmentRow.getByRole('status').filter({hasText:'review a new assignment preview'}).waitFor();
+  assert.ok(await confirmAssignment.isDisabled());
+  await reviewAssignment.click();await page.locator(assignmentPrefix+'-confirm').waitFor();
+  await assignmentRow.getByRole('status').filter({hasText:'Assign manual@acme.test'}).waitFor();
+  await page.locator(assignmentPrefix+'-confirm').check();await confirmAssignment.click();
+  await page.locator('#scimStatus').filter({hasText:'Existing employee assigned.'}).waitFor();
+  const assigned=await(await request('GET',source+'/Users/'+manual.employee_id,undefined,token)).json();
+  assert.equal(assigned.id,manual.employee_id);assert.equal(assigned.userName,'manual@acme.test');
+  assert.equal(assigned.displayName,'Updated manual worker');assert.equal(assigned.active,true);assert.equal(assigned.externalId,'native-manual-current');
+  const preserved=(await(await request('GET','/v1/admin/people/acme')).json()).employees.find(p=>p.employee_id===manual.employee_id);
+  assert.deepEqual(preserved.teams,['ops']);
   const created=await request('POST',source+'/Users',{schemas:['urn:ietf:params:scim:schemas:core:2.0:User'],userName:'operator@acme.test',displayName:'Owned operator',externalId:'native-operator',active:true},token);
   assert.equal(created.status,201);const user=await created.json(),uid=user.id;
   await page.locator('nav button[data-tab=people]').click();await page.locator('#ppl').filter({hasText:'operator@acme.test'}).waitFor();
@@ -82,6 +120,8 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const rehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:bulk[2].version,data:patch}]},token);
   assert.equal((await rehire.json()).Operations[0].status,'200');
   await identity();
+  await page.locator('[data-scim-assign="'+pid+'"]').click();
+  await page.locator(assignmentPrefix+'-employee').waitFor();
   await page.evaluate(source=>{const script=document.createElement('script');script.nonce=document.querySelector('script[nonce]').nonce;script.textContent=source;document.head.append(script);},await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8'));
   const audit=await page.evaluate(()=>axe.run(document.querySelector('#scimAdmin'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
   assert.deepEqual(audit.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[]);
@@ -119,10 +159,10 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.locator('#scimStatus').filter({hasText:'Credential permanently revoked'}).waitFor();
   assert.equal((await request('GET',source+'/Users',undefined,token)).status,401);
   assert.equal((await request('POST',source+'/Users/.search',{schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],attributes:['id']},token)).status,401);
-  const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['operator@acme.test','zbulk@acme.test']);
+  const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['manual@acme.test','operator@acme.test','zbulk@acme.test']);
   assert.equal((await request('POST',source+'/Bulk',{schemas:[schema],Operations:[newUser('revoked','refused@acme.test')]},token)).status,401);
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, explicit employee assignment with held-preview/stale-roster refusal and preserved identity/manual teams, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);
