@@ -66,7 +66,7 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))
-    for key in ("source_sha256", "content_sha256"):
+    for key in ("source_sha256", "content_sha256", "content_sha256_v2"):
         assert a[key] == b[key]
     assert a["transform"] == b["transform"] and len(a["content_sha256"]) == 64
     assert a["transform"]["mapping"]["mapping_version"] == quality.MAPPING_VERSION
@@ -93,6 +93,7 @@ def test_appended_batches_get_their_own_report_and_whole_log_diagnostics_move():
     assert batch["rows"]["duplicates_skipped_on_append"] == 1 and batch["diagnostics"]["events"] == 1
     assert result["current"]["diagnostics"]["events"] == 7 and result["batches_without_report"] == []
     assert result["current"]["content_sha256"] != result["reports"][0]["content_sha256"]
+    assert result["current"]["content_sha256_v2"] != result["reports"][0]["content_sha256_v2"]
 
 
 def test_xes_reports_total_rejections_without_inventing_reasons_and_delete_removes_reports():
@@ -152,6 +153,42 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_v2_content_digest_distinguishes_delimiter_collisions_without_changing_v1():
+    """A separator in source-owned identity/activity must not alias another row."""
+    import duckdb
+
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE events (log_id VARCHAR, event_id VARCHAR, activity VARCHAR, "
+                     "ts TIMESTAMP, resource VARCHAR, attributes VARCHAR)")
+        conn.execute("CREATE TABLE event_objects (log_id VARCHAR, event_id VARCHAR, "
+                     "object_id VARCHAR, qualifier VARCHAR)")
+        timestamp = "2024-01-01 00:00:00"
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("left", "a\x1fb", "c", timestamp, "r", "{}"),
+            ("right", "a", "b\x1fc", timestamp, "r", "{}"),
+        ])
+        # v1 joins adjacent untrusted fields with the same byte that may occur
+        # inside either field. Preserve it for historical references, but do
+        # not rely on it as a collision-resistant encoding of field boundaries.
+        assert quality.content_digest(conn, "left") == quality.content_digest(conn, "right")
+        assert quality.content_digest_v2(conn, "left") != quality.content_digest_v2(conn, "right")
+        assert quality.content_digest_v2(conn, "left") == quality.content_digest_v2(conn, "left")
+        conn.execute("INSERT INTO event_objects VALUES (?, ?, ?, ?)", ["left", "a\x1fb", "o", None])
+        assert quality.content_digest_v2(conn, "left") != quality.content_digest_v2(conn, "right")
+    finally:
+        conn.close()
+
+
+def test_v2_digest_is_additive_to_saved_quality_and_current_report():
+    made = _import()
+    report = quality.quality(made["log_id"])
+    assert len(report["reports"][0]["content_sha256_v2"]) == 64
+    assert report["reports"][0]["content_sha256_v2"] == report["current"]["content_sha256_v2"]
+    assert report["reports"][0]["content_sha256"] == report["current"]["content_sha256"]
+    assert report["reports"][0]["content_sha256_v2"] != report["reports"][0]["content_sha256"]
 
 
 @pytest.mark.skipif(not os.environ.get("OWG_SCALE_ACCEPTANCE"), reason="scale acceptance runs on demand")
