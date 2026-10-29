@@ -17,12 +17,13 @@ Primary references: [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643) resource 
 | `GET /ResourceTypes`, `/ResourceTypes/User` | Users resource type only |
 | `POST /Users` | Create a new roster identity; returns 201 |
 | `GET /Users/{id}` | Current provider-linked employee projection |
+| `POST /Users/.search` | Bounded read-only SearchRequest; same filters/pages and selected attributes as GET |
 | `GET /Users` | List/page; `userName eq "…"` or `externalId eq "…"` filters |
 | `PUT /Users/{id}` | Supported replacement projection under exact current If-Match |
 | `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations under exact current If-Match |
 | `DELETE /Users/{id}` | Offboard and tombstone provisioning resource; returns empty 204 |
 
-Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. Unsupported operators, sorting, attribute selection, repeated query parameters, groups, extensions and unsupported paths explicitly refuse. This increment does not implement `.search` or generic SCIM filtering.
+Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. POST `.search` and GET reads support bounded [attribute selection](SCIM_SEARCH.md). Unsupported operators, sorting, repeated query parameters, extensions and unsupported paths explicitly refuse; generic SCIM filtering remains unsupported.
 
 User inputs use the core User schema. Supported attributes are:
 
@@ -31,7 +32,7 @@ User inputs use the core User schema. Supported attributes are:
 - `active`: explicit JSON boolean. Create defaults to true. Replacement omission preserves status, so omission cannot implicitly rehire. Unassigning/removing active is unsupported; use an explicit boolean.
 - `externalId`: optional caller-supplied, case-sensitive string of at most 200 characters, unique within the provisioning provider; empty/null/removal clears it. It is **not an authenticated OIDC subject**. Common read-only `id`/`meta` echoed by a client are ignored.
 
-Attribute and operation names are case insensitive. Add/replace accept a supported scalar path or a pathless object of supported attributes. Required/immutable fields cannot be removed. A remove without a path returns noTarget. Unknown attributes, case-colliding names, invalid booleans, controls, bounds violations, duplicate JSON keys, non-finite JSON numbers and malformed/deep JSON refuse the request. Input bodies are bounded to 64 KiB and accept `application/scim+json` or `application/json`. Passwords, emails arrays/aliases, names components, groups and extensions are not silently accepted or retained.
+Attribute and operation names are case insensitive. Add/replace accept a supported scalar path or a pathless object of supported attributes. Required/immutable fields cannot be removed. A remove without a path returns noTarget. Unknown attributes, case-colliding names, invalid booleans, controls, invalid Unicode, bounds violations, duplicate JSON keys, non-finite JSON numbers and malformed/deep JSON refuse the request. Input bodies are bounded to 64 KiB and accept `application/scim+json` or `application/json`. Passwords, emails arrays/aliases, names components, groups and extensions are not silently accepted or retained.
 
 The exact current ETag is required for PUT, PATCH and DELETE: absent If-Match returns 428; a stale/mismatched/wildcard version returns 412. This is an intentional stricter deployment contract, not a claim of compatibility with clients that omit conditional writes. Ordinary administrator changes invalidate the projection's ETag too. No-op User updates preserve version and lastModified. After a lost response, read/filter the resource before retrying a conditional write.
 
@@ -57,7 +58,7 @@ Owned SQLite backup/restore and PostgreSQL 17 custom pg_dump/pg_restore checks p
 
 Tests cover advertised HTTP discovery/create/query/update/delete, scoped authentication, disabled/revoked providers, current versions, atomic PATCH/no-op/removal/null handling, uniqueness, malformed input, audit/team rollback, concurrent updates, manual-edit drift, tenant/provider isolation and no implicit identity adoption. Both SQLite and PostgreSQL are exercised. Owned RSA/OIDC flows for the process and analysis portals confirm deactivation blocks old browser sessions and rehire does not revive those or device/invitation credentials. The admin browser covers consented enablement, one-view credentials, escaped labels, roster effects, WCAG/mobile, permanent revocation and a held old-session 401 arriving after a fresh sign-in.
 
-Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filtering/search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
+Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filter expressions/cross-resource search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
 
 ## Bounded Users/Groups bulk provisioning
 

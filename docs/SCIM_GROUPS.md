@@ -18,3 +18,5 @@ Not implemented (broader acceptance remains under #412):
 - Verified real Entra/Okta/other IdP compatibility, mixed-worker migrations, company deployment and broader standards conformance.
 
 Keep manually managed teams and all SSO, privacy, evidence, retention and consent boundaries independent of these groups. An IdP may update membership metadata, but it is not a business-identity claim, approval or consent for recording/sharing.
+
+GET Group/list reads and POST `/Groups/.search` support bounded [read attribute selection](SCIM_SEARCH.md), including direct member subattributes. Existing filter/page limits and full-resource ETags apply.

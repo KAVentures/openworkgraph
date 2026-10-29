@@ -88,7 +88,7 @@ def test_invalid_json_returns_standard_scim_error_without_roster_mutation(http,d
 
 def test_unsupported_protocol_options_are_explicit_and_body_is_bounded(http):
     client,db,owner,h,base,pid=http
-    for params in [{'sortBy':'userName'},{'attributes':'userName'},{'count':'not-a-number'},{'count':201},{'startIndex':0}]:
+    for params in [{'sortBy':'userName'},{'attributes':'password'},{'count':'not-a-number'},{'count':201},{'startIndex':0}]:
         r=client.get(base+'/Users',headers=h,params=params)
         assert r.status_code==400 and r.json()['schemas']==[scim.ERROR],r.text
     assert client.get(base+'/Groups',headers=h).json()['totalResults']==0

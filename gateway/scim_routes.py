@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import scim_provisioning as scim, scim_bulk as bulk, scim_groups as group_module
+from . import scim_query as query
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
@@ -117,9 +118,9 @@ def build_router(service, require_admin, base_url):
         location = url(request, provider_id) + '/Users/' + quote(value['id'], safe='')
         return {**value, 'meta': {**value['meta'], 'location': location}}
 
-    def user_response(request, provider_id, value, *, status=200):
+    def user_response(request, provider_id, value, *, status=200, selection=None):
         value = resource(request, provider_id, value)
-        return _response(value, status=status,
+        return _response(query.project(value, selection), status=status,
                          headers={'ETag': value['meta']['version'], 'Location': value['meta']['location']})
 
     @router.get('/admin/scim.js')
@@ -235,30 +236,45 @@ def build_router(service, require_admin, base_url):
         location = url(request, provider_id) + '/Groups/' + quote(value['id'], safe='')
         return {**value, 'meta': {**value['meta'], 'location': location}}
 
-    def group_response(request, provider_id, value, *, status=200):
+    def group_response(request, provider_id, value, *, status=200, selection=None):
         value = group_resource(request, provider_id, value)
-        return _response(value, status=status,
+        return _response(query.project(value, selection), status=status,
                          headers={'ETag': value['meta']['version'], 'Location': value['meta']['location']})
+
+    def read_query(provider_id, request, token, values, core, *, posted=False):
+        kwargs, selection = query.parse(values, core, posted=posted)
+        if core == scim.CORE:
+            result = service.list_users(provider_id, token, **kwargs)
+            decorate = resource
+        else:
+            result = groups.list(provider_id, token, **kwargs)
+            decorate = group_resource
+        result['Resources'] = [query.project(decorate(request, provider_id, item), selection)
+                               for item in result['Resources']]
+        return _response(result)
+
+    def read_token(provider_id, request):
+        token = _bearer(request)
+        with service.transaction() as conn:
+            service.provider(conn, provider_id, token=token)
+        return token
 
     @router.get('/scim/v2/{provider_id}/Groups')
     def list_groups(provider_id: str, request: Request):
-        params = request.query_params
-        if set(params) - {'startIndex', 'count', 'filter'} or len(params.multi_items()) != len(params):
-            raise scim.Error(400, 'Unsupported or repeated query option', 'invalidValue')
-        try:
-            start, count = int(params.get('startIndex', '1')), int(params.get('count', '100'))
-        except ValueError:
-            raise scim.Error(400, 'Pagination requires integer values', 'invalidValue') from None
-        result = groups.list(provider_id, _bearer(request),
-                             start_index=start, count=count, filter_text=params.get('filter', ''))
-        result['Resources'] = [group_resource(request, provider_id, x) for x in result['Resources']]
-        return _response(result)
+        token = read_token(provider_id, request)
+        return read_query(provider_id, request, token, query.query_params(request.query_params), group_module.CORE)
 
     @router.get('/scim/v2/{provider_id}/Groups/{group_id}')
     def get_group(provider_id: str, group_id: str, request: Request):
-        if request.query_params:
-            raise scim.Error(400, 'Unsupported query option', 'invalidValue')
-        return group_response(request, provider_id, groups.get(provider_id, _bearer(request), group_id))
+        token = read_token(provider_id, request)
+        _, selection = query.parse(query.query_params(request.query_params), group_module.CORE, single=True)
+        return group_response(request, provider_id, groups.get(provider_id, token, group_id), selection=selection)
+
+    @router.post('/scim/v2/{provider_id}/Groups/.search')
+    async def search_groups(provider_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        return await run_in_threadpool(read_query, provider_id, request, token, body, group_module.CORE, posted=True)
 
     @router.post('/scim/v2/{provider_id}/Groups')
     async def create_group(provider_id: str, request: Request):
@@ -290,23 +306,20 @@ def build_router(service, require_admin, base_url):
 
     @router.get('/scim/v2/{provider_id}/Users')
     def users(provider_id: str, request: Request):
-        token = _bearer(request)
-        params = request.query_params
-        if set(params) - {'startIndex', 'count', 'filter'} or len(params.multi_items()) != len(params):
-            raise scim.Error(400, 'Unsupported or repeated query option', 'invalidValue')
-        try:
-            start, count = int(params.get('startIndex', '1')), int(params.get('count', '100'))
-        except ValueError:
-            raise scim.Error(400, 'Pagination requires integer values', 'invalidValue') from None
-        result = service.list_users(provider_id, token, filter_text=params.get('filter', ''), start_index=start, count=count)
-        result['Resources'] = [resource(request, provider_id, item) for item in result['Resources']]
-        return _response(result)
+        token = read_token(provider_id, request)
+        return read_query(provider_id, request, token, query.query_params(request.query_params), scim.CORE)
 
     @router.get('/scim/v2/{provider_id}/Users/{user_id}')
     def get_user(provider_id: str, user_id: str, request: Request):
-        if request.query_params:
-            raise scim.Error(400, 'Attribute selection is not supported', 'invalidValue')
-        return user_response(request, provider_id, service.get_user(provider_id, _bearer(request), user_id))
+        token = read_token(provider_id, request)
+        _, selection = query.parse(query.query_params(request.query_params), scim.CORE, single=True)
+        return user_response(request, provider_id, service.get_user(provider_id, token, user_id), selection=selection)
+
+    @router.post('/scim/v2/{provider_id}/Users/.search')
+    async def search_users(provider_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        return await run_in_threadpool(read_query, provider_id, request, token, body, scim.CORE, posted=True)
 
     @router.post('/scim/v2/{provider_id}/Users')
     async def create_user(provider_id: str, request: Request):

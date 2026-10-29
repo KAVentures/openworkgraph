@@ -59,6 +59,19 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   assert.deepEqual(bulk.map(r=>r.status),['201','201','200','409']);assert.equal(bulk[0].bulkId,'created');
   const savedGroup=await(await request('GET',bulk[1].location.replace(base,''),undefined,token)).json();
   assert.deepEqual(savedGroup.members,[{value:bulk[0].location.split('/').pop(),type:'User'}]);
+  // Exercise selected reads from Chromium itself; tokens remain memory-only.
+  const selectedReads=await page.evaluate(async ({source,token,uid})=>{
+   const headers={Authorization:'Bearer '+token,'Content-Type':'application/scim+json'};
+   const get=await fetch(source+'/Groups?attributes=displayName,members.value',{headers});
+   const post=await fetch(source+'/Groups/.search',{method:'POST',headers,body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],attributes:['displayName','members.value']})});
+   const single=await fetch(source+'/Users/'+encodeURIComponent(uid),{headers});
+   return {getStatus:get.status,postStatus:post.status,get:await get.json(),post:await post.json(),single:await single.json()};
+  },{source,token,uid});
+  assert.equal(selectedReads.getStatus,200);assert.equal(selectedReads.postStatus,200);
+  assert.deepEqual(selectedReads.post,selectedReads.get);
+  assert.deepEqual(Object.keys(selectedReads.post.Resources[0]).sort(),['displayName','id','members','schemas']);
+  assert.deepEqual(selectedReads.post.Resources[0].members,[{value:bulk[0].location.split('/').pop()}]);
+  assert.equal(selectedReads.single.id,uid);
   const unknownRef=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'POST',path:'/Groups',bulkId:'refused',data:{schemas:['urn:ietf:params:scim:schemas:core:2.0:Group'],displayName:'Not created',members:[{value:'bulkId:created'}]}}]},token);
   assert.equal((await unknownRef.json()).Operations[0].status,'400');
   assert.equal((await(await request('GET',source+'/Groups',undefined,token)).json()).totalResults,1);
@@ -105,10 +118,11 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   page.once('dialog',d=>d.accept());await page.locator('[data-scim-revoke="'+pid+'"]').click();
   await page.locator('#scimStatus').filter({hasText:'Credential permanently revoked'}).waitFor();
   assert.equal((await request('GET',source+'/Users',undefined,token)).status,401);
+  assert.equal((await request('POST',source+'/Users/.search',{schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],attributes:['id']},token)).status,401);
   const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['operator@acme.test','zbulk@acme.test']);
   assert.equal((await request('POST',source+'/Bulk',{schemas:[schema],Operations:[newUser('revoked','refused@acme.test')]},token)).status,401);
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

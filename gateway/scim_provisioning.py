@@ -63,9 +63,20 @@ def init_schema(db):
 def _text(value, maximum, *, blank=False):
     if (not isinstance(value, str) or len(value) > maximum or
             (not blank and not value.strip()) or
-            any(ord(c) < 32 or 127 <= ord(c) <= 159 or ord(c) in (65534, 65535) for c in value)):
+            any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF or ord(c) in (65534, 65535) for c in value)):
         raise Error(400, 'An identity attribute is missing, invalid or exceeds its bounds', 'invalidValue')
     return value
+
+
+def _filter_string(encoded):
+    try:
+        value = json.loads(encoded)
+        value.encode('utf-8')
+        if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+            raise ValueError('Control in identity filter')
+        return value
+    except (ValueError, UnicodeError):
+        raise Error(400, 'Invalid identity filter string', 'invalidFilter') from None
 
 
 def _keys(body, allowed):
@@ -262,10 +273,7 @@ class Provisioning:
             match = re.fullmatch(r'(userName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")', filter_text, re.I)
             if not match:
                 raise Error(400, 'Only userName eq or externalId eq with a JSON string is supported', 'invalidFilter')
-            try:
-                value = json.loads(match[2])
-            except ValueError:
-                raise Error(400, 'Invalid filter string', 'invalidFilter') from None
+            value = _filter_string(match[2])
             if match[1].lower() == 'username':
                 where, extra = ' AND e.email=?', [value.strip().lower()]
             else:

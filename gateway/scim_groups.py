@@ -182,10 +182,7 @@ class Groups:
                                  filter_text, flags=re.I) if isinstance(filter_text, str) and len(filter_text) <= 1000 else None
             if not match:
                 raise scim.Error(400, "Only displayName eq or externalId eq is supported", "invalidFilter")
-            try:
-                value = json.loads(match.group(2))
-            except ValueError:
-                raise scim.Error(400, "Invalid filter", "invalidFilter") from None
+            value = scim._filter_string(match.group(2))
             where = " AND " + ("display_name" if match.group(1).lower() == "displayname" else "external_id") + "=?"
             args = (value,)
         with self.service.transaction() as conn:
