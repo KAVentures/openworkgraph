@@ -24,7 +24,12 @@ const path=require('node:path');
   browser=await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
   const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',error=>errors.push(error.message));
   const login=async who=>{await page.locator('#token').fill(who);await page.getByRole('button',{name:'Connect',exact:true}).click();await page.locator('#status').filter({hasText:'Loaded organization process inventory.'}).waitFor();};
-  const open=async(title,revision=1)=>{await page.locator('#inventory').getByRole('button',{name:title+' · r'+revision,exact:true}).click();await page.locator('#selectedTitle').filter({hasText:'revision '+revision}).waitFor();await page.locator('#dependencyLoad').click();await page.locator('#dependencyEditor').waitFor();};
+  const open=async(title,revision=1)=>{await page.locator('#inventory').getByRole('button',{name:title+' · r'+revision,exact:true}).click();
+    // Waiting only for "revision 1" can pass on the previously selected
+    // process: the async detail request then replaces the dependency editor
+    // while the next click is in flight. Wait for the exact new identity.
+    await page.waitForFunction(({title,revision})=>document.querySelector('#selectedTitle')?.textContent===title+' · revision '+revision,{title,revision});
+    await page.locator('#dependencyLoad').click();await page.locator('#dependencyEditor').waitFor();};
   const add=async target=>{await page.locator('#dependencyChoices').click();await page.locator('#dependencyChoice option[value="'+target.workflow_id+'"]').waitFor({state:'attached'});await page.locator('#dependencyChoice').selectOption(target.workflow_id);await page.locator('#dependencyAdd').click();};
   const save=async()=>{await page.locator('#dependencyConfirm').check();await page.locator('#dependencySave').click();await page.locator('#dependencyStatus').filter({hasText:'Dependencies saved.'}).waitFor();assert.equal(await page.locator('#dependencyConfirm').isChecked(),false);};
   const loadGraph=async()=>{await page.locator('#dependencyGraphLoad').click();await page.locator('#dependencyGraphResult svg').waitFor();};
