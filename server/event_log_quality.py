@@ -160,8 +160,15 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
                       FILTER (WHERE l.object_id IS NOT NULL) AS links
           FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
         GROUP BY activity, ts, resource, attributes, links HAVING count(*) > 1)""").fetchone()[0]
-    attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') FROM qe, json_each(qe.attributes) j
-        GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
+    # A bounded top-N list must disclose omitted keys; otherwise readers may
+    # mistake an incomplete list for all available source attributes. The
+    # window count runs over grouped keys before LIMIT, without a second scan.
+    attributes = conn.execute(f"""SELECT j.key,
+          count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') AS populated,
+          count(*) OVER () AS total_keys
+        FROM qe, json_each(qe.attributes) j
+        GROUP BY j.key ORDER BY populated DESC, j.key LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
+    attribute_total_keys = int(attributes[0][2]) if attributes else 0
     return {
         "events": events,
         "first_event_at": first.isoformat() + "Z" if first else None,
@@ -175,7 +182,9 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
         "tied_order": "events with the same time in a case are ordered by event identifier, not by observation",
         "events_dated_after_import": future,
         "attribute_coverage": [{"attribute": k, "events_with_value": n, "events_without_value": events - n}
-                               for k, n in attributes],
+                               for k, n, _ in attributes],
+        "attribute_coverage_total_keys": attribute_total_keys,
+        "attribute_coverage_truncated": attribute_total_keys > len(attributes),
     }
 
 
