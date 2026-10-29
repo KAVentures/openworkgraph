@@ -102,8 +102,8 @@ def test_bulk_csv_blank_resources_match_streaming_reader_and_quality_counts():
     # Normalizing at INSERT must not weaken raw control-character rejection.
     # A tab inside a quoted resource is still rejected before storage.
     with pytest.raises(workspace.EventLogWorkspaceError, match="control characters"):
-        _import('case,activity,time,who\\n'
-                'c1,Open,2024-01-01T09:00:00Z," \\t "\\n', "csv", mapping=MAPPING)
+        _import('case,activity,time,who\n'
+                'c1,Open,2024-01-01T09:00:00Z," \t "\n', "csv", mapping=MAPPING)
 
 
 def test_csv_missing_columns_and_bad_mapping_are_safe_errors():
