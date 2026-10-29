@@ -45,6 +45,7 @@ def test_a_real_change_is_found_and_stable_months_are_not():
     assert [(p["before"], p["after"]) for p in points] == [("2024-03-01", "2024-04-01")]
     moved = {m["path"]: m for m in points[0]["paths_that_moved"]}
     assert moved["Receive → Approve"]["case_share_before"] == 0 and moved["Receive → Approve"]["case_share_after"] == 0.75
+    assert moved["Receive → Approve"]["from"] == "Receive" and moved["Receive → Approve"]["to"] == "Approve"
     stable = [b for b in result["boundaries"] if not b["change_point"]]
     assert all(b["p_value"] > 0.05 / 4 for b in stable) and all(b["distance"] < points[0]["distance"] for b in stable)
 
