@@ -20,7 +20,7 @@ Primary references: [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643) resource 
 | `POST /Users/.search` | Bounded read-only SearchRequest; same filters/pages and selected attributes as GET |
 | `GET /Users` | List/page; `userName eq "…"` or `externalId eq "…"` filters |
 | `PUT /Users/{id}` | Supported replacement projection under exact current If-Match |
-| `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations under exact current If-Match |
+| `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations; strict versions by default, optional approved standalone client policy |
 | `DELETE /Users/{id}` | Offboard and tombstone provisioning resource; returns empty 204 |
 
 Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. POST `.search` and GET reads support bounded [attribute selection](SCIM_SEARCH.md). Unsupported operators, sorting, repeated query parameters, extensions and unsupported paths explicitly refuse; generic SCIM filtering remains unsupported.
@@ -34,7 +34,7 @@ User inputs use the core User schema. Supported attributes are:
 
 Attribute and operation names are case insensitive. Add/replace accept a supported scalar path or a pathless object of supported attributes. Required/immutable fields cannot be removed. A remove without a path returns noTarget. Unknown attributes, case-colliding names, invalid booleans, controls, invalid Unicode, bounds violations, duplicate JSON keys, non-finite JSON numbers and malformed/deep JSON refuse the request. Input bodies are bounded to 64 KiB and accept `application/scim+json` or `application/json`. Passwords, emails arrays/aliases, names components, groups and extensions are not silently accepted or retained.
 
-The exact current ETag is required for PUT, PATCH and DELETE: absent If-Match returns 428; a stale/mismatched/wildcard version returns 412. This is an intentional stricter deployment contract, not a claim of compatibility with clients that omit conditional writes. Ordinary administrator changes invalidate the projection's ETag too. No-op User updates preserve version and lastModified. After a lost response, read/filter the resource before retrying a conditional write.
+By default the exact current ETag is required for PUT, PATCH and DELETE: absent If-Match returns 428; a stale/mismatched/wildcard version returns 412. The optional [standalone User PATCH policy](SCIM_CLIENT_POLICY.md) can permit only an absent version on that route after explicit administrator approval. This is not a claim of full IdP compatibility. Ordinary administrator changes invalidate the projection's ETag too. No-op User updates preserve version and lastModified. After a lost response, read/filter the resource before retrying a conditional write.
 
 ## Identity, access and transaction boundaries
 
@@ -128,3 +128,5 @@ Existing manual roster employees can be assigned only by the separate explicit
 [writable-admin review and confirmation](SCIM_EMPLOYEE_ASSIGNMENT.md). Ordinary
 SCIM POST still refuses automatic adoption, and assignments cannot transfer an
 existing provider linkage or resurrect a tombstone.
+
+Strict versions remain the default. An administrator may separately approve the bounded [standalone User PATCH client policy](SCIM_CLIENT_POLICY.md); supplied versions and all other write paths remain strict.

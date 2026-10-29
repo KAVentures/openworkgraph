@@ -6,13 +6,16 @@ import test_process_signin as process_flow
 import test_analysis_signin as analysis_flow
 
 
-@pytest.mark.parametrize('mode',['single','bulk','assigned'])
+@pytest.mark.parametrize('mode',['single','bulk','assigned','client_policy'])
 def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire_does_not_restore_them(portal,mode):
     kind,(client,app,db,idp,settings)=portal
     flow=process_flow if kind=='process' else analysis_flow
     service=app.state.scim_provisioning
     provision=service.create_provider('acme','Owned test IdP','fixture-admin');pid=provision['provider']['provider_id'];token=provision['token']
     service.set_enabled(pid,1,True,'fixture-admin')
+    if mode=='client_policy':
+        from gateway.scim_client_policy import Policies
+        Policies(service).set('acme',pid,{'revision':2,'enabled':True,'confirmUnversioned':True},'fixture-admin')
     if mode=='assigned':
         uid=roster.upsert_employee(db,'acme',email='person@acme.test',display_name='Owned person')[0]['employee_id']
     else:
@@ -44,7 +47,7 @@ def test_scim_http_deactivation_revokes_browser_device_and_invitation_and_rehire
     def update(version):
         auth={'Authorization':'Bearer '+token,'Content-Type':'application/scim+json'}
         if mode!='bulk':
-            response=client.patch(source,headers={**auth,'If-Match':version},json=change)
+            response=client.patch(source,headers=auth if mode=='client_policy' else {**auth,'If-Match':version},json=change)
             assert response.status_code==200,response.text
             assert response.json()['id']==uid
             return response.headers['etag']

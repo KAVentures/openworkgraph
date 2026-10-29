@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from . import scim_provisioning as scim, scim_bulk as bulk, scim_groups as group_module
 from . import scim_query as query
 from .scim_assignment import Assignments
+from .scim_client_policy import Policies
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
@@ -104,6 +105,7 @@ def build_router(service, require_admin, base_url):
     router = APIRouter(route_class=ProvisioningRoute)
     groups = group_module.Groups(service)
     assignments = Assignments(service)
+    policies = Policies(service)
 
     def authenticate(provider_id, request):
         token = _bearer(request)
@@ -195,10 +197,26 @@ def build_router(service, require_admin, base_url):
         item = await run_in_threadpool(assignments.assign, organization, provider_id, employee_id, body, principal.audit_id)
         return user_response(request, provider_id, item, status=201)
 
+    @router.get('/v1/admin/scim-providers/{organization}/{provider_id}/client-policy')
+    def client_policy(organization: str, provider_id: str, request: Request):
+        require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Client policy does not accept query options', 'invalidValue')
+        return JSONResponse(policies.get(organization, provider_id), headers={'Cache-Control': 'no-store'})
+
+    @router.patch('/v1/admin/scim-providers/{organization}/{provider_id}/client-policy')
+    async def set_client_policy(organization: str, provider_id: str, request: Request):
+        principal = require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Client policy does not accept query options', 'invalidValue')
+        body = await _body(request)
+        value = await run_in_threadpool(policies.set, organization, provider_id, body, principal.audit_id)
+        return JSONResponse(value, headers={'Cache-Control': 'no-store'})
+
     @router.get('/scim/v2/{provider_id}/ServiceProviderConfig')
     def configuration(provider_id: str, request: Request):
         authenticate(provider_id, request)
-        return _response({'schemas': [SPC], 'patch': {'supported': True},
+        return _response({'schemas': [SPC], 'documentationUri': 'https://github.com/KAVentures/openworkgraph/blob/main/docs/SCIM_CLIENT_POLICY.md', 'patch': {'supported': True},
             'bulk': {'supported': True, 'maxOperations': bulk.MAX_OPERATIONS, 'maxPayloadSize': MAX_BODY},
             'filter': {'supported': True, 'maxResults': 200}, 'sort': {'supported': False},
             'changePassword': {'supported': False}, 'etag': {'supported': True},
@@ -367,7 +385,10 @@ def build_router(service, require_admin, base_url):
     async def patch_user(provider_id: str, user_id: str, request: Request):
         token = await run_in_threadpool(authenticate, provider_id, request)
         body = await _body(request)
-        result = await run_in_threadpool(service.patch_user, provider_id, token, user_id, request.headers.get('if-match'), body)
+        if len(request.headers.getlist('if-match')) > 1:
+            raise scim.Error(400, 'Supply at most one exact If-Match header', 'invalidValue')
+        result = await run_in_threadpool(service.patch_user, provider_id, token, user_id,
+                                        request.headers.get('if-match'), body, standalone_client=True)
         return user_response(request, provider_id, result)
 
     @router.delete('/scim/v2/{provider_id}/Users/{user_id}')
