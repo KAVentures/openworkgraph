@@ -74,6 +74,37 @@ def test_bad_specs_and_empty_cohorts():
         compare.compare_maps(log, [JANUARY, {"started_from": "2030-01-01T00:00:00Z"}])
 
 
+def test_activity_truncation_distinguishes_exact_cap_from_omitted_names():
+    """The 64th activity fills the map; only a 65th is truly omitted."""
+    rows = ["case,activity,time"]
+    for case_id, day, count in (("exact", START, compare.MAX_MAP_ACTIVITIES),
+                                ("overflow", START + timedelta(days=32),
+                                 compare.MAX_MAP_ACTIVITIES + 1)):
+        for i in range(count):
+            stamp = (day + timedelta(minutes=i)).isoformat()
+            rows.append(f"{case_id},Activity-{i:03d},{stamp}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()),
+        name="boundary", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    result = compare.compare_maps(log, [JANUARY, FEBRUARY])
+    exact, overflow = result["maps"]
+    assert result["cases"] == [1, 1]
+    assert len(exact["activities"]) == len(overflow["activities"]) == compare.MAX_MAP_ACTIVITIES
+    assert exact["activities_truncated"] is False
+    assert overflow["activities_truncated"] is True
+    assert [a["activity"] for a in exact["activities"]] == [
+        f"Activity-{i:03d}" for i in range(compare.MAX_MAP_ACTIVITIES)]
+    assert [a["activity"] for a in overflow["activities"]] == [
+        f"Activity-{i:03d}" for i in range(compare.MAX_MAP_ACTIVITIES)]
+    assert "Activity-064" not in {a["activity"] for a in overflow["activities"]}
+    # Existing displayed-edge and start-activity limits remain unchanged.
+    assert len(exact["transitions"]) == len(overflow["transitions"]) == compare.MAX_MAP_ACTIVITIES - 1
+    assert exact["start_activities"] == overflow["start_activities"] == {"Activity-000": 1}
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
