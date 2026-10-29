@@ -176,15 +176,8 @@ class Groups:
     def list(self, provider_id, token, *, start_index=1, count=100, filter_text=""):
         if type(start_index) is not int or start_index < 1 or type(count) is not int or not 0 <= count <= 100:
             raise scim.Error(400, "startIndex must be positive and count 0–100", "invalidValue")
-        where, args = "", ()
-        if filter_text:
-            match = re.fullmatch(r'(displayName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")',
-                                 filter_text, flags=re.I) if isinstance(filter_text, str) and len(filter_text) <= 1000 else None
-            if not match:
-                raise scim.Error(400, "Only displayName eq or externalId eq is supported", "invalidFilter")
-            value = scim._filter_string(match.group(2))
-            where = " AND " + ("display_name" if match.group(1).lower() == "displayname" else "external_id") + "=?"
-            args = (value,)
+        from .scim_filter import matching_where
+        where, args = matching_where(filter_text, 'Group')
         with self.service.transaction() as conn:
             provider = self.service.provider(conn, provider_id, token=token)
             params = (provider_id, *args)

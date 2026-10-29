@@ -268,18 +268,8 @@ class Provisioning:
     def list_users(self, provider_id, token, *, filter_text='', start_index=1, count=100):
         if type(start_index) is not int or start_index < 1 or type(count) is not int or not 0 <= count <= 200:
             raise Error(400, 'startIndex must be positive and count must be from zero to 200', 'invalidValue')
-        where, extra = '', []
-        if filter_text:
-            if not isinstance(filter_text, str) or len(filter_text) > 1000:
-                raise Error(400, 'Unsupported filter', 'invalidFilter')
-            match = re.fullmatch(r'(userName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")', filter_text, re.I)
-            if not match:
-                raise Error(400, 'Only userName eq or externalId eq with a JSON string is supported', 'invalidFilter')
-            value = _filter_string(match[2])
-            if match[1].lower() == 'username':
-                where, extra = ' AND e.email=?', [value.strip().lower()]
-            else:
-                where, extra = ' AND l.external_id=?', [value]
+        from .scim_filter import matching_where
+        where, extra = matching_where(filter_text, 'User')
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
             scope = ' WHERE l.provider_id=? AND e.organization_id=? AND l.deleted_at IS NULL' + where

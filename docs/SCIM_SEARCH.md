@@ -12,7 +12,18 @@ Provisioning clients can use `POST /scim/v2/{provider_id}/Users/.search` or `/Gr
 }
 ```
 
-Search returns the same `ListResponse`, total, ordering and pages as GET. Users support `userName eq` and `externalId eq`; Groups support `displayName eq` and `externalId eq`, each with one JSON string. User-name matching keeps the existing normalized case-insensitive email behavior; Group names/external IDs keep their exact matching. Generic expressions, sorting, root/cross-resource `/.search`, extension schemas, and search query-string options are refused. Request bodies accept SCIM JSON or JSON, at most 64 KiB, with no duplicate/case-colliding names, nonfinite values or malformed/deep JSON. Filter strings are at most 1,000 characters; decoded identity filter values containing controls or invalid Unicode are refused before reaching either database. POST pagination uses actual JSON integers, never booleans/floats/strings; GET uses decimal digits. `startIndex` is 1 through 2,147,483,647; count is 0–200 for Users and 0–100 for Groups (default 100). Count zero returns totals and no resources. Pages are current reads, not a multi-request snapshot.
+Search returns the same `ListResponse`, total, ordering and pages as GET. Users support `userName eq` and `externalId eq`; Groups support `displayName eq` and `externalId eq`, with 1–8 equality clauses joined by case-insensitive `and` (each value is one JSON string). User-name matching keeps the existing normalized case-insensitive email behavior; Group names/external IDs keep their exact matching. OR, parentheses, nested/complex selectors, non-string comparisons, generic expressions, sorting, root/cross-resource `/.search`, extension schemas, and search query-string options are refused. Request bodies accept SCIM JSON or JSON, at most 64 KiB, with no duplicate/case-colliding names, nonfinite values or malformed/deep JSON. Filter strings are at most 1,000 characters; decoded identity filter values containing controls or invalid Unicode are refused before reaching either database. POST pagination uses actual JSON integers, never booleans/floats/strings; GET uses decimal digits. `startIndex` is 1 through 2,147,483,647; count is 0–200 for Users and 0–100 for Groups (default 100). Count zero returns totals and no resources. Pages are current reads, not a multi-request snapshot.
+
+For example, `userName eq "person@acme.test" and externalId eq "native-person"`
+requires both fields on the same provider-owned User. Repeated clauses are
+allowed and count toward the eight-clause budget; contradictory clauses match
+nothing. A quoted value containing `and`, escaped quotes, or SQL-looking text
+stays one literal value. Every clause must parse before any query runs; a bad
+later clause is never silently discarded. Count and page queries use exactly
+the same conjunction and provider/tenant/deletion scope. This does not add
+new matching fields, name/email attributes, group-name uniqueness or a complete
+IdP mapping contract. The Microsoft [matching-query guide](https://learn.microsoft.com/en-us/entra/identity/app-provisioning/use-scim-to-provision-users-and-groups#retrieving-resources)
+is a public request-shape reference; real customer IdP acceptance remains open.
 
 GET resource/list reads also accept `attributes` or `excludedAttributes` as comma-separated paths. In a SearchRequest these are arrays of paths. Use one option per request; both together are refused. Each selection has 1–32 paths totaling at most 4,096 characters. Names are case insensitive, may have surrounding whitespace, and can use their resource's full core-schema prefix. Unknown, cross-schema, selector/expression, or unsupported paths are refused rather than returning broader identity fields.
 

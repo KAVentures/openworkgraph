@@ -29,6 +29,7 @@ jobs:
             tests/test_scim_provisioning.py \
             tests/test_scim_routes.py \
             tests/test_scim_bulk.py \
+            tests/test_scim_filter.py \
             tests/test_scim_client_policy.py \
             tests/test_scim_assignment.py \
             tests/test_scim_search.py \

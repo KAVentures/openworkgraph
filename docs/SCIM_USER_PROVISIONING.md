@@ -18,7 +18,7 @@ Primary references: [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643) resource 
 | `POST /Users` | Create a new roster identity; returns 201 |
 | `GET /Users/{id}` | Current provider-linked employee projection |
 | `POST /Users/.search` | Bounded read-only SearchRequest; same filters/pages and selected attributes as GET |
-| `GET /Users` | List/page; `userName eq "…"` or `externalId eq "…"` filters |
+| `GET /Users` | List/page; `userName eq "…"` / `externalId eq "…"`, up to eight clauses joined by `and` |
 | `PUT /Users/{id}` | Supported replacement projection under exact current If-Match |
 | `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations; strict versions by default, optional approved standalone client policy |
 | `DELETE /Users/{id}` | Offboard and tombstone provisioning resource; returns empty 204 |
