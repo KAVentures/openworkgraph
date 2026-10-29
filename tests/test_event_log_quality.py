@@ -41,6 +41,38 @@ def _import(text=BAD, mapping=MAPPING, fmt="csv"):
     return workspace.import_log(BytesIO(text.encode()), name="q", source_format=fmt, mapping=mapping)
 
 
+def _without_digest_values(value):
+    """Inspect the disclosure surface without treating SHA-256 hex as plaintext.
+
+    Short source identifiers can appear by chance inside a 64-digit digest.
+    Only known digest *fields* are masked; unexpected source text in any other
+    field must remain visible to the counts-only assertion.
+    """
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            if key.endswith(("sha256", "sha256_v2")):
+                assert isinstance(item, str) and len(item) == 64
+                assert all(char in "0123456789abcdef" for char in item)
+                cleaned[key] = "<sha256>"
+            else:
+                cleaned[key] = _without_digest_values(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_without_digest_values(item) for item in value]
+    return value
+
+
+def test_counts_only_assertion_masks_only_digest_fields():
+    # A random digest containing an event identifier is not a plaintext leak;
+    # the same identifier in an unexpected metadata field still is.
+    sample = {"content_sha256_v2": "c4" + "0" * 62,
+              "diagnostics": {"unexpected_sample": "north"}}
+    checked = _without_digest_values(sample)
+    assert checked["content_sha256_v2"] == "<sha256>"
+    assert checked["diagnostics"]["unexpected_sample"] == "north"
+
+
 def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     made = _import()
     assert made["events"] == 6 and made["rejected_events"] == 5
@@ -59,8 +91,8 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     coverage = {a["attribute"]: a for a in d["attribute_coverage"]}
     assert coverage["region"] == {"attribute": "region", "events_with_value": 5, "events_without_value": 1}
     assert report["completeness"]["historical_completeness"] == "unknown"
-    serialized = str(report)
-    assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized   # counts only
+    serialized = str(_without_digest_values(report))
+    assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized  # counts only
 
 
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
