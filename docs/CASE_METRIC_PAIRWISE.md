@@ -6,9 +6,10 @@ fixed operators: `"average"` and `"absolute_difference"`. Each requires
 of opaque labels (such as `EUR/hour`), source enrichment, arbitrary SQL,
 expression nesting or new authorization is introduced.
 
-- `average` computes the per-case arithmetic mean of the two operands,
-  evaluating `a / 2.0 + b / 2.0` to avoid an overflowing intermediate sum
-  when two large finite values have a representable mean.
+- `average` computes the per-case arithmetic mean of the two operands.
+  For operands with the same sign, it evaluates `a + (b - a) / 2.0` to
+  avoid overflow while retaining equal subnormal values; for opposite signs
+  it halves each operand before adding, avoiding intermediate overflow.
 - `absolute_difference` computes `abs(a - b)` per case. A difference that
   overflows to a non-finite result is **missing**, not a fabricated finite
   value, under the existing non-finite coverage contract.

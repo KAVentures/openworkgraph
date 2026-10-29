@@ -119,6 +119,29 @@ def test_pairwise_average_avoids_intermediate_overflow_and_preserves_null():
         conn.close()
 
 
+def test_pairwise_average_preserves_equal_subnormal_values_and_signs():
+    import duckdb
+    from server import event_log_expressions as expressions
+
+    tiny = float.fromhex('0x0.0000000000001p-1022')
+    conn = duckdb.connect(':memory:')
+    try:
+        conn.execute('CREATE TEMP TABLE qc (case_id VARCHAR, x DOUBLE, y DOUBLE, result DOUBLE)')
+        conn.executemany('INSERT INTO qc VALUES (?, ?, ?, NULL)', [
+            ('a', tiny, tiny), ('b', -tiny, -tiny),
+            ('c', 1e308, 1e308), ('d', None, tiny),
+        ])
+        metric = expressions.Arithmetic.model_validate(
+            expr(operation='average', left=ref('x'), right=ref('y')))
+        coverage = expressions.materialize(conn, metric, {'x': 'x', 'y': 'y'}, 'result')
+        assert conn.execute('SELECT result FROM qc ORDER BY case_id').fetchall() == [
+            (tiny,), (-tiny,), (1e308,), (None,),
+        ]
+        assert coverage == {'cases_with_missing_operand': 1, 'cases_with_zero_divisor': 0}
+    finally:
+        conn.close()
+
+
 def test_pairwise_absolute_difference_nonfinite_is_not_reported_as_a_value(log):
     r = run(log, [expr(operation='absolute_difference',
                        left=constant(1e308), right=constant(-1e308))])

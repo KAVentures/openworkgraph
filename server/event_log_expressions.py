@@ -104,9 +104,13 @@ def materialize(conn, metric: Arithmetic, columns: dict[str, str], column: str) 
            # from the other operand.
            "minimum": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE least(a,b) END",
            "maximum": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE greatest(a,b) END",
-           # Halving before addition avoids overflow for two large finite values
-           # whose average is representable (e.g. 1e308 and 1e308).
-           "average": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE a / 2.0 + b / 2.0 END",
+           # Same-sign subtraction cannot overflow, and preserves subnormal
+           # equal inputs that would underflow if each operand were halved.
+           # Opposite-sign inputs can be safely halved before addition.
+           "average": ("CASE WHEN a IS NULL OR b IS NULL THEN NULL "
+                       "WHEN (a >= 0 AND b >= 0) OR (a <= 0 AND b <= 0) "
+                       "THEN a + (b - a) / 2.0 "
+                       "ELSE a / 2.0 + b / 2.0 END"),
            "absolute_difference": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE abs(a - b) END"}[metric.operation]
     conn.execute(f"UPDATE qc SET {column} = {sql} FROM qexpr WHERE qc.case_id = qexpr.case_id")
     return {"cases_with_missing_operand": missing,
