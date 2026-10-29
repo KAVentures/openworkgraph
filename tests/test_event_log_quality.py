@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -115,6 +116,51 @@ def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_fals
         assert coverage[attribute] == {
             "attribute": attribute, "events_with_value": 1, "events_without_value": 1
         }
+
+
+
+def test_attribute_coverage_reports_omitted_keys_without_exposing_values():
+    """A capped top-32 list must not imply the other source keys were absent."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        many = {f"k_{i:02d}": i for i in range(35)}
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_many_keys", "e-1", "Review", stamp, "", json.dumps(many)),
+            ("log_many_keys", "e-2", "Done", stamp + timedelta(seconds=1), "",
+             json.dumps({"k_33": False, "k_34": 0})),
+            ("log_exact_cap", "e-1", "Review", stamp, "",
+             json.dumps({f"a_{i:02d}": i for i in range(32)})),
+            ("log_no_keys", "e-1", "Review", stamp, "", "{}"),
+        ])
+        many_report = quality.diagnostics(conn, "log_many_keys")
+        at_cap = quality.diagnostics(conn, "log_exact_cap")
+        empty = quality.diagnostics(conn, "log_no_keys")
+    finally:
+        conn.close()
+
+    rows = many_report["attribute_coverage"]
+    names = [row["attribute"] for row in rows]
+    assert many_report["events"] == 2
+    assert many_report["attribute_coverage_total_keys"] == 35
+    assert many_report["attribute_coverage_truncated"] is True
+    assert len(rows) == quality.MAX_ATTRIBUTES_REPORTED == 32
+    assert names[:2] == ["k_33", "k_34"]
+    assert names[2:] == [f"k_{i:02d}" for i in range(30)]
+    assert rows[0]["events_with_value"] == 2
+    assert rows[1]["events_with_value"] == 2
+    assert rows[2]["events_with_value"] == 1
+    assert rows[2]["events_without_value"] == 1
+    assert "k_30" not in names and "k_31" not in names and "k_32" not in names
+    # Source values never appear in these counts-only summaries.
+    assert "Review" not in str(many_report) and "Done" not in str(many_report)
+
+    assert at_cap["attribute_coverage_total_keys"] == 32
+    assert at_cap["attribute_coverage_truncated"] is False
+    assert len(at_cap["attribute_coverage"]) == 32
+    assert empty["attribute_coverage_total_keys"] == 0
+    assert empty["attribute_coverage_truncated"] is False
+    assert empty["attribute_coverage"] == []
 
 
 def test_duplicate_diagnostic_requires_matching_attributes_and_qualified_links():
