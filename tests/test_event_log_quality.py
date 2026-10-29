@@ -141,6 +141,47 @@ def test_future_event_reference_uses_supplied_utc_instant_not_wall_clock():
         conn.close()
 
 
+
+def test_current_resource_presence_counts_legacy_unicode_whitespace_without_mutation():
+    """Current diagnostics use streaming-reader presence semantics for old rows."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        resources = [
+            ("b1:e-1", "   "),
+            ("b1:e-2", "\u00a0\u2003"),  # non-ASCII spaces are also missing
+            ("b1:e-3", "\u2009worker\u00a0"),  # padded nonblank ID remains supplied
+            ("b1:e-4", ""),
+            ("b2:e-1", "\u3000"),
+            ("b2:e-2", "worker"),
+            ("b2:e-3", " \u202f "),
+            ("b2:e-4", "0"),
+        ]
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_legacy_resource", event_id, "Review", stamp, resource, "{}")
+            for event_id, resource in resources
+        ])
+        current = quality.diagnostics(conn, "log_legacy_resource")
+        batch_one = quality.diagnostics(conn, "log_legacy_resource", "b1:")
+        batch_two = quality.diagnostics(conn, "log_legacy_resource", "b2:")
+        stored = conn.execute(
+            "SELECT event_id, resource FROM events WHERE log_id = ? ORDER BY event_id",
+            ["log_legacy_resource"]).fetchall()
+    finally:
+        conn.close()
+
+    # The streaming reader uses str.strip() only to determine whether an ID
+    # is present; it preserves all bytes of nonblank identifiers.
+    assert sum(not value.strip() for _, value in resources) == 5
+    assert current["events"] == 8
+    assert current["events_without_resource"] == 5
+    assert batch_one["events"] == 4 and batch_one["events_without_resource"] == 3
+    assert batch_two["events"] == 4 and batch_two["events_without_resource"] == 2
+    assert stored == resources  # no normalization or migration of historical rows
+    assert "worker" not in str(current) and "\u2009" not in str(current)
+
+
+
 def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_false_and_zero():
     """JSON null and empty strings are absent; false and zero are valid values."""
     conn = workspace._connect()

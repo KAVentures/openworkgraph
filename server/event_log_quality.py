@@ -29,6 +29,9 @@ from . import event_log_workspace as workspace
 MAPPING_VERSION = "owg.event-log-mapping.v1"
 TRANSFORM_VERSION = "owg.event-log-import.v1"
 MAX_ATTRIBUTES_REPORTED = 32
+# Python str.strip() whitespace that can survive identifier control-character validation.
+# Preserve literal nonblank labels; only diagnostic presence is normalized here.
+_RESOURCE_WHITESPACE = " \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 COMPLETENESS_NOTE = ("Counts describe the supplied rows only. Whether the source system holds events that were not "
                      "exported is unknown, so this log is not known to be complete.")
 
@@ -143,9 +146,14 @@ def diagnostics(conn, log_id: str, prefix: str | None = None, *,
     where, extra = _scope(prefix)
     params = [log_id, *extra]
     conn.execute(f"CREATE OR REPLACE TEMP TABLE qe AS SELECT e.* FROM events e WHERE e.log_id = ? {where}", params)
+    # Older stored logs may contain whitespace-only resource identifiers even
+    # when newer importers normalize them to ''. Match the streaming reader's
+    # presence rule without changing stored values or historical reports.
     events, first, last, no_resource, future = conn.execute(
-        "SELECT count(*), min(ts), max(ts), count(*) FILTER (WHERE resource = ''), count(*) FILTER (WHERE ts > ?) FROM qe",
-        [reference_at.replace(tzinfo=None)]).fetchone()
+        """SELECT count(*), min(ts), max(ts),
+                  count(*) FILTER (WHERE resource IS NULL OR trim(resource, ?) = ''),
+                  count(*) FILTER (WHERE ts > ?) FROM qe""",
+        [_RESOURCE_WHITESPACE, reference_at.replace(tzinfo=None)]).fetchone()
     conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, eo.qualifier, o.object_type
         FROM event_objects eo JOIN qe USING (event_id)
         JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
