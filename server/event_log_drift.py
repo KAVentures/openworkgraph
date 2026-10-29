@@ -64,7 +64,7 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             raise workspace.EventLogWorkspaceError(
                 f"{len(buckets)} windows is more than {MAX_WINDOWS}; choose a longer window or more cases per window")
         # Distinct paths per case: the case contains A → B at least once.
-        conn.execute("""CREATE OR REPLACE TEMP TABLE ce_edges AS SELECT DISTINCT case_id, to_json([src, activity]) AS edge
+        conn.execute("""CREATE OR REPLACE TEMP TABLE ce_edges AS SELECT DISTINCT case_id, to_json([src, activity])::VARCHAR AS edge
             FROM (SELECT case_id, activity, lag(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS src FROM ce)
             WHERE src IS NOT NULL""")
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE dcase AS SELECT case_id, w FROM dw
