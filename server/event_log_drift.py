@@ -18,6 +18,7 @@ does not say why, and a change in how events are recorded looks the same.
 """
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -63,7 +64,7 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             raise workspace.EventLogWorkspaceError(
                 f"{len(buckets)} windows is more than {MAX_WINDOWS}; choose a longer window or more cases per window")
         # Distinct paths per case: the case contains A → B at least once.
-        conn.execute("""CREATE OR REPLACE TEMP TABLE ce_edges AS SELECT DISTINCT case_id, src || ' → ' || activity AS edge
+        conn.execute("""CREATE OR REPLACE TEMP TABLE ce_edges AS SELECT DISTINCT case_id, to_json([src, activity]) AS edge
             FROM (SELECT case_id, activity, lag(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS src FROM ce)
             WHERE src IS NOT NULL""")
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE dcase AS SELECT case_id, w FROM dw
@@ -118,8 +119,17 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
                              (SELECT n FROM sz WHERE w = ?) a, (SELECT n FROM sz WHERE w = ?) b
                         GROUP BY e.edge""", [i, i + 1, i, i + 1, i, i + 1, i, i + 1]).fetchall()
                     moved.sort(key=lambda r: (-abs(r[2] - r[1]), r[0]))
-                    entry["paths_that_moved"] = [{"path": e, "case_share_before": round(a, 6),
-                                                  "case_share_after": round(b, 6)} for e, a, b in moved[:5]]
+                    # Decode only after grouping: JSON pairs prevent activity names
+                    # containing the display separator from colliding.
+                    shown = []
+                    for encoded, before, after in moved[:5]:
+                        source, target = json.loads(encoded)
+                        label = (f"{source} → {target}" if " → " not in source and " → " not in target
+                                 else json.dumps([source, target], ensure_ascii=False))
+                        shown.append({"path": label, "from": source, "to": target,
+                                      "case_share_before": round(before, 6),
+                                      "case_share_after": round(after, 6)})
+                    entry["paths_that_moved"] = shown
                 boundaries.append(entry)
         return {
             "settings": {"window": window, "window_cases": int(window_cases) if window == "cases" else None,
