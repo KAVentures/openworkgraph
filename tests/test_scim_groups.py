@@ -144,6 +144,39 @@ def test_member_add_and_selected_remove_do_not_clobber_other_members(http):
 
 
 
+def test_absent_member_remove_is_noop_even_with_hidden_offboarded_links(http):
+    client, db, owner, h, base, pid = http
+    created = client.post(base + "/Users", headers=h, json=user())
+    assert created.status_code == 201, created.text
+    uid = created.json()["id"]
+    group_response = client.post(base + "/Groups", headers=h,
+                                 json=group(members=[{"value": uid}]))
+    assert group_response.status_code == 201, group_response.text
+    location = group_response.headers["location"]
+    roster.offboard_employee(db, "acme", uid)
+    current = client.get(location, headers=h)
+    assert current.status_code == 200 and current.json()["members"] == []
+    version = current.headers["etag"]
+
+    # Removing a never-present member must not rewrite hidden offboarding
+    # history or spuriously advance the resource's conditional version.
+    missing = client.patch(location, headers={**h, "If-Match": version},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "remove", "path": 'members[value eq "not-a-user"]'}]})
+    assert missing.status_code == 200, missing.text
+    assert missing.headers["etag"] == version
+    assert missing.json()["members"] == []
+
+    # Explicitly removing the actual, now-inactive historical link cleans it
+    # up even though it was already absent from the public effective members.
+    removed = client.patch(location, headers={**h, "If-Match": version},
+        json={"schemas": [scim.PATCH], "Operations": [
+            {"op": "remove", "path": f'members[value eq "{uid}"]'}]})
+    assert removed.status_code == 200, removed.text
+    assert removed.headers["etag"] != version
+    assert removed.json()["members"] == []
+
+
 def test_user_groups_is_read_only_and_changes_user_etag(http):
     client, db, owner, h, base, pid = http
     created_user = client.post(base + "/Users", headers=h, json=user())

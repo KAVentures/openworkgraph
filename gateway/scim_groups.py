@@ -219,6 +219,10 @@ class Groups:
                 if envelope.get("schemas") != [scim.PATCH] or not isinstance(operations, list) or not 1 <= len(operations) <= 20:
                     raise scim.Error(400, "A PatchOp with 1–20 operations is required", "invalidSyntax")
                 values = {}
+                # Distinguish an absent-member no-op from an explicit removal
+                # of a retained (but currently ineffective) historical link.
+                force_members_rewrite = False
+                stored_member_ids = {m["value"] for m in json.loads(row["members_json"])}
                 for item in operations:
                     op = scim._keys(item, {"op", "path", "value"})
                     verb, path = op.get("op"), op.get("path")
@@ -234,6 +238,8 @@ class Groups:
                             uid = json.loads(selected.group(1))
                         except ValueError:
                             raise scim.Error(400, "Invalid member selector", "invalidPath") from None
+                        if uid in stored_member_ids:
+                            force_members_rewrite = True
                         members = values.get("members", [x["value"] for x in current["members"]])
                         values["members"] = [value for value in members if value != uid]
                         continue
@@ -243,6 +249,8 @@ class Groups:
                     if verb == "remove":
                         if path == "displayname":
                             raise scim.Error(400, "displayName is required", "mutability")
+                        if path == "members":
+                            force_members_rewrite = True
                         values[path] = None if path == "externalid" else []
                     elif verb == "add" and path == "members" and "value" in op:
                         additions = op["value"] if isinstance(op["value"], list) else [op["value"]]
@@ -252,6 +260,8 @@ class Groups:
                         if len(values["members"]) > MAX_MEMBERS:
                             raise scim.Error(400, "At most 200 direct Users are supported", "invalidValue")
                     elif verb in {"add", "replace"} and "value" in op:
+                        if path == "members" and verb == "replace":
+                            force_members_rewrite = True
                         values.update(_values({path: op["value"]}))
                     else:
                         raise scim.Error(400, "Invalid Group patch operation", "invalidSyntax")
@@ -265,7 +275,16 @@ class Groups:
             external = values.get("externalid", row["external_id"])
             # Preserve any pre-existing deauthorized links unless an explicit member
             # replacement occurs; they remain invisible and non-authoritative.
-            members = (self._members(conn, provider, values["members"]) if "members" in values
+            # An add of an already-effective User, or removal of a truly
+            # absent User, must not erase invisible historical links and
+            # spuriously advance the Group ETag. Explicit replace/clear and
+            # removal of a stored (even offboarded) User still rewrite them.
+            unchanged_effective_members = (
+                patch and "members" in values and not force_members_rewrite and
+                sorted(values["members"]) == [x["value"] for x in current["members"]]
+            )
+            members = (self._members(conn, provider, values["members"])
+                       if "members" in values and not unchanged_effective_members
                        else row["members_json"])
             if (name, external, members) == (row["display_name"], row["external_id"], row["members_json"]):
                 return current
