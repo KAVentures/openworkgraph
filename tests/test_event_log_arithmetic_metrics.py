@@ -88,19 +88,21 @@ def test_extrema_require_exact_matching_units_before_reading_dataset(log, operat
         run(log, [SPEND, expr(operation=operation, right=constant(1.0, 'USD'))])
 
 
-@pytest.mark.parametrize(('operation', 'expected'), [('minimum', 7.5), ('maximum', 15.0)])
+@pytest.mark.parametrize(('operation', 'expected'), [('minimum', 9.0), ('maximum', 18.0)])
 def test_extrema_accept_matching_derived_units_without_filling_missing_cases(log, operation, expected):
-    # Derived EUR/events has dimensional provenance, not the opaque declared
-    # label 'EUR/events'. Both operands must retain that exact same type.
-    per_item = expr('per_item')
+    # Keep the analysis within the public four-metric limit. Dividing the
+    # event-attribute spend by an explicitly typed event count creates a
+    # derived EUR/events dimension without consuming a fifth metric slot.
+    # The missing spend on case c must remain missing in both extrema.
+    per_item = expr('per_item', right=constant(2, 'events'))
     twice = expr('twice', operation='add', left=ref('per_item'), right=ref('per_item'))
     bounded = expr(operation=operation, left=ref('per_item'), right=ref('twice'))
-    r = run(log, [SPEND, COUNT, per_item, twice, bounded])
+    r = run(log, [SPEND, per_item, twice, bounded])
     assert r['rows'] == [[expected]]
     metric = r['metrics'][-1]
     assert metric['unit_powers'] == {'EUR': 1, 'events': -1}
-    assert metric['cases_with_value'] == 1 and metric['cases_without_value'] == 2
-    assert metric['cases_with_missing_operand'] == 2
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
     json.dumps(r, allow_nan=False)
 
 
