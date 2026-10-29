@@ -64,6 +64,13 @@ async def run_profile(profile_id: str, request: Request):
     return await _respond(profiles.run, profile_id, **body)
 
 
+@router.post('/{profile_id}/credential')
+async def check_profile_credential(profile_id: str, request: Request):
+    from .jira_credential_rebind import rebind
+    body = await _body(request, ('revision', 'confirm_account_check'))
+    return await _respond(rebind, profile_id, **body)
+
+
 @router.post('/{profile_id}/enabled')
 async def enable_profile(profile_id: str, request: Request):
     body = await _body(request, ('enabled', 'confirmed'))

@@ -243,6 +243,13 @@
     const sync=()=>{create.disabled=creating||!refs.value.trim()||!read.checked||!retain.checked||!labels.checked||(basis.value==='native_issue_keys'&&!nativeReady);};
     basis.addEventListener('change',()=>{refs.value='';scopeField.querySelector('label').textContent=basis.value==='native_issue_keys'?'Exact Jira issue keys':'Observed Jira references';refs.placeholder=basis.value==='native_issue_keys'?'One exact key per line, e.g. OWG-123':'One owg:r: reference per line';changed();if(basis.value==='native_issue_keys'&&!nativeReady)message.textContent='An administrator must separately authorize native issue-key ingestion.';});
     refs.addEventListener('input',changed);for(const control of [read,retain,labels])control.addEventListener('change',sync);
+    const credentialError=value=>({
+      jira_configuration_changed_recreate_profile:'The configured Jira credential changed. Verify the renewed credential to keep this profile; a different account or tenant requires a new profile.',
+      jira_credential_account_mismatch:'The configured credential could not be matched to this profile’s previously confirmed Jira account. The existing history and binding were preserved.',
+      jira_credential_tenant_change_refused:'The configured Jira tenant changed. Create a separate profile for that tenant.',
+      jira_profile_revision_conflict:'This profile changed. Refresh its status before checking the credential again.',
+      jira_prior_account_and_dataset_required:'Retain a history with the original credential before renewing this profile.'
+    })[value]||value;
     const endpoint='/v1/event-log-sources/jira';
     const send=async(path,body,method='POST')=>(await api(endpoint+path,{method,...(body===null?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})})).json();
     async function load(){
@@ -259,23 +266,26 @@
           item.append(el('p',profile.selection_basis==='native_issue_keys'?'Selection: exact Jira keys · '+profile.selected_issue_keys.join(', '):'Selection: observed references · '+profile.resource_refs.join(', ')));
           if(profile.checkpoint)item.append(el('p',profile.checkpoint.events+' retained projected events; '+profile.checkpoint.histories+' histories in the last successful bounded rescan.'));
           const row=el('div',null,'row');
-          const run=button('Read and retain selected histories');run.disabled=!profile.enabled||profile.status==='running'||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
-          const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary');
+          const run=button('Read and retain selected histories');run.disabled=!profile.enabled||['running','checking_credentials'].includes(profile.status)||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
+          const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary'),verify=button('Verify renewed credential','secondary');
+          verify.disabled=!profile.log_id||profile.status==='dataset_deleted'||profile.status==='checking_credentials'||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
+          if(profile.credential_check_status)item.append(el('p','Credential check: '+profile.credential_check_status+(profile.credential_check_error?' · '+credentialError(profile.credential_check_error):'')+'. Last verified: '+(profile.credential_verified_at?new Date(profile.credential_verified_at*1000).toISOString():'none')+'. History freshness and profile enablement are unchanged.'));
           // Lifecycle controls stay available while reading; generation fencing
           // prevents a held old run response from replacing newer disable state.
-          const action=async(path,body,method)=>{
-            const request=++version;run.disabled=true;
+          const action=async(path,body,method,selectRetainedLog=true)=>{
+            const request=++version;run.disabled=true;verify.disabled=true;
             try{const result=await send(path,body,method);if(request!==version)return;
-              if(result.log_id)await refreshLogs(result.log_id);
+              if(selectRetainedLog&&result.log_id)await refreshLogs(result.log_id);
               if(request!==version)return;
               await load();
-            }catch(error){if(request===version){const refreshed=version+1;await load();if(version===refreshed)message.textContent=error.message;}}
+            }catch(error){if(request===version){const refreshed=version+1;await load();if(version===refreshed)message.textContent=credentialError(error.message);}}
           };
           run.onclick=()=>action('/'+profile.profile_id+'/run',{confirm_reads:true});
           toggle.onclick=()=>action('/'+profile.profile_id+'/enabled',{enabled:!profile.enabled,confirmed:true});
           disconnect.onclick=()=>{if(window.confirm('Disconnect this Jira profile? Its imported log stays on this computer until you delete it.'))action('/'+profile.profile_id,null,'DELETE');};
+          verify.onclick=()=>{if(window.confirm('Verify the configured Jira credential against this profile’s previously confirmed account and tenant? This checks account permissions, preserves the selected cases and history, and does not enable a paused profile.'))action('/'+profile.profile_id+'/credential',{revision:profile.revision,confirm_account_check:true},undefined,false);};
           toggle.disabled=profile.status==='dataset_deleted';
-          row.append(run,toggle,disconnect);
+          row.append(run,verify,toggle,disconnect);
           if(profile.log_id&&profile.status!=='dataset_deleted'){const choose=button('Open retained log','secondary');choose.onclick=()=>refreshLogs(profile.log_id).catch(error=>{message.textContent=error.message;});row.append(choose);}
           item.append(row);out.append(item);
         }

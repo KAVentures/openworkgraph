@@ -44,3 +44,5 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_retained_ingestion.cjs
       - name: Verify native selected Jira cases without observed desktop evidence
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_native_case_ingestion.cjs
+      - name: Verify same-account Jira credential renewal and preserved paused history
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_credential_rebind.cjs

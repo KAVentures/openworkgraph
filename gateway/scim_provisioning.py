@@ -87,7 +87,8 @@ def _attributes(body):
     if values.get('schemas') != [CORE]:
         raise Error(400, 'Only the core User schema is supported', 'invalidSyntax')
     # SCIM readOnly fields echoed by a client are ignored; endpoint identity is
-    # authoritative. Password, email aliases, groups and extensions are refused.
+    # authoritative. The readOnly groups projection is ignored as well;
+    # password, email aliases and extensions are refused.
     return _validate_values({k: v for k, v in values.items() if k not in {'schemas', 'id', 'meta', 'groups'}})
 
 

@@ -17,12 +17,10 @@ MAX_MEMBERS = 200
 _GROUP_ID = re.compile(r"grp_[a-f0-9]{32}\Z")
 
 
-def _fields(body, *, patch=False):
+def _fields(body):
     values = scim._keys(body, {"schemas", "id", "meta", "displayname", "externalid", "members"})
     if values.get("schemas") != [CORE]:
         raise scim.Error(400, "Only the core Group schema is supported", "invalidSyntax")
-    if patch and ("id" in values or "meta" in values):
-        raise scim.Error(400, "Group identity and metadata cannot be modified", "mutability")
     return {key: val for key, val in values.items() if key not in {"schemas", "id", "meta"}}
 
 
@@ -266,7 +264,7 @@ class Groups:
                     else:
                         raise scim.Error(400, "Invalid Group patch operation", "invalidSyntax")
             else:
-                values = _values(_fields(body, patch=True))
+                values = _values(_fields(body))
                 if "displayname" not in values:
                     raise scim.Error(400, "displayName is required", "invalidValue")
                 values.setdefault("externalid", None)

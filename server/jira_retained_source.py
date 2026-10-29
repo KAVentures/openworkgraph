@@ -229,6 +229,19 @@ class Extractor:
                 return rows, total
         raise JiraIngestionError('history_page_budget_exceeded')
 
+    def verify_account(self):
+        """Bounded account/grant verification, without reading issue history."""
+        self.deadline = min(self.deadline, self.clock() + 20)
+        try:
+            with private_source_http_logs(), self.factory(follow_redirects=False, trust_env=False) as self.client:
+                account = self.account()
+                if self.account() != account:
+                    raise JiraIngestionError('jira_account_changed_during_read')
+                self.guard()
+            return account
+        except (httpx.HTTPError, OSError):
+            raise JiraIngestionError('source_request_failed') from None
+
     def collect(self, issue_keys):
         rows, histories, native_ids = [], 0, set()
         try:
