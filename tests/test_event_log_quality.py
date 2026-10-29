@@ -314,6 +314,50 @@ def test_qualified_links_do_not_inflate_case_sizes_or_shared_timestamp_ties():
         conn.close()
 
 
+def test_timestamp_ties_count_distinct_events_across_multiple_case_objects():
+    """One event tied in two case notions is one event, not two occurrences."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        later = stamp + timedelta(minutes=1)
+        conn.executemany("INSERT INTO objects VALUES (?, ?, ?, ?)", [
+            ("log_multi_ties", "order-1", "order", "{}"),
+            ("log_multi_ties", "invoice-1", "invoice", "{}"),
+            ("log_multi_ties", "order-2", "order", "{}"),
+        ])
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_multi_ties", "e-1", "Open", stamp, "", "{}"),
+            ("log_multi_ties", "e-2", "Check", stamp, "", "{}"),
+            ("log_multi_ties", "e-3", "Pack", later, "", "{}"),
+        ])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_multi_ties", "e-1", "order-1", "primary"),
+            ("log_multi_ties", "e-1", "order-1", "secondary"),
+            ("log_multi_ties", "e-1", "invoice-1", "primary"),
+            ("log_multi_ties", "e-2", "order-1", "primary"),
+            ("log_multi_ties", "e-2", "invoice-1", "primary"),
+            ("log_multi_ties", "e-3", "order-2", "primary"),
+        ])
+        first = quality.diagnostics(conn, "log_multi_ties")
+        assert first["events"] == 3
+        assert first["events_sharing_a_timestamp_in_a_case"] == 2
+        assert first["cases_with_shared_timestamps"] == 2
+
+        # A second, independent tie adds two new events and one affected case.
+        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                     ["log_multi_ties", "e-4", "Ship", later, "", "{}"])
+        conn.execute("INSERT INTO event_objects VALUES (?, ?, ?, ?)",
+                     ["log_multi_ties", "e-4", "order-2", "primary"])
+        second = quality.diagnostics(conn, "log_multi_ties")
+        assert second["events"] == 4
+        assert second["events_sharing_a_timestamp_in_a_case"] == 4
+        assert second["cases_with_shared_timestamps"] == 3
+        # No source event IDs or object IDs leak into the counts-only diagnostic.
+        assert "order-1" not in str(second) and "invoice-1" not in str(second)
+    finally:
+        conn.close()
+
+
 def test_events_without_case_counts_unlinked_events_not_missing_literal_case_type():
     """OCEL object types are case notions; only absent object links count as unlinked."""
     conn = workspace._connect()
