@@ -69,8 +69,16 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             WHERE src IS NOT NULL""")
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE dcase AS SELECT case_id, w FROM dw
             QUALIFY row_number() OVER (PARTITION BY w ORDER BY hash(case_id)) <= {SAMPLE_PER_WINDOW}""")
+        # The statistical comparison uses dcase (at most SAMPLE_PER_WINDOW
+        # deterministic cases per window), not all cases in dw. Disclose the
+        # actual analysis denominator rather than only the configured cap.
+        sampled_by_window = dict(conn.execute(
+            "SELECT w, count(*) FROM dcase GROUP BY w").fetchall())
         windows = [{"window": str(b) if window == "cases" else b.isoformat()[:10], "cases": n,
-                    "median_case_duration_seconds": med} for b, n, med in buckets]
+                    "sampled_cases": sampled_by_window.get(i, 0),
+                    "sampling_truncated": sampled_by_window.get(i, 0) < n,
+                    "median_case_duration_seconds": med}
+                   for i, (b, n, med) in enumerate(buckets)]
         if window == "cases":
             for i, w in enumerate(windows):
                 w["window"] = f"cases {i * int(window_cases) + 1}–{i * int(window_cases) + w['cases']}"

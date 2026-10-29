@@ -82,6 +82,32 @@ def test_activity_names_containing_arrow_do_not_collide_as_drift_edges():
     assert all(p["path"].startswith('["') for p in moved.values())
 
 
+def test_window_sampling_provenance_at_and_above_cap():
+    """Report the exact dcase denominator, not the full case count."""
+    cap = drift.SAMPLE_PER_WINDOW
+    rows = ["case,activity,time"]
+    for month, count in ((1, cap), (2, cap + 1)):
+        for i in range(count):
+            day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Receive,{day.isoformat()}")
+            rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="sample-cap",
+        source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    result = drift.drift(log, window="month")
+    assert result["settings"]["sample_per_window"] == cap
+    assert [(w["cases"], w["sampled_cases"], w["sampling_truncated"])
+            for w in result["windows"]] == [(cap, cap, False), (cap + 1, cap, True)]
+    assert result["boundaries_tested"] == 1
+    # Both samples contain the same directly-follows path. Sampling alone
+    # must not manufacture a change point.
+    assert result["change_points"] == []
+
+
 def test_no_change_means_no_change_points():
     result = drift.drift(_log(changed_from_month=99))
     assert result["change_points"] == [] and result["boundaries_tested"] == 4
