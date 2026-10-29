@@ -140,13 +140,17 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
         FROM event_objects eo JOIN qe USING (event_id)
         JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
     unlinked = conn.execute("SELECT count(*) FROM qe WHERE event_id NOT IN (SELECT event_id FROM qlinks)").fetchone()[0]
-    notions = conn.execute("""SELECT object_type, count(DISTINCT object_id),
-          count(DISTINCT object_id) FILTER (WHERE n = 1) FROM (
-            SELECT object_type, object_id, count(*) OVER (PARTITION BY object_id) AS n FROM qlinks)
-        GROUP BY 1 ORDER BY 2 DESC, 1""").fetchall()
+    # A source event may link to the same object with multiple qualifiers.
+    # Case sizes and timestamp ties count distinct events, not relationship rows.
+    notions = conn.execute("""SELECT object_type, count(*) AS cases,
+          count(*) FILTER (WHERE n = 1) AS single_event_cases FROM (
+            SELECT object_type, object_id, count(DISTINCT event_id) AS n
+            FROM qlinks GROUP BY object_type, object_id)
+        GROUP BY object_type ORDER BY cases DESC, object_type""").fetchall()
     tied_events, tied_cases = conn.execute("""SELECT coalesce(sum(n), 0), count(DISTINCT object_id) FROM (
-          SELECT l.object_id, q.ts, count(*) AS n FROM qlinks l JOIN qe q USING (event_id)
-          GROUP BY 1, 2 HAVING count(*) > 1)""").fetchone()
+          SELECT l.object_id, q.ts, count(DISTINCT l.event_id) AS n
+          FROM qlinks l JOIN qe q USING (event_id)
+          GROUP BY 1, 2 HAVING count(DISTINCT l.event_id) > 1)""").fetchone()
     # Duplicate diagnostics compare stored content and qualified links, not just
     # same-time activity/case coincidence. Event IDs themselves are excluded.
     duplicates = conn.execute("""SELECT coalesce(sum(n - 1), 0) FROM (SELECT count(*) AS n FROM (
