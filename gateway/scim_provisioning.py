@@ -55,6 +55,8 @@ class Error(ValueError):
 
 def init_schema(db):
     with db.connect() as conn:
+        from .scim_client_policy import SCHEMA as CLIENT_POLICY_SCHEMA
+        conn.execute(CLIENT_POLICY_SCHEMA)
         for statement in SCHEMA.split(';'):
             if statement.strip():
                 conn.execute(statement)
@@ -342,7 +344,7 @@ class Provisioning:
             self.conditional(conn, provider, row, etag)
             return self.mutate(conn, provider, row, values)
 
-    def patch_user(self, provider_id, token, uid, etag, body):
+    def patch_user(self, provider_id, token, uid, etag, body, *, standalone_client=False):
         packet = _keys(body, {'schemas', 'operations'})
         operations = packet.get('operations')
         if packet.get('schemas') != [PATCH] or not isinstance(operations, list) or not 1 <= len(operations) <= 20:
@@ -350,7 +352,11 @@ class Provisioning:
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
             row = self.load(conn, provider, uid)
-            self.conditional(conn, provider, row, etag)
+            from .scim_client_policy import enabled as client_policy_enabled
+            unversioned = (standalone_client is True and etag is None and
+                           client_policy_enabled(self.db, conn, provider_id))
+            if not unversioned:
+                self.conditional(conn, provider, row, etag)
             current = self.user_projection(conn, provider, row)
             values = {'username': current['userName'], 'displayname': current['displayName'],
                       'active': current['active'], 'externalid': current.get('externalId')}
@@ -379,7 +385,11 @@ class Provisioning:
                     else:
                         changed = _keys(op['value'], set(values))
                     values.update(_validate_values(changed))
-            return self.mutate(conn, provider, row, values)
+            result = self.mutate(conn, provider, row, values)
+            if unversioned:
+                self.audit(conn, provider['organization_id'], provider_id, 'scim.user.unversioned_patch',
+                           {'employee_id': uid, 'policy_revision': provider['revision']})
+            return result
 
     def delete_user(self, provider_id, token, uid, etag):
         with self.transaction() as conn:

@@ -9,7 +9,7 @@
   const valid=()=>generation===current&&host===container&&options.isCurrent();
   const title=el('h2','Identity provisioning (SCIM Users and Groups)');
   const help=el('p','Connect one explicitly approved provisioning provider to this organization’s employee roster. New credentials are disabled until enabled. Deactivation revokes employee access; rehire keeps old browser/device credentials revoked. Provisioning does not start recording or share evidence.');help.className='help';
-  const limits=el('p','Supported: work-email userName, display name, active state and provider external ID. Bulk supports up to 50 Users/Groups operations per request (64 KiB). Operations commit separately; stop-on-error limits do not undo earlier successes. Every update/delete needs its exact current resource version. Direct User group membership is available through SCIM. Groups do not grant OWG permissions. User-name renames, nested groups, password changes and complex attributes are not supported. An exact current If-Match version is required for changes. Provider compatibility must be tested before rollout.');limits.className='muted';
+  const limits=el('p','Supported: work-email userName, display name, active state and provider external ID. Bulk supports up to 50 Users/Groups operations per request (64 KiB). Operations commit separately; stop-on-error limits do not undo earlier successes. Strict versions are the default; the separately approved client policy can allow missing versions on standalone User PATCH only. Direct User group membership is available through SCIM. Groups do not grant OWG permissions. User-name renames, nested groups, password changes and complex attributes are not supported. Supplied versions must always be current. Provider compatibility must be tested before rollout.');limits.className='muted';
   const form=el('div');form.className='row';
   const label=el('label','Provider label');label.htmlFor='scimLabel';
   const name=el('input');name.id='scimLabel';name.maxLength=120;name.style.maxWidth='100%';
@@ -74,6 +74,41 @@
     }catch(error){if(active()&&own===sequence){reset();details.textContent=error.message+' Review the current employee before retrying.';}}
    });
   }
+  function clientPolicyForm(row,item){
+   const open=el('button','Client update policy');open.dataset.scimPolicy=item.provider_id;open.disabled=!options.canWrite;
+   const form=el('div');form.hidden=true;let state=null,sequence=0;
+   const note=el('p','Optional compatibility applies only to standalone User PATCH without If-Match. It uses current stored state and has no client-baseline conflict protection: targeted fields can overwrite a concurrent human or provider change. Supplied versions, Bulk, Groups, PUT and DELETE stay strict. Test your IdP mappings before rollout.');
+   const status=el('p');status.setAttribute('role','status');
+   const consent=el('input');consent.type='checkbox';consent.id='scimPolicyConsent-'+item.provider_id;
+   const label=el('label','Approve unversioned standalone User PATCH and its overwrite behavior');label.htmlFor=consent.id;
+   const check=el('div');check.className='check';check.append(consent,label);
+   const save=el('button','Enable compatibility');save.disabled=true;save.dataset.scimPolicySave=item.provider_id;
+   const close=el('button','Close policy');form.append(note,status,check,save,close);row.append(open,form);
+   const active=()=>valid()&&row.isConnected&&!form.hidden;
+   consent.addEventListener('change',()=>{save.disabled=!options.canWrite||!state||(!state.unversioned_user_patch&&!consent.checked);});
+   close.addEventListener('click',()=>{sequence++;state=null;consent.checked=false;form.hidden=true;open.disabled=!options.canWrite;});
+   open.addEventListener('click',async()=>{
+    if(!valid()||!options.canWrite)return;
+    const own=++sequence;state=null;consent.checked=false;save.disabled=true;open.disabled=true;form.hidden=false;forget();
+    status.textContent='Loading current client policy…';
+    try{
+     const value=await options.api('GET',path+'/'+encodeURIComponent(item.provider_id)+'/client-policy');
+     if(!active()||own!==sequence)return;
+     state=value;status.textContent=value.unversioned_user_patch?'Unversioned standalone User PATCH is enabled.':'Strict versions are required.';
+     check.hidden=value.unversioned_user_patch;save.textContent=value.unversioned_user_patch?'Require strict versions':'Enable compatibility';save.disabled=!options.canWrite||!value.unversioned_user_patch;
+    }catch(error){if(active()&&own===sequence)status.textContent=error.message;}
+   });
+   save.addEventListener('click',async()=>{
+    if(!active()||!options.canWrite||!state||(!state.unversioned_user_patch&&!consent.checked))return;
+    const own=sequence,value=state;save.disabled=true;
+    try{
+     await options.api('PATCH',path+'/'+encodeURIComponent(item.provider_id)+'/client-policy',
+      {revision:value.revision,enabled:!value.unversioned_user_patch,confirmUnversioned:!value.unversioned_user_patch});
+     if(!active()||own!==sequence)return;
+     await load();say(value.unversioned_user_patch?'Strict client versions restored.':'Unversioned standalone User PATCH enabled for this provider. Other operations remain strict.');
+    }catch(error){if(active()&&own===sequence){await load().catch(()=>{});say(error.message+' Review the current policy before retrying.');}}
+   });
+  }
   async function load(){
    const response=await options.api('GET',path);if(!valid())return;
    list.replaceChildren();
@@ -105,7 +140,7 @@
       catch(error){say(error.message);if(valid())await load().catch(()=>{});}
      });controls.append(toggle,revoke);
     }
-    row.append(controls);if(!item.revoked_at)assignmentForm(row,item);list.append(row);
+    row.append(controls);if(!item.revoked_at){assignmentForm(row,item);clientPolicyForm(row,item);}list.append(row);
    }
   }
   create.addEventListener('click',async()=>{

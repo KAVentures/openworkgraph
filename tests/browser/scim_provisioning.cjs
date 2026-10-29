@@ -84,6 +84,42 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const active=await request('PATCH',source+'/Users/'+uid,patch,token,{'If-Match':inactive.headers.get('etag')});assert.equal(active.status,200);
   assert.equal((await active.json()).id,uid);
   await identity();
+  const policyUserResponse=await request('POST',source+'/Users',{schemas:['urn:ietf:params:scim:schemas:core:2.0:User'],userName:'policy@acme.test',active:true},token);
+  assert.equal(policyUserResponse.status,201);const policyUser=await policyUserResponse.json(),policyUserUrl=source+'/Users/'+policyUser.id;
+  const policyPatch={schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:[{op:'replace',value:{active:false}}]};
+  assert.equal((await request('PATCH',policyUserUrl,policyPatch,token)).status,428);
+  const policyUrl='/v1/admin/scim-providers/acme/'+pid+'/client-policy';
+  const policyOpen=()=>page.locator('[data-scim-policy="'+pid+'"]');
+  const policySave=()=>page.locator('[data-scim-policy-save="'+pid+'"]');
+  let releasePolicy,policyArrived,policyFinished;
+  const policyGate=new Promise(r=>releasePolicy=r),policySeen=new Promise(r=>policyArrived=r),policyDone=new Promise(r=>policyFinished=r);
+  await page.route('**'+policyUrl,async route=>{
+   if(route.request().method()==='GET'){const response=await route.fetch();policyArrived();await policyGate;await route.fulfill({response});policyFinished();}
+   else await route.continue();
+  });
+  await policyOpen().click();await policySeen;
+  await page.getByRole('button',{name:'Close policy',exact:true}).click();
+  releasePolicy();await policyDone;await page.unroute('**'+policyUrl);await page.waitForLoadState('networkidle');
+  assert.ok(await policySave().isHidden(),'cancelled policy response cannot restore an old preview');
+  await policyOpen().click();await page.getByRole('status').filter({hasText:'Strict versions are required.'}).waitFor();
+  assert.ok(await policySave().isDisabled());
+  const reviewedPolicy=await(await request('GET',policyUrl)).json();
+  assert.equal((await request('PATCH','/v1/admin/scim-providers/acme/'+pid,{revision:reviewedPolicy.revision,enabled:true})).status,200);
+  await page.locator('#scimPolicyConsent-'+pid).check();await policySave().click();
+  await page.locator('#scimStatus').filter({hasText:'Provider changed'}).waitFor();
+  await policyOpen().click();await page.getByRole('status').filter({hasText:'Strict versions are required.'}).waitFor();
+  assert.ok(await policySave().isDisabled(),'stale confirmation must be reviewed again');
+  await page.locator('#scimPolicyConsent-'+pid).check();await policySave().click();
+  await page.locator('#scimStatus').filter({hasText:'Unversioned standalone User PATCH enabled'}).waitFor();
+  assert.equal((await request('PATCH',policyUserUrl,policyPatch,token,{'If-Match':'stale'})).status,412);
+  const clientDeactivated=await request('PATCH',policyUserUrl,policyPatch,token);assert.equal(clientDeactivated.status,200);
+  const clientNoop=await request('PATCH',policyUserUrl,policyPatch,token);assert.equal(clientNoop.headers.get('etag'),clientDeactivated.headers.get('etag'));
+  const strictBulk=await request('POST',source+'/Bulk',{schemas:['urn:ietf:params:scim:api:messages:2.0:BulkRequest'],Operations:[{method:'PATCH',path:'/Users/'+policyUser.id,data:policyPatch}]},token);
+  assert.equal((await strictBulk.json()).Operations[0].status,'428');
+  policyPatch.Operations[0].value.active=true;assert.equal((await request('PATCH',policyUserUrl,policyPatch,token)).status,200);
+  await policyOpen().click();await page.getByRole('status').filter({hasText:'Unversioned standalone User PATCH is enabled.'}).waitFor();
+  await policySave().click();await page.locator('#scimStatus').filter({hasText:'Strict client versions restored.'}).waitFor();
+  assert.equal((await request('PATCH',policyUserUrl,policyPatch,token)).status,428);
   assert.match(await page.locator('#scimAdmin').textContent(),/50 Users\/Groups operations/);
   assert.match(await page.locator('#scimAdmin').textContent(),/Operations commit separately/);
   const config=await(await request('GET',source+'/ServiceProviderConfig',undefined,token)).json();assert.equal(config.bulk.maxOperations,50);assert.equal(config.bulk.supported,true);
@@ -122,6 +158,7 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await identity();
   await page.locator('[data-scim-assign="'+pid+'"]').click();
   await page.locator(assignmentPrefix+'-employee').waitFor();
+  await policyOpen().click();await page.getByRole('status').filter({hasText:'Strict versions are required.'}).waitFor();
   await page.evaluate(source=>{const script=document.createElement('script');script.nonce=document.querySelector('script[nonce]').nonce;script.textContent=source;document.head.append(script);},await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8'));
   const audit=await page.evaluate(()=>axe.run(document.querySelector('#scimAdmin'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
   assert.deepEqual(audit.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)})),[]);
@@ -159,10 +196,10 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.locator('#scimStatus').filter({hasText:'Credential permanently revoked'}).waitFor();
   assert.equal((await request('GET',source+'/Users',undefined,token)).status,401);
   assert.equal((await request('POST',source+'/Users/.search',{schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],attributes:['id']},token)).status,401);
-  const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['manual@acme.test','operator@acme.test','zbulk@acme.test']);
+  const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['manual@acme.test','operator@acme.test','policy@acme.test','zbulk@acme.test']);
   assert.equal((await request('POST',source+'/Bulk',{schemas:[schema],Operations:[newUser('revoked','refused@acme.test')]},token)).status,401);
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, explicit employee assignment with held-preview/stale-roster refusal and preserved identity/manual teams, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, explicit employee assignment with held-preview/stale-roster refusal and preserved identity/manual teams, reviewed provider client policy with cancelled/stale preview refusal and current delta/no-op/strict-supplied-version/Bulk checks, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);
