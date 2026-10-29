@@ -68,6 +68,17 @@ def _text(value, maximum, *, blank=False):
     return value
 
 
+def _filter_string(encoded):
+    try:
+        value = json.loads(encoded)
+        value.encode('utf-8')
+        if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+            raise ValueError('Control in identity filter')
+        return value
+    except (ValueError, UnicodeError):
+        raise Error(400, 'Invalid identity filter string', 'invalidFilter') from None
+
+
 def _keys(body, allowed):
     if not isinstance(body, dict):
         raise Error(400, 'Expected a JSON object', 'invalidSyntax')
@@ -262,10 +273,7 @@ class Provisioning:
             match = re.fullmatch(r'(userName|externalId)\s+eq\s+("(?:[^"\\]|\\.)*")', filter_text, re.I)
             if not match:
                 raise Error(400, 'Only userName eq or externalId eq with a JSON string is supported', 'invalidFilter')
-            try:
-                value = json.loads(match[2])
-            except ValueError:
-                raise Error(400, 'Invalid filter string', 'invalidFilter') from None
+            value = _filter_string(match[2])
             if match[1].lower() == 'username':
                 where, extra = ' AND e.email=?', [value.strip().lower()]
             else:

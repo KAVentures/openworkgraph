@@ -17,12 +17,13 @@ Primary references: [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643) resource 
 | `GET /ResourceTypes`, `/ResourceTypes/User` | Users resource type only |
 | `POST /Users` | Create a new roster identity; returns 201 |
 | `GET /Users/{id}` | Current provider-linked employee projection |
+| `POST /Users/.search` | Bounded read-only SearchRequest; same filters/pages and selected attributes as GET |
 | `GET /Users` | List/page; `userName eq "…"` or `externalId eq "…"` filters |
 | `PUT /Users/{id}` | Supported replacement projection under exact current If-Match |
 | `PATCH /Users/{id}` | Atomic one-to-twenty add/replace/remove operations under exact current If-Match |
 | `DELETE /Users/{id}` | Offboard and tombstone provisioning resource; returns empty 204 |
 
-Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. Unsupported operators, sorting, attribute selection, repeated query parameters, groups, extensions and unsupported paths explicitly refuse. This increment does not implement `.search` or generic SCIM filtering.
+Pagination uses one-based `startIndex` and `count` from 0 through 200 (default 100). Count zero returns the current total without resources. Ordering is stable by normalized work email then employee ID; pages do not claim a historical snapshot across requests. POST `.search` and GET reads support bounded [attribute selection](SCIM_SEARCH.md). Unsupported operators, sorting, repeated query parameters, extensions and unsupported paths explicitly refuse; generic SCIM filtering remains unsupported.
 
 User inputs use the core User schema. Supported attributes are:
 
@@ -57,7 +58,7 @@ Owned SQLite backup/restore and PostgreSQL 17 custom pg_dump/pg_restore checks p
 
 Tests cover advertised HTTP discovery/create/query/update/delete, scoped authentication, disabled/revoked providers, current versions, atomic PATCH/no-op/removal/null handling, uniqueness, malformed input, audit/team rollback, concurrent updates, manual-edit drift, tenant/provider isolation and no implicit identity adoption. Both SQLite and PostgreSQL are exercised. Owned RSA/OIDC flows for the process and analysis portals confirm deactivation blocks old browser sessions and rehire does not revive those or device/invitation credentials. The admin browser covers consented enablement, one-view credentials, escaped labels, roster effects, WCAG/mobile, permanent revocation and a held old-session 401 arriving after a fresh sign-in.
 
-Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filtering/search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
+Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filter expressions/cross-resource search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
 
 ## Bounded Users/Groups bulk provisioning
 
