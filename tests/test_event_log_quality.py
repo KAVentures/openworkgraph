@@ -111,7 +111,7 @@ def test_future_event_reference_is_explicit_and_report_anchored():
     assert current["future_event_reference"]["basis"] == "current_query"
     assert current["events_dated_after_reference"] == current["events_dated_after_import"] == 1
     assert current["future_event_reference"]["at"].endswith("Z")
-    assert "2099" not in str(current)  # counts only, no event timestamps leaked
+    assert set(current["future_event_reference"]) == {"at", "basis"}
 
 
 def test_future_event_reference_uses_supplied_utc_instant_not_wall_clock():
