@@ -49,7 +49,9 @@ const path=require('node:path');
   assert.equal(await page.locator('#owgAnalysisName').inputValue(),'Keep this unsaved analysis');
   assert.equal(await page.locator('#owgEventLogResults > div').first().textContent(),overview);
   assert.equal(await page.locator('#owgEventLogPick').inputValue(),log);
-  assert.equal(requests.some(p=>p.startsWith('/v1/event-logs')),false);
+  // Initial analysis panels may still finish their own detail reads. A
+  // credential check must not refresh the dataset picker or rebuild analysis.
+  assert.equal(requests.includes('/v1/event-logs'),false);
   const after=JSON.parse(await fs.readFile(path.join(scratch,'provider-counts.json'),'utf8'));
   assert.equal(after.history_reads,before.history_reads);assert.equal(after.issue_reads,before.issue_reads);assert.equal(after.account_reads,before.account_reads+2);
   assert.match(await out.textContent(),/Status: disabled/);
