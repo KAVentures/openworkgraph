@@ -4,7 +4,7 @@ This subset extends existing provider-scoped SCIM Users provisioning. It is disa
 
 Supported:
 - Schemas and ResourceTypes discovery now advertise the Group resource alongside Users.
-- Group create, read, list with bounded displayName/externalId equality string filters and pagination, exact If-Match PUT/PATCH/DELETE.
+- Group create, read, list with bounded displayName/externalId equality string filters and pagination, exact If-Match PUT/PATCH/DELETE. PUT ignores echoed read-only id/meta fields; endpoint identity and the If-Match header remain authoritative. Explicit PATCH changes to id/meta are refused.
 - displayName, optional provider-scoped externalId, and up to 200 distinct direct User members supplied with a stable User ID and type User. Members must be current active Users of the same provider.
 - Patch paths displayName, externalId and members support replacement; adding direct members appends without dropping existing ones. Removing members clears the list, and removing an exact members[value eq "id"] selector removes only that member. A PATCH is atomic.
 - Resource versions include effective members. The read-only Users.groups projection lists current provider-owned direct groups, and the User ETag changes with that projection. No-op updates keep the version. Deleted groups are retained as tombstones.

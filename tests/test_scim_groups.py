@@ -253,3 +253,26 @@ def test_group_audit_failure_is_atomic(http, monkeypatch):
         # TestClient's exception propagation is intentional; the DB must roll back.
         client.post(base + "/Groups", headers=h, json=group(externalId="rollback"))
     assert client.get(base + "/Groups", headers=h).json()["totalResults"] == 0
+
+
+@pytest.mark.parametrize("forged_read_only", [False, True])
+def test_group_put_ignores_echoed_read_only_identity_and_metadata(http, forged_read_only):
+    client, db, owner, headers, base, provider = http
+    made = client.post(base + "/Groups", headers=headers, json=group())
+    assert made.status_code == 201, made.text
+    location = made.headers["location"]
+    current = client.get(location, headers=headers)
+    body = current.json()
+    if forged_read_only:
+        body["id"] = "grp_" + "0" * 32
+        body["meta"] = {"resourceType": "User", "version": "client-cannot-set-this"}
+    replaced = client.put(location, headers={**headers, "If-Match": current.headers["etag"]}, json=body)
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json() == current.json()
+    assert replaced.headers["etag"] == current.headers["etag"]
+    # PUT ignores readOnly fields; explicit PATCH mutations still fail.
+    for path in ("id", "meta"):
+        refused = client.patch(location, headers={**headers, "If-Match": current.headers["etag"]},
+            json={"schemas": [scim.PATCH], "Operations": [{"op": "replace", "path": path, "value": "forged"}]})
+        assert refused.status_code == 400
+    assert client.get(location, headers=headers).json() == current.json()
