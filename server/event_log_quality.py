@@ -101,6 +101,23 @@ def content_digest(conn, log_id: str, prefix: str | None = None) -> str:
     return hashlib.sha256(f"owg.event-log-content.v1:{events}:{links}".encode()).hexdigest()
 
 
+def content_digest_v2(conn, log_id: str, prefix: str | None = None) -> str:
+    """Delimiter-safe digest over all stored event fields and event-object links.
+
+    This is additive: v1 remains stable for existing saved provenance references.
+    JSON arrays encode field boundaries and NULLs unambiguously, unlike v1's
+    concat_ws(chr(31), ...) representation of untrusted source strings.
+    """
+    where, extra = _scope(prefix)
+    events = _set_digest(conn, f"""SELECT sha256(to_json([e.event_id, e.activity,
+            strftime(e.ts, '%Y-%m-%dT%H:%M:%S.%f'), e.resource, e.attributes])) AS h
+        FROM events e WHERE e.log_id = ? {where}""", [log_id, *extra])
+    link_scope = "AND starts_with(l.event_id, ?)" if prefix else ""
+    links = _set_digest(conn, f"""SELECT sha256(to_json([l.event_id, l.object_id, l.qualifier])) AS h
+        FROM event_objects l WHERE l.log_id = ? {link_scope}""", [log_id, *extra])
+    return hashlib.sha256(f"owg.event-log-content.v2:{events}:{links}".encode()).hexdigest()
+
+
 def source_identity_digest(conn, log_id: str, prefix: str | None = None) -> str:
     """Separate key/case-map digest; existing event-content digests stay unchanged."""
     where, extra = _scope(prefix)
@@ -168,6 +185,7 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
         "transform": transform(source_format, mapping),
         "source_sha256": source_digest(upload),
         "content_sha256": content_digest(conn, log_id, prefix),
+        "content_sha256_v2": content_digest_v2(conn, log_id, prefix),
         "rows": {"accepted": rows_accepted, "rejected": rows_rejected,
                  "rejected_by_reason": rejection_reasons,
                  "reason_counts_can_overlap": bool(rejection_reasons),
@@ -203,6 +221,7 @@ def quality(log_id: str) -> dict[str, Any]:
                 "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
+            digest_v2 = content_digest_v2(conn, log_id)
             relationship_metadata=workspace.object_relationships.metadata(conn,log_id,include_digest=True)
             identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
                                if info.get('source_identity') else {})
@@ -211,9 +230,10 @@ def quality(log_id: str) -> dict[str, Any]:
     present = {r["batch"] for r in reports}
     # Logs imported before reports existed, or whose report could not be written, have none.
     return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
-            "current": {"content_sha256": digest, "diagnostics": current, **identity_digest, **relationship_metadata,
+            "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
+                        "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "record", "transform", "content_digest", "diagnostics", "MAPPING_VERSION"]
+__all__ = ["quality", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
