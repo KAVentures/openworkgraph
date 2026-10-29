@@ -120,7 +120,7 @@ def test_min_cases_requires_actual_sampled_support(monkeypatch):
             rows.append(f"{case},Receive,{day.isoformat()}")
             rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="sample-support",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="sample-support",
         source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time"})["log_id"]
