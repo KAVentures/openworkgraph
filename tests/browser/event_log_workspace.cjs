@@ -73,6 +73,12 @@ const path=require('node:path');
    assert.ok(futureText.includes(Number(qualityPayload.current.diagnostics.events_dated_after_reference).toLocaleString()),
      'visible count matches the current API count');
    assert.doesNotMatch(qualityText,/Events dated after the import/,'live data must not be labeled import-time');
+   const unlinkedRow=page.locator('#owgQualityResults tr').filter({hasText:'Events without any retained object link'});
+   assert.equal(await unlinkedRow.count(),1,'object-centric diagnostic is not mislabeled as a literal case-type check');
+   assert.equal((await unlinkedRow.locator('td').last().textContent()).trim(),
+     Number(qualityPayload.current.diagnostics.events_without_case).toLocaleString(),
+     'the unlinked-event count matches the local API without changing its legacy key');
+   assert.doesNotMatch(qualityText,/Events without a case/,'an OCEL object link need not have type case');
    const currentV2=qualityPayload.current.content_sha256_v2;
    assert.match(currentV2,/^[0-9a-f]{64}$/,'current quality response supplies the delimiter-safe digest');
    assert.ok(qualityText.includes('Current content digest v2 (delimiter-safe): '+currentV2),

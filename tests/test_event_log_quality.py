@@ -287,6 +287,36 @@ def test_qualified_links_do_not_inflate_case_sizes_or_shared_timestamp_ties():
         conn.close()
 
 
+def test_events_without_case_counts_unlinked_events_not_missing_literal_case_type():
+    """OCEL object types are case notions; only absent object links count as unlinked."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.executemany("INSERT INTO objects VALUES (?, ?, ?, ?)", [
+            ("log_unlinked", "order-1", "order", "{}"),
+            ("log_unlinked", "case-1", "case", "{}"),
+        ])
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_unlinked", "e-order", "Open", stamp, "", "{}"),
+            ("log_unlinked", "e-orphan", "Check", stamp, "", "{}"),
+            ("log_unlinked", "e-case", "Close", stamp, "", "{}"),
+        ])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_unlinked", "e-order", "order-1", "primary"),
+            ("log_unlinked", "e-case", "case-1", "primary"),
+        ])
+        result = quality.diagnostics(conn, "log_unlinked")
+        assert result["events"] == 3
+        # The order-only event is linked even though it has no 'case' object.
+        # Preserve the legacy API key, but its meaning is unlinked events.
+        assert result["events_without_case"] == 1
+        assert {row["object_type"]: (row["cases"], row["single_event_cases"])
+                for row in result["case_notions"]} == {"order": (1, 1), "case": (1, 1)}
+        assert "order-1" not in str(result) and "e-orphan" not in str(result)
+    finally:
+        conn.close()
+
+
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))

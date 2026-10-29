@@ -21,6 +21,13 @@ event attribute values.
   status; a zero displayed key count is not presented as an exhaustive inventory.
 - **Future-dated events** retain the exact UTC reference instant and comparison
   basis from #449/#451. Live query-time counts are not called import-time counts.
+- **Events without any retained object link** is the display name for the
+  existing `events_without_case` API count. It counts events with no
+  event-to-object relationship at all, **not** events missing an object with
+  literal type `case`. OCEL object types such as `order` and `invoice` can
+  each form their own case notion. An event linked only to an `order` is
+  therefore not unlinked. This is a label clarification, not a redefinition
+  of stored events or a new completeness guarantee.
 
 A real-browser regression compares digest and count labels against the local
 quality API. A separate *synthetic intercepted response* tests the 32-of-35
