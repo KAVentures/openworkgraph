@@ -41,6 +41,7 @@ from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
 from . import analysis_snapshot_export
 from . import event_log_signals as signals
+from . import event_log_signal_inbox as signal_inbox
 from . import event_log_simulation as simulation
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
@@ -560,6 +561,26 @@ def event_log_evaluate_signals(request: Request, log_id: str):
 def event_log_delete_signal_rule(request: Request, log_id: str, rule_id: str):
     _require_dashboard(request)
     return _respond(signals.delete_rule, log_id, rule_id)
+
+
+@router.get("/v1/event-logs/{log_id}/signal-inbox")
+def event_log_signal_inbox(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(signal_inbox.list_inbox, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/signal-inbox/{rule_id}/acknowledge")
+async def event_log_signal_acknowledge(request: Request, log_id: str, rule_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "signal acknowledgement", strict=True)
+    return _respond(signal_inbox.review, log_id, rule_id, spec, acknowledge=True)
+
+
+@router.post("/v1/event-logs/{log_id}/signal-inbox/{rule_id}/reopen")
+async def event_log_signal_reopen(request: Request, log_id: str, rule_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "signal review reopening", strict=True)
+    return _respond(signal_inbox.review, log_id, rule_id, spec, acknowledge=False)
 
 
 @router.post("/v1/event-logs/{log_id}/benchmark")
