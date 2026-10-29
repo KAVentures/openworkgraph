@@ -129,13 +129,23 @@ def source_identity_digest(conn, log_id: str, prefix: str | None = None) -> str:
         WHERE k.log_id=? {where}''', [log_id, *extra])
 
 
-def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
+def diagnostics(conn, log_id: str, prefix: str | None = None, *,
+                reference_at: datetime | None = None,
+                reference_basis: str = "current_query") -> dict[str, Any]:
+    """Counts-only snapshot; future timestamps are compared to an explicit UTC instant."""
+    if reference_basis not in ("current_query", "report_created"):
+        raise ValueError("unknown future-event reference basis")
+    if reference_at is None:
+        reference_at = datetime.now(timezone.utc)
+    if reference_at.tzinfo is None:
+        raise ValueError("future-event reference must be timezone-aware")
+    reference_at = reference_at.astimezone(timezone.utc)
     where, extra = _scope(prefix)
     params = [log_id, *extra]
     conn.execute(f"CREATE OR REPLACE TEMP TABLE qe AS SELECT e.* FROM events e WHERE e.log_id = ? {where}", params)
     events, first, last, no_resource, future = conn.execute(
         "SELECT count(*), min(ts), max(ts), count(*) FILTER (WHERE resource = ''), count(*) FILTER (WHERE ts > ?) FROM qe",
-        [datetime.now(timezone.utc).replace(tzinfo=None)]).fetchone()
+        [reference_at.replace(tzinfo=None)]).fetchone()
     conn.execute("""CREATE OR REPLACE TEMP TABLE qlinks AS SELECT eo.event_id, eo.object_id, eo.qualifier, o.object_type
         FROM event_objects eo JOIN qe USING (event_id)
         JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id WHERE eo.log_id = ?""", [log_id])
@@ -180,7 +190,12 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
         "events_sharing_a_timestamp_in_a_case": int(tied_events),
         "cases_with_shared_timestamps": tied_cases,
         "tied_order": "events with the same time in a case are ordered by event identifier, not by observation",
+        # Preserve the legacy field while disclosing its actual comparison basis.
+        # In a current snapshot the comparison is at query time, not import time.
         "events_dated_after_import": future,
+        "events_dated_after_reference": future,
+        "future_event_reference": {"at": reference_at.isoformat().replace("+00:00", "Z"),
+                                   "basis": reference_basis},
         "attribute_coverage": [{"attribute": k, "events_with_value": n, "events_without_value": events - n}
                                for k, n, _ in attributes],
         "attribute_coverage_total_keys": attribute_total_keys,
@@ -193,12 +208,13 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
            duplicates_skipped: int | None = None, prefix: str | None = None,
            kept: dict[str, int] | None = None, source_identity: dict[str, Any] | None = None) -> dict[str, Any]:
     """Store the report for one import (batch 0) or appended batch, inside the caller's transaction."""
+    created_at = datetime.now(timezone.utc)
     rejection_reasons = dict(rejection_reasons) if rejection_reasons is not None else None
     assumed = (rejection_reasons or {}).pop("timestamps_with_assumed_offset", None)
     report = {
         "format": "openworkgraph.event-log-quality.v1",
         "batch": batch, "kind": kind,
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "created_at": created_at.isoformat().replace("+00:00", "Z"),
         "transform": transform(source_format, mapping),
         "source_sha256": source_digest(upload),
         "content_sha256": content_digest(conn, log_id, prefix),
@@ -211,7 +227,8 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
                  **({"rejected_rows_kept_for_review": kept.get("retained", 0),
                      "rejected_rows_over_review_limit": kept.get("not_retained", 0)} if kept is not None else {}),
                  **({"duplicates_skipped_on_append": duplicates_skipped} if duplicates_skipped is not None else {})},
-        "diagnostics": diagnostics(conn, log_id, prefix),
+        "diagnostics": diagnostics(conn, log_id, prefix, reference_at=created_at,
+                                   reference_basis="report_created"),
         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE},
     }
     if rejection_reasons is None:
@@ -222,7 +239,7 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
         report['source_identity_map_sha256']=source_identity_digest(conn,log_id,prefix)
     report.update(workspace.object_relationships.metadata(conn,log_id,include_digest=True))
     conn.execute("INSERT INTO log_quality VALUES (?, ?, ?, ?)",
-                 [log_id, batch, datetime.now(timezone.utc).replace(tzinfo=None), _canonical(report)])
+                 [log_id, batch, created_at.replace(tzinfo=None), _canonical(report)])
     return report
 
 
