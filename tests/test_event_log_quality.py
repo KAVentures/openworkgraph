@@ -95,6 +95,28 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized  # counts only
 
 
+def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_false_and_zero():
+    """JSON null and empty strings are absent; false and zero are valid values."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_coverage", "event-1", "Review", stamp, "", 
+             '{"nullable":null,"blank":"","flag":false,"count":0}'),
+            ("log_coverage", "event-2", "Done", stamp + timedelta(seconds=1), "",
+             '{"nullable":"known","blank":"filled"}'),
+        ])
+        result = quality.diagnostics(conn, "log_coverage")
+    finally:
+        conn.close()
+    coverage = {item["attribute"]: item for item in result["attribute_coverage"]}
+    assert result["events"] == 2
+    for attribute in ("nullable", "blank", "flag", "count"):
+        assert coverage[attribute] == {
+            "attribute": attribute, "events_with_value": 1, "events_without_value": 1
+        }
+
+
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))

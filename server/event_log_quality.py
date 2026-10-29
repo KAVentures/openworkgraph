@@ -152,7 +152,7 @@ def diagnostics(conn, log_id: str, prefix: str | None = None) -> dict[str, Any]:
                  list(l.object_id ORDER BY l.object_id) FILTER (WHERE l.object_id IS NOT NULL) AS objs
           FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4)
         GROUP BY activity, ts, resource, objs HAVING count(*) > 1)""").fetchone()[0]
-    attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.value <> '""') FROM qe, json_each(qe.attributes) j
+    attributes = conn.execute(f"""SELECT j.key, count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') FROM qe, json_each(qe.attributes) j
         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
     return {
         "events": events,
