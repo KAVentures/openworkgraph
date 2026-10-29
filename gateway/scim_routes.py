@@ -8,7 +8,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import scim_provisioning as scim, scim_bulk as bulk
+from . import scim_provisioning as scim, scim_bulk as bulk, scim_groups as group_module
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
@@ -69,13 +69,19 @@ def _list(resources):
 
 
 def _schema():
-    def attribute(name, kind='string', *, required=False, mutable='readWrite', exact=False, unique='none'):
-        return {'name': name, 'type': kind, 'multiValued': False, 'required': required,
+    def attribute(name, kind='string', *, required=False, mutable='readWrite', exact=False, unique='none', multi=False):
+        return {'name': name, 'type': kind, 'multiValued': multi, 'required': required,
                 'caseExact': exact, 'mutability': mutable, 'returned': 'default', 'uniqueness': unique}
+    groups = attribute('groups', 'complex', mutable='readOnly', multi=True)
+    groups['subAttributes'] = [
+        attribute('value', required=True),
+        attribute('display'),
+        {**attribute('type', mutable='readOnly'), 'canonicalValues': ['direct']},
+    ]
     return {'schemas': [SCHEMA_URI], 'id': scim.CORE, 'name': 'User',
-            'description': 'OWG bounded User projection; userName is a stable work-email actor. Other core/extension fields are unsupported.',
+            'description': 'OWG bounded User projection; userName is a stable work-email actor. Groups are read-only provider metadata, not access grants.',
             'attributes': [attribute('userName', required=True, mutable='immutable', unique='server'),
-                           attribute('displayName'), attribute('active', 'boolean')]}
+                           attribute('displayName'), attribute('active', 'boolean'), groups]}
 
 
 class ProvisioningRoute(APIRoute):
@@ -94,6 +100,7 @@ class ProvisioningRoute(APIRoute):
 
 def build_router(service, require_admin, base_url):
     router = APIRouter(route_class=ProvisioningRoute)
+    groups = group_module.Groups(service)
 
     def authenticate(provider_id, request):
         token = _bearer(request)
@@ -170,17 +177,39 @@ def build_router(service, require_admin, base_url):
                 'description': 'Explicitly enabled organization/provider-scoped credential; not an admin or evidence grant.',
                 'specUri': 'https://www.rfc-editor.org/rfc/rfc6750', 'primary': True}]})
 
+    def group_schema():
+        def attribute(name, kind='string', *, required=False, multi=False, mutable='readWrite'):
+            return {'name': name, 'type': kind, 'multiValued': multi,
+                    'required': required, 'caseExact': True, 'mutability': mutable,
+                    'returned': 'default', 'uniqueness': 'none'}
+        members = attribute('members', 'complex', multi=True)
+        members['subAttributes'] = [
+            attribute('value', required=True),
+            {**attribute('type'), 'canonicalValues': ['User']},
+        ]
+        return {'schemas': [SCHEMA_URI], 'id': group_module.CORE, 'name': 'Group',
+                'description': 'Provider-owned direct User membership metadata. No OWG role/team/ACL mapping; no nested groups.',
+                'attributes': [attribute('displayName', required=True),
+                               attribute('externalId'), members]}
+
     @router.get('/scim/v2/{provider_id}/Schemas')
     def schemas(provider_id: str, request: Request):
         authenticate(provider_id, request)
-        return _response(_list([_schema()]))
+        return _response(_list([_schema(), group_schema()]))
 
     @router.get('/scim/v2/{provider_id}/Schemas/{schema_id}')
     def schema(provider_id: str, schema_id: str, request: Request):
         authenticate(provider_id, request)
-        if schema_id != scim.CORE:
-            raise scim.Error(404, 'Schema not found')
-        return _response(_schema())
+        if schema_id == scim.CORE:
+            return _response(_schema())
+        if schema_id == group_module.CORE:
+            return _response(group_schema())
+        raise scim.Error(404, 'Schema not found')
+
+    def group_type():
+        return {'schemas': [RESOURCE_TYPE], 'id': 'Group', 'name': 'Group',
+                'endpoint': '/Groups', 'schema': group_module.CORE, 'schemaExtensions': [],
+                'description': 'Provider-owned direct membership metadata; grants no OWG permissions.'}
 
     def user_type():
         return {'schemas': [RESOURCE_TYPE], 'id': 'User', 'name': 'User', 'endpoint': '/Users',
@@ -190,12 +219,74 @@ def build_router(service, require_admin, base_url):
     @router.get('/scim/v2/{provider_id}/ResourceTypes')
     def resource_types(provider_id: str, request: Request):
         authenticate(provider_id, request)
-        return _response(_list([user_type()]))
+        return _response(_list([user_type(), group_type()]))
 
     @router.get('/scim/v2/{provider_id}/ResourceTypes/User')
     def resource_type(provider_id: str, request: Request):
         authenticate(provider_id, request)
         return _response(user_type())
+
+    @router.get('/scim/v2/{provider_id}/ResourceTypes/Group')
+    def group_resource_type(provider_id: str, request: Request):
+        authenticate(provider_id, request)
+        return _response(group_type())
+
+    def group_resource(request, provider_id, value):
+        location = url(request, provider_id) + '/Groups/' + quote(value['id'], safe='')
+        return {**value, 'meta': {**value['meta'], 'location': location}}
+
+    def group_response(request, provider_id, value, *, status=200):
+        value = group_resource(request, provider_id, value)
+        return _response(value, status=status,
+                         headers={'ETag': value['meta']['version'], 'Location': value['meta']['location']})
+
+    @router.get('/scim/v2/{provider_id}/Groups')
+    def list_groups(provider_id: str, request: Request):
+        params = request.query_params
+        if set(params) - {'startIndex', 'count', 'filter'} or len(params.multi_items()) != len(params):
+            raise scim.Error(400, 'Unsupported or repeated query option', 'invalidValue')
+        try:
+            start, count = int(params.get('startIndex', '1')), int(params.get('count', '100'))
+        except ValueError:
+            raise scim.Error(400, 'Pagination requires integer values', 'invalidValue') from None
+        result = groups.list(provider_id, _bearer(request),
+                             start_index=start, count=count, filter_text=params.get('filter', ''))
+        result['Resources'] = [group_resource(request, provider_id, x) for x in result['Resources']]
+        return _response(result)
+
+    @router.get('/scim/v2/{provider_id}/Groups/{group_id}')
+    def get_group(provider_id: str, group_id: str, request: Request):
+        if request.query_params:
+            raise scim.Error(400, 'Unsupported query option', 'invalidValue')
+        return group_response(request, provider_id, groups.get(provider_id, _bearer(request), group_id))
+
+    @router.post('/scim/v2/{provider_id}/Groups')
+    async def create_group(provider_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        item = await run_in_threadpool(groups.create, provider_id, token, body)
+        return group_response(request, provider_id, item, status=201)
+
+    @router.put('/scim/v2/{provider_id}/Groups/{group_id}')
+    async def replace_group(provider_id: str, group_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        item = await run_in_threadpool(groups.replace, provider_id, token, group_id, request.headers.get('if-match'), body)
+        return group_response(request, provider_id, item)
+
+    @router.patch('/scim/v2/{provider_id}/Groups/{group_id}')
+    async def patch_group(provider_id: str, group_id: str, request: Request):
+        token = await run_in_threadpool(authenticate, provider_id, request)
+        body = await _body(request)
+        item = await run_in_threadpool(groups.patch, provider_id, token, group_id, request.headers.get('if-match'), body)
+        return group_response(request, provider_id, item)
+
+    @router.delete('/scim/v2/{provider_id}/Groups/{group_id}')
+    def delete_group(provider_id: str, group_id: str, request: Request):
+        if request.query_params:
+            raise scim.Error(400, 'Unsupported query option', 'invalidValue')
+        groups.delete(provider_id, _bearer(request), group_id, request.headers.get('if-match'))
+        return Response(status_code=204, headers={'Cache-Control': 'no-store'})
 
     @router.get('/scim/v2/{provider_id}/Users')
     def users(provider_id: str, request: Request):
