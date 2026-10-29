@@ -150,6 +150,29 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   assert.equal(selectedReads.single.id,uid);
   assert.equal(selectedReads.usersStatus,200);assert.equal(selectedReads.users.totalResults,1);
   assert.deepEqual(selectedReads.users.Resources,[{schemas:[userSchema],id:uid}]);
+  const namedReads=await page.evaluate(async ({source,token,uid})=>{
+   const headers={Authorization:'Bearer '+token,'Content-Type':'application/scim+json'},url=source+'/Users/'+encodeURIComponent(uid);
+   const original=await fetch(url,{headers}),originalValue=await original.json();
+   const first=await fetch(url,{method:'PATCH',headers:{...headers,'If-Match':original.headers.get('etag')},
+    body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:[{op:'replace',path:'name',value:{givenName:'Zoë',familyName:'雪',formatted:'Literal  full name'}}]})});
+   const firstValue=await first.json();
+   const partial=await fetch(url,{method:'PATCH',headers:{...headers,'If-Match':first.headers.get('etag')},
+    body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:[{op:'replace',path:'NAME',value:{GIVENNAME:'Jane'}}]})});
+   const partialValue=await partial.json();
+   const stale=await fetch(url,{method:'PATCH',headers:{...headers,'If-Match':first.headers.get('etag')},
+    body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:[{op:'remove',path:'name'}]})});
+   const selected=await fetch(url+'?attributes=name.givenName,name.familyName',{headers});
+   const post=await fetch(source+'/Users/.search',{method:'POST',headers,
+    body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],filter:'userName eq "operator@acme.test"',attributes:['name.givenName','name.familyName']})});
+   return {original:originalValue,firstStatus:first.status,first:firstValue,partialStatus:partial.status,partial:partialValue,staleStatus:stale.status,
+    selectedStatus:selected.status,selected:await selected.json(),postStatus:post.status,post:await post.json(),etag:selected.headers.get('etag'),fullEtag:partial.headers.get('etag')};
+  },{source,token,uid});
+  assert.equal(namedReads.firstStatus,200);assert.equal(namedReads.partialStatus,200);assert.equal(namedReads.staleStatus,412);
+  assert.deepEqual(namedReads.partial.name,{givenName:'Jane',familyName:'雪',formatted:'Literal  full name'});
+  for(const key of ['id','userName','displayName','active'])assert.equal(namedReads.partial[key],namedReads.original[key],'name metadata preserves '+key);
+  assert.equal(namedReads.selectedStatus,200);assert.equal(namedReads.postStatus,200);assert.equal(namedReads.etag,namedReads.fullEtag);
+  assert.deepEqual(namedReads.selected,{schemas:[userSchema],id:uid,name:{givenName:'Jane',familyName:'雪'}});
+  assert.deepEqual(namedReads.post.Resources,[namedReads.selected]);
   const unknownRef=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'POST',path:'/Groups',bulkId:'refused',data:{schemas:['urn:ietf:params:scim:schemas:core:2.0:Group'],displayName:'Not created',members:[{value:'bulkId:created'}]}}]},token);
   assert.equal((await unknownRef.json()).Operations[0].status,'400');
   assert.equal((await(await request('GET',source+'/Groups',undefined,token)).json()).totalResults,1);
@@ -157,7 +180,9 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   patch.Operations[0].value=true;
   const blind=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,data:patch}]},token);
   assert.equal((await blind.json()).Operations[0].status,'428');
-  const rehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:bulk[2].version,data:patch}]},token);
+  const staleRehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:bulk[2].version,data:patch}]},token);
+  assert.equal((await staleRehire.json()).Operations[0].status,'412','name changes invalidate earlier Bulk versions');
+  const rehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:offboarded.meta.version,data:patch}]},token);
   assert.equal((await rehire.json()).Operations[0].status,'200');
   await identity();
   await page.locator('[data-scim-assign="'+pid+'"]').click();

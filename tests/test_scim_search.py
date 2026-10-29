@@ -118,7 +118,7 @@ def test_user_readonly_group_projection_tracks_current_membership_without_search
     {'count': 201}, {'attributes': 'userName'}, {'attributes': []}, {'attributes': [1]},
     {'attributes': ['password']}, {'attributes': ['userName'], 'excludedAttributes': ['id']},
     {'attributes': ['userName'] * 33}, {'attributes': ['x' * 4097]}, {'attributes': ['members[value eq "x"]']},
-    {'attributes': ['meta.password']}, {'attributes': ['userName.value']}, {'attributes': ['name.familyName']},
+    {'attributes': ['meta.password']}, {'attributes': ['userName.value']}, {'attributes': ['name.unknown']},
     {'attributes': [scim_groups.CORE + ':displayName']}, {'attributes': ['meta.version.extra']},
     {'attributes': ['']}, {'ATTRIBUTES': ['id'], 'attributes': ['userName']},
 ])

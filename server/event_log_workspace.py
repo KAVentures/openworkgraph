@@ -336,7 +336,8 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         keep_rejected.update(retained=kept_rows, not_retained=total_bad - kept_rows)
     conn.execute(f"DELETE FROM staged WHERE {invalid}")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
-    conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts), resource, attributes FROM staged""",
+    conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts),
+                 CASE WHEN trim(resource) = '' THEN '' ELSE resource END, attributes FROM staged""",
                  [log_id])
     case_type=source_identity.CASE_TYPE if identity_mode else CASE_TYPE
     conn.execute("INSERT INTO objects SELECT DISTINCT ?, case_id, ?, '{}' FROM staged", [log_id, case_type])
