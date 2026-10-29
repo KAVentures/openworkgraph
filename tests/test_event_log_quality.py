@@ -96,6 +96,51 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
     assert "north" not in serialized and "ann" not in serialized and "c4" not in serialized  # counts only
 
 
+
+def test_future_event_reference_is_explicit_and_report_anchored():
+    made = _import()
+    result = quality.quality(made["log_id"])
+    report = result["reports"][0]
+    saved = report["diagnostics"]
+    assert saved["future_event_reference"] == {
+        "at": report["created_at"], "basis": "report_created"
+    }
+    assert saved["events_dated_after_reference"] == saved["events_dated_after_import"] == 1
+
+    current = result["current"]["diagnostics"]
+    assert current["future_event_reference"]["basis"] == "current_query"
+    assert current["events_dated_after_reference"] == current["events_dated_after_import"] == 1
+    assert current["future_event_reference"]["at"].endswith("Z")
+    assert "2099" not in str(current)  # counts only, no event timestamps leaked
+
+
+def test_future_event_reference_uses_supplied_utc_instant_not_wall_clock():
+    made = _import()
+    conn = workspace._connect()
+    try:
+        before = quality.diagnostics(conn, made["log_id"],
+                                     reference_at=datetime(2098, 12, 31, tzinfo=timezone.utc))
+        after = quality.diagnostics(conn, made["log_id"],
+                                    reference_at=datetime(2100, 1, 1, tzinfo=timezone.utc))
+        assert before["events_dated_after_reference"] == 1
+        assert after["events_dated_after_reference"] == 0
+        assert before["events_dated_after_import"] == 1  # compatibility alias
+        assert after["events_dated_after_import"] == 0
+        assert after["future_event_reference"] == {
+            "at": "2100-01-01T00:00:00Z", "basis": "current_query"
+        }
+        # The comparison uses UTC even when supplied in another timezone.
+        shifted = quality.diagnostics(conn, made["log_id"],
+                                      reference_at=datetime(2100, 1, 1, 1,
+                                                            tzinfo=timezone(timedelta(hours=1))))
+        assert shifted["events_dated_after_reference"] == 0
+        assert shifted["future_event_reference"]["at"] == "2100-01-01T00:00:00Z"
+        with pytest.raises(ValueError, match="timezone-aware"):
+            quality.diagnostics(conn, made["log_id"], reference_at=datetime(2100, 1, 1))
+    finally:
+        conn.close()
+
+
 def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_false_and_zero():
     """JSON null and empty strings are absent; false and zero are valid values."""
     conn = workspace._connect()
