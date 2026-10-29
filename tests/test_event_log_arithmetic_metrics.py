@@ -63,6 +63,73 @@ def test_finite_typed_constants_and_arithmetic(log, operation, value, expected):
 
 
 @pytest.mark.parametrize(('operation', 'expected'), [
+    ('average', 17.0),  # (15+8)/2 + (3+8)/2; c stays missing
+    ('absolute_difference', 12.0),  # |15-8| + |3-8|
+])
+def test_pairwise_same_unit_values_and_missingness(log, operation, expected):
+    r = run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'EUR'))])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit'] == 'EUR' and metric['unit_powers'] == {'EUR': 1}
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+    assert metric.get('cases_with_non_finite_value', 0) == 0
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize('operation', ['average', 'absolute_difference'])
+def test_pairwise_mismatched_units_fail_before_dataset_access(log, operation, monkeypatch):
+    def no_query(*args, **kwargs):
+        pytest.fail('invalid pairwise units accessed the dataset')
+    monkeypatch.setattr(workspace, '_query', no_query)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='identical units'):
+        run(log, [SPEND, expr(operation=operation, right=constant(8.0, 'USD'))])
+
+
+@pytest.mark.parametrize(('operation', 'expected'), [
+    ('average', 13.5), ('absolute_difference', 9.0),
+])
+def test_pairwise_matching_derived_units_and_null_propagation(log, operation, expected):
+    per_item = expr('per_item', right=constant(2.0, 'events'))
+    twice = expr('twice', operation='add', left=ref('per_item'), right=ref('per_item'))
+    bounded = expr(operation=operation, left=ref('per_item'), right=ref('twice'))
+    r = run(log, [SPEND, per_item, twice, bounded])
+    assert r['rows'] == [[expected]]
+    metric = r['metrics'][-1]
+    assert metric['unit_powers'] == {'EUR': 1, 'events': -1}
+    assert metric['cases_with_value'] == 2 and metric['cases_without_value'] == 1
+    assert metric['cases_with_missing_operand'] == 1
+
+
+def test_pairwise_average_avoids_intermediate_overflow_and_preserves_null():
+    import duckdb
+    from server import event_log_expressions as expressions
+
+    conn = duckdb.connect(':memory:')
+    try:
+        conn.execute('CREATE TEMP TABLE qc (case_id VARCHAR, x DOUBLE, y DOUBLE, result DOUBLE)')
+        conn.execute("INSERT INTO qc VALUES ('a', 1e308, 1e308, NULL), ('b', NULL, 1e308, NULL)")
+        metric = expressions.Arithmetic.model_validate(
+            expr(operation='average', left=ref('x'), right=ref('y')))
+        coverage = expressions.materialize(conn, metric, {'x': 'x', 'y': 'y'}, 'result')
+        values = conn.execute('SELECT result FROM qc ORDER BY case_id').fetchall()
+        assert values == [(1e308,), (None,)]
+        assert coverage == {'cases_with_missing_operand': 1, 'cases_with_zero_divisor': 0}
+    finally:
+        conn.close()
+
+
+def test_pairwise_absolute_difference_nonfinite_is_not_reported_as_a_value(log):
+    r = run(log, [expr(operation='absolute_difference',
+                       left=constant(1e308), right=constant(-1e308))])
+    metric = r['metrics'][-1]
+    assert r['rows'] == [[None]]
+    assert metric['cases_with_value'] == 0
+    assert metric['cases_with_non_finite_value'] == 3
+    json.dumps(r, allow_nan=False)
+
+
+@pytest.mark.parametrize(('operation', 'expected'), [
     ('minimum', 11.0),  # 8 for a, 3 for b; c is missing
     ('maximum', 23.0),  # 15 for a, 8 for b; c is missing
 ])
