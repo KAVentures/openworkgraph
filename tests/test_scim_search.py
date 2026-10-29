@@ -264,3 +264,15 @@ def test_filter_decoded_unicode_and_controls_fail_as_standard_errors(http, colle
     client, db, owner, h, base, pid = http
     r = search(client, h, base, collection, filter=attribute + ' eq "' + escaped + '"')
     assert r.status_code == 400 and r.json()['scimType'] == 'invalidFilter', r.text
+
+
+@pytest.mark.parametrize('collection', ['Users', 'Groups'])
+@pytest.mark.parametrize('attribute', ['displayName', 'externalId'])
+def test_invalid_unicode_identity_attributes_are_refused_before_database(http, collection, attribute):
+    import json
+    client, db, owner, h, base, pid = http
+    body = user() if collection == 'Users' else {'schemas': [scim_groups.CORE], 'displayName': 'Team'}
+    body[attribute] = '\ud800'
+    r = client.post(base + '/' + collection, headers=h, content=json.dumps(body))
+    assert r.status_code == 400 and r.json()['scimType'] == 'invalidValue', r.text
+    assert client.get(base + '/' + collection, headers=h).json()['totalResults'] == 0

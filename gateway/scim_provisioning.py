@@ -63,7 +63,7 @@ def init_schema(db):
 def _text(value, maximum, *, blank=False):
     if (not isinstance(value, str) or len(value) > maximum or
             (not blank and not value.strip()) or
-            any(ord(c) < 32 or 127 <= ord(c) <= 159 or ord(c) in (65534, 65535) for c in value)):
+            any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF or ord(c) in (65534, 65535) for c in value)):
         raise Error(400, 'An identity attribute is missing, invalid or exceeds its bounds', 'invalidValue')
     return value
 
