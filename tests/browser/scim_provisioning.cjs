@@ -136,16 +136,20 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   // Exercise selected reads from Chromium itself; tokens remain memory-only.
   const selectedReads=await page.evaluate(async ({source,token,uid})=>{
    const headers={Authorization:'Bearer '+token,'Content-Type':'application/scim+json'};
-   const get=await fetch(source+'/Groups?attributes=displayName,members.value',{headers});
-   const post=await fetch(source+'/Groups/.search',{method:'POST',headers,body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],attributes:['displayName','members.value']})});
+   const filter='displayName eq "Bulk group" AND displayName eq "Bulk group"';
+   const get=await fetch(source+'/Groups?attributes=displayName,members.value&filter='+encodeURIComponent(filter),{headers});
+   const post=await fetch(source+'/Groups/.search',{method:'POST',headers,body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],filter,attributes:['displayName','members.value']})});
+   const users=await fetch(source+'/Users/.search',{method:'POST',headers,body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],filter:'userName eq "operator@acme.test" and externalId eq "native-operator"',attributes:['id']})});
    const single=await fetch(source+'/Users/'+encodeURIComponent(uid),{headers});
-   return {getStatus:get.status,postStatus:post.status,get:await get.json(),post:await post.json(),single:await single.json()};
+   return {getStatus:get.status,postStatus:post.status,get:await get.json(),post:await post.json(),usersStatus:users.status,users:await users.json(),single:await single.json()};
   },{source,token,uid});
   assert.equal(selectedReads.getStatus,200);assert.equal(selectedReads.postStatus,200);
   assert.deepEqual(selectedReads.post,selectedReads.get);
   assert.deepEqual(Object.keys(selectedReads.post.Resources[0]).sort(),['displayName','id','members','schemas']);
   assert.deepEqual(selectedReads.post.Resources[0].members,[{value:bulk[0].location.split('/').pop()}]);
   assert.equal(selectedReads.single.id,uid);
+  assert.equal(selectedReads.usersStatus,200);assert.equal(selectedReads.users.totalResults,1);
+  assert.deepEqual(selectedReads.users.Resources,[{schemas:[userSchema],id:uid}]);
   const unknownRef=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'POST',path:'/Groups',bulkId:'refused',data:{schemas:['urn:ietf:params:scim:schemas:core:2.0:Group'],displayName:'Not created',members:[{value:'bulkId:created'}]}}]},token);
   assert.equal((await unknownRef.json()).Operations[0].status,'400');
   assert.equal((await(await request('GET',source+'/Groups',undefined,token)).json()).totalResults,1);

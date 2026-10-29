@@ -157,10 +157,21 @@ def diagnostics(conn, log_id: str, prefix: str | None = None, *,
             SELECT object_type, object_id, count(DISTINCT event_id) AS n
             FROM qlinks GROUP BY object_type, object_id)
         GROUP BY object_type ORDER BY cases DESC, object_type""").fetchall()
-    tied_events, tied_cases = conn.execute("""SELECT coalesce(sum(n), 0), count(DISTINCT object_id) FROM (
-          SELECT l.object_id, q.ts, count(DISTINCT l.event_id) AS n
+    # The same event can participate in timestamp ties for multiple object
+    # notions. Count each tied event once, not once per linked object/case.
+    # Deduplicate qualified links before the window so multiple qualifiers
+    # on one event-object pair cannot manufacture a tie.
+    tied_events, tied_cases = conn.execute("""WITH distinct_members AS (
+          SELECT DISTINCT l.object_id, l.event_id, q.ts
           FROM qlinks l JOIN qe q USING (event_id)
-          GROUP BY 1, 2 HAVING count(DISTINCT l.event_id) > 1)""").fetchone()
+        ), tie_members AS (
+          SELECT event_id, object_id,
+                 count(*) OVER (PARTITION BY object_id, ts) AS group_size
+          FROM distinct_members
+        )
+        SELECT count(DISTINCT event_id) FILTER (WHERE group_size > 1),
+               count(DISTINCT object_id) FILTER (WHERE group_size > 1)
+        FROM tie_members""").fetchone()
     # Duplicate diagnostics compare stored content and qualified links, not just
     # same-time activity/case coincidence. Event IDs themselves are excluded.
     duplicates = conn.execute("""SELECT coalesce(sum(n - 1), 0) FROM (SELECT count(*) AS n FROM (
