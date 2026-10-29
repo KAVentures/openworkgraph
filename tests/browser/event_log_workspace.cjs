@@ -52,7 +52,10 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected: 1 time without a UTC offset/);
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected rows were kept for review/);
 
+   const qualityResponsePromise=page.waitForResponse(response=>response.status()===200&&
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
    await page.locator('#owgEventLogAnalyze').click();
+   const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQuality summary').click();
@@ -61,6 +64,15 @@ const path=require('node:path');
    assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
    assert.match(qualityText,/Case columncase_id/);assert.match(qualityText,/not known to be complete/);
    assert.doesNotMatch(qualityText,/C99/,'rejected rows are not shown');
+   const reference=qualityPayload.current.diagnostics.future_event_reference;
+   assert.equal(reference.basis,'current_query','live diagnostics use query time');
+   const futureRow=page.locator('#owgQualityResults tr').filter({hasText:'Events dated after reference (current query)'});
+   assert.equal(await futureRow.count(),1,'current diagnostics disclose their actual basis');
+   const futureText=await futureRow.textContent();
+   assert.ok(futureText.includes('UTC reference: '+reference.at),'visible reference matches the API instant');
+   assert.ok(futureText.includes(Number(qualityPayload.current.diagnostics.events_dated_after_reference).toLocaleString()),
+     'visible count matches the current API count');
+   assert.doesNotMatch(qualityText,/Events dated after the import/,'live data must not be labeled import-time');
 
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
    assert.equal(await page.locator('#owgMapDrawing').count(),1);

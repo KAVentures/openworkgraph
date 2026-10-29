@@ -34,3 +34,16 @@ retention, tenant isolation, authorization, API access or source reads.
 Synthetic UTC/offset and time-boundary tests cover the comparison and the
 legacy alias. No customer/provider acceptance or source-completeness claim
 is made.
+
+## Dashboard reference disclosure
+
+The Data quality panel displays the live `current` diagnostic, labels its
+comparison as **current query**, and shows the exact UTC reference instant
+returned by the API alongside the future-event count. It does not label a
+recomputed count as "after import". Historical import/append reports keep
+their own immutable `report_created` reference in the API.
+
+For an older server that returns only `events_dated_after_import`, the panel
+uses that legacy count but explicitly says the exact reference was **not
+recorded**. It does not fabricate a comparison timestamp. The real-browser
+acceptance test compares the rendered count and reference to the API response.
