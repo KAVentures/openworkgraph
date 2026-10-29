@@ -117,6 +117,37 @@ def test_attribute_coverage_excludes_explicit_json_null_and_empty_but_keeps_fals
         }
 
 
+def test_duplicate_diagnostic_requires_matching_attributes_and_qualified_links():
+    """Coincident activity/time/case is not an exact duplicate of stored content."""
+    conn = workspace._connect()
+    try:
+        stamp = datetime(2024, 1, 1)
+        conn.execute("INSERT INTO objects VALUES (?, ?, ?, ?)",
+                     ["log_duplicates", "case-1", "case", "{}"])
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", [
+            ("log_duplicates", "e-1", "Review", stamp, "r", '{"channel":"web"}'),
+            ("log_duplicates", "e-2", "Review", stamp, "r", '{"channel":"phone"}'),
+            ("log_duplicates", "e-3", "Review", stamp, "r", '{"channel":"web"}'),
+            ("log_duplicates", "e-4", "Review", stamp, "r", '{"channel":"web"}'),
+        ])
+        conn.executemany("INSERT INTO event_objects VALUES (?, ?, ?, ?)", [
+            ("log_duplicates", "e-1", "case-1", "primary"),
+            ("log_duplicates", "e-2", "case-1", "primary"),
+            ("log_duplicates", "e-3", "case-1", "secondary"),
+            ("log_duplicates", "e-4", "case-1", "primary"),
+        ])
+        result = quality.diagnostics(conn, "log_duplicates")
+        assert result["events"] == 4
+        assert result["events_sharing_a_timestamp_in_a_case"] == 4
+        assert result["duplicate_events"] == 1  # only e-1 and e-4 match
+        assert "phone" not in str(result) and "primary" not in str(result)
+        conn.execute("UPDATE events SET attributes = ? WHERE log_id = ? AND event_id = ?",
+                     ['{"channel":"other"}', "log_duplicates", "e-4"])
+        assert quality.diagnostics(conn, "log_duplicates")["duplicate_events"] == 0
+    finally:
+        conn.close()
+
+
 def test_same_file_and_mapping_reproduce_every_digest_and_mapping_changes_are_visible():
     first, second = _import(), _import()
     a, b = (quality.quality(m["log_id"])["reports"][0] for m in (first, second))
