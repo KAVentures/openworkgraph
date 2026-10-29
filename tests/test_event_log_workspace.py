@@ -73,6 +73,39 @@ def test_csv_import_rejects_naive_times_and_mines_variants():
     assert activities["Receive"]["cases"] == 2
 
 
+def test_bulk_csv_blank_resources_match_streaming_reader_and_quality_counts():
+    """Whitespace-only resources are missing; padded nonblank IDs stay literal."""
+    text = (
+        "case,activity,time,who\n"
+        "c1,Open,2024-01-01T09:00:00Z,   \n"
+        "c1,Review,2024-01-01T10:00:00Z,\n"
+        "c1,Approve,2024-01-01T11:00:00Z, worker \n"
+        "c1,Close,2024-01-01T12:00:00Z,worker\n"
+    )
+    expected = [row.resource for row in formats.read_csv(
+        StringIO(text), case_column="case", activity_column="activity",
+        timestamp_column="time", resource_column="who")
+        if isinstance(row, formats.EventRecord)]
+    assert expected == ["", "", " worker ", "worker"]
+    log = _import(text, "csv", mapping=MAPPING)
+    assert log["events"] == 4 and log["rejected_events"] == 0
+    assert log["quality"]["diagnostics"]["events_without_resource"] == 2
+    conn = workspace._connect()
+    try:
+        stored = [row[0] for row in conn.execute(
+            "SELECT resource FROM events WHERE log_id = ? ORDER BY event_id",
+            [log["log_id"]]).fetchall()]
+    finally:
+        conn.close()
+    assert stored == expected
+
+    # Normalizing at INSERT must not weaken raw control-character rejection.
+    # A tab inside a quoted resource is still rejected before storage.
+    with pytest.raises(workspace.EventLogWorkspaceError, match="control characters"):
+        _import('case,activity,time,who\\n'
+                'c1,Open,2024-01-01T09:00:00Z," \\t "\\n', "csv", mapping=MAPPING)
+
+
 def test_csv_missing_columns_and_bad_mapping_are_safe_errors():
     with pytest.raises(workspace.EventLogWorkspaceError):
         _import(CSV, "csv", mapping={**MAPPING, "case_column": "nope"})
