@@ -1,0 +1,7 @@
+# Concept-drift directly-follows path identity (#326 H4)
+
+Drift detection compares **distinct ordered activity pairs**, not a string obtained by joining activity names. The internal key is a JSON-encoded two-element array `[source_activity, target_activity]`; this prevents collisions when a source activity itself contains the human-readable separator ` → `. Previously, `A → B` followed by `C` and `A` followed by `B → C` both collapsed to the same text `A → B → C`, hiding a real observed change.
+
+The existing `paths_that_moved[].path` display remains `Source → Target` for ordinary activity names. When either activity contains ` → `, it is rendered as a reversible JSON array string instead. New additive `from` and `to` fields disclose the exact original endpoints for every reported moved path, including ordinary paths. These fields are source activity labels in a user-authorized saved event log, not evidence of a causal explanation.
+
+The statistical method, case sampling, change-point thresholds, limits, time windows, source retention, authorization, tenant boundaries, REST route and response structure are otherwise unchanged. The regression uses synthetic CSV cases with two distinct pairs that previously collided, verifying a change point and separately attributed path shares. It is not real-provider completeness or customer acceptance, and a detected change can still reflect source-recording differences rather than a business-process change.
