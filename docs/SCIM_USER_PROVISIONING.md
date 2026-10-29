@@ -59,7 +59,7 @@ Tests cover advertised HTTP discovery/create/query/update/delete, scoped authent
 
 Actual customer-controlled IdP mapping/conditional-client compatibility, group provenance/conflict semantics, broader SCIM attributes/filtering/search, multiple provisioning domains per employee/adoption, safe user-name migration, durable organization jobs, backup operations and real company rollout remain open. Synthetic tests do not certify those or full competitor parity.
 
-## Bounded Users bulk provisioning
+## Bounded Users/Groups bulk provisioning
 
 An explicitly enabled provider can `POST /scim/v2/{provider_id}/Bulk` with
 `urn:ietf:params:scim:api:messages:2.0:BulkRequest`. ServiceProviderConfig advertises
@@ -68,10 +68,10 @@ An explicitly enabled provider can `POST /scim/v2/{provider_id}/Bulk` with
 Identity page explains the batch limits, partial commits and version requirements;
 no credential or batch is saved in browser storage.
 
-Each operation uses POST `/Users`, or PUT/PATCH/DELETE `/Users/{employee_id}`.
+Each operation uses POST `/Users` or `/Groups`, or PUT/PATCH/DELETE on an exact resource path in either collection. [Mixed Users/Groups Bulk](SCIM_GROUP_BULK.md) documents typed member references and the Group subset.
 POST requires a request-unique `bulkId` (1–100 ASCII alphanumeric, underscore or
 dash characters). POST/PUT/PATCH require a `data` object; DELETE forbids data.
-Updates/deletes require `version` equal to the current User ETag. A missing/stale
+Updates/deletes require `version` equal to the current resource ETag. A missing/stale
 version returns the same 428/412 refusal as a standalone request. OWG never reads
 and inserts a fresh version on the caller's behalf. Paths cannot be external
 URLs, encoded aliases, queries, fragments or traversal. Existing User attribute,
@@ -96,7 +96,7 @@ failure returns a generic 500 item and logs a generic server-health error; its
 transaction rolls back on a failure before commit. A lost commit acknowledgment
 can leave an operation outcome uncertain. The batch is synchronous, has no durable job, and cannot
 be resumed from a server-side checkpoint. After a transport/server interruption,
-read current Users and reconcile completed changes before retrying. Repeating
+read current Users/Groups and reconcile completed changes before retrying. Repeating
 creates produces the existing 409 uniqueness refusal, never silent adoption or
 reactivation; repeating updates must use their intended exact version.
 
@@ -105,9 +105,7 @@ successfully earlier in **that request**. This resolves identity only and still
 requires the explicit current version for mutation. Failed, forward and previous-
 request references fail; OWG never guesses a User from email/externalId. Literal
 `bulkId:` text in displayName/externalId stays literal. Bulk IDs are not persisted,
-authentication subjects, grants or idempotency keys. Groups, nested/circular
-resource references, generic bulk resources and asynchronous bulk jobs remain
-unsupported. Actual provider mappings and conditional Bulk behavior still need
+authentication subjects, grants or idempotency keys. The same request-local rule now supports Groups resource paths and declared direct User member references. Nested/circular or forward references, generic bulk resources and asynchronous bulk jobs remain unsupported. Actual provider mappings and conditional Bulk behavior still need
 customer-controlled IdP compatibility acceptance.
 
 Primary reference: [RFC7644 §3.7](https://www.rfc-editor.org/rfc/rfc7644.html#section-3.7),

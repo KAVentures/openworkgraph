@@ -7,9 +7,9 @@
  async function mount(container,options){
   clear();host=container;const current=++generation;
   const valid=()=>generation===current&&host===container&&options.isCurrent();
-  const title=el('h2','Identity provisioning (SCIM Users)');
+  const title=el('h2','Identity provisioning (SCIM Users and Groups)');
   const help=el('p','Connect one explicitly approved provisioning provider to this organization’s employee roster. New credentials are disabled until enabled. Deactivation revokes employee access; rehire keeps old browser/device credentials revoked. Provisioning does not start recording or share evidence.');help.className='help';
-  const limits=el('p','Supported: work-email userName, display name, active state and provider external ID. Bulk supports up to 50 Users operations per request (64 KiB). Operations commit separately; stop-on-error limits do not undo earlier successes. Every update/delete needs its exact current resource version. User-name renames, groups, password changes and complex attributes are not supported. An exact current If-Match version is required for changes. Provider compatibility must be tested before rollout.');limits.className='muted';
+  const limits=el('p','Supported: work-email userName, display name, active state and provider external ID. Bulk supports up to 50 Users/Groups operations per request (64 KiB). Operations commit separately; stop-on-error limits do not undo earlier successes. Every update/delete needs its exact current resource version. Direct User group membership is available through SCIM. Groups do not grant OWG permissions. User-name renames, nested groups, password changes and complex attributes are not supported. An exact current If-Match version is required for changes. Provider compatibility must be tested before rollout.');limits.className='muted';
   const form=el('div');form.className='row';
   const label=el('label','Provider label');label.htmlFor='scimLabel';
   const name=el('input');name.id='scimLabel';name.maxLength=120;name.style.maxWidth='100%';

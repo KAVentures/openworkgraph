@@ -100,7 +100,7 @@ def test_failed_operation_audit_rolls_back_without_leaking_private_exception(ser
     request(create(),failOnErrors=True),request(create(),failOnErrors=0),request(create(),failOnErrors=51),
     request(create(),failOnErrors=None),request(create(),OperationsAgain=[]),
     request(create(),{**create('two'),'method':'GET'}),request(create(),{**create('two'),'method':'post'}),
-    request(create(),{**create('two'),'path':'/Groups'}),request(create(),{**create('two'),'path':'https://other.test/Users'}),
+    request(create(),{**create('two'),'path':'/Roles'}),request(create(),{**create('two'),'path':'https://other.test/Users'}),
     request(create(),{**create('two'),'version':'guessed'}),request(create(),create()),
     request(create(),{**create('two'),'bulkId':'with/slash'}),request(create(),{'method':'PATCH','path':'/Users/id','data':[]}),
     request(create(),{'method':'DELETE','path':'/Users/id','data':{}}),
