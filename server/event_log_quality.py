@@ -173,8 +173,11 @@ def diagnostics(conn, log_id: str, prefix: str | None = None, *,
     # A bounded top-N list must disclose omitted keys; otherwise readers may
     # mistake an incomplete list for all available source attributes. The
     # window count runs over grouped keys before LIMIT, without a second scan.
+    # json_each can emit repeated keys from supplied JSON. Count events with
+    # any populated occurrence, never JSON key occurrences: the latter could
+    # exceed the event total and make events_without_value negative.
     attributes = conn.execute(f"""SELECT j.key,
-          count(*) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') AS populated,
+          count(DISTINCT qe.event_id) FILTER (WHERE j.type <> 'NULL' AND j.value <> '""') AS populated,
           count(*) OVER () AS total_keys
         FROM qe, json_each(qe.attributes) j
         GROUP BY j.key ORDER BY populated DESC, j.key LIMIT {MAX_ATTRIBUTES_REPORTED}""").fetchall()
