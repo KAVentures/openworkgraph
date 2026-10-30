@@ -372,3 +372,36 @@ def test_planned_pages_bound_entries_and_require_zero_start():
             project_planned_pages(selected, bad)
     with pytest.raises(StagingError, match="Nonconsecutive"):
         project_planned_pages(selected, [(plan_page(selected, offset=1, limit=1), page(item(A)))])
+
+
+@pytest.mark.parametrize("extra", [
+    {"error": {"message": "private ACL denial"}, "status": "failure"},
+    {"error": {"message": "private partial response"}},
+    {"status": "failure"},
+    {"next": "https://attacker.example/next"},
+    {"metadata": {"total": 0}},
+])
+def test_mixed_result_envelopes_fail_closed_in_all_projection_modes(extra):
+    """An error-bearing/extended envelope is not evidence of a clean empty page."""
+    selected = scope()
+    raw = json.dumps({"result": [item(A)], **extra}).encode("utf-8")
+    planned = plan_page(selected, limit=1)
+    projections = (
+        lambda: project_page(selected, raw, limit=1),
+        lambda: project_planned_page(selected, raw, plan=planned),
+        lambda: project_planned_pages(selected, [(planned, raw)]),
+    )
+    for project in projections:
+        with pytest.raises(StagingError, match="envelope") as caught:
+            project()
+        assert "private" not in str(caught.value)
+        assert "attacker" not in str(caught.value)
+
+
+def test_exact_result_envelope_remains_compatible_with_empty_planned_page():
+    selected = scope()
+    planned = plan_page(selected, limit=1)
+    result = project_planned_pages(selected, [(planned, page())])
+    assert result["returned_rows"] == 0
+    assert result["historical_completeness"] == "unknown"
+    assert result["checkpoint_advanced"] is False

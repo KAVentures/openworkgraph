@@ -127,7 +127,11 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
                           parse_constant=lambda _: (_ for _ in ()).throw(StagingError("Nonfinite JSON")))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise StagingError("Invalid bounded provider JSON") from exc
-    if type(body) is not dict or type(body.get("result")) is not list or len(body["result"]) > limit:
+    # A ServiceNow Table API read has one result array. Never silently stage
+    # a mixed success/error envelope or provider-supplied pagination metadata:
+    # an HTTP status/ACL failure must not masquerade as an empty successful page.
+    if (type(body) is not dict or set(body) != {"result"}
+            or type(body["result"]) is not list or len(body["result"]) > limit):
         raise StagingError("Invalid provider result envelope or page size")
     selected = set(scope.sys_ids)
     seen: dict[str, dict[str, Any]] = {}
