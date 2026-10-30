@@ -202,3 +202,16 @@ def test_corrupt_declaration_db_cannot_block_explicit_review_deletion(local):
     assert reviews.remove_review_intention(A, now=NOW) is True
     assert not facts._path().exists()
     assert A not in {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
+
+
+def test_expired_dependency_cannot_be_presented_as_live_declared_edge(local):
+    reviewed(A)
+    save()
+    reviewed(A, at=NOW + timedelta(days=1))  # Review renewed, declaration not.
+    reviewed(B, at=NOW + timedelta(days=1))
+    facts.save_case_declaration(B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=NOW + timedelta(days=1))
+    at = NOW + timedelta(days=7, hours=1)
+    assert A in {i["work_item_ref"] for i in reviews.list_review_intentions(now=at)["items"]}
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
