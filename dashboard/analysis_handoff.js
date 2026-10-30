@@ -278,7 +278,7 @@
     // Do not turn malformed lease metadata into an apparent permission.
     const leaseInstant=value=>{
       if(typeof value!=='string' ||
-         !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/.test(value))
+         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value))
         return null;
       const parts=value.slice(0,10).split('-').map(Number);
       const day=new Date(0);day.setUTCFullYear(parts[0],parts[1]-1,parts[2]);
