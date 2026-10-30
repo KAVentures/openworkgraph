@@ -91,6 +91,30 @@ def test_benchmark_compares_two_cohorts_with_intervals():
     assert result["intervals_assume_independent_cohorts"] is True and result["causal_claims"] is False
 
 
+def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monkeypatch):
+    """A capped bootstrap must not imply full-cohort statistical support."""
+    log_id = _log()
+    specs = [{"resource": "bob"}, {"resource": "ann"}]
+    full = cohorts.benchmark(log_id, specs)
+    full_gap = full["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (full_gap["sampled_cases_first"], full_gap["sampled_cases_second"]) == (40, 20)
+    assert not full_gap["sampling_truncated_first"]
+    assert not full_gap["sampling_truncated_second"]
+    assert full_gap["sampled_median_throughput_seconds_first"] == full["cohorts"][0]["throughput_seconds"]["p50"]
+    assert full_gap["sampled_median_throughput_seconds_second"] == full["cohorts"][1]["throughput_seconds"]["p50"]
+
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
+    capped = cohorts.benchmark(log_id, specs)
+    gap = capped["differences_second_minus_first"]["median_throughput_seconds"]
+    assert [side["cases"] for side in capped["cohorts"]] == [40, 20]
+    assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (3, 3)
+    assert gap["sampling_truncated_first"] and gap["sampling_truncated_second"]
+    assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
+                                 - gap["sampled_median_throughput_seconds_first"])
+    assert cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"] == gap
+    assert not any("case_id" in key for key in gap)
+
+
 def test_benchmark_reports_overlap_and_refuses_bad_input():
     log_id = _log()
     overlapping = cohorts.benchmark(log_id, [{}, {"resource": "ann"}])
