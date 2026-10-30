@@ -145,17 +145,29 @@ def _reviewed(now: datetime) -> dict[str, datetime]:
 
 def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: dict[str, datetime]) -> None:
     cutoff = (now - timedelta(days=days)).isoformat()
-    db.execute("DELETE FROM declarations WHERE expires_at <= ? OR created_at <= ?",
-               (now.isoformat(), cutoff))
-    # A source disconnect or explicit review deletion removes admission even
-    # if a previous cleanup was interrupted. No undeclared orphan can survive
-    # the next write transaction.
-    if reviewed:
-        placeholders = ",".join("?" for _ in reviewed)
-        db.execute(f"DELETE FROM declarations WHERE work_item_ref NOT IN ({placeholders})",
-                   tuple(sorted(reviewed)))
-    else:
-        db.execute("DELETE FROM declarations")
+    current = now.isoformat()
+    # A reviewed prerequisite can expire before a dependent if its lifetime
+    # was shortened by a later CAS edit. Prune the entire dependent closure:
+    # recreating that prerequisite must never resurrect a stale owner edge.
+    # The store is bounded to 50 rows, and this runs inside BEGIN IMMEDIATE.
+    rows = db.execute(
+        "SELECT work_item_ref,dependencies_json,created_at,expires_at "
+        "FROM declarations"
+    ).fetchall()
+    revoked = {
+        ref for ref, _deps, created, expires in rows
+        if ref not in reviewed or expires <= current or created <= cutoff
+    }
+    while True:
+        newly_revoked = {
+            ref for ref, raw, _created, _expires in rows
+            if ref not in revoked and any(dep in revoked for dep in json.loads(raw))
+        }
+        if not newly_revoked:
+            break
+        revoked.update(newly_revoked)
+    for ref in sorted(revoked):
+        db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
 
 
 def _public(row: tuple[Any, ...]) -> dict[str, Any]:
