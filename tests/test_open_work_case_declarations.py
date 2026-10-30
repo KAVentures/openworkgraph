@@ -962,3 +962,77 @@ def test_corrupt_stored_owner_metadata_suppresses_and_prunes_dependents(
         save(B, expected_revision=old_b["revision"],
              expected_edit_token=old_b["edit_token"],
              depends_on_work_item_refs=[A])
+
+@pytest.mark.parametrize("review_change", ["revoked", "replaced"])
+def test_list_rechecks_review_window_after_sql_fetch(local, monkeypatch, review_change):
+    # Deterministically model review revocation/replacement after the bounded
+    # SQLite SELECT but before the owner-approval projection is returned.
+    d = "owg:w:" + "d" * 32
+    admitted = NOW - timedelta(hours=1)
+    for ref in (A, B, C, d):
+        reviewed(ref, at=admitted)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    initial = facts._reviewed(NOW)
+    calls = 0
+
+    def review_changes_between_snapshots(at):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return initial
+        live = dict(initial)
+        if review_change == "revoked":
+            live.pop(A)
+        else:
+            # A fresh review does not reapprove the old A -> B -> C chain.
+            live[A] = (NOW, NOW + timedelta(days=7))
+        return live
+
+    monkeypatch.setattr(facts, "_reviewed", review_changes_between_snapshots)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    assert calls == 2
+    # A read suppresses stale facts; it does not rewrite the ledger.
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 4
+
+
+def test_list_rechecks_shortened_retention_after_sql_fetch(local, monkeypatch):
+    # A was valid under the original 7-day policy but not a concurrent
+    # reduction to one day. B is recent and must remain available.
+    early = NOW - timedelta(days=2)
+    reviewed(A, at=early)
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=early)
+    reviewed(B)
+    recent = save(B)
+    calls = 0
+
+    def shortened_retention():
+        nonlocal calls
+        calls += 1
+        return 7 if calls == 1 else 1
+
+    monkeypatch.setattr(facts, "_retention_days", shortened_retention)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [recent]
+    assert calls == 2
+
+
+def test_list_scrubs_when_retention_revoked_after_sql_fetch(local, monkeypatch):
+    reviewed(A)
+    save()
+    assert facts._path().exists()
+    calls = 0
+
+    def revoked_retention():
+        nonlocal calls
+        calls += 1
+        return 7 if calls == 1 else None
+
+    monkeypatch.setattr(facts, "_retention_days", revoked_retention)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert calls == 2
+    assert not facts._path().exists()

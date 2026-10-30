@@ -482,6 +482,7 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
     else:
         reviewed = _reviewed(current)
         rows = []
+        candidates: list[tuple[Any, ...]] = []
         with _database(create=False) as db:
             if db is not None and reviewed:
                 cutoff = (current - timedelta(days=days)).isoformat()
@@ -494,34 +495,49 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                     (scope_ref, current.isoformat(), cutoff,
                      current.isoformat(), current.isoformat(), _MAX_ITEMS),
                 ).fetchall()
-                # A dependency whose own declaration expired or changed scope
-                # is not an available owner-declared edge, even if the local
-                # review queue still contains that opaque case reference.
-                # Close this condition transitively: A expired, B -> A, C -> B
-                # must suppress BOTH B and C, never expose C -> hidden B.
-                dependencies = {
-                    r[0]: _stored_dependencies(r[4], r[0]) for r in candidates
-                }
-                eligible = {
+        # A review can be removed/replaced or retention reduced while the
+        # bounded SQLite read is in progress. Recheck after closing the DB,
+        # require the same admitting review window, and apply the stricter
+        # retention before returning any owner-approved dependency closure.
+        # This narrows TOCTOU, not a cross-process source-grant fence.
+        live_days = _retention_days()
+        if live_days is None:
+            clear_case_declarations()
+        elif candidates:
+            days = min(days, live_days)
+            live_reviewed = _reviewed(current)
+            reviewed = {
+                ref: window for ref, window in reviewed.items()
+                if live_reviewed.get(ref) == window
+            }
+            # A dependency whose own declaration expired or changed scope
+            # is not an available owner-declared edge, even if the local
+            # review queue still contains that opaque case reference.
+            # Close this condition transitively: A expired, B -> A, C -> B
+            # must suppress BOTH B and C, never expose C -> hidden B.
+            dependencies = {
+                r[0]: _stored_dependencies(r[4], r[0]) for r in candidates
+            }
+            eligible = {
+                r[0] for r in candidates
+                if _stored_fields_valid(r) and r[0] in reviewed and
+                dependencies[r[0]] is not None and
+                _stored_temporal_valid(r[6], r[7], r[8], now=current,
+                                       days=days, review=reviewed[r[0]])
+            }
+            # Grow from independent reviewed roots. Starting with every
+            # row would incorrectly retain a corrupt A <-> B cycle.
+            available: set[str] = set()
+            while True:
+                newly_available = {
                     r[0] for r in candidates
-                    if _stored_fields_valid(r) and r[0] in reviewed and
-                    dependencies[r[0]] is not None and
-                    _stored_temporal_valid(r[6], r[7], r[8], now=current,
-                                           days=days, review=reviewed[r[0]])
+                    if r[0] in eligible and r[0] not in available and
+                    all(dep in available for dep in dependencies[r[0]])
                 }
-                # Grow from independent reviewed roots. Starting with every
-                # row would incorrectly retain a corrupt A <-> B cycle.
-                available: set[str] = set()
-                while True:
-                    newly_available = {
-                        r[0] for r in candidates
-                        if r[0] in eligible and r[0] not in available and
-                        all(dep in available for dep in dependencies[r[0]])
-                    }
-                    if not newly_available:
-                        break
-                    available.update(newly_available)
-                rows = [r for r in candidates if r[0] in available]
+                if not newly_available:
+                    break
+                available.update(newly_available)
+            rows = [r for r in candidates if r[0] in available]
     return {
         "format": "openworkgraph.local-case-declarations.v1",
         "items": [_public(row) for row in rows],

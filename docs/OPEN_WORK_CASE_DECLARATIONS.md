@@ -65,3 +65,21 @@ transitive suppression, unrelated D survival, and post-prune stale CAS
 refusal. They do not prove resistance to malicious database tampering,
 cross-process source revocation, real provider acceptance, or verified
 business outcomes.
+
+## Read-time consent and retention revalidation (bounded race narrowing)
+
+A declaration list now rechecks local human-review admission windows and history
+retention **after** fetching its bounded SQLite rows and closing the connection.
+A removed review or a replacement review with a different creation/expiry
+window suppresses that declaration and every transitively dependent approval;
+an unchanged independent declaration remains available. If retention shortens,
+the stricter of the two snapshots governs the response. If durable retention is
+disabled during the read, no owner facts are returned and the local auxiliary
+ledger is erased. This does not grant new source reads or authorize actions.
+
+These are deterministic synthetic interleavings, **not** proof of atomic
+cross-process revocation: a grant may change again after the final check, and
+the review store and declaration store do not share a transaction. An equal-
+timestamp review replacement still cannot be distinguished by the current
+review-window representation. Trusted callers must not treat a prior list
+response as a durable provider grant, business obligation, or verified outcome.
