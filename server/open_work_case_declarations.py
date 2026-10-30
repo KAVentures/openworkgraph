@@ -30,6 +30,7 @@ _EXPECTED = frozenset({"human_review_recorded", "source_state_rechecked", "opera
 _FILENAME = ".open_work_case_declarations.sqlite3"
 _MAX_ITEMS = 50
 _MAX_DEPENDENCIES = 8
+_MAX_STORED_DEPENDENCIES_CHARS = 1024  # canonical eight-edge JSON is <=336 chars
 _TTL_DAYS = 7
 _MAX_REVISION = 2_147_483_647
 
@@ -175,9 +176,15 @@ def _reviewed(now: datetime) -> dict[str, tuple[datetime, datetime]]:
 
 def _stored_dependencies(raw: str, owner_ref: str) -> list[str] | None:
     """Fail closed on malformed persisted edges; never coerce them to no edges."""
+    # SQLite row-count bounds alone do not bound JSON decoding cost. The
+    # trusted eight-edge writer emits at most 336 characters; permit bounded
+    # legacy whitespace while refusing oversized/corrupt auxiliary payloads
+    # before handing them to the decoder. Never reinterpret them as no edges.
+    if not isinstance(raw, str) or len(raw) > _MAX_STORED_DEPENDENCIES_CHARS:
+        return None
     try:
         dependencies = json.loads(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     if (not isinstance(dependencies, list) or
         len(dependencies) > _MAX_DEPENDENCIES or
