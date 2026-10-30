@@ -432,3 +432,42 @@ def test_planned_pages_unique_rows_still_stage_without_completeness_claim():
     assert staged["plan_sequence_checked"] is True
     assert staged["historical_completeness"] == "unknown"
     assert staged["checkpoint_advanced"] is False
+
+
+def _page_with_private_json_number(token: str) -> bytes:
+    """Inject a numeric token without json.dumps normalizing overflow."""
+    raw = page(item(A, diagnostic={"nested_metric": 0}))
+    marker = b'"nested_metric": 0'
+    assert raw.count(marker) == 1
+    return raw.replace(marker, f'"nested_metric": {token}'.encode("ascii"))
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned", "batch"])
+@pytest.mark.parametrize("token", ["1e309", "-1E99999", "9.99e9999"])
+def test_overflowed_private_json_number_refused_in_all_projection_modes(mode, token):
+    selected = scope()
+    raw = _page_with_private_json_number(token)
+    planned = plan_page(selected, limit=1)
+    with pytest.raises(StagingError, match="Invalid bounded provider JSON") as caught:
+        if mode == "standalone":
+            project_page(selected, raw, limit=1)
+        elif mode == "planned":
+            project_planned_page(selected, raw, plan=planned)
+        else:
+            project_planned_pages(selected, [(planned, raw)])
+    assert token not in str(caught.value)
+    assert "nested_metric" not in str(caught.value)
+
+
+@pytest.mark.parametrize("token", ["1e308", "-2.5", "0.0", "1e-9999"])
+def test_finite_private_json_numbers_are_discarded_without_changing_source_projection(token):
+    selected = scope()
+    planned = plan_page(selected, limit=1)
+    staged = project_planned_pages(
+        selected, [(planned, _page_with_private_json_number(token))]
+    )
+    assert staged["returned_rows"] == staged["distinct_selected_rows"] == 1
+    assert staged["records"][0]["source_event_id"] == A + ":3"
+    assert "nested_metric" not in json.dumps(staged)
+    assert not staged["checkpoint_advanced"]
+    assert staged["historical_completeness"] == "unknown"

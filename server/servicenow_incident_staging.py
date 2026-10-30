@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -105,6 +106,14 @@ def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _finite_json_float(value: str) -> float:
+    """Refuse numeric JSON overflow, including fields later discarded."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise StagingError("Nonfinite JSON")
+    return number
+
+
 def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
                  since: str | None = None,
                  _require_planned_order: bool = False) -> dict[str, Any]:
@@ -124,6 +133,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
         raise StagingError("Source response exceeds bounded byte limit")
     try:
         body = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
+                          parse_float=_finite_json_float,
                           parse_constant=lambda _: (_ for _ in ()).throw(StagingError("Nonfinite JSON")))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise StagingError("Invalid bounded provider JSON") from exc
