@@ -1184,3 +1184,43 @@ test('ordinary events may lack a latest work timestamp for excluded apps', async
   assert.deepEqual(h.copied, ['request-excluded']);
   assert.equal(h.tickets.length, 0);
 });
+
+test('handoff date plan refuses more than 31 displayed chunks without truncating silently', async t => {
+  // The backend deliberately lists only days[:31]. Both responses otherwise
+  // conserve counts, respect the selected window and intersect observations.
+  for (const [name, rows, accepted] of [
+    ['31 chunks is the maximum supported plan', 31, true],
+    ['32 chunks is not a trustworthy server preview', 32, false]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const first = Date.parse(observedStart);
+    const d = h.preview('range', 'bounded-date-plan');
+    d.canonical_rows = rows;
+    d.retained_rows = rows;
+    d.event_types = {focus_span: rows};
+    d.sources = {desktop: rows};
+    d.analysis_plan = {
+      date_chunks: Array.from({length: rows}, (_, i) => ({
+        since: utc(first + i * 1000),
+        until: utc(first + (i + 1) * 1000),
+        event_rows: 1
+      })),
+      more_dates_not_listed: accepted
+    };
+    h.reply(h.reads[1], d);
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-bounded-date-plan']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.equal(h.toasts.length, 1);
+    }
+  });
+});
