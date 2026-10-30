@@ -110,3 +110,25 @@ them. These tests do not prove arbitrary database-tamper resistance, atomic
 source-grant revocation, real provider/customer outcome verification, or
 business uplift. The ledger remains internal-only, local, opt-in, and
 non-executing.
+
+
+## Final pre-commit review and retention check (bounded revocation window)
+
+A declaration save now takes a **third** local human-review and retained-history
+policy snapshot after its SQLite row insert/update and before COMMIT. If the
+admitting review or any newly declared prerequisite review was removed or
+replaced, or if the retained-history duration changed (including session-only
+revocation), the entire transaction rolls back. The saved row, its revision,
+and any transitive dependent-pruning side effects are not committed. This
+protects against a revocation observed after the earlier BEGIN IMMEDIATE
+admission check; it does not extend an approval or grant provider access.
+
+Seven parameterized synthetic regressions cover create/update/dependency
+review revocation and create/update retention reduction or disabling at that
+exact boundary. They check the underlying SQLite rows after rollback, not
+only a read-time suppression filter. This is **not** atomic cross-process
+source-grant fencing: a review or grant may change immediately after the final
+check, and the review/policy stores do not share this SQLite transaction.
+Equal-timestamp replacement review generations remain indistinguishable.
+Do not expose the internal ledger as an independent provider permission,
+business obligation, verified outcome or agent execution authorization.
