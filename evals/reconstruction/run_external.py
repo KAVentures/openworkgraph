@@ -32,6 +32,10 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: set[str]) -> dict[str, Any]:
+    # A response that names another case must never be silently relabeled and
+    # scored as this case. Older model outputs may omit case_id entirely.
+    if "case_id" in prediction and prediction["case_id"] != case_id:
+        raise ValueError("model response case_id does not match requested case")
     prediction["case_id"] = case_id
     workflows = prediction.get("workflows")
     if not isinstance(workflows, list):
