@@ -326,3 +326,44 @@ def test_literal_metadata_and_explicit_top_level_identifiers_still_work():
         result = linked_work_items([first, second])
         assert set(_items(result)) == {("e01", "e02")}, field
         assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+
+
+
+def test_nonstring_event_ids_cannot_become_observation_identity():
+    # str(True) and str(7) satisfy the event-ID grammar, but they are not
+    # literal observed event IDs. Reject rather than fabricating membership.
+    for invalid in (True, False, 7, 0, {"id": "e01"}, ["e01"]):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        first["event_id"] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], invalid
+        assert result["candidate_links"] == [], invalid
+        assert result["unlinked_observation_count"] == 1, invalid
+
+    # Literal numeric-looking strings remain valid, just like ordinary IDs.
+    first = _scoped(_event(1, A))
+    second = _scoped(_event(2, A))
+    first["event_id"], second["event_id"] = "7", "8"
+    assert set(_items(linked_work_items([first, second]))) == {("7", "8")}
+
+
+def test_nonstring_app_labels_cannot_create_surface_continuity():
+    # Non-string values were coerced with str(...), allowing a fabricated
+    # match to a real app string and a misleading weak candidate.
+    for invalid in (True, 7, {"app": "Excel"}, ["Excel"]):
+        first = _scoped(_event(1, app="Excel"))
+        second = _scoped(_event(2, app=str(invalid)))
+        first["app"] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], invalid
+        assert result["candidate_links"] == [], invalid
+        assert result["unlinked_observation_count"] == 2, invalid
+
+    # Legitimate literal strings still yield only unmerged uncertainty.
+    result = linked_work_items([
+        _scoped(_event(1, app="Excel")),
+        _scoped(_event(2, app="Excel")),
+    ])
+    assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in result["candidate_links"])
