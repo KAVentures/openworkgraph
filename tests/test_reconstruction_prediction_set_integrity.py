@@ -309,3 +309,161 @@ def test_resume_refuses_coerced_uncertainty_before_any_new_request(tmp_path, mon
     assert path.read_bytes() == before
     assert not (tmp_path / "synthetic-model.report.json").exists()
     assert not (tmp_path / "synthetic-model.metadata.json").exists()
+
+
+def _blind_case():
+    return {
+        "case_id": "case-a",
+        "presented_evidence": [
+            {"event_id": "task", "resource_ref": "ticket-1", "action": "review"},
+            {"event_id": "noise", "surface": "unrelated-tab"},
+        ],
+    }
+
+
+def _bound_prediction(case):
+    from evals.reconstruction.run_external import (
+        BLIND_EVIDENCE_DIGEST_FIELD, _blind_evidence_digest,
+    )
+
+    return {
+        **_prediction(case["case_id"]),
+        BLIND_EVIDENCE_DIGEST_FIELD: _blind_evidence_digest(
+            case["case_id"], case["presented_evidence"]
+        ),
+    }
+
+
+def test_fake_provider_response_receives_local_blind_evidence_digest():
+    from evals.reconstruction.run_external import (
+        BLIND_EVIDENCE_DIGEST_FIELD, _blind_evidence_digest, _request,
+    )
+
+    case = _blind_case()
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "id": "synthetic-only",
+                "model": "synthetic-model",
+                "choices": [{"message": {"content": json.dumps(_prediction("case-a"))}}],
+            }
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            assert kwargs["json"]["messages"][1]["content"]
+            return FakeResponse()
+
+    prediction, metadata = _request(
+        FakeClient(), base_url="https://invalid.example", api_key="not-real",
+        model="synthetic-model", case=case, temperature=None, timeout=1.0,
+    )
+    assert prediction[BLIND_EVIDENCE_DIGEST_FIELD] == _blind_evidence_digest(
+        case["case_id"], case["presented_evidence"]
+    )
+    assert metadata["response_id"] == "synthetic-only"
+
+
+def test_blind_evidence_digest_ignores_object_key_order_but_not_event_order():
+    from evals.reconstruction.run_external import _blind_evidence_digest
+
+    case = _blind_case()
+    first = _blind_evidence_digest(case["case_id"], case["presented_evidence"])
+    rekeyed = [dict(reversed(list(event.items()))) for event in case["presented_evidence"]]
+    assert _blind_evidence_digest(case["case_id"], rekeyed) == first
+    assert _blind_evidence_digest(case["case_id"], list(reversed(rekeyed))) != first
+    assert _blind_evidence_digest("another-case", case["presented_evidence"]) != first
+
+
+def test_resume_rejects_changed_blind_evidence_with_identical_event_ids(tmp_path):
+    case = _blind_case()
+    path = _write_jsonl(tmp_path, [_bound_prediction(case)])
+    before = path.read_bytes()
+    changed = [dict(event) for event in case["presented_evidence"]]
+    changed[0]["resource_ref"] = "ticket-2"
+    assert {e["event_id"] for e in changed} == {
+        e["event_id"] for e in case["presented_evidence"]
+    }
+
+    with pytest.raises(ValueError, match="blind evidence changed"):
+        _load_resume_predictions(
+            path, {"case-a"},
+            evidence_ids_by_case={"case-a": {"task", "noise"}},
+            evidence_by_case={"case-a": changed},
+        )
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("digest", ["wrong", "f" * 64, None, 42])
+def test_resume_rejects_malformed_or_tampered_digest(tmp_path, digest):
+    from evals.reconstruction.run_external import BLIND_EVIDENCE_DIGEST_FIELD
+
+    case = _blind_case()
+    row = _bound_prediction(case)
+    row[BLIND_EVIDENCE_DIGEST_FIELD] = digest
+    path = _write_jsonl(tmp_path, [row])
+    with pytest.raises(ValueError, match="malformed blind-evidence digest|blind evidence changed"):
+        _load_resume_predictions(
+            path, {"case-a"},
+            evidence_ids_by_case={"case-a": {"task", "noise"}},
+            evidence_by_case={"case-a": case["presented_evidence"]},
+        )
+
+
+def test_resume_requires_current_blind_evidence_when_digest_is_present(tmp_path):
+    case = _blind_case()
+    path = _write_jsonl(tmp_path, [_bound_prediction(case)])
+    with pytest.raises(ValueError, match="lack blind evidence"):
+        _load_resume_predictions(
+            path, {"case-a"}, evidence_ids_by_case={"case-a": {"task", "noise"}},
+        )
+
+
+def test_legacy_digestless_resume_stays_supported_but_unattested(tmp_path):
+    case = _blind_case()
+    row = _prediction("case-a")
+    path = _write_jsonl(tmp_path, [row])
+    changed = [dict(event) for event in case["presented_evidence"]]
+    changed[0]["action"] = "changed"
+    assert _load_resume_predictions(
+        path, {"case-a"},
+        evidence_ids_by_case={"case-a": {"task", "noise"}},
+        evidence_by_case={"case-a": changed},
+    )["case-a"] == row
+
+
+def test_model_cannot_forge_runner_evidence_digest():
+    from evals.reconstruction.run_external import BLIND_EVIDENCE_DIGEST_FIELD
+
+    prediction = _prediction("case-a")
+    prediction[BLIND_EVIDENCE_DIGEST_FIELD] = "f" * 64
+    with pytest.raises(ValueError, match="must not supply runner blind-evidence digest"):
+        _validate_prediction(prediction, "case-a", {"task", "noise"})
+
+
+def test_runner_rejects_changed_same_id_resume_before_request(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    case = _blind_case()
+    path = _write_jsonl(tmp_path, [_bound_prediction(case)])
+    original_bytes = path.read_bytes()
+    path.rename(tmp_path / "synthetic-model.predictions.jsonl")
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    changed = {**case, "presented_evidence": [dict(e) for e in case["presented_evidence"]]}
+    changed["presented_evidence"][0]["action"] = "reassigned"
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [changed])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("changed resume must not call model"))
+    ))
+    with pytest.raises(ValueError, match="blind evidence changed"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert path.read_bytes() == original_bytes
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+    assert not (tmp_path / "synthetic-model.metadata.json").exists()
