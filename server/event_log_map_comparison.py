@@ -29,16 +29,17 @@ GAP_ROUNDS = 300
 
 
 def _gaps(conn, table: str, source: str, target: str) -> list[float]:
-    # Materialize the path predicate before sampling: DuckDB may otherwise
-    # apply the reservoir to all transitions, then filter to this path,
-    # yielding fewer than GAP_SAMPLE rows even when the path has enough.
+    # DuckDB reservoir(... REPEATABLE(seed)) is sensitive to scan order and
+    # query plans. Rank matching transitions by a stable content-derived key
+    # instead; do not use imported event_id (which can depend on CSV order).
+    # JSON array encoding avoids ambiguous concatenation of literal case IDs.
+    # Only the bounded gaps, never the case IDs, reach Python or the response.
     return [r[0] for r in conn.execute(
-        f"""WITH matching AS MATERIALIZED (
-                SELECT gap FROM {table}_dfg WHERE src = ? AND dst = ?
-            )
-            SELECT gap FROM matching
-            USING SAMPLE reservoir({GAP_SAMPLE} ROWS) REPEATABLE (7)""",
-        [source, target]).fetchall()]
+        f"""SELECT gap FROM {table}_dfg WHERE src = ? AND dst = ?
+            ORDER BY md5(to_json([case_id, CAST(ts AS VARCHAR), CAST(gap AS VARCHAR)])),
+                     case_id, ts, gap
+            LIMIT ?""",
+        [source, target, GAP_SAMPLE]).fetchall()]
 
 
 def _median_difference(a: list[float], b: list[float]) -> tuple[float, float, float]:
@@ -57,7 +58,7 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
         sizes = {}
         for t in ("ca", "cb"):
             sizes[t] = conn.execute(f"SELECT count(DISTINCT case_id) FROM {t}").fetchone()[0]
-            conn.execute(f"""CREATE OR REPLACE TEMP TABLE {t}_dfg AS SELECT case_id, src, activity AS dst,
+            conn.execute(f"""CREATE OR REPLACE TEMP TABLE {t}_dfg AS SELECT case_id, ts, src, activity AS dst,
                   epoch(ts - prev_ts) AS gap FROM (
                     SELECT case_id, activity, ts, lag(activity) OVER w AS src, lag(ts) OVER w AS prev_ts
                     FROM {t} WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)) WHERE src IS NOT NULL""")
