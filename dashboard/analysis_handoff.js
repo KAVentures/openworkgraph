@@ -72,6 +72,13 @@
         (windowEnd === null || Date.parse(last) < windowEnd));
     const chunks = d?.analysis_plan == null ||
       (object(d.analysis_plan) &&
+        // The server uses a positive bounded page size and reports whether
+        // its listed dates were clipped to the selected window. Optional
+        // legacy fields may be absent, but contradictory claims fail closed.
+        (d.analysis_plan.page_size == null ||
+          (Number.isSafeInteger(d.analysis_plan.page_size) && d.analysis_plan.page_size > 0)) &&
+        (d.analysis_plan.chunks_respect_selected_window == null ||
+          d.analysis_plan.chunks_respect_selected_window === true) &&
         (d.analysis_plan.more_dates_not_listed == null ||
           typeof d.analysis_plan.more_dates_not_listed === 'boolean') &&
         (d.analysis_plan.date_chunks == null ||
@@ -85,6 +92,10 @@
               // A displayed stepwise plan must not silently repeat, overlap,
               // reverse or reorder evidence windows. Date-only labels are UTC.
               const since = Date.parse(x.since), until = Date.parse(x.until);
+              // The backend groups rows by UTC date and clips that one-day
+              // window to the selected period. A multi-day or midnight-
+              // crossing chunk would falsely advertise daily coverage.
+              const nextUtcMidnight = Math.floor(since / 86400000) * 86400000 + 86400000;
               // A positive-count chunk must overlap the actual observed span.
               // The chunk end is exclusive; do not present events before the
               // first or after the last observed event as supported evidence.
@@ -92,7 +103,7 @@
                   (!instant(first) || !instant(last) ||
                    until <= Date.parse(first) || since > Date.parse(last)))
                 return false;
-              return since < until &&
+              return since < until && until <= nextUtcMidnight &&
                 (windowStart === null || since >= windowStart) &&
                 (windowEnd === null || until <= windowEnd) &&
                 (i === 0 || Date.parse(list[i - 1].until) <= since);
