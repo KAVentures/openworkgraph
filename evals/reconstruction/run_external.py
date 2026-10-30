@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import re
@@ -109,10 +110,17 @@ def _revision() -> str:
         return "unknown"
 
 
-def _load_resume_predictions(path: Path, selected_case_ids: set[str]) -> dict[str, dict[str, Any]]:
+def _load_resume_predictions(
+    path: Path,
+    selected_case_ids: set[str],
+    *,
+    evidence_ids_by_case: dict[str, set[str]] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Read an interrupted run without silently replacing or importing cases.
 
-    This checks case identity only; it is not a model/revision attestation.
+    When current blind evidence is supplied, validate every resumed prediction
+    against its selected case before the runner makes another provider request.
+    This is not a model/revision attestation or an answer-key check.
     """
     existing: dict[str, dict[str, Any]] = {}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -128,6 +136,16 @@ def _load_resume_predictions(path: Path, selected_case_ids: set[str]) -> dict[st
             raise ValueError(f"resume predictions contain case outside selected split: {cid}")
         if cid in existing:
             raise ValueError(f"resume predictions contain duplicate case_id: {cid}")
+        if evidence_ids_by_case is not None:
+            current_ids = evidence_ids_by_case.get(cid)
+            if current_ids is None:
+                raise ValueError(f"resume predictions lack current evidence for case_id: {cid}")
+            # The validator supplies optional defaults in place. Validate a
+            # copy so the exact persisted JSONL row remains unmodified.
+            try:
+                _validate_prediction(deepcopy(row), cid, current_ids)
+            except ValueError as exc:
+                raise ValueError(f"resume predictions line {line_number} invalid for current evidence: {exc}") from exc
         existing[cid] = row
     return existing
 
@@ -167,7 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     existing: dict[str, dict[str, Any]] = {}
     if args.resume and predictions_path.exists():
         existing = _load_resume_predictions(
-            predictions_path, {str(case["case_id"]) for case in cases}
+            predictions_path,
+            {str(case["case_id"]) for case in cases},
+            evidence_ids_by_case={
+                str(case["case_id"]): {str(event["event_id"]) for event in case["presented_evidence"]}
+                for case in cases
+            },
         )
 
     predictions: list[dict[str, Any]] = []
