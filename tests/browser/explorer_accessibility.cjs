@@ -27,9 +27,9 @@ const path=require('node:path');
      await new Promise(resolve=>setTimeout(resolve,200));
    }if(!ready)throw new Error('Synthetic explorer server not ready: '+logs);
    browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-   const page=await browser.newPage(),errors=[];let writes=0;
+   const page=await browser.newPage(),errors=[];let writes=0,evidenceReads=0;
    page.on('pageerror',error=>errors.push(error.message));
-   page.on('request',request=>{if(request.method()!=='GET'&&new URL(request.url()).pathname.startsWith('/v1/workflow'))writes++;});
+   page.on('request',request=>{const pathname=new URL(request.url()).pathname;if(request.method()!=='GET'&&pathname.startsWith('/v1/workflow'))writes++;if(pathname==='/v1/workflow-evidence')evidenceReads++;});
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=overview]').click();
    const open=page.getByRole('button',{name:'Explore workflows',exact:true});
@@ -124,6 +124,34 @@ const path=require('node:path');
    await page.unroute('**/v1/workflow-evidence?*');
    assert.equal(await page.locator('#owgExplorerEvidence').textContent(),'');
    assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/Variant [0-9]+, step [0-9]+/);
+   // A reviewed group can retain candidate-wide refs even when one exact
+   // variant has no valid refs. Never attribute a different variant's evidence
+   // to the explicitly selected unlinked variant or copy those refs as support.
+   await page.evaluate(()=>{
+     window.__owgCopiedHandoff='';
+     window.copyText=text=>{window.__owgCopiedHandoff=text;};
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Synthetic reviewed group',workflow_id:'synthetic',revision:1,
+       bundle:{
+         selector:{execution_ids:['execution:other_variant'],selected_execution_count:1},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[{
+           readable_steps:['Unlinked observed step'],structural_steps:['action:unlinked'],
+           execution_count:1,execution_ids:[]
+         }]}]}
+       }
+     });
+   });
+   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
+   assert.match(await page.evaluate(()=>window.__owgCopiedHandoff),/execution:other_variant/);
+   await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   const evidenceReadsBefore=evidenceReads;
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   assert.match(await page.locator('#owgExplorerEvidence').textContent(),/No selectable execution references available/);
+   assert.equal(evidenceReads,evidenceReadsBefore,'unlinked selected variant must not request unrelated candidate evidence');
+   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
+   const unlinkedHandoff=await page.evaluate(()=>window.__owgCopiedHandoff);
+   assert.match(unlinkedHandoff,/Find and inspect the exact executions/);
+   assert(!unlinkedHandoff.includes('execution:other_variant'),'handoff must not attribute unrelated candidate refs to selected variant');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    assert.equal(writes,0);assert.deepEqual(errors,[]);
