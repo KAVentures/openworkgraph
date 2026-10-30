@@ -482,3 +482,72 @@ def test_wrong_scope_prerequisite_prunes_dependents_not_unrelated_cases(local):
     assert independent in remaining and new_case in remaining
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
         save(B, expected_revision=old_b["revision"])
+
+
+def test_prerequisite_revision_erases_transitive_owner_approvals_not_unrelated(local):
+    # B -> A was approved for A revision 1; changing A's declared goal
+    # cannot silently carry B (or C -> B) into A revision 2.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=a["revision"], now=NOW + timedelta(minutes=1))
+    assert revised["revision"] == 2
+    assert revised["goal_code"] == "verify_operation"
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [
+        revised, independent
+    ]
+    # Review requests are not erased, but old dependent declarations are.
+    reviewed_refs = {
+        item["work_item_ref"] for item in reviews.list_review_intentions(now=NOW)["items"]
+    }
+    assert {A, B, C, d}.issubset(reviewed_refs)
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"],
+            now=NOW + timedelta(minutes=2))
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=2))
+    assert fresh_b["revision"] == 1
+    assert fresh_b["depends_on_work_item_refs"] == [A]
+
+
+def test_failed_prerequisite_cas_rolls_back_and_same_value_revision_invalidates(local):
+    reviewed(A)
+    reviewed(B)
+    a = save()
+    b = save(B, depends_on_work_item_refs=[A])
+    # Invalid A -> B would create a cycle and must not erase B.
+    with pytest.raises(facts.CaseDeclarationError, match="cyclic"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            depends_on_work_item_refs=[B], expected_revision=1,
+            now=NOW + timedelta(minutes=1))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+    # Even a same-value CAS advances A's exact revision. Without pinned
+    # dependency versions, B must be explicitly re-declared.
+    same_value = facts.save_case_declaration(
+        A, SCOPE, goal_code=a["goal_code"],
+        expected_outcome_code=a["expected_outcome_code"],
+        expected_revision=1, now=NOW + timedelta(minutes=1))
+    assert same_value["revision"] == 2
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [same_value]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code=b["goal_code"],
+            expected_outcome_code=b["expected_outcome_code"],
+            depends_on_work_item_refs=[A], expected_revision=b["revision"],
+            now=NOW + timedelta(minutes=2))
