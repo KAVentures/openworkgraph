@@ -35,6 +35,25 @@ def _blind_evidence_digest(case_id: str, presented_evidence: list[dict[str, Any]
 
 
 
+def _selected_blind_corpus_digest(cases: list[dict[str, Any]]) -> str:
+    """Fingerprint the complete selected *blind* corpus, never the answer key.
+
+    Preserve case and evidence-array order; normalize only JSON object-key
+    order. Call after selected-case shape/finite-JSON preflight.
+    """
+    blind = [
+        {"case_id": case["case_id"], "presented_evidence": case["presented_evidence"]}
+        for case in cases
+    ]
+    payload = json.dumps(
+        blind, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"owg-reconstruction-selected-blind-corpus-v1\0" + payload
+    ).hexdigest()
+
+
 def _strict_json_loads(text: str) -> Any:
     """Refuse ambiguous duplicate keys at every JSON object depth.
 
@@ -263,7 +282,13 @@ def _load_resume_metadata(
     metadata = _strict_json_loads(path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError("resume metadata must be an object")
+    legacy_corpus_unattested = False
     for field, requested in expected.items():
+        if field == "selected_blind_corpus_sha256" and field not in metadata:
+            # Historical manifests predate this field. Keep their resumes
+            # usable, but never claim complete selected-corpus provenance.
+            legacy_corpus_unattested = True
+            continue
         prior = metadata.get(field)
         if field not in metadata or type(prior) is not type(requested) or prior != requested:
             raise ValueError(f"resume metadata mismatch for {field}; use a new output directory")
@@ -285,7 +310,10 @@ def _load_resume_metadata(
         raise ValueError("resume_provenance_unverified must be a boolean")
     # Old runner versions discarded prior receipts on each resume. Do not
     # fabricate receipts or silently claim complete response provenance.
-    return deepcopy(responses), prior_unattested or seen != resumed_case_ids
+    return (
+        deepcopy(responses),
+        prior_unattested or seen != resumed_case_ids or legacy_corpus_unattested,
+    )
 
 
 
@@ -391,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
         cases = cases[: args.max_cases]
 
     _validate_selected_blind_cases(cases)
+    selected_blind_corpus_sha256 = _selected_blind_corpus_digest(cases)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -424,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
                     "temperature": args.temperature,
                     "split": args.split,
                     "cases": len(cases),
+                    "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
                 },
                 set(existing),
             )
@@ -484,6 +514,7 @@ def main(argv: list[str] | None = None) -> int:
         "temperature": args.temperature,
         "split": args.split,
         "cases": len(cases),
+        "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
         "revision": _revision(),
         "elapsed_seconds": round(time.time() - started, 3),
         "responses": response_meta,
