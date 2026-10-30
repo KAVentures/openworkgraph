@@ -84,7 +84,8 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
                           "median_gap_seconds_first": ma, "median_gap_seconds_second": mb})
         # Time intervals for the paths both cohorts use most.
         timed = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
-                       key=lambda p: -(p["transitions_in_first"] + p["transitions_in_second"]))[:TIMED_PATHS]
+                       key=lambda p: (-(p["transitions_in_first"] + p["transitions_in_second"]),
+                                      p["from"], p["to"]))[:TIMED_PATHS]
         for p in timed:
             # The full-cohort medians above and the reservoir-sampled bootstrap
             # below can have different point estimates. Expose the actual
