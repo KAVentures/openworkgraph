@@ -446,3 +446,74 @@ test('ticket token disagreement fails closed, while UTC-equivalent detailed expo
   assert.equal(h.downloads, 1);
   assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
 });
+
+test('repeated Copy clicks issue one pending clipboard write and announce local progress', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisCopy'].onclick();
+  const second = h.modal['#analysisCopy'].onclick();
+  await settle();
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /copying.*locally.*no ai was invoked/i);
+  pendingClipboard.resolve();
+  await Promise.all([first, second]);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('clipboard rejection allows deliberate single-flight retry for current scope', async () => {
+  const writes = [], attempts = [deferred(), deferred()];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return attempts[writes.length - 1].promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisCopy'].onclick();
+  await settle();
+  attempts[0].reject(new Error('clipboard denied'));
+  await first;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /clipboard unavailable/i);
+  const retry = h.modal['#analysisCopy'].onclick();
+  const duplicate = h.modal['#analysisCopy'].onclick();
+  await settle();
+  assert.deepEqual(writes, ['request-reviewed', 'request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  attempts[1].resolve();
+  await Promise.all([retry, duplicate]);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('successful pending Copy after period change remains disabled and discloses old scope', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  pendingClipboard.resolve();
+  await copy;
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed during copying/i);
+  assert.equal(h.tickets.length, 0);
+});
