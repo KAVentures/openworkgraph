@@ -676,3 +676,71 @@ def test_resume_refuses_orphan_manifest_before_provider_request(
     assert (path.read_bytes() if path.exists() else None) == before
     assert metadata_path.read_bytes() == before_metadata
     assert not (tmp_path / "synthetic-model.report.json").exists()
+
+@pytest.mark.parametrize("cases,pattern", [
+    ([], "at least one case"),
+    ([{"case_id": "same", "presented_evidence": []},
+      {"case_id": "same", "presented_evidence": []}], "duplicate selected case_id"),
+    ([{"case_id": "", "presented_evidence": []}], "nonempty string case_id"),
+    ([{"case_id": " ", "presented_evidence": []}], "nonempty string case_id"),
+    ([{"case_id": None, "presented_evidence": []}], "nonempty string case_id"),
+    ([None], "must be an object"),
+    ([{"case_id": "case-a", "presented_evidence": None}], "presented_evidence must be a list"),
+    ([{"case_id": "case-a", "presented_evidence": [None]}], "event 1 must be an object"),
+    ([{"case_id": "case-a", "presented_evidence": [{"event_id": ""}]}],
+     "nonempty string event_id"),
+    ([{"case_id": "case-a", "presented_evidence": [{"event_id": 12}]}],
+     "nonempty string event_id"),
+    ([{"case_id": "case-a", "presented_evidence": [
+        {"event_id": "e1"}, {"event_id": "e1"},
+    ]}], "duplicate event_id"),
+])
+def test_selected_blind_corpus_preflight_rejects_ambiguous_identity(cases, pattern):
+    from evals.reconstruction.run_external import _validate_selected_blind_cases
+
+    with pytest.raises(ValueError, match=pattern):
+        _validate_selected_blind_cases(cases)
+
+
+def test_selected_blind_corpus_preflight_allows_case_local_ids_and_empty_evidence():
+    from evals.reconstruction.run_external import _validate_selected_blind_cases
+
+    cases = [
+        {"case_id": "a", "presented_evidence": [
+            {"event_id": "e2", "observed_at": "later"},
+            {"event_id": "e1", "observed_at": "earlier"},
+        ]},
+        {"case_id": "b", "presented_evidence": [{"event_id": "e1"}]},
+        {"case_id": "c", "presented_evidence": []},
+    ]
+    before = json.dumps(cases)
+    assert _validate_selected_blind_cases(cases) is None
+    assert json.dumps(cases) == before  # no sorting, inference, or mutation
+
+
+@pytest.mark.parametrize("cases,pattern", [
+    ([_case("same"), _case("same")], "duplicate selected case_id"),
+    ([{"case_id": "case-a", "presented_evidence": [
+        {"event_id": "e1"}, {"event_id": "e1"},
+    ]}], "duplicate event_id"),
+    ([{"case_id": "case-a", "presented_evidence": [{"event_id": None}]}],
+     "nonempty string event_id"),
+])
+def test_runner_rejects_invalid_selected_blind_corpus_before_requests_or_files(
+    tmp_path, monkeypatch, cases, pattern,
+):
+    from evals.reconstruction import run_external
+
+    output_dir = tmp_path / "not-yet-created"
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: cases)
+    monkeypatch.setattr(run_external, "split_cases", lambda selected, split: selected)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("invalid corpus must not request a model"))
+    ))
+    with pytest.raises(ValueError, match=pattern):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(output_dir),
+        ])
+    assert not output_dir.exists()
+

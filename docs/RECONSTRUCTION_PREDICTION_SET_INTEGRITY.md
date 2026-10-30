@@ -212,3 +212,25 @@ and explicitly unattested. Synthetic regressions cover no-request,
 byte-preservation and completed-row compatibility. This does not establish
 multi-file transaction durability, model authenticity, assignment-F1
 improvement or real-provider acceptance.
+
+## Selected blind-corpus identity preflight
+
+Before opening an output file or requesting any paid model response,
+`run_external.py` now checks the **selected** split (after `--max-cases`)
+for nonempty, unique string case IDs and a list of blind evidence objects with
+nonempty, unique string `event_id` values **within each case**. Duplicate
+event IDs in a single case previously collapsed in the per-request set while
+duplicate case IDs could trigger provider requests before the scorer detected
+them. Both now fail closed without writing a prediction or metadata artifact.
+
+IDs are case-local: the same event ID in *different* cases is allowed.
+Evidence order is preserved; an empty evidence list is still a valid
+uncertain/unknown case. This check reads only `case_id` and
+`presented_evidence`, never hidden `ground_truth`, and does not merge cases
+by timestamp, infer obligations, or change the scorer/acceptance thresholds.
+
+Synthetic tests cover duplicate cases/events, missing/invalid IDs, malformed
+evidence, cross-case reused IDs, interleaved event ordering, and a command-level
+fail-before-request/fail-before-output guarantee. This is input/measurement
+integrity, **not** a demonstrated assignment F1 or contamination improvement,
+real-provider validation, or a consenting customer pilot.

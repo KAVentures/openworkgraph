@@ -250,6 +250,46 @@ def _load_resume_metadata(
     return deepcopy(responses), prior_unattested or seen != resumed_case_ids
 
 
+
+def _validate_selected_blind_cases(cases: list[dict[str, Any]]) -> None:
+    """Reject ambiguous selected evidence before a paid request or artifact write.
+
+    Event IDs are case-local; equal IDs in *different* cases are legitimate.
+    Only blind evidence is inspected, never ground_truth or answer-key fields.
+    """
+    if not cases:
+        raise ValueError("selected reconstruction corpus must contain at least one case")
+    seen_cases: set[str] = set()
+    for case_index, case in enumerate(cases, start=1):
+        if not isinstance(case, dict):
+            raise ValueError(f"selected case {case_index} must be an object")
+        case_id = case.get("case_id")
+        if not isinstance(case_id, str) or not case_id.strip():
+            raise ValueError(f"selected case {case_index} requires a nonempty string case_id")
+        if case_id in seen_cases:
+            raise ValueError(f"duplicate selected case_id at position {case_index}")
+        seen_cases.add(case_id)
+        evidence = case.get("presented_evidence")
+        if not isinstance(evidence, list):
+            raise ValueError(f"selected case {case_index} presented_evidence must be a list")
+        seen_events: set[str] = set()
+        for event_index, event in enumerate(evidence, start=1):
+            if not isinstance(event, dict):
+                raise ValueError(
+                    f"selected case {case_index} event {event_index} must be an object"
+                )
+            event_id = event.get("event_id")
+            if not isinstance(event_id, str) or not event_id.strip():
+                raise ValueError(
+                    f"selected case {case_index} event {event_index} requires a nonempty string event_id"
+                )
+            if event_id in seen_events:
+                raise ValueError(
+                    f"selected case {case_index} contains duplicate event_id at position {event_index}"
+                )
+            seen_events.add(event_id)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the blind OWG reconstruction eval through an OpenAI-compatible endpoint")
     parser.add_argument("--model", required=True, help="exact model ID accepted by the endpoint")
@@ -273,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_cases < 1:
             parser.error("--max-cases must be >= 1")
         cases = cases[: args.max_cases]
+
+    _validate_selected_blind_cases(cases)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
