@@ -125,3 +125,91 @@ def test_accepting_ambiguous_candidates_would_break_the_contamination_gate():
     linked, _ = _gate(score_linked_items(holdout))
     assert accepted["workflow_assignment_f1"] > linked["workflow_assignment_f1"]
     assert accepted["cross_workflow_contamination"] > 0.05 >= linked["cross_workflow_contamination"]
+
+
+def _scoped(event, *, org="tenant-a", actor="actor-a", device="device-a", session="session-a"):
+    return {
+        **event,
+        "organization_id": org,
+        "actor_id": actor,
+        "device_id": device,
+        "session_id": session,
+    }
+
+
+def test_clipboard_transfer_is_not_global_across_tenant_actor_device_or_session():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        first = _scoped(_event(1, A, transfer="reused-transfer"))
+        second = _scoped(_event(2, B, transfer="reused-transfer"))
+        second[dimension] = "different-scope"
+        result = linked_work_items([first, second])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    same_scope = linked_work_items([
+        _scoped(_event(1, A, transfer="same-transfer")),
+        _scoped(_event(2, B, transfer="same-transfer")),
+    ])
+    assert set(_items(same_scope)) == {("e01", "e02")}
+    assert _items(same_scope)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+
+
+def test_reused_tab_id_cannot_attach_unreferenced_events_across_scope():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        anchor = _scoped(_event(1, A, tab="reused-tab"))
+        loose = _scoped(_event(2, tab="reused-tab"))
+        loose[dimension] = "different-scope"
+        result = linked_work_items([anchor, loose])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    # Two independently scoped tabs with the same opaque ID remain separate.
+    result = linked_work_items([
+        _scoped(_event(1, A, tab="reused-tab")),
+        _scoped(_event(2, tab="reused-tab")),
+        _scoped(_event(3, B, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(4, tab="reused-tab"), org="tenant-b"),
+    ])
+    assert set(_items(result)) == {("e01", "e02"), ("e03", "e04")}
+    assert result["candidate_links"] == []
+
+
+def test_surface_continuity_candidates_respect_scope_not_just_adjacency():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        first = _scoped(_event(1, app="Excel"))
+        second = _scoped(_event(2, app="Excel"))
+        second[dimension] = "different-scope"
+        result = linked_work_items([first, second])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    same_scope = linked_work_items([
+        _scoped(_event(1, app="Excel")),
+        _scoped(_event(2, app="Excel")),
+    ])
+    assert {c["relation"] for c in same_scope["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in same_scope["candidate_links"])
+
+
+def test_missing_or_malformed_scope_is_never_a_cross_scope_wildcard():
+    named = _scoped(_event(1, A, transfer="x", tab="t"))
+    unknown = _event(2, B, transfer="x", tab="t")
+    invalid = _scoped(_event(3, C, transfer="x", tab="t"))
+    invalid["organization_id"] = {"invalid": "not-a-string"}
+    result = linked_work_items([named, unknown, invalid])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+    assert result["link_contract"]["missing_scope_is_wildcard"] is False
+    assert result["link_contract"]["ephemeral_signals_scope"] == "exact_organization_actor_device_session"
+
+
+def test_exact_record_evidence_can_still_link_across_actors_without_leaking_scope():
+    result = linked_work_items([
+        _scoped(_event(1, A), actor="human-a"),
+        _scoped(_event(2, A), actor="human-b"),
+    ])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+    output = json.dumps(result)
+    for private_scope in ("tenant-a", "human-a", "human-b", "device-a", "session-a"):
+        assert private_scope not in output
