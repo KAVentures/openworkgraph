@@ -486,6 +486,17 @@ def save_case_declaration(
             saved = _get(db, work_item_ref)
             if saved is None:
                 raise CaseDeclarationError("saved declaration unavailable")
+            # The review queue and history policy live outside this SQLite
+            # transaction. Revalidate immediately before COMMIT: a separate
+            # revocation/replacement after the BEGIN check must not cause us
+            # to commit a newly approved owner declaration knowingly stale.
+            # This narrows a race; it is NOT an atomic cross-store grant fence.
+            final_reviewed = _reviewed(current)
+            if any(final_reviewed.get(ref) != live_reviewed[ref]
+                   for ref in (work_item_ref, *dependencies)):
+                raise CaseDeclarationError("case or dependency review changed before declaration commit")
+            if _retention_days() != live_days:
+                raise CaseDeclarationError("human history retention changed before declaration commit")
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
