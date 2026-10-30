@@ -96,7 +96,8 @@ def test_group_mapping_cannot_be_enabled_implicitly():
     '{"client":Infinity}',
     "[" * 1100 + "0" + "]" * 1100,
     "x" * 32769,
-])
+], ids=["case-colliding-keys", "duplicate-keys", "nonfinite-nan",
+        "nonfinite-infinity", "excessive-nesting", "oversized-input"])
 def test_bad_json_is_refused_before_mapping(text):
     with pytest.raises(InvalidMapping):
         load_text(text)
