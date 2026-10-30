@@ -829,3 +829,69 @@ def test_replay_allows_higher_counter_at_equal_provider_local_second(mode):
     assert not result["business_outcome_verified"]
     assert not result["provider_timestamp_timezone_verified"]
     assert not result["checkpoint_advanced"]
+
+
+def test_selected_scope_cannot_be_duck_typed_to_bypass_consent_or_host():
+    """No-op authority methods on arbitrary objects cannot create a GET plan."""
+    class ForgedScope:
+        host = "attacker.invalid"
+        tenant_scope = "org1"
+        sys_ids = (A,)
+        namespace = "snow.untrusted"
+
+        def require_authority(self):
+            return None
+
+    with pytest.raises(StagingError, match="Invalid selected incident scope"):
+        plan_page(ForgedScope())
+
+
+def test_all_offline_entrypoints_reject_forged_scope_authority():
+    """Even a matching-looking namespace and plan cannot replace consent."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    authorized = scope(sys_ids=(A,))
+    planned = plan_page(authorized, limit=1)
+    raw = page(item(A))
+
+    class ForgedScope:
+        host = authorized.host
+        tenant_scope = authorized.tenant_scope
+        sys_ids = authorized.sys_ids
+        namespace = authorized.namespace
+
+        def require_authority(self):
+            return None
+
+    fake = ForgedScope()
+    entrypoints = [
+        lambda: plan_page(fake, limit=1),
+        lambda: project_page(fake, raw, limit=1),
+        lambda: project_planned_page(fake, raw, plan=planned),
+        lambda: project_planned_pages(fake, [(planned, raw)]),
+        lambda: reconcile_replayed_pages(fake, raw, raw, limit=1),
+        lambda: reconcile_planned_replays(fake, [(planned, raw)], [(planned, raw)]),
+    ]
+    for entrypoint in entrypoints:
+        with pytest.raises(StagingError, match="Invalid selected incident scope"):
+            entrypoint()
+
+    # The identical authorized input remains a valid offline staging operation.
+    assert project_planned_page(authorized, raw, plan=planned)["plan_bound"] is True
+
+
+def test_selected_scope_subclass_cannot_override_revocation_authority():
+    """Frozen dataclass fields do not prevent overriding instance methods."""
+    class ForgedSubclass(SelectedIncidents):
+        def require_authority(self):
+            return None
+
+    denied = ForgedSubclass(
+        host="example.service-now.com", tenant_scope="org1", sys_ids=(A,),
+        consented=False, grant_current=False,
+    )
+    with pytest.raises(StagingError, match="Invalid selected incident scope"):
+        plan_page(denied)
+    with pytest.raises(StagingError, match="Invalid selected incident scope"):
+        project_page(denied, page(item(A)), limit=1)
