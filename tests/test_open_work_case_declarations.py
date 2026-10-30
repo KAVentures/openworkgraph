@@ -1421,3 +1421,41 @@ def test_oversized_auxiliary_edge_does_not_block_explicit_review_deletion(local)
     assert reviews.remove_review_intention(A, now=NOW)
     assert not facts._path().exists()
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_mixed_precision_as_of_approval_and_dependency_closure(local):
+    # ISO UTC strings with no fractional seconds compare *after* strings
+    # with fractional seconds in SQLite TEXT order, even when earlier.
+    # The bounded reader must use parsed UTC instants, not SQL text filters.
+    admitted = NOW - timedelta(hours=1)
+    for ref in (A, B, C):
+        reviewed(ref, at=admitted)
+    root = save()  # whole-second UTC approval
+    middle_time = NOW + timedelta(microseconds=125_000)
+    dependent = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=middle_time)
+    future_time = NOW + timedelta(microseconds=750_000)
+    future = facts.save_case_declaration(
+        C, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=future_time)
+
+    at_whole_second = facts.list_case_declarations(SCOPE, now=NOW)
+    assert at_whole_second["items"] == [root]
+
+    # The root must remain visible and permit its explicitly declared
+    # dependent at a fractional as-of time; C is not yet owner-approved.
+    halfway = facts.list_case_declarations(
+        SCOPE, now=NOW + timedelta(microseconds=500_000))
+    assert halfway["items"] == [dependent, root]
+    assert halfway["source_read_performed"] is False
+    assert all(item["customer_outcome_verified"] is False
+               for item in halfway["items"])
+
+    # Mixed-precision timestamps must sort chronologically rather than
+    # lexicographically. All cases are still from one reviewed scope.
+    after_all = facts.list_case_declarations(
+        SCOPE, now=NOW + timedelta(microseconds=900_000))
+    assert after_all["items"] == [future, dependent, root]
+    assert facts.list_case_declarations(OTHER_SCOPE, now=future_time)["items"] == []
