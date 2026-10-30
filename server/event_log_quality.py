@@ -24,14 +24,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from shared.event_log_formats import RESOURCE_PRESENCE_WHITESPACE
+
 from . import event_log_workspace as workspace
 
 MAPPING_VERSION = "owg.event-log-mapping.v1"
 TRANSFORM_VERSION = "owg.event-log-import.v1"
 MAX_ATTRIBUTES_REPORTED = 32
-# Python str.strip() whitespace that can survive identifier control-character validation.
-# Preserve literal nonblank labels; only diagnostic presence is normalized here.
-_RESOURCE_WHITESPACE = " \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+# Reuse the streaming reader's allowed whitespace; do not change stored values.
+_RESOURCE_WHITESPACE = RESOURCE_PRESENCE_WHITESPACE
 COMPLETENESS_NOTE = ("Counts describe the supplied rows only. Whether the source system holds events that were not "
                      "exported is unknown, so this log is not known to be complete.")
 

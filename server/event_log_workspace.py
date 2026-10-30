@@ -27,7 +27,8 @@ if TYPE_CHECKING:
     import duckdb
 
 from shared.event_log_formats import (
-    CASE_TYPE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES, EventLogFormatError, EventRecord,
+    CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
+    EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
     read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
     write_ocel_xml, write_xes,
@@ -336,9 +337,12 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         keep_rejected.update(retained=kept_rows, not_retained=total_bad - kept_rows)
     conn.execute(f"DELETE FROM staged WHERE {invalid}")
     kept = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
+    # Raw control/length validation above must run before presence normalization.
+    # DuckDB's one-argument trim handles ASCII spaces only; use the exact allowed
+    # Unicode whitespace set from the shared streaming reader instead.
     conn.execute("""INSERT INTO events SELECT ?, 'e' || n, activity, timezone('UTC', ts),
-                 CASE WHEN trim(resource) = '' THEN '' ELSE resource END, attributes FROM staged""",
-                 [log_id])
+                 CASE WHEN trim(resource, ?) = '' THEN '' ELSE resource END, attributes FROM staged""",
+                 [log_id, RESOURCE_PRESENCE_WHITESPACE])
     case_type=source_identity.CASE_TYPE if identity_mode else CASE_TYPE
     conn.execute("INSERT INTO objects SELECT DISTINCT ?, case_id, ?, '{}' FROM staged", [log_id, case_type])
     conn.execute("INSERT INTO event_objects SELECT ?, 'e' || n, case_id, ? FROM staged", [log_id, case_type])

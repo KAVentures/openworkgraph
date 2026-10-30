@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO, StringIO
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -105,6 +106,49 @@ def test_bulk_csv_blank_resources_match_streaming_reader_and_quality_counts():
     with pytest.raises(workspace.EventLogWorkspaceError, match="control characters"):
         _import('case,activity,time,who\n'
                 'c1,Open,2024-01-01T09:00:00Z," \t "\n', "csv", mapping=MAPPING)
+
+
+
+def test_bulk_csv_unicode_whitespace_resource_presence_matches_streaming_reader():
+    """All allowed Unicode blank IDs normalize at import, without relaxing raw validation."""
+    spaces = formats.RESOURCE_PRESENCE_WHITESPACE
+    assert len(spaces) == 19 and len(set(spaces)) == len(spaces)
+    assert all(char.isspace() and not char.strip() for char in spaces)
+    padded = "\u2009worker\u00a0"
+    text = ("case,activity,time,who\n"
+            + "".join(f"c{i},Review,2024-01-01T00:{i:02d}:00Z,{char}\n"
+                      for i, char in enumerate(spaces, 1))
+            + f"c20,Close,2024-01-01T00:20:00Z,{padded}\n")
+    expected = [row.resource for row in formats.read_csv(
+        StringIO(text), case_column="case", activity_column="activity",
+        timestamp_column="time", resource_column="who")
+        if isinstance(row, formats.EventRecord)]
+    assert expected == [""] * len(spaces) + [padded]
+
+    made = _import(text, "csv", mapping=MAPPING)
+    assert made["events"] == len(expected) and made["rejected_events"] == 0
+    report = quality.quality(made["log_id"])["reports"][0]
+    assert report["source_sha256"] == hashlib.sha256(text.encode()).hexdigest()
+    assert report["diagnostics"]["events_without_resource"] == len(spaces)
+    conn = workspace._connect()
+    try:
+        stored = [row[0] for row in conn.execute(
+            """SELECT resource FROM events WHERE log_id = ?
+               ORDER BY CAST(substr(event_id, 2) AS INTEGER)""",
+            [made["log_id"]]).fetchall()]
+        assert report["content_sha256"] == quality.content_digest(conn, made["log_id"])
+        assert report["content_sha256_v2"] == quality.content_digest_v2(conn, made["log_id"])
+    finally:
+        conn.close()
+    assert stored == expected
+    assert "worker" not in str(report["diagnostics"])
+
+    # C1 controls are forbidden by both readers; they must never be normalized
+    # into accepted missing identifiers or leak the offending source value.
+    with pytest.raises(workspace.EventLogWorkspaceError, match="control characters"):
+        _import('case,activity,time,who\n'
+                'c1,Review,2024-01-01T00:00:00Z,"\u0085"\n',
+                "csv", mapping=MAPPING)
 
 
 def test_csv_missing_columns_and_bad_mapping_are_safe_errors():
