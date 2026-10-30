@@ -92,6 +92,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
     """Validated, de-duplicated, chronologically ordered observations."""
     identities: dict[str, tuple[str, str, str, str]] = {}
     conflicts: set[str] = set()
+    invalid_claim_events: set[str] = set()
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for event in events:
@@ -112,6 +113,10 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
             claimed = metadata.get("resource_reference") if isinstance(metadata.get("resource_reference"), dict) else {}
             claimed_ref = str(claimed.get("resource_ref") or "").lower()
+            # A malformed explicit reference is not an unreferenced observation.
+            # It must not regain linking authority through a tab or transfer.
+            if claimed:
+                invalid_claim_events.add(event_id)
             if _RESOURCE.fullmatch(claimed_ref):
                 conflicts.add(claimed_ref)
         rows.append({
@@ -120,13 +125,17 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             "tab": _field(event, "tab_context_id", _TAB),
             "transfer": _field(event, "clipboard_transfer_id", _TRANSFER),
             "scope": _link_scope(event),
+            "reference_tainted": False,
             "app": str(event.get("app") or "").strip().casefold()[:120],
             "action": _token(event.get("event_type")),
             "source": _token(event.get("source")),
         })
-    # A reference seen with conflicting identities never links anything.
+    # A reference seen with conflicting identities never links anything,
+    # including via weaker signals that would otherwise treat it as loose.
+    # Invalid explicit claims are similarly ineligible for ephemeral linking.
     for row in rows:
-        if row["ref"] in conflicts:
+        if row["ref"] in conflicts or row["event_id"] in invalid_claim_events:
+            row["reference_tainted"] = True
             row["ref"] = ""
     rows.sort(key=lambda row: (row["observed_at"], row["event_id"]))
     return rows, len(conflicts)
@@ -155,7 +164,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         # Opaque IDs are not globally unique: two tenants, people, devices or
         # capture sessions can legitimately reuse the same tab/transfer token.
         # Do not use missing/invalid identity as a wildcard.
-        if row["scope"] is not None:
+        if row["scope"] is not None and not row["reference_tainted"]:
             if row["transfer"]:
                 by_transfer[(row["scope"], row["transfer"])].append(row["event_id"])
             if row["tab"]:
@@ -185,10 +194,11 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 candidates.append({"event_id": row["event_id"], "toward_event_id": previous["event_id"],
                                    "relation": "same_tab_unreferenced"})
     for index, row in enumerate(rows):
-        if row["ref"] or row["tab"] or row["transfer"] or not row["app"]:
+        if row["reference_tainted"] or row["ref"] or row["tab"] or row["transfer"] or not row["app"]:
             continue
         for neighbour in (rows[index - 1] if index else None, rows[index + 1] if index + 1 < len(rows) else None):
             if (row["scope"] is not None and neighbour is not None
+                    and not neighbour["reference_tainted"]
                     and neighbour["scope"] == row["scope"] and neighbour["app"] == row["app"]):
                 candidates.append({"event_id": row["event_id"], "toward_event_id": neighbour["event_id"],
                                    "relation": "surface_continuity"})
