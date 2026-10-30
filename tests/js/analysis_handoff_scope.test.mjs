@@ -168,3 +168,28 @@ test('old auth wait does not start a superseded evidence request', async () => {
   h.reply(h.reads[0], h.preview('all', 'authorized')); await settle();
   assert.equal(h.summary.textContent.includes('recorded events'), true);
 });
+
+test('open handoff is proactively disabled and announced stale before any click', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed-week')); await open;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  // This is synchronous; a slow preview cannot leave old export controls active.
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-reviewed-week');
+  assert.equal(h.tickets.length, 0);
+  h.reply(h.reads[2], h.preview('all', 'all-period')); await settle();
+  const again = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'new-request')); await again;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-new-request');
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-new-request']);
+});
