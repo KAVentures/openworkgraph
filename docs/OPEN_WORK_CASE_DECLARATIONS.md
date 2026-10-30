@@ -180,3 +180,24 @@ outcome, source receipt or agent execution permission is inferred.
 The original v1 ledger is an ordinary SQLite rowid table with a `TEXT PRIMARY KEY` opaque work-item reference. Its v2 incarnation-token upgrade first fetches at most 51 **integer rowids** (50 allowed plus an overflow sentinel) and updates tokens by `rowid`. It does not materialize or rebind arbitrarily large native `work_item_ref` TEXT values from a damaged legacy database merely to perform migration. More than 50 legacy rows still fail closed before any schema alteration or token generation; an exactly 50-row valid ledger remains supported. A synthetic malformed 256-KiB reference regression inspects the migration SQL and verifies both surviving rows receive distinct tokens without changing their original references.
 
 This bounds migration *identifier enumeration*, not SQLite file size, page-cache allocation, later full-row reads, or a malicious local database. The normal reader still validates opaque reference syntax and excludes malformed rows; it does not turn a malformed ref into a verified business fact. No new source authority, tenant-wide revocation guarantee or independently verified outcome follows from this change.
+
+
+## Persisted approval timestamp parser bound
+
+The internal writer emits canonical UTC ISO-8601 owner-approval timestamps of
+at most 32 characters. A damaged auxiliary SQLite row with a non-text or
+more-than-40-character `created_at`, `updated_at` or `expires_at` is now
+rejected **before calling Python's ISO timestamp parser**. Existing canonical
+UTC, review-window, retention, and dependency-approval checks remain
+mandatory. A rejected prerequisite withholds its entire explicitly declared
+dependent chain; a subsequent authorized owner save prunes that chain while
+preserving unrelated reviewed declarations. It never converts a malformed
+clock into a new approval or source-confirmed outcome.
+
+Synthetic regressions verify a parser tripwire on oversized/non-text values,
+plus 256-KiB corruption of each of the three timestamp columns, read-time
+withholding, and transactional pruning. This only bounds **Python timestamp
+parsing**, not SQLite's prior materialization of an oversized TEXT cell,
+filesystem growth, atomic cross-process source revocation, or real provider
+and customer-outcome validation. No routes, agent permissions or source reads
+are added.
