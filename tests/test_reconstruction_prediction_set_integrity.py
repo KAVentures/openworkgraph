@@ -923,3 +923,72 @@ def test_invalid_numeric_request_options_fail_before_artifacts_or_provider(
         ])
     assert exc.value.code == 2
     assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("bad", [
+    float("nan"),
+    float("inf"),
+    -float("inf"),
+    {"nested": [{"ratio": float("nan")}]},
+    {"non_json_key": {1: "ambiguous"}},
+    {"tuple": ("python-only",)},
+    object(),
+])
+def test_selected_blind_evidence_preflight_rejects_noncanonical_json(bad):
+    from evals.reconstruction.run_external import _validate_selected_blind_cases
+
+    case = _case("case-a")
+    case["presented_evidence"][0]["attribute"] = bad
+    with pytest.raises(ValueError, match="blind evidence must be canonical finite JSON"):
+        _validate_selected_blind_cases([case])
+
+
+def test_selected_blind_evidence_preflight_accepts_finite_nested_json():
+    from evals.reconstruction.run_external import (
+        _blind_evidence_digest, _validate_selected_blind_cases,
+    )
+
+    case = _case("case-a")
+    case["presented_evidence"][0]["attribute"] = {
+        "ratio": 0.125, "count": 42, "flags": [True, False, None],
+        "nested": {"note": "synthetic"},
+    }
+    assert _validate_selected_blind_cases([case]) is None
+    assert len(_blind_evidence_digest(case["case_id"], case["presented_evidence"])) == 64
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_noncanonical_blind_evidence_fails_before_artifacts_or_model_call(
+    tmp_path, monkeypatch, resume,
+):
+    from evals.reconstruction import run_external
+
+    case = _case("case-a")
+    case["presented_evidence"][1]["attributes"] = {
+        "nested": [{"invalid": float("inf")}],
+    }
+    output_dir = tmp_path / "results"
+    if resume:
+        output_dir.mkdir()
+        predictions_path = output_dir / "synthetic-model.predictions.jsonl"
+        predictions_path.write_text(
+            json.dumps(_prediction("case-a")) + "\n", encoding="utf-8"
+        )
+        before = predictions_path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [case])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("invalid evidence must not call model"))
+    ))
+    with pytest.raises(ValueError, match="blind evidence must be canonical finite JSON"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(output_dir),
+            *(["--resume"] if resume else []),
+        ])
+    if resume:
+        assert predictions_path.read_bytes() == before
+        assert not (output_dir / "synthetic-model.report.json").exists()
+        assert not (output_dir / "synthetic-model.metadata.json").exists()
+    else:
+        assert not output_dir.exists()
