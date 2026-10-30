@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from evals.reconstruction.run_external import _load_resume_predictions
+from evals.reconstruction.run_external import _load_resume_predictions, _validate_prediction
 from evals.reconstruction.scoring import aggregate
 
 
@@ -109,3 +109,24 @@ def test_resume_does_not_recover_from_truncated_jsonl_silently(tmp_path):
     path.write_text('{"case_id":"case-a"', encoding="utf-8")
     with pytest.raises(json.JSONDecodeError):
         _load_resume_predictions(path, {"case-a"})
+
+
+@pytest.mark.parametrize("returned_case_id", ["another-case", "", 42, None])
+def test_model_response_wrong_case_id_is_refused_without_relabeling(returned_case_id):
+    prediction = {
+        "case_id": returned_case_id,
+        "workflows": [{"event_ids": ["task"]}],
+    }
+    with pytest.raises(ValueError, match="case_id does not match"):
+        _validate_prediction(prediction, "case-a", {"task"})
+    assert prediction["case_id"] == returned_case_id
+
+
+def test_model_response_may_omit_case_id_or_match_requested_case():
+    for prediction in (
+        {"workflows": [{"event_ids": ["task"]}]},
+        {"case_id": "case-a", "workflows": [{"event_ids": ["task"]}]},
+    ):
+        validated = _validate_prediction(prediction, "case-a", {"task"})
+        assert validated["case_id"] == "case-a"
+        assert validated["workflows"][0]["event_ids"] == ["task"]
