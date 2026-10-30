@@ -66,3 +66,24 @@ For **synthetic/offline** selected-record offset reads, `reconcile_planned_repla
 Mismatched plans, invalid scope, out-of-order/overlapping offsets, conflicting same-revision evidence, backwards counters and missing consent/current grant fail closed. A missing incident remains **missing-unknown**, not deleted, closed or completed. A higher counter is **source-reported**, not authenticated chronology or a verified business outcome. `same_plans_checked`, `plan_sequence_checked` and `pages_per_read` report only local consistency; historical completeness, source clock/timezone and outcomes remain unverified, with no checkpoint or append authorization.
 
 Matching offline plans **cannot prove** an HTTP client fetched those URLs, that an ACL/provider returned a stable complete snapshot, or that consent/grant remains current during later persistence. This helper does not add credentials, transport, storage, source-revocation fencing or real ServiceNow acceptance. Production transport must authenticate request/response identity and atomically fence consent/tenant/grant at append/checkpoint time.
+
+
+## Selected incidents absent from both replay reads
+
+Both `reconcile_replayed_pages` and `reconcile_planned_replays` now return
+`unobserved_in_either_read_ids`: the sorted exact selected incident IDs that
+appeared in **neither** validated response. This is distinct from
+`missing_unknown_ids` (observed earlier, absent later) and
+`newly_observed_ids` (absent earlier, observed later). For example, two empty
+responses for a three-ID selection disclose all three as unobserved rather than
+presenting an apparently complete, consistent empty replay. The list is derived
+only from the explicitly consented selected scope, never from a provider search
+or an inferred record identity. The list is bounded by the existing eight-ID
+selection limit and remains tenant/provider namespaced.
+
+An empty `unobserved_in_either_read_ids` list **does not** prove source
+completeness, current ACLs, snapshot stability, authentic transport, valid
+provider chronology, deletion, a verified business outcome or permission to
+append/advance a checkpoint. All existing unknown and non-execution flags
+remain unchanged. Synthetic fake-response tests cover both replay entrypoints,
+empty, partial and fully observed selections, revocation and tenant scoping.
