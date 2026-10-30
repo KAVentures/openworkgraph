@@ -542,15 +542,16 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
             if (db is not None and reviewed and
                 db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] <= _MAX_ITEMS):
                 # A scoped subset cannot certify a damaged global ledger.
-                cutoff = (current - timedelta(days=days)).isoformat()
+                # SQLite TEXT comparisons are not chronological for mixed
+                # ISO-8601 precision: a whole-second '+00:00' sorts after
+                # a fractional-second '.123+00:00' at the same second.
+                # The global count is <=50, so read a bounded scope subset
+                # and apply strict parsed-UTC temporal checks below instead.
                 candidates = db.execute(
                     "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
                     "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
-                    "FROM declarations WHERE scope_ref=? AND expires_at>? AND created_at>? "
-                    "AND created_at<=? AND updated_at<=? "
-                    "ORDER BY updated_at DESC,work_item_ref LIMIT ?",
-                    (scope_ref, current.isoformat(), cutoff,
-                     current.isoformat(), current.isoformat(), _MAX_ITEMS),
+                    "FROM declarations WHERE scope_ref=? LIMIT ?",
+                    (scope_ref, _MAX_ITEMS),
                 ).fetchall()
         # A review can be removed/replaced or retention reduced while the
         # bounded SQLite read is in progress. Recheck after closing the DB,
@@ -598,6 +599,11 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                     break
                 available.update(newly_available)
             rows = [r for r in candidates if r[0] in available]
+            # All returned rows passed canonical UTC validation. Sort by
+            # actual instants, not the non-chronological SQLite TEXT order.
+            # Stable ref tie-break preserves deterministic equal-time reads.
+            rows.sort(key=lambda row: row[0])
+            rows.sort(key=lambda row: datetime.fromisoformat(row[7]), reverse=True)
     return {
         "format": "openworkgraph.local-case-declarations.v1",
         "items": [_public(row) for row in rows],
