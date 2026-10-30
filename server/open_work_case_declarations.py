@@ -127,23 +127,29 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         db.close()
 
 
-def _reviewed(now: datetime) -> dict[str, datetime]:
+def _reviewed(now: datetime) -> dict[str, tuple[datetime, datetime]]:
     # Preserve each admitting review's exact expiry: a declaration must not
     # outlive the human review that authorized its creation. Merely renewing
     # a lapsed review cannot revive an older declaration.
-    result: dict[str, datetime] = {}
+    result: dict[str, tuple[datetime, datetime]] = {}
     for item in list_review_intentions(now=now)["items"]:
         try:
+            admitted = datetime.fromisoformat(item["created_at"])
             expiry = datetime.fromisoformat(item["expires_at"])
         except (KeyError, TypeError, ValueError):
             continue
-        if expiry.tzinfo is None or expiry <= now:
+        if (admitted.tzinfo is None or expiry.tzinfo is None or
+            admitted > now or expiry <= now):
             continue
-        result[item["work_item_ref"]] = expiry.astimezone(timezone.utc)
+        # A replacement human review is not a reapproval of an earlier
+        # owner-declared goal or dependency graph, even before expiry.
+        result[item["work_item_ref"]] = (
+            admitted.astimezone(timezone.utc), expiry.astimezone(timezone.utc))
     return result
 
 
-def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: dict[str, datetime]) -> None:
+def _prune(db: sqlite3.Connection, now: datetime, days: int,
+           reviewed: dict[str, tuple[datetime, datetime]]) -> None:
     cutoff = (now - timedelta(days=days)).isoformat()
     current = now.isoformat()
     # A reviewed prerequisite can expire before a dependent if its lifetime
@@ -157,7 +163,8 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: dict[str,
     scopes = {ref: scope for ref, scope, _deps, _created, _expires in rows}
     revoked = {
         ref for ref, _scope, _deps, created, expires in rows
-        if ref not in reviewed or expires <= current or created <= cutoff
+        if (ref not in reviewed or expires <= current or created <= cutoff or
+            datetime.fromisoformat(created) < reviewed[ref][0])
     }
     # An absent or wrong-scope prerequisite is not an owner-approved edge.
     # Without this guard, a later re-declaration of the missing prerequisite
@@ -270,6 +277,12 @@ def save_case_declaration(
             if (work_item_ref not in live_reviewed or
                 any(dep not in live_reviewed for dep in dependencies)):
                 raise CaseDeclarationError("case or dependency review revoked before declaration save")
+            # A review can be replaced after the first admission snapshot,
+            # without ever disappearing from the queue. Refuse that change
+            # rather than attaching a stale declaration to a new review.
+            if any(reviewed[ref] != live_reviewed[ref]
+                   for ref in (work_item_ref, *dependencies)):
+                raise CaseDeclarationError("case or dependency review changed before declaration save")
             live_days = _retention_days()
             if live_days is None:
                 raise CaseDeclarationError("durable review retention revoked before declaration save")
@@ -284,7 +297,7 @@ def save_case_declaration(
                     raise CaseDeclarationError("local declaration limit reached")
                 created = current.isoformat()
                 expires = min(current + timedelta(days=days),
-                              live_reviewed[work_item_ref]).isoformat()
+                              live_reviewed[work_item_ref][1]).isoformat()
                 revision = 1
             else:
                 if old[1] != scope_ref:
@@ -321,7 +334,7 @@ def save_case_declaration(
             expires = min(
                 datetime.fromisoformat(expires),
                 datetime.fromisoformat(created) + timedelta(days=days),
-                live_reviewed[work_item_ref],
+                live_reviewed[work_item_ref][1],
                 *dependency_expiries,
             ).isoformat()
             if old is None:
@@ -375,7 +388,11 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 # review queue still contains that opaque case reference.
                 # Close this condition transitively: A expired, B -> A, C -> B
                 # must suppress BOTH B and C, never expose C -> hidden B.
-                available = {r[0] for r in candidates if r[0] in reviewed}
+                available = {
+                    r[0] for r in candidates
+                    if r[0] in reviewed and
+                    datetime.fromisoformat(r[6]) >= reviewed[r[0]][0]
+                }
                 while True:
                     supported = {
                         r[0] for r in candidates
