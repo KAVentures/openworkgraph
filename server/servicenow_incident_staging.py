@@ -57,6 +57,16 @@ class SelectedIncidents:
             raise StagingError("Selected-record read is not currently authorized")
 
 
+def _validate_updated(value: str) -> None:
+    """Require a real provider-local calendar timestamp, without claiming UTC."""
+    if type(value) is not str or not _UPDATED.fullmatch(value):
+        raise StagingError("Invalid provider-local update timestamp")
+    try:
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError as exc:
+        raise StagingError("Invalid provider-local update timestamp") from exc
+
+
 def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
               since: str | None = None) -> dict[str, Any]:
     """Construct a fixed-host GET plan; never follows provider-supplied links."""
@@ -66,12 +76,7 @@ def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
         raise StagingError("Page size outside bounded range")
     if since is not None:
-        if type(since) is not str or not _UPDATED.fullmatch(since):
-            raise StagingError("Invalid provider-local update watermark")
-        try:
-            datetime.strptime(since, "%Y-%m-%d %H:%M:%S")
-        except ValueError as exc:
-            raise StagingError("Invalid provider-local update watermark") from exc
+        _validate_updated(since)
     query = "sys_idIN" + ",".join(sorted(scope.sys_ids))
     if since is not None:
         query += "^sys_updated_on>=" + since
@@ -126,8 +131,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50) -> di
         if type(sys_id) is not str or not _ID.fullmatch(sys_id) or sys_id not in selected:
             raise StagingError("Provider returned an unselected or invalid incident")
         updated = item.get("sys_updated_on")
-        if type(updated) is not str or not _UPDATED.fullmatch(updated):
-            raise StagingError("Invalid provider-local update timestamp")
+        _validate_updated(updated)
         mod = item.get("sys_mod_count")
         if type(mod) is not str or not re.fullmatch(r"(?:0|[1-9][0-9]{0,11})", mod):
             raise StagingError("Invalid provider modification counter")
