@@ -80,20 +80,24 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
 
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-        rows = conn.execute(f"""SELECT path, count(*) AS cases FROM (
+        rows = conn.execute(f"""SELECT path, count(*) AS cases, count(*) OVER () AS observed_variants FROM (
               SELECT string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
             GROUP BY path ORDER BY cases DESC, path LIMIT {max_variants}""").fetchall()
+        observed_variants = rows[0][2] if rows else 0
         aligned_cases = fitting_cases = 0
         fitness_sum = 0.0
         skipped: dict[str, int] = {}
         inserted: dict[str, int] = {}
         too_long = 0
+        variants_aligned = variants_skipped_too_long = 0
         worst: list[dict[str, Any]] = []
-        for joined, cases in rows:
+        for joined, cases, _ in rows:
             trace = joined.split(_SEP)
             if len(trace) > MAX_ALIGNED_TRACE_LENGTH:
                 too_long += cases
+                variants_skipped_too_long += 1
                 continue
+            variants_aligned += 1
             best_cost, best_moves, best_path = None, [], 0
             for index, path in enumerate(paths):
                 cost, moves = _align(trace, path)
@@ -119,10 +123,20 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
                     for a, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:50]]
         return {
             "model_paths": len(paths),
+            "max_variants_applied": max_variants,
+            "variants_selected": len(rows),
+            "variants_observed": observed_variants,
+            "variants_not_selected_variant_limit": observed_variants - len(rows),
+            "variants_aligned": variants_aligned,
+            "variants_skipped_trace_too_long": variants_skipped_too_long,
             "cases": total_cases,
             "aligned_cases": aligned_cases,
             "aligned_share": round(aligned_cases / total_cases, 6) if total_cases else 0,
             "cases_not_aligned_trace_too_long": too_long,
+            # Distinguish ranked-variant cap omissions from selected traces too long to align.
+            # These two counts plus aligned_cases partition all selected log cases.
+            "cases_not_aligned_variant_limit": total_cases - aligned_cases - too_long,
+            "variant_limit_truncated": total_cases > aligned_cases + too_long,
             "fitness": round(fitness_sum / aligned_cases, 6) if aligned_cases else None,
             "fitting_cases": fitting_cases,
             "fitting_share": round(fitting_cases / aligned_cases, 6) if aligned_cases else None,
