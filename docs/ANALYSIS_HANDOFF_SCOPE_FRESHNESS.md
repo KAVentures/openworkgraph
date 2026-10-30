@@ -63,9 +63,17 @@ though the existing backend still applies its authorization checks.
   is still current; a period change leaves both controls disabled. A fresh
   preparation resets the detailed-chronology checkbox to unchecked. No
   background export or automatic retry occurs.
+- Copy is a single-flight, user-initiated local clipboard operation. While
+  the permission prompt/write is pending, Copy is disabled and its status
+  announces local copying; repeated clicks cannot enqueue duplicate writes.
+  Success or failure re-enables Copy only if the prepared period is still
+  current, allowing an explicit retry after a permission failure. No AI
+  invocation, upload or automatic retry occurs.
 - A delayed clipboard failure after the selected period changes retains the
   stale-period warning rather than replacing it with a generic clipboard
-  message. A successful in-flight clipboard write cannot be revoked.
+  message. A successful in-flight clipboard write cannot be revoked: the
+  status discloses that it copied the **previous** period and the old Copy
+  button remains disabled.
 - No AI, business-system write, automatic upload, source authorization,
   recorder setting, retention rule, or REST/MCP contract changes.
 
@@ -79,7 +87,9 @@ download, an old authentication wait cannot start a stale preview read, a forged
 export ticket, the detailed-evidence option is frozen and accurately reported during a pending ticket (including programmatic mutation), stale tickets cannot re-enable it, ticket failures allow a deliberate retry, forged or mismatched
 export links cannot change the scope/redaction/detail settings or leave the
 local endpoint, UTC-equivalent range bounds still pass, and delayed clipboard
-errors preserve the stale-period warning.
+errors preserve the stale-period warning. Deferred clipboard checks also cover
+single-flight Copy, a permission-failure retry and successful completion after
+a period change without re-enabling the old control.
 
 These are deterministic JavaScript contract checks, **not** an actual
 consenting-user UX study, browser accessibility certification, provider
