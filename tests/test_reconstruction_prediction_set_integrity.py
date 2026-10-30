@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -474,7 +475,11 @@ def test_runner_rejects_changed_same_id_resume_before_request(tmp_path, monkeypa
 
 
 def _resume_manifest(*, cases=2):
+    from evals.reconstruction.run_external import _selected_blind_corpus_digest
+
+    selected = [_case("case-a"), _case("case-b")][:cases]
     return {
+        "selected_blind_corpus_sha256": _selected_blind_corpus_digest(selected),
         "model_requested": "synthetic-model",
         "base_url": "https://api.openai.com/v1",
         "temperature": None,
@@ -1134,3 +1139,97 @@ def test_standalone_scorer_jsonl_rejects_nonobject_with_line_number(tmp_path):
     path.write_text("\n[]\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"line 2: prediction must be an object"):
         _jsonl(path)
+
+
+def test_selected_blind_corpus_digest_tracks_same_id_changes_and_order_not_truth():
+    from evals.reconstruction.run_external import _selected_blind_corpus_digest
+
+    cases = [_case("case-a"), _case("case-b")]
+    first = _selected_blind_corpus_digest(cases)
+    changed_truth = deepcopy(cases)
+    changed_truth[0]["ground_truth"]["workflows"] = []
+    assert _selected_blind_corpus_digest(changed_truth) == first
+    changed_evidence = deepcopy(cases)
+    changed_evidence[0]["presented_evidence"][0]["resource_ref"] = "different-record"
+    assert _selected_blind_corpus_digest(changed_evidence) != first
+    assert _selected_blind_corpus_digest(list(reversed(cases))) != first
+    reordered_events = deepcopy(cases)
+    reordered_events[0]["presented_evidence"].reverse()
+    assert _selected_blind_corpus_digest(reordered_events) != first
+    rekeyed = deepcopy(cases)
+    rekeyed[0]["presented_evidence"][0] = dict(
+        reversed(list(rekeyed[0]["presented_evidence"][0].items()))
+    )
+    assert _selected_blind_corpus_digest(rekeyed) == first
+
+
+def test_resume_rejects_changed_selected_blind_corpus_with_legacy_rows_before_request(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    path = _write_jsonl(tmp_path, [_prediction("case-a")]).rename(
+        tmp_path / "synthetic-model.predictions.jsonl"
+    )
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
+    original_rows, original_metadata = path.read_bytes(), metadata_path.read_bytes()
+    changed = deepcopy(_case("case-a"))
+    changed["presented_evidence"][0]["resource_ref"] = "new-record-same-event-id"
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [changed])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("changed corpus must not call provider"))
+    ))
+    with pytest.raises(ValueError, match="resume metadata mismatch for selected_blind_corpus_sha256"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert path.read_bytes() == original_rows
+    assert metadata_path.read_bytes() == original_metadata
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+def test_legacy_manifest_without_corpus_digest_is_usable_but_unattested(tmp_path):
+    from evals.reconstruction.run_external import (
+        _load_resume_metadata, _selected_blind_corpus_digest,
+    )
+
+    manifest = _resume_manifest(cases=1)
+    manifest.pop("selected_blind_corpus_sha256")
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = {key: manifest[key] for key in (
+        "model_requested", "base_url", "temperature", "split", "cases"
+    )}
+    expected["selected_blind_corpus_sha256"] = _selected_blind_corpus_digest(
+        [_case("case-a")]
+    )
+    receipts, unverified = _load_resume_metadata(path, expected, {"case-a"})
+    assert [row["case_id"] for row in receipts] == ["case-a"]
+    assert unverified is True
+
+
+def test_new_runner_manifest_records_selected_blind_corpus_digest(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    case = _case("case-a")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [case])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        _prediction("case-a"), {"response_id": "synthetic-only"}
+    ))
+    run_external.main([
+        "--model", "synthetic-model", "--output-dir", str(tmp_path),
+    ])
+    metadata = json.loads(
+        (tmp_path / "synthetic-model.metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["selected_blind_corpus_sha256"] == (
+        run_external._selected_blind_corpus_digest([case])
+    )
+    assert metadata["resume_provenance_unverified"] is False
