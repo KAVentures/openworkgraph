@@ -123,6 +123,10 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
             "aligned_cases": aligned_cases,
             "aligned_share": round(aligned_cases / total_cases, 6) if total_cases else 0,
             "cases_not_aligned_trace_too_long": too_long,
+            # Distinguish ranked-variant cap omissions from selected traces too long to align.
+            # These two counts plus aligned_cases partition all selected log cases.
+            "cases_not_aligned_variant_limit": total_cases - aligned_cases - too_long,
+            "variant_limit_truncated": total_cases > aligned_cases + too_long,
             "fitness": round(fitness_sum / aligned_cases, 6) if aligned_cases else None,
             "fitting_cases": fitting_cases,
             "fitting_share": round(fitting_cases / aligned_cases, 6) if aligned_cases else None,
