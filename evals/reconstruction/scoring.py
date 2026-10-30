@@ -105,10 +105,19 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
         mixed += len(pset) - max(overlaps, default=0)
         fragments += bool(pset) and sum(bool(n) for n in overlaps) == 1
     contamination = mixed / assigned if assigned else 0.0
-    unknown_ids = set().union(*[_set(p.get("event_ids")) for p in predicted]) - all_event_ids if predicted else set()
+    assigned_ids = set().union(*(_set(p.get("event_ids")) for p in predicted)) if predicted else set()
+    unknown_ids = assigned_ids - all_event_ids
 
     unassigned = _set(prediction.get("unassigned_event_ids"))
-    noise_rejected = len(truth_noise & unassigned) / len(truth_noise) if truth_noise else 1.0
+    conflicting_ids = assigned_ids & unassigned
+    noise_assigned = truth_noise & assigned_ids
+    # An interruption is rejected only when explicitly unassigned AND absent
+    # from every predicted workflow. Contradictory assignments must not earn
+    # credit toward the preregistered interruption-rejection acceptance gate.
+    noise_rejected = (
+        len(truth_noise & (unassigned - assigned_ids)) / len(truth_noise)
+        if truth_noise else 1.0
+    )
 
     true_relevant = set()
     true_ui = set()
@@ -151,6 +160,8 @@ def score_case(case: dict[str, Any], prediction: dict[str, Any]) -> dict[str, An
         "one_to_one_assignment_error_rate": round(fp / (tp + fp), 6) if tp + fp else 0.0,
         "pure_fragment_excess": max(0, fragments - len(truth)),
         "unknown_event_id_count": len(unknown_ids),
+        "assigned_and_unassigned_event_id_count": len(conflicting_ids),
+        "noise_assigned_event_count": len(noise_assigned),
         "membership_observability": "ambiguous" if "membership" in (case.get("ground_truth") or {}).get("uncertainty_dimensions", []) else "not_flagged",
         "uncertainty_dimensions_expected": (case.get("ground_truth") or {}).get("uncertainty_dimensions", []),
         "workflow_count_exact": len(predicted) == len(truth),
