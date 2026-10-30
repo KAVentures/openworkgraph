@@ -166,7 +166,7 @@ def test_duplicate_external_identity_refuses_all_intermediate_deactivation(servi
 @pytest.mark.parametrize('changes',[
     {'active':0},{'active':'false'},{'active':None},{'password':'NEVER_STORE'},
     {'displayName':'x'*121},{'displayName':'has\ncontrol'},{'externalId':'x'*201},
-    {'USERNAME':'duplicate@acme.test'},{'schemas':[]},{'emails':[{'value':'other@acme.test'}]},
+    {'USERNAME':'duplicate@acme.test'},{'schemas':[]},{'phoneNumbers':[{'value':'other@acme.test'}]},
 ])
 def test_unsupported_or_ambiguous_user_values_are_refused_without_roster_changes(service,provider,changes):
     with pytest.raises(scim.Error):service.create_user(*provider,user(**changes))

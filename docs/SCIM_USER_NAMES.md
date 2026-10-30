@@ -48,8 +48,9 @@ Bulk/PUT/DELETE remain refused.
 
 Schema discovery advertises these six children. Existing `attributes` and
 `excludedAttributes` selection accepts `name` and its supported children for
-GET and POST search; selected reads retain the full-resource ETag. Name filters,
-email arrays/aliases, password, unsupported complex attributes and extension
+GET and POST search; selected reads retain the full-resource ETag. Optional
+[contact emails](SCIM_USER_EMAILS.md) have a separate bounded array contract. Name
+filters, login aliases, password, unsupported complex attributes and extension
 schemas are still refused. This is not full SCIM or real IdP certification.
 
 The additive provider/employee-keyed table has no rows for old unassigned
