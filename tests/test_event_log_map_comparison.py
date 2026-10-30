@@ -77,6 +77,15 @@ def test_timed_gap_interval_discloses_reservoir_cap_and_sample_medians(monkeypat
     assert "sampled_gaps_first" not in ab, "sampling support belongs to the timed interval only"
     assert result["intervals_assume_independent_cohorts"] is True
 
+    # The reservoir must operate on the *matching path*, not sample all
+    # directly-follows transitions before filtering. A→B and B→C coexist
+    # with other paths in both cohorts, but each has >=4 transitions.
+    bc = _paths(result)[("B", "C")]
+    assert (bc["transitions_in_first"], bc["transitions_in_second"]) == (30, 30)
+    bc_gap = bc["median_gap_difference"]
+    assert (bc_gap["sampled_gaps_first"], bc_gap["sampled_gaps_second"]) == (4, 4)
+    assert bc_gap["sampling_truncated_first"] and bc_gap["sampling_truncated_second"]
+
 
 
 def test_side_by_side_maps_and_overlap_warning():
