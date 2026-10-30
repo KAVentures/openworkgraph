@@ -63,7 +63,7 @@ def test_sampling_and_thinning_keep_bounds(monkeypatch):
     sampled = dots.dotted_chart(log, max_cases=10)
     assert sampled["coverage"]["cases_shown"] == 10 and sampled["coverage"]["cases_sampled"] is True
     ids = [c["case_id"] for c in sampled["cases"]]
-    assert ids[0] == "c000" and ids == sorted(ids) and ids[-1] >= "c040"       # spread across the whole log
+    assert ids[0] == "c000" and ids == sorted(ids) and ids[-1] == "c049"       # spread across the whole log
     assert sampled["coverage"]["events"] == 150
     assert sampled["coverage"]["events_in_shown_cases"] == sampled["coverage"]["points_shown"] == 30
     assert sampled["coverage"]["events_omitted_by_case_sampling"] == 120
@@ -79,6 +79,34 @@ def test_sampling_and_thinning_keep_bounds(monkeypatch):
     for bad in ({"time": "x"}, {"order": "x"}, {"max_cases": 0}, {"max_cases": 5000}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             dots.dotted_chart(log, **bad)
+
+
+
+def test_sampled_rows_include_both_ordered_endpoints_and_one_row_is_deterministic():
+    log = _log(cases=50)
+    start = dots.dotted_chart(log, max_cases=10, order="start")
+    start_ids = [c["case_id"] for c in start["cases"]]
+    assert len(start_ids) == len(set(start_ids)) == 10
+    assert start_ids[0] == "c000" and start_ids[-1] == "c049"
+
+    # Duration order is the reverse of start order for this fixture.
+    duration = dots.dotted_chart(log, max_cases=10, order="duration")
+    duration_ids = [c["case_id"] for c in duration["cases"]]
+    assert len(duration_ids) == len(set(duration_ids)) == 10
+    assert duration_ids[0] == "c049" and duration_ids[-1] == "c000"
+
+    two = dots.dotted_chart(log, max_cases=2, order="start")
+    assert [c["case_id"] for c in two["cases"]] == ["c000", "c049"]
+    assert two["coverage"]["cases_sampled"] is True
+
+    one = dots.dotted_chart(log, max_cases=1, order="duration")
+    assert [c["case_id"] for c in one["cases"]] == ["c049"]
+    assert one["coverage"]["cases_shown"] == 1
+
+    full = dots.dotted_chart(log, max_cases=50, order="start")
+    assert [c["case_id"] for c in full["cases"]] == [f"c{i:03d}" for i in range(50)]
+    assert full["coverage"]["cases_sampled"] is False
+    assert full["coverage"]["events_omitted_by_case_sampling"] == 0
 
 
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
