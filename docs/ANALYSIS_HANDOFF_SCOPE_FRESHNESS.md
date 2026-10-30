@@ -54,11 +54,15 @@ though the existing backend still applies its authorization checks.
 - A current, explicitly prepared request still supports the existing
   redacted CSV ZIP and optional detailed chronological evidence. Export
   tickets remain subject to the existing local backend permission checks.
-- While an export ticket is pending, Download is disabled and the modal
-  announces local preparation. Repeated clicks for the same handoff cannot
-  create concurrent tickets. A ticket failure restores the button for an
-  explicit retry only if that period is still current; a period change never
-  re-enables the stale handoff. No background export or automatic retry occurs.
+- While an export ticket is pending, Download **and** the detailed-chronology
+  checkbox are disabled. The requested detail level is captured before the
+  asynchronous ticket call and announced in the pending and successful-download
+  status; subsequent DOM changes cannot rewrite that already-issued request.
+  Repeated clicks for the same handoff cannot create concurrent tickets. A
+  ticket failure restores the controls for an explicit retry only if that period
+  is still current; a period change leaves both controls disabled. A fresh
+  preparation resets the detailed-chronology checkbox to unchecked. No
+  background export or automatic retry occurs.
 - A delayed clipboard failure after the selected period changes retains the
   stale-period warning rather than replacing it with a generic clipboard
   message. A successful in-flight clipboard write cannot be revoked.
@@ -72,7 +76,7 @@ deferred API responses and a minimal DOM model to verify: a superseded modal
 never opens, stale controls disable and announce their status immediately,
 current copy/download retains the exact selected scope, a late export ticket cannot trigger a
 download, an old authentication wait cannot start a stale preview read, a forged preview window cannot open a handoff, UTC-equivalent server bounds remain accepted,\nimpossible custom dates are rejected, repeated Download clicks issue one
-export ticket, ticket failures allow a deliberate retry, forged or mismatched
+export ticket, the detailed-evidence option is frozen and accurately reported during a pending ticket (including programmatic mutation), stale tickets cannot re-enable it, ticket failures allow a deliberate retry, forged or mismatched
 export links cannot change the scope/redaction/detail settings or leave the
 local endpoint, UTC-equivalent range bounds still pass, and delayed clipboard
 errors preserve the stale-period warning.
