@@ -76,7 +76,7 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
     rows = ["case,activity,time,who"]
     rows += [f"{case},{activity},2024-01-01T00:00:00Z,ann" for case, activity in
              (("a", "A"), ("b", "B"), ("c", "C"), ("d", "C"))]
-    log_id = _log("\\n".join(rows))
+    log_id = _log("\n".join(rows))
     limited = analytics.conformance(log_id, model, max_variants=1)
     assert limited["cases"] == 4 and limited["aligned_cases"] == 2
     assert limited["cases_not_aligned_trace_too_long"] == 0
@@ -95,7 +95,7 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
         for index in range(301):
             rows.append(f"{case},L,2024-01-01T00:{index // 60:02d}:{index % 60:02d}Z,ann")
     rows.append("short,A,2024-01-01T00:00:00Z,ann")
-    long_log = _log("\\n".join(rows))
+    long_log = _log("\n".join(rows))
     short_model = {"format": "openworkgraph.reference-model.v1", "paths": [["A"]]}
     limited = analytics.conformance(long_log, short_model, max_variants=1)
     assert (limited["cases"], limited["aligned_cases"],
