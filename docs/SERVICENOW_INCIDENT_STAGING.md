@@ -142,3 +142,21 @@ request/response receipt, HTTP origin, provider ACL completeness, verified
 source time, a current persistence-time grant or permission to append.
 Synthetic tests use deliberately Python-equal boolean/number substitutions
 and exercise all three plan-bound entrypoints without provider calls.
+
+
+## Exact selected-scope authority type
+
+Every public offline planner, page projector, bounded page batch and replay
+entrypoint now requires the **exact** `SelectedIncidents` type before invoking
+its validated consent/current-grant check. A duck-typed object can otherwise
+supply `require_authority()` as a no-op and forge the selected host, namespace,
+tenant or grant state; a subclass can override that method despite frozen
+dataclass fields. Neither is accepted as an authorized selected-record scope.
+
+Synthetic adversarial regressions cover a forged off-domain host, a forged
+matching-looking namespace/GET plan across all six entrypoints, and a subclass
+that tries to bypass revoked consent. Genuine explicitly consented scopes
+retain existing staging behavior. This protects the **local Python contract**;
+it does not authenticate HTTPS, independently verify the provider or source
+clock, provide a persisted grant/tenant revocation fence, prove completeness,
+authorize event-log writes or constitute real ServiceNow acceptance.
