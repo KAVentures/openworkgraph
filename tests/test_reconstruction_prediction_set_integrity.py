@@ -467,3 +467,133 @@ def test_runner_rejects_changed_same_id_resume_before_request(tmp_path, monkeypa
     assert path.read_bytes() == original_bytes
     assert not (tmp_path / "synthetic-model.report.json").exists()
     assert not (tmp_path / "synthetic-model.metadata.json").exists()
+
+
+def _resume_manifest(*, cases=2):
+    return {
+        "model_requested": "synthetic-model",
+        "base_url": "https://api.openai.com/v1",
+        "temperature": None,
+        "split": "all",
+        "cases": cases,
+        "revision": "synthetic-prior-revision",
+        "responses": [{"case_id": "case-a", "response_id": "prior-receipt"}],
+    }
+
+
+@pytest.mark.parametrize("field,changed", [
+    ("model_requested", "another-model"),
+    ("base_url", "https://different.invalid/v1"),
+    ("temperature", 0.4),
+    ("split", "holdout"),
+    ("cases", 2),
+])
+def test_runner_refuses_changed_resume_settings_before_request_or_write(
+    tmp_path, monkeypatch, field, changed,
+):
+    from evals.reconstruction import run_external
+
+    predictions_path = _write_jsonl(tmp_path, [_prediction("case-a")])
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    manifest = _resume_manifest(cases=1)
+    manifest[field] = changed
+    metadata_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before_predictions = predictions_path.read_bytes()
+    before_metadata = metadata_path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("mismatched resume must not call provider"))
+    ))
+    with pytest.raises(ValueError, match=f"resume metadata mismatch for {field}"):
+        run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    assert predictions_path.read_bytes() == before_predictions
+    assert metadata_path.read_bytes() == before_metadata
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+def test_runner_resume_preserves_prior_receipt_and_appends_new_one(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    _write_jsonl(tmp_path, [_prediction("case-a")])
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest()), encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    called = []
+
+    def fake_request(*args, **kwargs):
+        called.append(kwargs["case"]["case_id"])
+        return _prediction("case-b"), {"response_id": "new-receipt", "response_model": "synthetic-model"}
+
+    monkeypatch.setattr(run_external, "_request", fake_request)
+    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    saved = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert called == ["case-b"]
+    assert [(row["case_id"], row["response_id"]) for row in saved["responses"]] == [
+        ("case-a", "prior-receipt"), ("case-b", "new-receipt"),
+    ]
+    assert saved["resume_provenance_unverified"] is False
+
+
+def test_interrupted_legacy_resume_without_manifest_is_marked_unattested(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    _write_jsonl(tmp_path, [_prediction("case-a")])
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    called = []
+
+    def fake_request(*args, **kwargs):
+        called.append(kwargs["case"]["case_id"])
+        return _prediction("case-b"), {"response_id": "only-new-receipt"}
+
+    monkeypatch.setattr(run_external, "_request", fake_request)
+    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    saved = json.loads((tmp_path / "synthetic-model.metadata.json").read_text(encoding="utf-8"))
+    assert called == ["case-b"]
+    assert saved["resume_provenance_unverified"] is True
+    assert [row["case_id"] for row in saved["responses"]] == ["case-b"]
+
+
+@pytest.mark.parametrize("responses", [
+    "not-a-list",
+    [{"case_id": "case-a"}, {"case_id": "case-a"}],
+    [{"case_id": "other-case"}],
+    [42],
+])
+def test_resume_rejects_corrupt_or_unmatched_prior_receipts(tmp_path, responses):
+    from evals.reconstruction.run_external import _load_resume_metadata
+
+    path = tmp_path / "metadata.json"
+    manifest = _resume_manifest(cases=1)
+    manifest["responses"] = responses
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = {key: manifest[key] for key in (
+        "model_requested", "base_url", "temperature", "split", "cases"
+    )}
+    with pytest.raises(ValueError, match="resume metadata"):
+        _load_resume_metadata(path, expected, {"case-a"})
+
+
+def test_resume_missing_old_receipt_stays_unattested_across_later_resumes(tmp_path):
+    from evals.reconstruction.run_external import _load_resume_metadata
+
+    path = tmp_path / "metadata.json"
+    manifest = _resume_manifest()
+    manifest["responses"] = []
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = {key: manifest[key] for key in (
+        "model_requested", "base_url", "temperature", "split", "cases"
+    )}
+    rows, unverified = _load_resume_metadata(path, expected, {"case-a"})
+    assert rows == []
+    assert unverified is True
+    manifest["responses"] = [{"case_id": "case-a"}]
+    manifest["resume_provenance_unverified"] = True
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    _, unverified = _load_resume_metadata(path, expected, {"case-a"})
+    assert unverified is True
