@@ -156,3 +156,26 @@ Synthetic modal regressions cover six invalid chronology patterns,
 including a duplicate expressed with equivalent timezone offsets, and
 a positive contiguous mixed date-only/UTC-offset sequence. No real-user
 or provider validation is implied.
+
+## Preview count conservation
+
+The authenticated local preview's event-type and source count maps are
+two partitions of the same selected canonical event rows. The handoff now
+requires each partition to sum **exactly** to `canonical_rows`, with
+`canonical_rows <= retained_rows` (the latter is the count of all retained
+events, not just the selected period). Summation refuses integer overflow even
+if every individual count is a valid safe integer. Otherwise the panel
+refuses to open and cannot copy or request an export ticket.
+
+The optional date plan lists at most the first 31 observed dates and may
+omit dates, so its listed `event_rows` total need **not** equal the selected
+count. It must not exceed the selected count or overflow. An absent/empty
+plan, valid partial plan and zero-event copy-only handoff remain supported.
+These checks catch inconsistent preview envelopes; they do **not** establish
+complete capture, exact source truth, permission to export, real-world
+workflow confirmation or business-outcome improvement.
+
+Synthetic modal regressions cover source/event-type undercounts and
+overcounts, retained-count disagreement, safe-integer sum overflow,
+excess planned rows, zero-selected/positive-plan contradiction and a valid
+partial-date plan. No real customer or provider acceptance is claimed.

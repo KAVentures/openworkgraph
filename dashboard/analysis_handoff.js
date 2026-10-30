@@ -65,7 +65,26 @@
               return since < until &&
                 (i === 0 || Date.parse(list[i - 1].until) <= since);
             }))));
-    if (!object(d) || typeof d.request_text !== 'string' || !d.request_text.trim() ||
+    // Both maps partition the selected events; a date plan may list only
+    // the first 31 days, but cannot list more events than were selected.
+    // Accumulate safely: individually valid integers may overflow in sum.
+    const sumSafe = values => {
+      let total = 0;
+      for (const value of values) {
+        if (!count(value) || !Number.isSafeInteger(total + value)) return null;
+        total += value;
+      }
+      return total;
+    };
+    const partitionCounts = object(d?.event_types) && object(d?.sources) &&
+      sumSafe(Object.values(d.event_types)) === d.canonical_rows &&
+      sumSafe(Object.values(d.sources)) === d.canonical_rows;
+    const plannedRows = Array.isArray(d?.analysis_plan?.date_chunks)
+      ? sumSafe(d.analysis_plan.date_chunks.map(x => x?.event_rows)) : 0;
+    const conserved = count(d?.canonical_rows) && count(d?.retained_rows) &&
+      d.canonical_rows <= d.retained_rows && partitionCounts &&
+      plannedRows !== null && plannedRows <= d.canonical_rows;
+    if (!object(d) || !conserved || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||

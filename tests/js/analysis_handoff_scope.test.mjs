@@ -745,6 +745,8 @@ test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-on
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
+    canonical_rows: 7, retained_rows: 7,
+    event_types: {focus_span: 7}, sources: {desktop: 7},
     analysis_plan: {date_chunks: [
       {since: '2026-10-27', until: '2026-10-28', event_rows: 1},
       {since: '2026-10-28', until: '2026-10-29', event_rows: 2},
@@ -755,5 +757,55 @@ test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-on
   assert.equal(h.modals, 1);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-ordered-plan']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('partition and planned-row inconsistencies refuse the handoff before any copy or ticket', async t => {
+  const mutations = [
+    ['event type total too small', d => ({...d, event_types: {focus_span: 1}})],
+    ['event type total too large', d => ({...d, event_types: {focus_span: 3}})],
+    ['source total too small', d => ({...d, sources: {desktop: 1}})],
+    ['source total too large', d => ({...d, sources: {desktop: 3}})],
+    ['selected rows exceed retained rows', d => ({...d, retained_rows: 1})],
+    ['partition addition overflows safe integer', d => ({...d,
+      event_types: {focus_span: Number.MAX_SAFE_INTEGER, capture_gap: 1}})],
+    ['listed date chunks exceed selected rows', d => ({...d, analysis_plan: {
+      date_chunks: [
+        {since: '2026-10-28', until: '2026-10-29', event_rows: 2},
+        {since: '2026-10-29', until: '2026-10-30', event_rows: 1}
+      ]}})],
+    ['zero selected rows with positive planned rows', d => ({...d,
+      canonical_rows: 0, first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, analysis_plan: {date_chunks: [
+        {since: '2026-10-29', until: '2026-10-30', event_rows: 1}]}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'inconsistent')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('a valid partial date plan conserves counts without claiming complete coverage', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'partial-plan'),
+    analysis_plan: {date_chunks: [
+      {since: '2026-10-29', until: '2026-10-30', event_rows: 1}
+    ], more_dates_not_listed: true}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-partial-plan']);
   assert.equal(h.tickets.length, 0);
 });
