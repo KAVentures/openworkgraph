@@ -1089,3 +1089,48 @@ def test_fake_provider_rejects_nonobject_outer_completion_envelope():
             FakeClient(), base_url="https://invalid.example", api_key="synthetic-only",
             model="synthetic-model", case=_blind_case(), temperature=None, timeout=1.0,
         )
+
+
+# The standalone scorer ingests predictions from external producers.
+@pytest.mark.parametrize("raw,pattern", [
+    ('{"case_id":"case-a","case_id":"case-b","workflows":[]}', "duplicate JSON object key"),
+    ('{"case_id":"case-a","workflows":[{"event_ids":["task"],"event_ids":["noise"]}]}',
+     "duplicate JSON object key"),
+    ('{"case_id":"case-a","workflows":[],"uncertainty":{"membership":true,"membership":false}}',
+     "duplicate JSON object key"),
+    ('{"case_id":"case-a","workflows":[],"extra":NaN}', "non-finite JSON constant"),
+    ('{"case_id":"case-a","workflows":[],"extra":-Infinity}', "non-finite JSON constant"),
+    ('{"case_id":"case-a","workflows":[],"extra":{"ratio":1e999}}', "non-finite JSON number"),
+    ('{"case_id":"case-a","workflows":[],"extra":[-1e999]}', "non-finite JSON number"),
+])
+def test_standalone_scorer_jsonl_rejects_ambiguous_rows_with_line_context(tmp_path, raw, pattern):
+    from evals.reconstruction.scoring import _jsonl
+
+    path = tmp_path / "synthetic-predictions.jsonl"
+    path.write_text('{"case_id":"case-ok","workflows":[]}\n' + raw + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=pattern) as error:
+        _jsonl(path)
+    assert "line 2:" in str(error.value)
+    assert path.read_text(encoding="utf-8").endswith(raw + "\n")
+
+
+def test_standalone_scorer_jsonl_accepts_valid_finite_rows_and_blank_lines(tmp_path):
+    from evals.reconstruction.scoring import _jsonl
+
+    first = _prediction("case-a")
+    second = {**_prediction("case-b"), "extra": {"ratio": 0.125, "items": [1, 2]}}
+    path = tmp_path / "synthetic-predictions.jsonl"
+    path.write_text("\n" + json.dumps(first) + "\n  \n" + json.dumps(second) + "\n",
+                    encoding="utf-8")
+    assert _jsonl(path) == [first, second]
+    report = aggregate([_case("case-b"), _case("case-a")], _jsonl(path))
+    assert report["workflow_assignment_f1"] == 1.0
+
+
+def test_standalone_scorer_jsonl_rejects_nonobject_with_line_number(tmp_path):
+    from evals.reconstruction.scoring import _jsonl
+
+    path = tmp_path / "synthetic-predictions.jsonl"
+    path.write_text("\n[]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"line 2: prediction must be an object"):
+        _jsonl(path)

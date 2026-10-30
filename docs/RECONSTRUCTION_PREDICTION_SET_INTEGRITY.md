@@ -304,3 +304,23 @@ usage and otherwise discarded envelope fields, finite nested receipts, and
 prove the permissive response.json() shortcut is not used. This check does
 not authenticate a provider, attest usage billing, establish a real API
 integration, change the answer key or demonstrate held-out F1 improvement.
+
+
+## Standalone scorer JSONL ingress
+
+The standalone `python -m evals.reconstruction.scoring` command accepts
+prediction JSONL from external producers, not only the validated external
+runner. Its JSONL reader now rejects duplicate object keys at any depth,
+non-standard `NaN`/`Infinity` constants and numeric exponents that overflow
+to infinity, with a line number identifying the offending row. Previously,
+Python's permissive JSON decoder could silently keep the last duplicate
+value or accept non-finite data. Valid finite JSONL, blank lines and
+out-of-order case rows remain supported; malformed files are never
+rewritten. These checks run before scoring or writing a report.
+
+The regression fixtures are entirely synthetic and cover conflicting case
+IDs, nested workflow and uncertainty keys, non-finite ignored metadata,
+positive finite nested metadata and non-object rows. This protects the
+integrity of the submitted scoring artifact; it does **not** authenticate
+its origin, prove assignment correctness, alter private holdout truth,
+change the scorer or thresholds, or demonstrate F1/contamination progress.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -368,13 +369,38 @@ def acceptance(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"{path}: each line must be an object")
-            rows.append(value)
+    """Fail closed on ambiguous JSONL from independent prediction producers."""
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key: {key}")
+            result[key] = value
+        return result
+
+    def finite_float(token: str) -> float:
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number is not allowed")
+        return value
+
+    def reject_nonfinite(token: str) -> None:
+        raise ValueError(f"non-finite JSON constant is not allowed: {token}")
+
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(
+                line, object_pairs_hook=unique_object,
+                parse_constant=reject_nonfinite, parse_float=finite_float,
+            )
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"{path}: line {line_number}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: line {line_number}: prediction must be an object")
+        rows.append(value)
     return rows
 
 def main(argv: list[str] | None = None) -> int:
