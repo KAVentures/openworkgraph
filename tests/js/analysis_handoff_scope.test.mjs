@@ -1208,7 +1208,7 @@ test('handoff date plan refuses more than 31 displayed chunks without truncating
         until: utc(first + (i + 1) * 1000),
         event_rows: 1
       })),
-      more_dates_not_listed: accepted
+      more_dates_not_listed: false
     };
     h.reply(h.reads[1], d);
     await opening;
@@ -1217,6 +1217,48 @@ test('handoff date plan refuses more than 31 displayed chunks without truncating
     if (accepted) {
       await h.modal['#analysisCopy'].onclick();
       assert.deepEqual(h.copied, ['request-bounded-date-plan']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.equal(h.toasts.length, 1);
+    }
+  });
+});
+
+test('handoff refuses unsupported completeness and contradictory omission claims', async t => {
+  const selectedDay = {since: dayLabel(0), until: dayLabel(1), event_rows: 2};
+  const partialDay = {since: dayLabel(0), until: dayLabel(1), event_rows: 1};
+  const cases = [
+    ['unverified complete-history assertion', d => {d.analysis_plan = {
+      date_chunks: [], complete_history_claimed: true};}, false],
+    ['string false is not a verified boolean', d => {d.analysis_plan = {
+      date_chunks: [], complete_history_claimed: 'false'};}, false],
+    ['omission flag with all selected rows listed', d => {d.analysis_plan = {
+      date_chunks: [selectedDay], more_dates_not_listed: true,
+      complete_history_claimed: false};}, false],
+    ['omission flag without a listed plan', d => {d.analysis_plan = {
+      more_dates_not_listed: true, complete_history_claimed: false};}, false],
+    ['partial selected history with honest omission', d => {d.analysis_plan = {
+      date_chunks: [partialDay], more_dates_not_listed: true,
+      complete_history_claimed: false};}, true],
+    ['legacy absent coverage flags', d => {d.analysis_plan = {
+      date_chunks: [selectedDay]};}, true],
+    ['explicitly unverified full listed plan', d => {d.analysis_plan = {
+      date_chunks: [selectedDay], more_dates_not_listed: false,
+      complete_history_claimed: false};}, true]
+  ];
+  for (const [name, mutate, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const d = h.preview('range', 'coverage-flags'); mutate(d);
+    h.reply(h.reads[1], d); await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-coverage-flags']);
     } else {
       assert.deepEqual(h.copied, []);
       assert.match(h.summary.textContent, /incomplete or malformed/i);
