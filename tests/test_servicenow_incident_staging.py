@@ -731,3 +731,59 @@ def test_valid_unicode_pair_and_small_discarded_tree_remain_compatible():
     assert staged["checkpoint_advanced"] is False
     planned = plan_page(selected, limit=2)
     assert project_planned_page(selected, raw, plan=planned)["plan_bound"] is True
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned"])
+def test_replay_withholds_higher_revision_when_reported_source_time_regresses(mode):
+    """A higher counter plus earlier provider-local time is conflicting evidence."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope()
+    before_a = item(A, mod="3", updated="2026-10-30 03:10:00")
+    before_b = item(B, mod="3", updated="2026-10-30 03:11:00")
+    after_a = item(A, mod="4", state="6", updated="2026-10-30 03:09:59")
+    after_b = item(B, mod="4", updated="2026-10-30 03:12:00")
+    if mode == "standalone":
+        result = reconcile_replayed_pages(
+            selected, page(before_a, before_b), page(after_a, after_b),
+        )
+    else:
+        plans = [plan_page(selected, offset=i, limit=1) for i in (0, 1)]
+        result = reconcile_planned_replays(
+            selected,
+            [(plans[0], page(before_a)), (plans[1], page(before_b))],
+            [(plans[0], page(after_a)), (plans[1], page(after_b))],
+        )
+    assert result["timestamp_regression_unknown_ids"] == [A]
+    assert result["higher_reported_revision_ids"] == [B]
+    assert result["same_reported_revision_ids"] == []
+    assert result["replay_consistency_checked"]
+    assert result["historical_completeness"] == "unknown"
+    assert not result["provider_timestamp_timezone_verified"]
+    assert not result["business_outcome_verified"]
+    assert not result["checkpoint_advanced"]
+    assert result["not_an_authorization_to_append"]
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned"])
+def test_replay_allows_higher_counter_at_equal_provider_local_second(mode):
+    """Second-resolution timestamps can tie without proving true chronology."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope(sys_ids=(A,))
+    before = item(A, mod="3", updated="2026-10-30 03:10:00")
+    after = item(A, mod="4", updated="2026-10-30 03:10:00")
+    if mode == "standalone":
+        result = reconcile_replayed_pages(selected, page(before), page(after))
+    else:
+        plan = plan_page(selected, limit=1)
+        result = reconcile_planned_replays(
+            selected, [(plan, page(before))], [(plan, page(after))],
+        )
+    assert result["higher_reported_revision_ids"] == [A]
+    assert result["timestamp_regression_unknown_ids"] == []
+    assert not result["business_outcome_verified"]
+    assert not result["provider_timestamp_timezone_verified"]
+    assert not result["checkpoint_advanced"]
