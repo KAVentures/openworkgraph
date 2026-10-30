@@ -508,7 +508,7 @@ def test_runner_refuses_changed_resume_settings_before_request_or_write(
         (_ for _ in ()).throw(AssertionError("mismatched resume must not call provider"))
     ))
     with pytest.raises(ValueError, match=f"resume metadata mismatch for {field}"):
-        run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+        run_external.main(["--model", "synthetic-model", "--base-url", "https://api.openai.com/v1", "--api-key-env", "OPENAI_API_KEY", "--output-dir", str(tmp_path), "--resume"])
     assert predictions_path.read_bytes() == before_predictions
     assert metadata_path.read_bytes() == before_metadata
     assert not (tmp_path / "synthetic-model.report.json").exists()
@@ -532,7 +532,7 @@ def test_runner_resume_preserves_prior_receipt_and_appends_new_one(tmp_path, mon
         return _prediction("case-b"), {"response_id": "new-receipt", "response_model": "synthetic-model"}
 
     monkeypatch.setattr(run_external, "_request", fake_request)
-    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    run_external.main(["--model", "synthetic-model", "--base-url", "https://api.openai.com/v1", "--api-key-env", "OPENAI_API_KEY", "--output-dir", str(tmp_path), "--resume"])
     saved = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert called == ["case-b"]
     assert [(row["case_id"], row["response_id"]) for row in saved["responses"]] == [
@@ -557,7 +557,7 @@ def test_interrupted_legacy_resume_without_manifest_is_marked_unattested(tmp_pat
         return _prediction("case-b"), {"response_id": "only-new-receipt"}
 
     monkeypatch.setattr(run_external, "_request", fake_request)
-    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    run_external.main(["--model", "synthetic-model", "--base-url", "https://api.openai.com/v1", "--api-key-env", "OPENAI_API_KEY", "--output-dir", str(tmp_path), "--resume"])
     saved = json.loads((tmp_path / "synthetic-model.metadata.json").read_text(encoding="utf-8"))
     assert called == ["case-b"]
     assert saved["resume_provenance_unverified"] is True
