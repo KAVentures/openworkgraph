@@ -1114,3 +1114,72 @@ def test_save_returns_exact_transaction_snapshot_under_post_commit_race(
         assert stored[0]["revision"] == 3
         assert stored[0]["goal_code"] == "verify_operation"
         assert stored[0]["revision"] != saved["revision"]
+
+
+@pytest.mark.parametrize("corruption", [
+    "prerequisite_revised_after_dependent",
+    "dependent_deadline_outlives_prerequisite",
+])
+def test_persisted_dependency_approval_window_fails_closed(local, corruption):
+    # Each row remains individually valid at the as-of time. Only the
+    # explicit owner-declared dependency edge becomes temporally impossible.
+    d = "owg:w:" + "d" * 32
+    early = NOW - timedelta(hours=2)
+    for ref in (A, B, C, d):
+        reviewed(ref, at=early if ref == A else early + timedelta(hours=1))
+    root = facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        now=NOW - timedelta(hours=1))
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    as_of = NOW + timedelta(minutes=30)
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=as_of)["items"]} == {A, B, C, d}
+
+    with facts._database(create=False) as db:
+        if corruption == "prerequisite_revised_after_dependent":
+            # A later owner approval cannot silently rebind an older B -> A.
+            db.execute("UPDATE declarations SET updated_at=? WHERE work_item_ref=?",
+                       ((NOW + timedelta(minutes=15)).isoformat(), A))
+        else:
+            # B's review itself allows this later deadline, but its declared
+            # prerequisite A expires earlier. No independent B approval.
+            db.execute("UPDATE declarations SET expires_at=? WHERE work_item_ref=?",
+                       ((datetime.fromisoformat(root["expires_at"]) +
+                         timedelta(minutes=30)).isoformat(), B))
+        a_row = facts._get(db, A)
+        b_row = facts._get(db, B)
+    reviewed_windows = facts._reviewed(as_of)
+    for row in (a_row, b_row):
+        assert facts._stored_temporal_valid(
+            row[6], row[7], row[8], now=as_of, days=7,
+            review=reviewed_windows[row[0]])
+    assert not facts._dependency_approval_window_valid(b_row, a_row)
+
+    # A and unrelated D survive; B and its transitive dependent C are
+    # withheld without mutating the private auxiliary store on read.
+    visible = facts.list_case_declarations(SCOPE, now=as_of)["items"]
+    assert {item["work_item_ref"] for item in visible} == {A, d}
+    assert independent in visible
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 4
+
+    # A later explicit, reviewed write prunes only the invalid closure.
+    changed = facts.save_case_declaration(
+        d, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=independent["revision"],
+        expected_edit_token=independent["edit_token"], now=as_of)
+    assert changed["revision"] == 2
+    with facts._database(create=False) as db:
+        assert {r[0] for r in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A],
+            expected_revision=dependent["revision"],
+            expected_edit_token=dependent["edit_token"], now=as_of)
