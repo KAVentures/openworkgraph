@@ -476,12 +476,14 @@ def test_runner_rejects_changed_same_id_resume_before_request(tmp_path, monkeypa
 
 def _resume_manifest(*, cases=2):
     from evals.reconstruction.run_external import (
+        SYSTEM_INSTRUCTION, _system_instruction_digest,
         _selected_blind_corpus_digest, _selected_prediction_set_digest,
     )
 
     selected = [_case("case-a"), _case("case-b")][:cases]
     return {
         "selected_blind_corpus_sha256": _selected_blind_corpus_digest(selected),
+        "system_instruction_sha256": _system_instruction_digest(SYSTEM_INSTRUCTION),
         "selected_prediction_set_sha256": _selected_prediction_set_digest([_prediction("case-a")]),
         "model_requested": "synthetic-model",
         "base_url": "https://api.openai.com/v1",
@@ -1412,3 +1414,93 @@ def test_resume_prediction_digest_uses_selected_case_order_not_jsonl_order(
     assert metadata["selected_prediction_set_sha256"] == manifest[
         "selected_prediction_set_sha256"
     ]
+
+
+def test_system_instruction_digest_is_domain_separated_and_content_sensitive():
+    from evals.reconstruction.run_external import _system_instruction_digest
+
+    first = _system_instruction_digest("Reconstruct only from observed evidence.")
+    assert len(first) == 64
+    assert first == _system_instruction_digest("Reconstruct only from observed evidence.")
+    assert first != _system_instruction_digest("Reconstruct only from observed evidence.\\n")
+    assert first != _system_instruction_digest("reconstruct only from observed evidence.")
+    with pytest.raises(ValueError, match="must be text"):
+        _system_instruction_digest(None)
+
+
+def test_new_manifest_attests_exact_system_instruction(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        _prediction("case-a"), {"response_id": "synthetic-only"}
+    ))
+    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path)])
+    metadata = json.loads((tmp_path / "synthetic-model.metadata.json").read_text())
+    assert metadata["system_instruction_sha256"] == run_external._system_instruction_digest(
+        run_external.SYSTEM_INSTRUCTION
+    )
+    assert metadata["resume_provenance_unverified"] is False
+
+
+def test_resume_rejects_changed_system_instruction_before_request_or_mutation(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    path.write_text(json.dumps(_prediction("case-a")) + "\\n", encoding="utf-8")
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
+    before = (path.read_bytes(), metadata_path.read_bytes())
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "SYSTEM_INSTRUCTION", run_external.SYSTEM_INSTRUCTION + "\\nChanged")
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("prompt mismatch must not call provider"))
+    ))
+    with pytest.raises(ValueError, match="resume metadata mismatch for system_instruction_sha256"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert (path.read_bytes(), metadata_path.read_bytes()) == before
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+def test_legacy_manifest_without_prompt_digest_is_usable_but_unattested(tmp_path):
+    from evals.reconstruction.run_external import _load_resume_metadata
+
+    manifest = _resume_manifest(cases=1)
+    manifest.pop("system_instruction_sha256")
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = _resume_manifest(cases=1)
+    receipts, unverified = _load_resume_metadata(path, {
+        key: value for key, value in expected.items()
+        if key in ("model_requested", "base_url", "temperature", "split", "cases",
+                   "selected_blind_corpus_sha256", "selected_prediction_set_sha256",
+                   "system_instruction_sha256")
+    }, {"case-a"})
+    assert len(receipts) == 1
+    assert unverified is True
+
+
+@pytest.mark.parametrize("invalid", ["not-a-digest", "f" * 64, None, 0])
+def test_present_bad_prompt_digest_is_not_treated_as_legacy(tmp_path, invalid):
+    from evals.reconstruction.run_external import _load_resume_metadata
+
+    expected = _resume_manifest(cases=1)
+    manifest = dict(expected)
+    manifest["system_instruction_sha256"] = invalid
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="resume metadata mismatch for system_instruction_sha256"):
+        _load_resume_metadata(path, {
+            key: value for key, value in expected.items()
+            if key in ("model_requested", "base_url", "temperature", "split", "cases",
+                       "selected_blind_corpus_sha256", "selected_prediction_set_sha256",
+                       "system_instruction_sha256")
+        }, {"case-a"})
