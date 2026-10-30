@@ -243,6 +243,37 @@ def test_sparse_path_support_requires_min_cases_observed_paths_per_side():
             == len(result["windows"]) - 1)
 
 
+def test_omission_counters_partition_mixed_small_sparse_and_pathless_boundaries():
+    """Distinct omission reasons must not double-count the same comparison."""
+    rows = ["case,activity,time"]
+    for month, count, path_cases in ((1, 10, 10), (2, 40, 10),
+                                     (3, 40, 40), (4, 40, 0)):
+        for i in range(count):
+            day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Receive,{day.isoformat()}")
+            if i < path_cases:
+                rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()), name="mixed-omissions",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = drift.drift(log, window="month", min_cases=30)
+    assert result["boundaries_tested"] == 0
+    assert result["boundaries_skipped_small_windows"] == 1
+    assert result["boundaries_skipped_sparse_paths"] == 1
+    assert result["boundaries_skipped_no_paths"] == 1
+    assert [b.get("reason") for b in result["boundaries_not_tested"]] == [
+        None, "insufficient_path_support", "no_directly_follows_paths"]
+    assert result["boundaries_not_tested"][0]["insufficient_side"] == "before"
+    assert result["boundaries_not_tested"][1]["insufficient_path_support_side"] == "before"
+    assert result["boundaries_not_tested"][2]["missing_paths_side"] == "after"
+    assert (result["boundaries_tested"] + result["boundaries_skipped_small_windows"]
+            + result["boundaries_skipped_sparse_paths"] + result["boundaries_skipped_no_paths"]
+            == len(result["windows"]) - 1)
+
+
 def test_two_pathless_windows_are_not_counted_as_tested_no_change():
     rows = ["case,activity,time"]
     for month in (1, 2):

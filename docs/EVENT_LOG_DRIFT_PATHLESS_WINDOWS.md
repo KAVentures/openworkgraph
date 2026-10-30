@@ -55,6 +55,10 @@ and the original small-window omission record shape. A boundary with
 both insufficient case support and no paths remains categorized as
 insufficient sampled cases.
 
+The three omission counters are mutually exclusive: a sparse-path boundary
+must not also be counted as a small sampled-case window, and a zero-path
+boundary is distinct from both. Mixed-reason windows exercise this rule.
+
 The invariant is:
 `boundaries_tested + boundaries_skipped_small_windows +
 boundaries_skipped_no_paths + boundaries_skipped_sparse_paths

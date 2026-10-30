@@ -201,8 +201,10 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             "windows": windows,
             "boundaries": boundaries,
             "boundaries_tested": len(tested),
+            # Each omitted boundary has exactly one reason; sparse path
+            # support must not also count as a small sampled-case window.
             "boundaries_skipped_small_windows": sum(
-                b.get("reason") != "no_directly_follows_paths" for b in boundaries_not_tested),
+                b.get("reason") is None for b in boundaries_not_tested),
             "boundaries_skipped_no_paths": sum(
                 b.get("reason") == "no_directly_follows_paths" for b in boundaries_not_tested),
             "boundaries_skipped_sparse_paths": sum(
