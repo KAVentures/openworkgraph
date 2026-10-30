@@ -207,6 +207,8 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
             # different denominators. Expose actual support, not just the cap.
             "sampled_cases_first": len(samples[0]),
             "sampled_cases_second": len(samples[1]),
+            "sample_fraction_first": round(len(samples[0]) / a["cases"], 6),
+            "sample_fraction_second": round(len(samples[1]) / b["cases"], 6),
             "sampled_median_throughput_seconds_first": _median(samples[0]),
             "sampled_median_throughput_seconds_second": _median(samples[1]),
             "sampling_truncated_first": len(samples[0]) < a["cases"],
