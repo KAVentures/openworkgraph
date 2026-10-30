@@ -227,6 +227,21 @@ def _stored_temporal_valid(
             deadline <= start + timedelta(days=days))
 
 
+def _dependency_approval_window_valid(
+    dependent: tuple[Any, ...], prerequisite: tuple[Any, ...],
+) -> bool:
+    """A declared edge cannot outlive or predate its prerequisite approval.
+
+    Call only after both stored rows passed canonical UTC temporal validation.
+    Comparing parsed instants avoids ISO text-order errors at fractional seconds.
+    This validates an existing explicit edge; it never infers a time-based join.
+    """
+    return (
+        datetime.fromisoformat(prerequisite[7]) <= datetime.fromisoformat(dependent[7])
+        and datetime.fromisoformat(dependent[8]) <= datetime.fromisoformat(prerequisite[8])
+    )
+
+
 def _prune(db: sqlite3.Connection, now: datetime, days: int,
            reviewed: dict[str, tuple[datetime, datetime]]) -> None:
     # Admit only a DAG rooted in current, same-scope, explicitly reviewed
@@ -238,6 +253,7 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
         "FROM declarations"
     ).fetchall()
     scopes = {row[0]: row[1] for row in rows}
+    row_by_ref = {row[0]: row for row in rows}
     dependencies = {
         row[0]: _stored_dependencies(row[4], row[0]) for row in rows
     }
@@ -253,7 +269,8 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
         newly_available = {
             row[0] for row in rows
             if row[0] in eligible and row[0] not in available and
-            all(dep in available and scopes.get(dep) == row[1]
+            all(dep in available and scopes.get(dep) == row[1] and
+                _dependency_approval_window_valid(row, row_by_ref[dep])
                 for dep in dependencies[row[0]])
         }
         if not newly_available:
@@ -523,6 +540,7 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
             dependencies = {
                 r[0]: _stored_dependencies(r[4], r[0]) for r in candidates
             }
+            row_by_ref = {r[0]: r for r in candidates}
             eligible = {
                 r[0] for r in candidates
                 if _stored_fields_valid(r) and r[0] in reviewed and
@@ -537,7 +555,9 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 newly_available = {
                     r[0] for r in candidates
                     if r[0] in eligible and r[0] not in available and
-                    all(dep in available for dep in dependencies[r[0]])
+                    all(dep in available and
+                        _dependency_approval_window_valid(r, row_by_ref[dep])
+                        for dep in dependencies[r[0]])
                 }
                 if not newly_available:
                     break
