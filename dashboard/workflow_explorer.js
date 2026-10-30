@@ -493,12 +493,16 @@
         core_steps:clusters[0]?.core_steps||[]};
       ++latestRequest;
       invalidateEvidence();
+      const refresh=document.getElementById('owgExplorerRefresh');
+      if(refresh)refresh.disabled=false;
       selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=bundle;currentWindow=filter;
       renderCandidates();renderDetail(candidate);
     },
     clearReviewed(label){
       ++latestRequest;
       invalidateEvidence();
+      const refresh=document.getElementById('owgExplorerRefresh');
+      if(refresh)refresh.disabled=false;
       selectedId='';selectedExample=null;renderCandidates();
       clearDetail(label?'Reviewed group · '+label+'. Loadable source details are required to draw its observed variants.':'Choose an inferred candidate or load a reviewed classification to inspect observed variants.');
     }
