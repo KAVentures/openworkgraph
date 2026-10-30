@@ -56,13 +56,26 @@ def test_colours_follow_overall_frequency_and_fold_into_other():
 
 def test_sampling_and_thinning_keep_bounds(monkeypatch):
     log = _log(cases=50)
+    full = dots.dotted_chart(log, max_cases=50)
+    assert full["coverage"]["events"] == full["coverage"]["events_in_shown_cases"] == 150
+    assert full["coverage"]["events_omitted_by_case_sampling"] == 0
+    assert full["coverage"]["events_omitted_by_point_thinning"] == 0
     sampled = dots.dotted_chart(log, max_cases=10)
     assert sampled["coverage"]["cases_shown"] == 10 and sampled["coverage"]["cases_sampled"] is True
     ids = [c["case_id"] for c in sampled["cases"]]
     assert ids[0] == "c000" and ids == sorted(ids) and ids[-1] >= "c040"       # spread across the whole log
+    assert sampled["coverage"]["events"] == 150
+    assert sampled["coverage"]["events_in_shown_cases"] == sampled["coverage"]["points_shown"] == 30
+    assert sampled["coverage"]["events_omitted_by_case_sampling"] == 120
+    assert sampled["coverage"]["events_omitted_by_point_thinning"] == 0
     monkeypatch.setattr(dots, "MAX_POINTS", 10)
     thin = dots.dotted_chart(log, max_cases=10)
     assert thin["coverage"]["points_shown"] == 10 and thin["coverage"]["points_thinned"] is True
+    assert thin["coverage"]["events_in_shown_cases"] == 30
+    assert thin["coverage"]["events_omitted_by_case_sampling"] == 120
+    assert thin["coverage"]["events_omitted_by_point_thinning"] == 20
+    assert (thin["coverage"]["points_shown"] + thin["coverage"]["events_omitted_by_point_thinning"]
+            + thin["coverage"]["events_omitted_by_case_sampling"] == thin["coverage"]["events"])
     for bad in ({"time": "x"}, {"order": "x"}, {"max_cases": 0}, {"max_cases": 5000}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             dots.dotted_chart(log, **bad)
