@@ -1375,3 +1375,40 @@ def test_new_manifest_prediction_digest_matches_written_rows(tmp_path, monkeypat
         run_external._selected_prediction_set_digest(predictions)
     )
     assert metadata["resume_provenance_unverified"] is False
+
+
+def test_resume_prediction_digest_uses_selected_case_order_not_jsonl_order(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    rows = [_prediction("case-b"), _prediction("case-a")]
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    before = path.read_bytes()
+    manifest = _resume_manifest(cases=2)
+    manifest["selected_prediction_set_sha256"] = (
+        run_external._selected_prediction_set_digest(list(reversed(rows)))
+    )
+    manifest["responses"] = [
+        {"case_id": "case-a", "response_id": "synthetic-a"},
+        {"case_id": "case-b", "response_id": "synthetic-b"},
+    ]
+    (tmp_path / "synthetic-model.metadata.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("reordered rows must not call provider"))
+    ))
+    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume"])
+    assert path.read_bytes() == before
+    metadata = json.loads(
+        (tmp_path / "synthetic-model.metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["resume_provenance_unverified"] is False
+    assert metadata["selected_prediction_set_sha256"] == manifest[
+        "selected_prediction_set_sha256"
+    ]
