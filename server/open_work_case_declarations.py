@@ -416,7 +416,7 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 cutoff = (current - timedelta(days=days)).isoformat()
                 candidates = db.execute(
                     "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
-                    "dependencies_json,revision,created_at,updated_at,expires_at "
+                    "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
                     "FROM declarations WHERE scope_ref=? AND expires_at>? AND created_at>? "
                     "ORDER BY updated_at DESC,work_item_ref LIMIT ?",
                     (scope_ref, current.isoformat(), cutoff, _MAX_ITEMS),
