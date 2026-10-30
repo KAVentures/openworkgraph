@@ -475,11 +475,14 @@ def test_runner_rejects_changed_same_id_resume_before_request(tmp_path, monkeypa
 
 
 def _resume_manifest(*, cases=2):
-    from evals.reconstruction.run_external import _selected_blind_corpus_digest
+    from evals.reconstruction.run_external import (
+        _selected_blind_corpus_digest, _selected_prediction_set_digest,
+    )
 
     selected = [_case("case-a"), _case("case-b")][:cases]
     return {
         "selected_blind_corpus_sha256": _selected_blind_corpus_digest(selected),
+        "selected_prediction_set_sha256": _selected_prediction_set_digest([_prediction("case-a")]),
         "model_requested": "synthetic-model",
         "base_url": "https://api.openai.com/v1",
         "temperature": None,
@@ -1231,5 +1234,144 @@ def test_new_runner_manifest_records_selected_blind_corpus_digest(
     )
     assert metadata["selected_blind_corpus_sha256"] == (
         run_external._selected_blind_corpus_digest([case])
+    )
+    assert metadata["resume_provenance_unverified"] is False
+
+
+def test_prediction_set_digest_binds_assignments_but_not_json_key_order():
+    from evals.reconstruction.run_external import _selected_prediction_set_digest
+
+    first = [_prediction("case-a"), _prediction("case-b")]
+    digest = _selected_prediction_set_digest(first)
+    assert _selected_prediction_set_digest([
+        dict(reversed(list(row.items()))) for row in first
+    ]) == digest
+    assert _selected_prediction_set_digest([first[1], first[0]]) != digest
+    changed = deepcopy(first)
+    changed[0] = _prediction("case-a", correct=False)
+    assert _selected_prediction_set_digest(changed) != digest
+    changed = deepcopy(first)
+    changed[0]["workflows"][0]["event_ids"].append("noise")
+    assert _selected_prediction_set_digest(changed) != digest
+
+
+def test_runner_resume_rejects_modified_valid_prediction_before_request_or_write(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    predictions_path = tmp_path / "synthetic-model.predictions.jsonl"
+    # Same case/event IDs, still structurally valid, but the assignment has
+    # changed since the completed manifest was written.
+    predictions_path.write_text(
+        json.dumps(_prediction("case-a", correct=False)) + "\n", encoding="utf-8"
+    )
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
+    before_predictions = predictions_path.read_bytes()
+    before_metadata = metadata_path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("changed predictions must not call provider"))
+    ))
+    with pytest.raises(ValueError, match="resume metadata mismatch for selected_prediction_set_sha256"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert predictions_path.read_bytes() == before_predictions
+    assert metadata_path.read_bytes() == before_metadata
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+def test_runner_resume_accepts_exact_attested_prediction_without_request(
+    tmp_path, monkeypatch,
+):
+    from evals.reconstruction import run_external
+
+    predictions_path = tmp_path / "synthetic-model.predictions.jsonl"
+    predictions_path.write_text(json.dumps(_prediction("case-a")) + "\n", encoding="utf-8")
+    before = predictions_path.read_bytes()
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("complete resume must not call provider"))
+    ))
+    run_external.main([
+        "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+    ])
+    assert predictions_path.read_bytes() == before
+    saved = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert saved["resume_provenance_unverified"] is False
+    assert saved["selected_prediction_set_sha256"] == (
+        run_external._selected_prediction_set_digest([_prediction("case-a")])
+    )
+
+
+def test_legacy_manifest_without_prediction_digest_remains_unattested(tmp_path):
+    from evals.reconstruction.run_external import (
+        _load_resume_metadata, _selected_prediction_set_digest,
+    )
+
+    manifest = _resume_manifest(cases=1)
+    manifest.pop("selected_prediction_set_sha256")
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = {key: manifest[key] for key in (
+        "model_requested", "base_url", "temperature", "split", "cases",
+        "selected_blind_corpus_sha256",
+    )}
+    expected["selected_prediction_set_sha256"] = _selected_prediction_set_digest(
+        [_prediction("case-a")]
+    )
+    receipts, unverified = _load_resume_metadata(path, expected, {"case-a"})
+    assert len(receipts) == 1
+    assert unverified is True
+
+
+@pytest.mark.parametrize("digest", ["not-a-sha256", "f" * 64, None, 0])
+def test_present_invalid_prediction_set_digest_never_downgrades_to_legacy(
+    tmp_path, digest,
+):
+    from evals.reconstruction.run_external import (
+        _load_resume_metadata, _selected_prediction_set_digest,
+    )
+
+    manifest = _resume_manifest(cases=1)
+    manifest["selected_prediction_set_sha256"] = digest
+    path = tmp_path / "metadata.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected = {key: manifest[key] for key in (
+        "model_requested", "base_url", "temperature", "split", "cases",
+        "selected_blind_corpus_sha256",
+    )}
+    expected["selected_prediction_set_sha256"] = _selected_prediction_set_digest(
+        [_prediction("case-a")]
+    )
+    with pytest.raises(ValueError, match="resume metadata mismatch for selected_prediction_set_sha256"):
+        _load_resume_metadata(path, expected, {"case-a"})
+
+
+def test_new_manifest_prediction_digest_matches_written_rows(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        _prediction("case-a"), {"response_id": "synthetic-only"}
+    ))
+    run_external.main(["--model", "synthetic-model", "--output-dir", str(tmp_path)])
+    metadata = json.loads((tmp_path / "synthetic-model.metadata.json").read_text())
+    predictions = [
+        json.loads(line) for line in
+        (tmp_path / "synthetic-model.predictions.jsonl").read_text().splitlines()
+    ]
+    assert metadata["selected_prediction_set_sha256"] == (
+        run_external._selected_prediction_set_digest(predictions)
     )
     assert metadata["resume_provenance_unverified"] is False
