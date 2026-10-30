@@ -715,7 +715,7 @@ test('valid offset observations and date-only chunks preserve safe copy', async 
     first_observed_at: asOffset(Date.parse(observedStart), 2),
     last_observed_at: observedEnd,
     analysis_plan: {date_chunks: [
-      {since: dayLabel(-1), until: dayLabel(0), event_rows: 2}],
+      {since: dayLabel(0), until: dayLabel(1), event_rows: 2}],
       more_dates_not_listed: false}});
   await open;
   assert.equal(h.modals, 1);
@@ -771,6 +771,8 @@ test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-on
   const [start] = selectedBounds(h.reads[1]), day = 86400_000;
   h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
     canonical_rows: 7, retained_rows: 7,
+    first_observed_at: utc(start + 3600_000),
+    last_observed_at: utc(start + 3 * day + 3600_000),
     event_types: {focus_span: 7}, sources: {desktop: 7},
     analysis_plan: {date_chunks: [
       {since: utc(start), until: utc(start + day), event_rows: 1},
@@ -820,6 +822,8 @@ test('UTC-equivalent date chunks at both selected boundaries remain valid', asyn
   await settle();
   const [start, end] = selectedBounds(h.reads[1]);
   h.reply(h.reads[1], {...h.preview('range', 'boundary-plan'),
+    first_observed_at: utc(start + 1800_000),
+    last_observed_at: utc(end - 1800_000),
     analysis_plan: {date_chunks: [
       {since: asOffset(start, 2), until: utc(start + 3600_000), event_rows: 1},
       {since: utc(end - 3600_000), until: asOffset(end, 1), event_rows: 1}
@@ -885,7 +889,7 @@ test('a valid partial date plan conserves counts without claiming complete cover
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], {...h.preview('range', 'partial-plan'),
     analysis_plan: {date_chunks: [
-      {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}
+      {since: dayLabel(0), until: dayLabel(1), event_rows: 1}
     ], more_dates_not_listed: true}});
   await open;
   assert.equal(h.modals, 1);
