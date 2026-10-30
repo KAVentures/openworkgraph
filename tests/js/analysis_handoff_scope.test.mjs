@@ -711,3 +711,49 @@ test('valid offset observations and date-only chunks preserve safe copy', async 
   assert.deepEqual(h.copied, ['request-valid']);
   assert.equal(h.tickets.length, 0);
 });
+
+test('date chunks refuse reversed, overlapping, duplicated and out-of-order coverage', async t => {
+  const a = {since: '2026-10-27', until: '2026-10-28', event_rows: 1};
+  const b = {since: '2026-10-28', until: '2026-10-29', event_rows: 2};
+  const mutations = [
+    ['reversed bounds', [{...a, since: '2026-10-29'}]],
+    ['zero-length window', [{...a, until: a.since}]],
+    ['overlapping windows', [a, {...b, since: '2026-10-27'}]],
+    ['duplicate window', [a, {...a}]],
+    ['out-of-order windows', [b, a]],
+    ['UTC-equivalent duplicate', [
+      {since: '2026-10-27T00:00:00Z', until: '2026-10-28T00:00:00Z', event_rows: 1},
+      {since: '2026-10-27T02:00:00+02:00', until: '2026-10-28T02:00:00+02:00', event_rows: 1}
+    ]]
+  ];
+  for (const [name, chunks] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'invalid-plan'),
+      analysis_plan: {date_chunks: chunks}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-only safe', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
+    analysis_plan: {date_chunks: [
+      {since: '2026-10-27', until: '2026-10-28', event_rows: 1},
+      {since: '2026-10-28', until: '2026-10-29', event_rows: 2},
+      {since: '2026-10-29T00:00:00Z', until: '2026-10-30T00:00:00Z', event_rows: 3},
+      {since: '2026-10-30T02:00:00+02:00', until: '2026-10-31T02:00:00+02:00', event_rows: 1}
+    ], more_dates_not_listed: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-ordered-plan']);
+  assert.equal(h.tickets.length, 0);
+});

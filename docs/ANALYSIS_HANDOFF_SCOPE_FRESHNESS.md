@@ -138,3 +138,21 @@ Copy/Download. These are presentation-shape checks, not completeness,
 source-verification, live customer acceptance or business outcome claims.
 Synthetic regressions cover malformed/absent/reversed times, impossible
 dates, malformed chunk counts and valid offset/zero-evidence compatibility.
+
+## Chronological date-chunk consistency
+
+The optional per-day analysis plan is displayed as a sequence of evidence
+windows, not independent unordered labels. Each supplied chunk must have
+`since < until` as an actual instant, and every next chunk must begin at
+or after the previous chunk ends. Reversed, zero-length, overlapping,
+repeated and out-of-order chunks fail closed before the handoff modal,
+clipboard or export-ticket request. Date-only labels are interpreted as
+UTC midnight; equivalent offset timestamps compare by instant. Adjacent
+chunks, gaps, an empty plan and an absent optional plan remain valid.
+This protects the **presentation of coverage**, not the completeness or
+truth of the underlying recorded events.
+
+Synthetic modal regressions cover six invalid chronology patterns,
+including a duplicate expressed with equivalent timezone offsets, and
+a positive contiguous mixed date-only/UTC-offset sequence. No real-user
+or provider validation is implied.

@@ -56,8 +56,15 @@
           typeof d.analysis_plan.more_dates_not_listed === 'boolean') &&
         (d.analysis_plan.date_chunks == null ||
           (Array.isArray(d.analysis_plan.date_chunks) &&
-            d.analysis_plan.date_chunks.every(x => object(x) &&
-              dateLabel(x.since) && dateLabel(x.until) && count(x.event_rows)))));
+            d.analysis_plan.date_chunks.every((x, i, list) => {
+              if (!object(x) || !dateLabel(x.since) || !dateLabel(x.until) ||
+                  !count(x.event_rows)) return false;
+              // A displayed stepwise plan must not silently repeat, overlap,
+              // reverse or reorder evidence windows. Date-only labels are UTC.
+              const since = Date.parse(x.since), until = Date.parse(x.until);
+              return since < until &&
+                (i === 0 || Date.parse(list[i - 1].until) <= since);
+            }))));
     if (!object(d) || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
