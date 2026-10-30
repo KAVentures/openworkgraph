@@ -226,6 +226,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
             raise StagingError("Conflicting incident revision within page")
         seen[sys_id] = record
     return {"records": [seen[k] for k in sorted(seen)],
+            "unobserved_selected_ids": sorted(selected - seen.keys()),
             "returned_rows": len(body["result"]), "distinct_selected_rows": len(seen),
             "may_have_more": len(body["result"]) == limit,
             "historical_completeness": "unknown", "checkpoint_advanced": False,
@@ -314,6 +315,7 @@ def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, 
         returned_rows += staged["returned_rows"]
         last_page = staged
     return {"records": [seen[k] for k in sorted(seen)],
+            "unobserved_selected_ids": sorted(set(scope.sys_ids) - seen.keys()),
             "returned_rows": returned_rows, "distinct_selected_rows": len(seen),
             "pages_checked": len(pages), "plan_sequence_checked": True,
             "may_have_more": last_page["may_have_more"],
