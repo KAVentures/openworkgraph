@@ -13,6 +13,18 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
+// The dashboard selects local calendar days. Keep fixture observations inside
+// that selected week on every CI date and timezone, not only October 2026.
+const fixtureDay = new Date();
+const observedStart = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+  fixtureDay.getDate(), 10, 0, 0).toISOString();
+const observedEnd = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+  fixtureDay.getDate(), 10, 1, 0).toISOString();
+const dayLabel = delta => {
+  const d = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(), fixtureDay.getDate());
+  d.setDate(d.getDate() + delta);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
   let downloads = 0, modals = 0;
@@ -98,8 +110,8 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   const preview = (scope, request = scope) => ({
     request_text: 'request-' + request,
     canonical_rows: 2, retained_rows: 2,
-    first_observed_at: '2026-10-29T10:00:00Z',
-    last_observed_at: '2026-10-29T10:01:00Z',
+    first_observed_at: observedStart,
+    last_observed_at: observedEnd,
     window: scope === 'all' ? {scope: 'all'} :
       {scope: 'range', since: '2026-10-23T00:00:00Z', until: '2026-10-30T00:00:00Z'},
     event_types: {focus_span: 2, capture_gap: 0}, sources: {desktop: 2},
@@ -655,7 +667,7 @@ test('nonzero observed evidence requires real chronological ISO timestamps', asy
     ['missing pair', d => ({...d, first_observed_at: null, last_observed_at: null})],
     ['invalid timestamp', d => ({...d, first_observed_at: 'not-a-date'})],
     ['impossible day', d => ({...d, first_observed_at: '2026-02-30T10:00:00Z'})],
-    ['reversed', d => ({...d, last_observed_at: '2026-10-29T09:00:00Z'})],
+    ['reversed', d => ({...d, last_observed_at: utc(Date.parse(d.first_observed_at) - 60_000)})],
     ['locale timestamp', d => ({...d, last_observed_at: '10/29/2026'})]
   ];
   for (const [name, mutate] of mutations) await t.test(name, async () => {
@@ -672,7 +684,7 @@ test('nonzero observed evidence requires real chronological ISO timestamps', asy
 });
 
 test('date chunks require valid labels and safe integer event counts', async t => {
-  const chunk = {since: '2026-10-29', until: '2026-10-30', event_rows: 2};
+  const chunk = {since: dayLabel(-1), until: dayLabel(0), event_rows: 2};
   const mutations = [
     ['missing since', x => ({...x, since: undefined})],
     ['impossible day', x => ({...x, since: '2026-02-30'})],
@@ -700,10 +712,10 @@ test('valid offset observations and date-only chunks preserve safe copy', async 
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], {...h.preview('range', 'valid'),
-    first_observed_at: '2026-10-29T12:00:00+02:00',
-    last_observed_at: '2026-10-29T10:01:00Z',
+    first_observed_at: asOffset(Date.parse(observedStart), 2),
+    last_observed_at: observedEnd,
     analysis_plan: {date_chunks: [
-      {since: '2026-10-29', until: '2026-10-30', event_rows: 2}],
+      {since: dayLabel(-1), until: dayLabel(0), event_rows: 2}],
       more_dates_not_listed: false}});
   await open;
   assert.equal(h.modals, 1);
@@ -713,17 +725,17 @@ test('valid offset observations and date-only chunks preserve safe copy', async 
 });
 
 test('date chunks refuse reversed, overlapping, duplicated and out-of-order coverage', async t => {
-  const a = {since: '2026-10-27', until: '2026-10-28', event_rows: 1};
-  const b = {since: '2026-10-28', until: '2026-10-29', event_rows: 2};
+  const a = {since: dayLabel(-3), until: dayLabel(-2), event_rows: 1};
+  const b = {since: dayLabel(-2), until: dayLabel(-1), event_rows: 2};
   const mutations = [
-    ['reversed bounds', [{...a, since: '2026-10-29'}]],
+    ['reversed bounds', [{...a, since: dayLabel(-1)}]],
     ['zero-length window', [{...a, until: a.since}]],
-    ['overlapping windows', [a, {...b, since: '2026-10-27'}]],
+    ['overlapping windows', [a, {...b, since: dayLabel(-3)}]],
     ['duplicate window', [a, {...a}]],
     ['out-of-order windows', [b, a]],
     ['UTC-equivalent duplicate', [
-      {since: '2026-10-27T00:00:00Z', until: '2026-10-28T00:00:00Z', event_rows: 1},
-      {since: '2026-10-27T02:00:00+02:00', until: '2026-10-28T02:00:00+02:00', event_rows: 1}
+      {since: dayLabel(-3) + 'T00:00:00Z', until: dayLabel(-2) + 'T00:00:00Z', event_rows: 1},
+      {since: dayLabel(-3) + 'T02:00:00+02:00', until: dayLabel(-2) + 'T02:00:00+02:00', event_rows: 1}
     ]]
   ];
   for (const [name, chunks] of mutations) await t.test(name, async () => {
@@ -845,13 +857,13 @@ test('partition and planned-row inconsistencies refuse the handoff before any co
       event_types: {focus_span: Number.MAX_SAFE_INTEGER, capture_gap: 1}})],
     ['listed date chunks exceed selected rows', d => ({...d, analysis_plan: {
       date_chunks: [
-        {since: '2026-10-28', until: '2026-10-29', event_rows: 2},
-        {since: '2026-10-29', until: '2026-10-30', event_rows: 1}
+        {since: dayLabel(-2), until: dayLabel(-1), event_rows: 2},
+        {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}
       ]}})],
     ['zero selected rows with positive planned rows', d => ({...d,
       canonical_rows: 0, first_observed_at: null, last_observed_at: null,
       event_types: {}, sources: {}, analysis_plan: {date_chunks: [
-        {since: '2026-10-29', until: '2026-10-30', event_rows: 1}]}})]
+        {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}]}})]
   ];
   for (const [name, mutate] of mutations) await t.test(name, async () => {
     const h = harness();
@@ -873,7 +885,7 @@ test('a valid partial date plan conserves counts without claiming complete cover
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], {...h.preview('range', 'partial-plan'),
     analysis_plan: {date_chunks: [
-      {since: '2026-10-29', until: '2026-10-30', event_rows: 1}
+      {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}
     ], more_dates_not_listed: true}});
   await open;
   assert.equal(h.modals, 1);
@@ -886,7 +898,7 @@ test('a valid partial date plan conserves counts without claiming complete cover
 
 test('work evidence totals, capture-health partition and liveness metadata fail closed', async () => {
   const base = {ordinary_event_rows: 2, health_event_rows: 0,
-    last_work_observed_at: '2026-10-29T10:00:00Z',
+    last_work_observed_at: observedStart,
     recorder_liveness_verified: false};
   const invalid = [
     {ordinary_event_rows: 3, health_event_rows: 0}, // exceeds selected rows
@@ -896,8 +908,8 @@ test('work evidence totals, capture-health partition and liveness metadata fail 
     {ordinary_event_rows: -1, health_event_rows: 3},
     {health_event_rows: undefined}, // a supplied partition cannot be partial
     {recorder_liveness_verified: 'false'},
-    {last_work_observed_at: '2026-10-29T09:59:59Z'},
-    {last_work_observed_at: '2026-10-29T10:01:01Z'},
+    {last_work_observed_at: utc(Date.parse(observedStart) - 1000)},
+    {last_work_observed_at: utc(Date.parse(observedEnd) + 1000)},
     {last_work_observed_at: '2026-02-30T10:00:00Z'}
   ];
   for (const change of invalid) {
@@ -916,7 +928,7 @@ test('work evidence totals, capture-health partition and liveness metadata fail 
 test('valid selected work/health partition and optional legacy metadata still prepare safely', async () => {
   const valid = [
     {work_evidence: {ordinary_event_rows: 1, health_event_rows: 1,
-      last_work_observed_at: '2026-10-29T10:00:00+00:00',
+      last_work_observed_at: asOffset(Date.parse(observedStart), 0),
       recorder_liveness_verified: false},
       event_types: {focus_span: 1, capture_gap: 1}},
     {work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
@@ -935,4 +947,69 @@ test('valid selected work/health partition and optional legacy metadata still pr
     assert.equal(h.modals, 1, 'valid/legacy evidence should open: ' + JSON.stringify(variant));
     assert.equal(h.modal['#analysisCopy'].disabled, false);
   }
+});
+
+test('out-of-window observed timestamps refuse copy and export', async t => {
+  const bad = [
+    ['before start', (s) => ({first_observed_at: utc(s - 1000), last_observed_at: utc(s + 60000)})],
+    ['offset before start', (s) => ({first_observed_at: asOffset(s - 1000, 2), last_observed_at: utc(s + 60000)})],
+    ['at exclusive end', (_, e) => ({first_observed_at: utc(e - 60000), last_observed_at: utc(e)})],
+    ['offset after end', (_, e) => ({first_observed_at: utc(e - 60000), last_observed_at: asOffset(e + 1000, -3)})]
+  ];
+  for (const [name, mutation] of bad) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const [start, end] = selectedBounds(h.reads[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'forged-observations'), ...mutation(start, end)});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('inclusive first and pre-exclusive last observations accept equivalent offsets', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  const [start, end] = selectedBounds(h.reads[1]);
+  h.reply(h.reads[1], {...h.preview('range', 'valid-observed-bounds'),
+    first_observed_at: asOffset(start, 2), last_observed_at: asOffset(end - 1000, -3)});
+  await opening;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-valid-observed-bounds']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('current-run lower bound rejects older observations; all remains unbounded', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  h.bars[0].controls.select.value = 'current';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('current')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], {...h.preview('current'),
+    window: {scope: 'current', since: utc(Date.parse(observedStart) + 30000)}},
+    {preserveWindow: true});
+  await opening;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /incomplete or malformed/i);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[3], h.preview('all')); await settle();
+  const all = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[4], {...h.preview('all', 'unbounded'),
+    first_observed_at: '2020-01-01T10:00:00Z',
+    last_observed_at: '2020-01-01T10:01:00Z'});
+  await all;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-unbounded']);
 });
