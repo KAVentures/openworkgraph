@@ -52,13 +52,20 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
               CAST(floor(i * (? - 1) / greatest(? - 1, 1)) AS BIGINT) AS rank
               FROM range(?) t(i)""", [total_cases, shown, shown])
         per_case = max(1, MAX_POINTS // max(shown, 1))
+        # Preserve both first and last recorded events of each displayed case
+        # whenever at least two dots fit. Boundary-crossing integer ranks
+        # select exactly per_case dots for longer cases, never exceeding the
+        # global MAX_POINTS budget. With one dot, keep the first event only.
         rows = conn.execute("""WITH chosen AS (SELECT d.* FROM dc d JOIN pick p USING (rank)),
               numbered AS (SELECT e.case_id, e.activity, e.ts, c.rank, c.start_ts, c.end_ts, c.events,
                   row_number() OVER (PARTITION BY e.case_id ORDER BY e.ts, e.event_id) - 1 AS k
                 FROM ce e JOIN chosen c USING (case_id))
             SELECT rank, case_id, start_ts, end_ts, events, list(struct_pack(ts := ts, activity := activity) ORDER BY ts, k)
-            FROM numbered WHERE events <= ? OR k % CAST(ceil(events / ?) AS BIGINT) = 0
-            GROUP BY rank, case_id, start_ts, end_ts, events ORDER BY rank""", [per_case, per_case]).fetchall()
+            FROM numbered WHERE events <= ? OR k = 0
+                OR (? > 1 AND floor(k * (? - 1) / greatest(events - 1, 1))
+                    > floor((k - 1) * (? - 1) / greatest(events - 1, 1)))
+            GROUP BY rank, case_id, start_ts, end_ts, events ORDER BY rank""",
+            [per_case, per_case, per_case, per_case]).fetchall()
         origin = first
         other = len(slots)
         cases, points = [], 0

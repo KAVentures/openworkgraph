@@ -109,6 +109,52 @@ def test_sampled_rows_include_both_ordered_endpoints_and_one_row_is_deterministi
     assert full["coverage"]["events_omitted_by_case_sampling"] == 0
 
 
+
+def test_point_thinning_retains_case_endpoints_without_exceeding_budget(monkeypatch):
+    """A displayed case's final event must survive when two or more dots fit."""
+    rows = ["case,activity,time"]
+    for case, day, events in (("ten", 0, 10), ("seven", 1, 7)):
+        for i in range(events):
+            stamp = (START + timedelta(days=day, minutes=i)).isoformat()
+            rows.append(f"{case},Step,{stamp}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="point-endpoints",
+        source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    monkeypatch.setattr(dots, "MAX_POINTS", 6)
+    result = dots.dotted_chart(log, max_cases=2, time="relative")
+    by_case = {c["case_id"]: c for c in result["cases"]}
+    assert [p[0] for p in by_case["ten"]["points"]] == [0, 300, 540]
+    assert [p[0] for p in by_case["seven"]["points"]] == [0, 180, 360]
+    assert result["span_seconds"] == 540
+    assert result["coverage"]["events"] == result["coverage"]["events_in_shown_cases"] == 17
+    assert result["coverage"]["events_omitted_by_case_sampling"] == 0
+    assert result["coverage"]["events_omitted_by_point_thinning"] == 11
+    assert result["coverage"]["points_shown"] == 6
+    assert dots.dotted_chart(log, max_cases=2, time="relative")["cases"] == result["cases"]
+
+    monkeypatch.setattr(dots, "MAX_POINTS", 4)
+    two = dots.dotted_chart(log, max_cases=2, time="relative")
+    assert [[p[0] for p in c["points"]] for c in two["cases"]] == [[0, 540], [0, 360]]
+    assert two["coverage"]["points_shown"] == 4
+
+    # A one-dot budget cannot represent both endpoints; preserve rank zero.
+    monkeypatch.setattr(dots, "MAX_POINTS", 2)
+    one = dots.dotted_chart(log, max_cases=2, time="relative")
+    assert [[p[0] for p in c["points"]] for c in one["cases"]] == [[0], [0]]
+    assert one["coverage"]["points_shown"] == 2
+
+    # No thinning: preserve every event and the legacy response shape.
+    monkeypatch.setattr(dots, "MAX_POINTS", 20)
+    full = dots.dotted_chart(log, max_cases=2, time="relative")
+    assert [[p[0] for p in c["points"]] for c in full["cases"]] == [
+        [60 * i for i in range(10)], [60 * i for i in range(7)]]
+    assert full["coverage"]["events_omitted_by_point_thinning"] == 0
+    assert full["coverage"]["points_thinned"] is False
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
