@@ -70,6 +70,45 @@ def test_conformance_fitness_and_deviations():
     assert analytics.conformance(log_id, alternatives)["fitting_cases"] == 54
 
 
+def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
+    """Fitness only covers aligned cases; the two omission reasons partition the rest."""
+    model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
+    rows = ["case,activity,time,who"]
+    rows += [f"{case},{activity},2024-01-01T00:00:00Z,ann" for case, activity in
+             (("a", "A"), ("b", "B"), ("c", "C"), ("d", "C"))]
+    log_id = _log("\\n".join(rows))
+    limited = analytics.conformance(log_id, model, max_variants=1)
+    assert limited["cases"] == 4 and limited["aligned_cases"] == 2
+    assert limited["cases_not_aligned_trace_too_long"] == 0
+    assert limited["cases_not_aligned_variant_limit"] == 2
+    assert limited["variant_limit_truncated"] is True
+    assert limited["fitting_cases"] == 2 and limited["fitness"] == 1
+    complete = analytics.conformance(log_id, model, max_variants=3)
+    assert complete["aligned_cases"] == 4
+    assert complete["cases_not_aligned_variant_limit"] == 0
+    assert complete["variant_limit_truncated"] is False
+
+    # A frequent 301-event trace exceeds the alignment bound. Its cases are
+    # not cap omissions, even when a rarer short trace is excluded by LIMIT.
+    rows = ["case,activity,time,who"]
+    for case in ("long1", "long2"):
+        for index in range(301):
+            rows.append(f"{case},L,2024-01-01T00:{index // 60:02d}:{index % 60:02d}Z,ann")
+    rows.append("short,A,2024-01-01T00:00:00Z,ann")
+    long_log = _log("\\n".join(rows))
+    short_model = {"format": "openworkgraph.reference-model.v1", "paths": [["A"]]}
+    limited = analytics.conformance(long_log, short_model, max_variants=1)
+    assert (limited["cases"], limited["aligned_cases"],
+            limited["cases_not_aligned_trace_too_long"],
+            limited["cases_not_aligned_variant_limit"]) == (3, 0, 2, 1)
+    assert limited["variant_limit_truncated"] is True
+    complete = analytics.conformance(long_log, short_model, max_variants=2)
+    assert (complete["cases"], complete["aligned_cases"],
+            complete["cases_not_aligned_trace_too_long"],
+            complete["cases_not_aligned_variant_limit"]) == (3, 1, 2, 0)
+    assert complete["variant_limit_truncated"] is False
+
+
 @pytest.mark.parametrize("model", [
     {}, {"format": "other", "paths": [["A"]]}, {"format": "openworkgraph.reference-model.v1", "paths": []},
     {"format": "openworkgraph.reference-model.v1", "paths": [["A", 3]]},
@@ -171,6 +210,7 @@ with TestClient(app) as client:
     assert client.post(base + "/conformance", json=model).status_code == 401
     ok = client.post(base + "/conformance", json=model, headers=headers)
     assert ok.status_code == 200 and ok.json()["fitting_cases"] == 6, ok.text
+    assert ok.json()["cases_not_aligned_variant_limit"] == 0 and not ok.json()["variant_limit_truncated"]
     assert client.post(base + "/conformance", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/conformance", content=b"{", headers={**headers, "Content-Type": "application/json"}).status_code == 422
     assert client.post(base + "/conformance", content=b" " * 70000, headers={**headers, "Content-Type": "application/json"}).status_code == 413
