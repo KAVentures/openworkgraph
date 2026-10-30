@@ -141,6 +141,16 @@ def test_median_difference_bootstrap_is_deterministic_and_brackets_the_estimate(
     assert cohorts.median_difference(a, b) == (estimate, low, high)
 
 
+def test_median_difference_bootstrap_is_invariant_to_sample_row_order():
+    """Seeded bootstrap intervals must depend on the samples, not SQL row order."""
+    first = [1, 10, 100, 2, 20, 200]
+    second = [5, 50, 500, 6, 60, 600]
+    expected = cohorts.median_difference(first, second)
+    assert cohorts.median_difference(list(reversed(first)), second) == expected
+    assert cohorts.median_difference(first, list(reversed(second))) == expected
+    assert cohorts.median_difference([20, 1, 200, 10, 2, 100], [60, 5, 600, 50, 6, 500]) == expected
+
+
 def test_real_http_cohort_routes(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
