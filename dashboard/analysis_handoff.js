@@ -99,6 +99,7 @@
     if(activeHandoff && activeHandoff.seq!==seq){
       activeHandoff.copy.disabled=true;
       activeHandoff.download.disabled=true;
+      activeHandoff.detailed.disabled=true;
       activeHandoff.status.textContent=staleScope+' Nothing was copied or downloaded by this change.';
       activeHandoff=null;
     }
@@ -155,7 +156,9 @@
     requestNode.textContent=request;
     copyNode.disabled=false;
     downloadNode.disabled=!d.canonical_rows;
-    activeHandoff={seq,copy:copyNode,download:downloadNode,status:statusNode};
+    detailedNode.checked=false;
+    detailedNode.disabled=false;
+    activeHandoff={seq,copy:copyNode,download:downloadNode,detailed:detailedNode,status:statusNode};
     const current=()=>seq===generation;
     const expired=()=>{
       if(current())return false;
@@ -178,19 +181,28 @@
     let downloadInFlight=false;
     downloadNode.onclick=async()=>{
       if(expired()||downloadInFlight||!d.canonical_rows)return;
+      // Freeze the exact option shown to the user before the async ticket read.
+      // A later checkbox change cannot rewrite an already-issued request.
+      const includeDetailed=!!detailedNode.checked;
       downloadInFlight=true;
       downloadNode.disabled=true;
-      statusNode.textContent='Preparing the redacted evidence package locally…';
+      detailedNode.disabled=true;
+      statusNode.textContent=includeDetailed
+        ? 'Preparing the redacted evidence package with detailed chronological evidence locally…'
+        : 'Preparing the redacted evidence package without detailed chronological evidence locally…';
       try{
-        await download('csvzip',detailedNode.checked,true,chosen,current);
+        await download('csvzip',includeDetailed,true,chosen,current);
         statusNode.textContent=current()
-          ? 'Download started. Inspect the file, then attach it to your AI. No data was uploaded.'
+          ? `Download started (${includeDetailed?'detailed chronology included':'summary evidence only'}). Inspect the file, then attach it to your AI. No data was uploaded.`
           : staleScope;
       }catch(e){statusNode.textContent=current()?e.message:staleScope;}
       finally{
         downloadInFlight=false;
         // A superseded modal must never regain an enabled export control.
-        if(current())downloadNode.disabled=false;
+        if(current()){
+          downloadNode.disabled=false;
+          detailedNode.disabled=false;
+        }
       }
     };
   }
