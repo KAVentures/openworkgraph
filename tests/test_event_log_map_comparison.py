@@ -147,7 +147,7 @@ def test_one_transition_does_not_claim_a_bootstrap_interval():
         rows.append(f"{case_id},A,{start.isoformat()}")
         rows.append(f"{case_id},{target},{(start + timedelta(minutes=2)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="one-transition",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="one-transition",
         source_format="csv", mapping={"case_column": "case",
                                       "activity_column": "activity",
                                       "timestamp_column": "time"})["log_id"]
