@@ -1070,3 +1070,48 @@ test('calendar-covering, boundary and zero-count optional chunks preserve safe h
     assert.equal(h.tickets.length, 0);
   });
 });
+
+test('redacted focus examples cannot contradict selected counts or observation span', async t => {
+  const sample = observed_at => ({app: 'Editor', window_title: 'Redacted',
+    ...(observed_at === undefined ? {} : {observed_at})});
+  const cases = [
+    ['no selected focus', d => {d.event_types = {capture_gap: 2}; d.redacted_examples = [sample(observedStart)];}],
+    ['too many for selected focus', d => {d.event_types = {focus_span: 1, capture_gap: 1}; d.redacted_examples = [sample(observedStart), sample(observedEnd)];}],
+    ['over six-row cap', d => {d.canonical_rows = 8; d.retained_rows = 8; d.event_types = {focus_span: 8}; d.sources = {desktop: 8}; d.redacted_examples = Array.from({length: 7}, () => sample(observedStart));}],
+    ['before observed span', d => {d.redacted_examples = [sample(new Date(Date.parse(observedStart)-1000).toISOString())];}],
+    ['after observed span', d => {d.redacted_examples = [sample(new Date(Date.parse(observedEnd)+1000).toISOString())];}],
+    ['malformed timestamp', d => {d.redacted_examples = [sample('not-a-timestamp')];}],
+    ['numeric timestamp', d => {d.redacted_examples = [sample(123)];}]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    const d = h.preview('range', 'reviewed'); mutate(d);
+    h.reply(h.reads[1], d); await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /preview evidence was incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('valid redacted focus examples preserve offset and legacy compatibility', async t => {
+  const cases = [
+    ['UTC-offset equivalent observations', d => {d.redacted_examples = [{app: 'Editor', observed_at: observedStart.replace(/Z$/, '+00:00')}, {app: 'Browser', observed_at: observedEnd}];}],
+    ['legacy examples without timestamps', d => {d.redacted_examples = [{app: 'Editor'}];}],
+    ['health-only without focus examples', d => {d.event_types = {capture_gap: 2}; d.redacted_examples = [];}]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    const d = h.preview('range', 'reviewed'); mutate(d);
+    h.reply(h.reads[1], d); await open;
+    assert.equal(h.modals, 1);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
