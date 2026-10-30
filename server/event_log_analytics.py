@@ -88,12 +88,15 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
         skipped: dict[str, int] = {}
         inserted: dict[str, int] = {}
         too_long = 0
+        variants_aligned = variants_skipped_too_long = 0
         worst: list[dict[str, Any]] = []
         for joined, cases in rows:
             trace = joined.split(_SEP)
             if len(trace) > MAX_ALIGNED_TRACE_LENGTH:
                 too_long += cases
+                variants_skipped_too_long += 1
                 continue
+            variants_aligned += 1
             best_cost, best_moves, best_path = None, [], 0
             for index, path in enumerate(paths):
                 cost, moves = _align(trace, path)
@@ -119,6 +122,10 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
                     for a, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:50]]
         return {
             "model_paths": len(paths),
+            "max_variants_applied": max_variants,
+            "variants_selected": len(rows),
+            "variants_aligned": variants_aligned,
+            "variants_skipped_trace_too_long": variants_skipped_too_long,
             "cases": total_cases,
             "aligned_cases": aligned_cases,
             "aligned_share": round(aligned_cases / total_cases, 6) if total_cases else 0,
