@@ -130,7 +130,7 @@ def test_benchmark_capped_hash_sample_is_independent_of_import_order(monkeypatch
     """Identical case sets produce identical capped bootstrap support across row orders."""
     rows = _claims_csv().splitlines()
     reversed_log = workspace.import_log(
-        BytesIO(("\\n".join([rows[0], *reversed(rows[1:])]) + "\\n").encode()),
+        BytesIO(("\n".join([rows[0], *reversed(rows[1:])]) + "\n").encode()),
         name="claims-reversed", source_format="csv", mapping=MAPPING)["log_id"]
     original_log = _log()
     monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
