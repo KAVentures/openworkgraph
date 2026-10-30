@@ -1422,7 +1422,7 @@ def test_system_instruction_digest_is_domain_separated_and_content_sensitive():
     first = _system_instruction_digest("Reconstruct only from observed evidence.")
     assert len(first) == 64
     assert first == _system_instruction_digest("Reconstruct only from observed evidence.")
-    assert first != _system_instruction_digest("Reconstruct only from observed evidence.\\n")
+    assert first != _system_instruction_digest("Reconstruct only from observed evidence.\n")
     assert first != _system_instruction_digest("reconstruct only from observed evidence.")
     with pytest.raises(ValueError, match="must be text"):
         _system_instruction_digest(None)
@@ -1451,14 +1451,14 @@ def test_resume_rejects_changed_system_instruction_before_request_or_mutation(
     from evals.reconstruction import run_external
 
     path = tmp_path / "synthetic-model.predictions.jsonl"
-    path.write_text(json.dumps(_prediction("case-a")) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(_prediction("case-a")) + "\n", encoding="utf-8")
     metadata_path = tmp_path / "synthetic-model.metadata.json"
     metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
     before = (path.read_bytes(), metadata_path.read_bytes())
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
     monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
     monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
-    monkeypatch.setattr(run_external, "SYSTEM_INSTRUCTION", run_external.SYSTEM_INSTRUCTION + "\\nChanged")
+    monkeypatch.setattr(run_external, "SYSTEM_INSTRUCTION", run_external.SYSTEM_INSTRUCTION + "\nChanged")
     monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
         (_ for _ in ()).throw(AssertionError("prompt mismatch must not call provider"))
     ))
