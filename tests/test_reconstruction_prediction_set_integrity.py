@@ -139,7 +139,7 @@ def test_model_response_may_omit_case_id_or_match_requested_case():
     ]}, "multiple workflows"),
     ({"case_id": "case-a", "workflows": "not-a-list"}, "workflows must be a list"),
     ({"case_id": "case-a", "workflows": [{"event_ids": "task"}]}, "event_ids must be a list"),
-    ({"case_id": "case-a", "workflows": [], "unassigned_event_ids": ["stale-event"]}, "unknown ids"),
+    ({"case_id": "case-a", "workflows": [], "unassigned_event_ids": ["stale-event"]}, "unknown event ids"),
 ])
 def test_resume_refuses_stale_or_malformed_evidence_membership(tmp_path, bad_prediction, pattern):
     path = _write_jsonl(tmp_path, [bad_prediction])
@@ -193,3 +193,53 @@ def test_runner_refuses_stale_resume_before_model_request(tmp_path, monkeypatch)
     assert path.read_bytes() == before
     assert not (tmp_path / "synthetic-model.report.json").exists()
     assert not (tmp_path / "synthetic-model.metadata.json").exists()
+
+
+@pytest.mark.parametrize("prediction,pattern", [
+    ({"workflows": [{"event_ids": ["task", "task"]}]}, "duplicate event ids"),
+    ({"workflows": [{"event_ids": [7]}]}, "nonempty string event ids"),
+    ({"workflows": [{"event_ids": [""]}]}, "nonempty string event ids"),
+    ({"workflows": [{"event_ids": ["task"], "ordered_event_ids": ["noise"]}]},
+     "outside its workflow"),
+    ({"workflows": [{"event_ids": ["task"], "automation_relevant_event_ids": ["noise"]}]},
+     "outside its workflow"),
+    ({"workflows": [{"event_ids": ["task"], "ui_mechanic_event_ids": ["noise"]}]},
+     "outside its workflow"),
+    ({"workflows": [{"event_ids": ["task"]}], "unassigned_event_ids": ["task"]},
+     "both assigned and unassigned"),
+    ({"workflows": [], "unassigned_event_ids": ["noise", "noise"]},
+     "duplicate event ids"),
+    ({"workflows": [], "unassigned_event_ids": [None]},
+     "nonempty string event ids"),
+])
+def test_model_response_rejects_inconsistent_event_membership(prediction, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        _validate_prediction(prediction, "case-a", {"task", "noise"})
+
+
+def test_model_response_accepts_partial_order_and_omitted_optional_lists():
+    prediction = {
+        "workflows": [
+            {"event_ids": ["task", "noise"], "ordered_event_ids": ["noise"]},
+            {"event_ids": []},
+        ],
+        "unassigned_event_ids": [],
+    }
+    validated = _validate_prediction(prediction, "case-a", {"task", "noise"})
+    assert validated["case_id"] == "case-a"
+    assert validated["workflows"][0]["ordered_event_ids"] == ["noise"]
+
+
+def test_resume_rejects_contradictory_membership_without_modifying_file(tmp_path):
+    prediction = {
+        "case_id": "case-a",
+        "workflows": [{"event_ids": ["task"]}],
+        "unassigned_event_ids": ["task"],
+    }
+    path = _write_jsonl(tmp_path, [prediction])
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="both assigned and unassigned"):
+        _load_resume_predictions(
+            path, {"case-a"}, evidence_ids_by_case={"case-a": {"task", "noise"}}
+        )
+    assert path.read_bytes() == before
