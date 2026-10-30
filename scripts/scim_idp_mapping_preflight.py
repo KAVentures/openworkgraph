@@ -29,13 +29,14 @@ GROUP_MATCH = frozenset({"displayname", "externalid"})
 # not User search/matching filters or authenticated identity claims.
 _CONTACT_CHILDREN = frozenset({"value", "type", "display", "primary"})
 _CONTACT_SELECTOR = re.compile(
-    r'emails\[(type|value)\s+eq\s+("(?:[^"\\]|\\.)*")\](?:\.(value|type|display|primary))?',
+    r'emails\[(type|value) +eq +("(?:[^"\\]|\\.)*")\](?:\.(value|type|display|primary))?',
     re.IGNORECASE,
 )
 
 
 def _supported_contact_patch_path(path: str) -> bool:
-    if path == "emails" or path in {"emails." + child for child in _CONTACT_CHILDREN}:
+    folded = path.casefold()
+    if folded == "emails" or folded in {"emails." + child for child in _CONTACT_CHILDREN}:
         return True
     match = _CONTACT_SELECTOR.fullmatch(path)
     if match is None:
@@ -47,9 +48,10 @@ def _supported_contact_patch_path(path: str) -> bool:
     return (
         type(literal) is str
         and bool(literal.strip())
-        and len(literal) <= 320
-        and not any(ord(char) < 32 or ord(char) == 127
-                    or 0xD800 <= ord(char) <= 0xDFFF for char in literal)
+        and len(literal) <= (64 if match.group(1).casefold() == "type" else 320)
+        and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                    or 0xD800 <= ord(char) <= 0xDFFF
+                    or ord(char) in (65534, 65535) for char in literal)
     )
 
 
@@ -65,15 +67,18 @@ def _object(value: Any, path: str, required: set[str], optional: set[str] = froz
     return value
 
 
-def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> list[str]:
+def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128,
+                preserve_case: bool = False) -> list[str]:
     if type(value) is not list or not minimum <= len(value) <= MAX_ATTRIBUTES:
         raise InvalidMapping(f"{path} must have {minimum}–{MAX_ATTRIBUTES} paths")
     folded = []
     for item in value:
         if type(item) is not str or not 1 <= len(item) <= max_path or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in item):
             raise InvalidMapping(f"{path} contains an invalid path")
-        folded.append(item.casefold())
-    if len(set(folded)) != len(folded):
+        # Preserve JSON selector literal spelling: casefolding \\U into \\u
+        # can turn an invalid provider path into a falsely accepted one.
+        folded.append(item if preserve_case else item.casefold())
+    if len({item.casefold() for item in folded}) != len(folded):
         raise InvalidMapping(f"{path} contains duplicate paths")
     return folded
 
@@ -95,7 +100,8 @@ def assess(mapping: Any) -> dict:
 
     match = _attributes(users["match_attributes"], "users.match_attributes", minimum=1)
     create = _attributes(users["create_attributes"], "users.create_attributes", minimum=1)
-    patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0, max_path=1024)
+    patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0,
+                        max_path=1024, preserve_case=True)
     group_match = _attributes(groups["match_attributes"], "groups.match_attributes", minimum=0)
     findings: list[dict[str, str]] = []
 
@@ -109,24 +115,24 @@ def assess(mapping: Any) -> dict:
         ("groups.match_attributes", group_match, GROUP_MATCH),
     ):
         for index, value in enumerate(values):
-            if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
+            if value.casefold() not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
     if any((contact_selector := _CONTACT_SELECTOR.fullmatch(value)) is not None
            and contact_selector.group(1).casefold() == "value" for value in patch):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
-    if "emails" in create or any(value.startswith("emails") for value in patch):
+    if "emails" in create or any(value.casefold().startswith("emails") for value in patch):
         add("caution", "unverified_contact_metadata", "users",
             "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
-    if "username" in patch:
+    if any(value.casefold() == "username" for value in patch):
         add("blocker", "immutable_username", "users.patch_attributes",
             "OWG does not support changing the stable userName/evidence actor")
     for path, values in (("users.create_attributes", create), ("users.patch_attributes", patch)):
-        if "name" in values and any(value.startswith("name.") for value in values):
+        if any(value.casefold() == "name" for value in values) and any(value.casefold().startswith("name.") for value in values):
             add("caution", "overlapping_name_paths", path,
                 "Whole-name and child mappings overlap; verify the IdP's emitted request order")
 
