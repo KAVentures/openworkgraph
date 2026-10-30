@@ -266,3 +266,23 @@ non-finite or negative `--temperature` and non-finite or nonpositive
 billable request. Finite nonnegative temperature bounds remain
 provider-specific. These checks do not authenticate the provider, prove
 prediction quality or alter any preregistered scoring threshold.
+
+
+## Pre-request blind evidence serialization gate
+
+The runner now preflights **every selected case's blind presented evidence**
+before creating the output directory, opening a prediction artifact or
+requesting a model. Nested non-finite numbers, Python-only values (including
+tuples), non-string object keys and evidence that cannot be encoded as the
+canonical finite JSON used for the local evidence fingerprint are rejected.
+Case-indexed errors do not echo the potentially sensitive source payload.
+Finite nested JSON values remain valid. The gate also runs for legacy
+digestless `--resume` rows, which otherwise would not trigger digest
+verification until after a new model request.
+
+The strict digest itself still binds only *blind* evidence and case identity;
+it does not authenticate the model, the source, or hidden answer keys. This is
+an early refusal of malformed evidence, **not** improved held-out assignment
+F1, contamination, interruption rejection, provider validation or customer
+pilot proof. Synthetic tests exercise preflight, finite compatibility and
+fail-before-request/no-mutation behavior; no paid API was invoked.
