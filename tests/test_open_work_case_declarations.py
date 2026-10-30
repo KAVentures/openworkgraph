@@ -317,3 +317,80 @@ def test_expired_dependency_cannot_be_presented_as_live_declared_edge(local):
     at = NOW + timedelta(days=7, hours=1)
     assert A in {i["work_item_ref"] for i in reviews.list_review_intentions(now=at)["items"]}
     assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
+
+
+def test_lapsed_review_cannot_resurrect_a_later_saved_declaration(local):
+    # A review expires seven days after its own creation. A declaration
+    # saved later must not gain an extra seven days of authority.
+    reviewed(A)
+    saved_at = NOW + timedelta(days=1)
+    item = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=saved_at)
+    assert item["expires_at"] == (NOW + timedelta(days=7)).isoformat()
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=6))["items"] == [item]
+
+    after_lapse = NOW + timedelta(days=7, hours=1)
+    assert facts.list_case_declarations(SCOPE, now=after_lapse)["items"] == []
+    reviewed(A, at=after_lapse)
+    # A newly saved review is not a reapproval of the old goal/outcome.
+    assert facts.list_case_declarations(SCOPE, now=after_lapse)["items"] == []
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(A, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=item["revision"], now=after_lapse)
+    fresh = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=after_lapse)
+    assert fresh["revision"] == 1
+    assert fresh["created_at"] == after_lapse.isoformat()
+
+
+def test_dependency_expiry_cascades_and_cas_update_never_renews(local):
+    # B is reviewed later than A; B cannot outlive A's declared prerequisite
+    # and reappear merely because A is re-reviewed after expiry.
+    reviewed(A)
+    later = NOW + timedelta(days=1)
+    reviewed(B, at=later)
+    a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=later)
+    b = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=later)
+    assert b["expires_at"] == (later + timedelta(days=7)).isoformat()
+
+    linked = facts.save_case_declaration(B, SCOPE,
+        goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], expected_revision=1,
+        now=later + timedelta(hours=1))
+    assert linked["expires_at"] == a["expires_at"]
+    # Removing the dependency by explicit CAS must not silently renew B.
+    unlinked = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        expected_revision=2, now=later + timedelta(hours=2))
+    assert unlinked["expires_at"] == a["expires_at"]
+
+    # Reapprove B -> A before expiry; even this cannot extend the deadline.
+    linked_again = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], expected_revision=3,
+        now=later + timedelta(hours=3))
+    assert linked_again["expires_at"] == a["expires_at"]
+
+    after_lapse = NOW + timedelta(days=7, hours=1)
+    reviewed(A, at=after_lapse)
+    facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=after_lapse)
+    items = facts.list_case_declarations(SCOPE, now=after_lapse)["items"]
+    assert {item["work_item_ref"] for item in items} == {A}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(B, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=linked_again["revision"], now=after_lapse)
