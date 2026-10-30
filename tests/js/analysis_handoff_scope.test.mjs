@@ -1013,3 +1013,56 @@ test('current-run lower bound rejects older observations; all remains unbounded'
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-unbounded']);
 });
+
+test('positive date chunks must intersect the actual observed evidence span', async t => {
+  const first = Date.parse(observedStart), last = Date.parse(observedEnd);
+  const impossible = [
+    ['earlier observed day inside the selected week',
+      {since: dayLabel(-2), until: dayLabel(-1), event_rows: 1}],
+    ['chunk ends exactly at first observation (exclusive end)',
+      {since: utc(first - 3600_000), until: asOffset(first, 2), event_rows: 1}],
+    ['later time on the same observed day',
+      {since: asOffset(last + 1000, -3), until: utc(last + 60_000), event_rows: 1}],
+    ['later day inside the selected week is not needed: last event bounds the evidence',
+      {since: utc(last + 60_000), until: utc(last + 120_000), event_rows: 2}]
+  ];
+  for (const [name, chunk] of impossible) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'false-chunk-coverage'),
+      analysis_plan: {date_chunks: [chunk]}});
+    await opening;
+    assert.equal(h.modals, 0, 'out-of-observation positive chunk must be withheld');
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('calendar-covering, boundary and zero-count optional chunks preserve safe handoff', async t => {
+  const first = Date.parse(observedStart), last = Date.parse(observedEnd);
+  const allowed = [
+    ['full observed local day', {since: dayLabel(0), until: dayLabel(1), event_rows: 2}],
+    ['offset-equivalent exact first and last bounds',
+      {since: asOffset(first, 2), until: asOffset(last + 1000, -3), event_rows: 1}],
+    ['chunk begins at the last observed event',
+      {since: asOffset(last, 2), until: utc(last + 1000), event_rows: 1}],
+    ['legacy empty chunk outside observed events',
+      {since: dayLabel(-2), until: dayLabel(-1), event_rows: 0}]
+  ];
+  for (const [name, chunk] of allowed) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'observed-intersection'),
+      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: true}});
+    await opening;
+    assert.equal(h.modals, 1, 'valid/partial plan should remain usable');
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-observed-intersection']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
