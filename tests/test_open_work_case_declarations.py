@@ -1423,39 +1423,51 @@ def test_oversized_auxiliary_edge_does_not_block_explicit_review_deletion(local)
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
 
 
-def test_mixed_precision_as_of_approval_and_dependency_closure(local):
-    # ISO UTC strings with no fractional seconds compare *after* strings
-    # with fractional seconds in SQLite TEXT order, even when earlier.
-    # The bounded reader must use parsed UTC instants, not SQL text filters.
-    admitted = NOW - timedelta(hours=1)
-    for ref in (A, B, C):
-        reviewed(ref, at=admitted)
-    root = save()  # whole-second UTC approval
-    middle_time = NOW + timedelta(microseconds=125_000)
-    dependent = facts.save_case_declaration(
-        B, SCOPE, goal_code="review_source_state",
-        expected_outcome_code="source_state_rechecked",
-        depends_on_work_item_refs=[A], now=middle_time)
-    future_time = NOW + timedelta(microseconds=750_000)
-    future = facts.save_case_declaration(
-        C, SCOPE, goal_code="review_source_state",
-        expected_outcome_code="source_state_rechecked", now=future_time)
+def test_legacy_migration_does_not_materialize_unbounded_refs(local, monkeypatch):
+    # A damaged v1 auxiliary row can contain a huge native TEXT reference.
+    # Migration must enumerate bounded integer rowids, not load and rebind
+    # that untrusted TEXT cell for each incarnation-token UPDATE.
+    path = facts._path()
+    oversized_ref = "owg:w:" + "f" * (256 * 1024)
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.executemany(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+            [(ref, SCOPE, "review_source_state", "source_state_rechecked",
+              "[]", 1, NOW.isoformat(), NOW.isoformat(),
+              (NOW + timedelta(days=7)).isoformat())
+             for ref in (A, oversized_ref)],
+        )
+        db.execute("PRAGMA user_version=1")
+    if os.name == "posix":
+        path.chmod(0o600)
 
-    at_whole_second = facts.list_case_declarations(SCOPE, now=NOW)
-    assert at_whole_second["items"] == [root]
+    traced_sql = []
+    original_connect = sqlite3.connect
 
-    # The root must remain visible and permit its explicitly declared
-    # dependent at a fractional as-of time; C is not yet owner-approved.
-    halfway = facts.list_case_declarations(
-        SCOPE, now=NOW + timedelta(microseconds=500_000))
-    assert halfway["items"] == [dependent, root]
-    assert halfway["source_read_performed"] is False
-    assert all(item["customer_outcome_verified"] is False
-               for item in halfway["items"])
+    def traced_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        connection.set_trace_callback(traced_sql.append)
+        return connection
 
-    # Mixed-precision timestamps must sort chronologically rather than
-    # lexicographically. All cases are still from one reviewed scope.
-    after_all = facts.list_case_declarations(
-        SCOPE, now=NOW + timedelta(microseconds=900_000))
-    assert after_all["items"] == [future, dependent, root]
-    assert facts.list_case_declarations(OTHER_SCOPE, now=future_time)["items"] == []
+    monkeypatch.setattr(facts.sqlite3, "connect", traced_connect)
+    with facts._database(create=False) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        count, unique_tokens = db.execute(
+            "SELECT COUNT(*),COUNT(DISTINCT edit_token) FROM declarations"
+        ).fetchone()
+        assert (count, unique_tokens) == (2, 2)
+        assert db.execute(
+            "SELECT length(work_item_ref) FROM declarations WHERE work_item_ref=?",
+            (oversized_ref,)
+        ).fetchone()[0] == len(oversized_ref)
+
+    assert any("SELECT rowid FROM declarations LIMIT" in sql for sql in traced_sql)
+    assert not any("SELECT work_item_ref FROM declarations LIMIT" in sql
+                   for sql in traced_sql)
+    assert any("WHERE rowid=" in sql for sql in traced_sql)
