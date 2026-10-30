@@ -32,3 +32,18 @@ The contact-email array **shipped in #480** (resolving #470) and is documented i
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
 
 Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_USER_NAMES.md), [search](SCIM_SEARCH.md), [Groups](SCIM_GROUPS.md), [client policy](SCIM_CLIENT_POLICY.md). Coordination: #458, #412, #326 Section B, #264 Stage 3.
+
+
+### Contact selector syntax parity (offline, not provider validation)
+
+The preflight checks declared contact PATCH selector syntax against the shipped
+\`gateway/scim_user_emails.py\` parser without rewriting quoted JSON literals.
+Attribute/field names are case-insensitive, but literal spelling is preserved
+for JSON decoding: an invalid \`\\U\` escape must not be transformed into a valid
+\`\\u\` escape by case normalization. The shipped grammar requires ordinary
+ASCII spaces around \`eq\` (not tabs, newlines or non-breaking spaces), and
+selector literals are limited to **64 characters for \`type\`** and **320 for
+\`value\`**, with control characters and invalid Unicode refused. Valid
+\`\\u\` JSON escapes remain supported. The tool checks declared *paths* only;
+it cannot prove a target contact exists, a PATCH operation succeeds, an
+identity matches or an Entra/Okta mapping is compatible without live tests.
