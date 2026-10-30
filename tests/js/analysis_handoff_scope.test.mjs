@@ -68,7 +68,18 @@ function harness(auth = Promise.resolve(true)) {
   vm.runInNewContext(source, {window, document, fetch, navigator, Date, Intl,
     URLSearchParams, AbortController, Event: class Event {}, setTimeout});
   document.ready();
-  const reply = (item, data) => item.resolve({ok: true, async json() {return data;}});
+  const reply = (item, data, {preserveWindow = false} = {}) => {
+    // The real backend echoes the selected scope and normalizes UTC Z to +00:00.
+    // Preserve deliberately forged windows only for adversarial response tests.
+    if (!preserveWindow && item.url.startsWith('/v1/analysis-preview?')) {
+      const params = new URLSearchParams(item.url.split('?')[1]);
+      const scope = params.get('scope');
+      const bound = key => params.get(key)?.replace(/Z$/, '+00:00');
+      data = {...data, window: scope === 'range'
+        ? {scope, since: bound('since'), until: bound('until')} : {scope}};
+    }
+    item.resolve({ok: true, async json() {return data;}});
+  };
   const preview = (scope, request = scope) => ({
     request_text: 'request-' + request,
     canonical_rows: 2, retained_rows: 2,
@@ -194,4 +205,56 @@ test('open handoff is proactively disabled and announced stale before any click'
   assert.equal(h.modal['#analysisRequest'].textContent, 'request-new-request');
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-new-request']);
+});
+
+test('preview for a different scope is refused before opening or exporting', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const prepare = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], h.preview('all', 'wrong-scope'), {preserveWindow: true});
+  await prepare;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /period did not match/i);
+  assert.equal(h.toasts.length, 1);
+});
+
+test('shifted range bounds are refused but UTC-equivalent server bounds pass', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const bad = h.bars[0].controls.button.onclick();
+  await settle();
+  const selected = new URLSearchParams(h.reads[1].url.split('?')[1]);
+  const shifted = new Date(Date.parse(selected.get('since')) + 3600_000).toISOString();
+  h.reply(h.reads[1], {...h.preview('range', 'wrong-range'), window: {
+    scope: 'range', since: shifted, until: selected.get('until')
+  }}, {preserveWindow: true});
+  await bad;
+  assert.equal(h.modals, 0);
+  assert.match(h.summary.textContent, /period did not match/i);
+  const good = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], h.preview('range', 'correct-range'));
+  await good;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-correct-range');
+});
+
+test('impossible custom dates cannot silently roll into another evidence period', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'custom';
+  controls.select.onchange({target: controls.select});
+  await settle();
+  const previousReads = h.reads.length;
+  controls.start.value = '2026-02-30';
+  controls.end.value = '2026-03-03';
+  controls.start.onchange();
+  await settle();
+  assert.equal(h.reads.length, previousReads);
+  assert.match(h.summary.textContent, /valid dates/i);
+  assert.throws(() => h.window.owgEvidenceSelection(), /valid dates/i);
+  assert.equal(h.tickets.length, 0);
 });
