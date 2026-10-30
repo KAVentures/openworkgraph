@@ -69,6 +69,13 @@ though the existing backend still applies its authorization checks.
   Success or failure re-enables Copy only if the prepared period is still
   current, allowing an explicit retry after a permission failure. No AI
   invocation, upload or automatic retry occurs.
+- Copy and Download share one status announcement and therefore cannot run
+  simultaneously. While either operation is pending, both action buttons are
+  disabled; the other action cannot replace its progress or completion message.
+  Completion or failure restores both buttons only for the still-current
+  prepared scope (and only if recorded evidence permits Download). A stale
+  handoff remains disabled. This does not cancel a clipboard write already
+  underway or grant any export permission.
 - A delayed clipboard failure after the selected period changes retains the
   stale-period warning rather than replacing it with a generic clipboard
   message. A successful in-flight clipboard write cannot be revoked: the
@@ -88,7 +95,8 @@ export ticket, the detailed-evidence option is frozen and accurately reported du
 export links cannot change the scope/redaction/detail settings or leave the
 local endpoint, UTC-equivalent range bounds still pass, and delayed clipboard
 errors preserve the stale-period warning. Deferred clipboard checks also cover
-single-flight Copy, a permission-failure retry and successful completion after
+single-flight Copy, mutual exclusion with pending Download and the shared
+status announcement, a permission-failure retry and successful completion after
 a period change without re-enabling the old control.
 
 These are deterministic JavaScript contract checks, **not** an actual

@@ -377,6 +377,76 @@ test('late clipboard rejection cannot replace a period-change warning', async ()
   assert.equal(h.tickets.length, 0);
 });
 
+
+test('pending Copy blocks Download until the same-scope clipboard settles', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /copying.*locally/i);
+  pendingClipboard.resolve();
+  await copy;
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  h.reply(h.tickets[0], {});
+  await download;
+  assert.equal(h.downloads, 1);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('pending Download blocks Copy without replacing ticket progress', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, []);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*locally/i);
+  h.tickets[0].reject(new Error('Ticket unavailable'));
+  await download;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-reviewed']);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+});
+
+test('period change during pending Copy keeps both actions disabled after completion', async () => {
+  const pendingClipboard = deferred();
+  const h = harness(Promise.resolve(true), () => pendingClipboard.promise);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  pendingClipboard.resolve();
+  await copy;
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /previous period/i);
+});
+
 test('ticket URL must preserve exact selected scope, privacy flags and local endpoint', async t => {
   const attacks = [
     ['external origin', url => 'https://example.invalid' + url],

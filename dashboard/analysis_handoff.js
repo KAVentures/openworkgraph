@@ -167,11 +167,14 @@
     };
     // Clipboard permission prompts can remain pending. Repeated Copy clicks
     // must not queue duplicate writes or race to announce an older result.
-    let copyInFlight=false;
+    // Copy and Download share one status region: serialize both operations so
+    // one completion cannot overwrite the other action's progress or result.
+    let actionInFlight=false;
     copyNode.onclick=async()=>{
-      if(expired()||copyInFlight)return;
-      copyInFlight=true;
+      if(expired()||actionInFlight)return;
+      actionInFlight=true;
       copyNode.disabled=true;
+      downloadNode.disabled=true;
       statusNode.textContent='Copying the prepared request locally… No AI was invoked.';
       try{
         await navigator.clipboard.writeText(request);
@@ -182,20 +185,23 @@
         ? 'Clipboard unavailable. Open “Read the request” and copy the text.'
         : staleScope+' Clipboard write failed; prepare again.';}
       finally{
-        copyInFlight=false;
-        // A superseded handoff must not regain a usable Copy button.
-        if(current())copyNode.disabled=false;
+        actionInFlight=false;
+        // A superseded handoff must not regain either action button.
+        if(current()){
+          copyNode.disabled=false;
+          downloadNode.disabled=!d.canonical_rows;
+        }
       }
     };
     // A user may double-click while the local ticket is pending. Only one
     // ticket/download may be started for this prepared handoff at a time.
-    let downloadInFlight=false;
     downloadNode.onclick=async()=>{
-      if(expired()||downloadInFlight||!d.canonical_rows)return;
+      if(expired()||actionInFlight||!d.canonical_rows)return;
       // Freeze the exact option shown to the user before the async ticket read.
       // A later checkbox change cannot rewrite an already-issued request.
       const includeDetailed=!!detailedNode.checked;
-      downloadInFlight=true;
+      actionInFlight=true;
+      copyNode.disabled=true;
       downloadNode.disabled=true;
       detailedNode.disabled=true;
       statusNode.textContent=includeDetailed
@@ -208,10 +214,11 @@
           : staleScope;
       }catch(e){statusNode.textContent=current()?e.message:staleScope;}
       finally{
-        downloadInFlight=false;
-        // A superseded modal must never regain an enabled export control.
+        actionInFlight=false;
+        // A superseded modal must never regain either action control.
         if(current()){
-          downloadNode.disabled=false;
+          copyNode.disabled=false;
+          downloadNode.disabled=!d.canonical_rows;
           detailedNode.disabled=false;
         }
       }
