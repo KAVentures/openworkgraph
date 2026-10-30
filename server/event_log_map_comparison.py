@@ -14,6 +14,7 @@ describe the two cohorts; they are not explained by the cohort definition.
 """
 from __future__ import annotations
 
+from statistics import median
 from typing import Any
 
 from . import event_log_cohorts as cohorts
@@ -78,9 +79,19 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
         timed = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
                        key=lambda p: -(p["transitions_in_first"] + p["transitions_in_second"]))[:TIMED_PATHS]
         for p in timed:
-            d, low, high = _median_difference(_gaps(conn, "ca", p["from"], p["to"]),
-                                              _gaps(conn, "cb", p["from"], p["to"]))
+            # The full-cohort medians above and the reservoir-sampled bootstrap
+            # below can have different point estimates. Expose the actual
+            # sampled denominators and medians so the distinction is explicit.
+            first_gaps = _gaps(conn, "ca", p["from"], p["to"])
+            second_gaps = _gaps(conn, "cb", p["from"], p["to"])
+            d, low, high = _median_difference(first_gaps, second_gaps)
             p["median_gap_difference"] = {"seconds": d, "ci95": [low, high], "ci_excludes_zero": low > 0 or high < 0,
+                                          "sampled_gaps_first": len(first_gaps),
+                                          "sampled_gaps_second": len(second_gaps),
+                                          "sampled_median_gap_seconds_first": median(first_gaps),
+                                          "sampled_median_gap_seconds_second": median(second_gaps),
+                                          "sampling_truncated_first": len(first_gaps) < p["transitions_in_first"],
+                                          "sampling_truncated_second": len(second_gaps) < p["transitions_in_second"],
                                           "method": f"percentile bootstrap, {GAP_ROUNDS} rounds, up to "
                                                     f"{GAP_SAMPLE} sampled gaps per cohort"}
         paths.sort(key=lambda p: (not p["ci_excludes_zero"], -abs(p["case_share_difference"]), p["from"], p["to"]))
