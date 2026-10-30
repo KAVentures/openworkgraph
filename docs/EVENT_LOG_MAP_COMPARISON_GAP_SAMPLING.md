@@ -31,6 +31,15 @@ The nested `median_gap_difference` object now also reports:
   fewer transitions were sampled than the corresponding full-cohort
   `transitions_in_first` / `transitions_in_second` count.
 
+The bounded timed-path selection ranks eligible paths by the sum of
+observed transitions in both cohorts, descending. When counts tie, it
+breaks ties by the literal `(from, to)` activity names, ascending. Thus
+exactly 25 of 26 equally frequent eligible paths receive an interval in
+a reproducible order, independent of SQL group-row order. Paths outside
+this cap still have full-cohort medians but no bootstrap interval;
+absence of an interval is not evidence of no change. This ordering
+makes no claim about path importance or business causation.
+
 No new case identifiers, event rows, raw resource labels or source reads
 are returned. Existing path frequency, full-cohort medians, bootstrap
 method, sample cap, output fields, REST/MCP/dashboard contracts, local
