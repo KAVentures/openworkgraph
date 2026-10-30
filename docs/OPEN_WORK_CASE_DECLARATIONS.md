@@ -132,3 +132,8 @@ check, and the review/policy stores do not share this SQLite transaction.
 Equal-timestamp replacement review generations remain indistinguishable.
 Do not expose the internal ledger as an independent provider permission,
 business obligation, verified outcome or agent execution authorization.
+
+
+### Persisted row-count integrity
+
+The local auxiliary ledger is capped at **50 total declarations across all source scopes**. If damaged/legacy SQLite content exceeds this bound, scoped reads withhold the entire owner-approval projection instead of presenting a seemingly complete truncated subset. Transactional pruning and dependent-deletion traversal fetch at most 51 rows and refuse an over-capacity graph. A failed save rolls back; explicit review deletion can scrub the corrupt auxiliary ledger through the existing fail-closed cleanup path. Exactly 50 rows remain supported, with unreviewed entries removed by the next authorized save. This is a local resource/availability bound, not tamper-proof storage, tenant authorization or independently verified outcomes.
