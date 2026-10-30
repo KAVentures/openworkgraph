@@ -91,7 +91,8 @@ def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
     }
     return {"method": "GET", "url": f"https://{scope.host}/api/now/table/incident?{urlencode(params)}",
             "source_namespace": scope.namespace, "selected_count": len(scope.sys_ids),
-            "offset": offset, "limit": limit, "historical_completeness": "unknown",
+            "offset": offset, "limit": limit, "since": since,
+            "historical_completeness": "unknown",
             "provider_timestamp_timezone_verified": False}
 
 
@@ -162,3 +163,29 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
             "historical_completeness": "unknown", "checkpoint_advanced": False,
             "provider_timestamp_timezone_verified": False,
             "not_an_authorization_to_append": True}
+
+
+def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
+                         plan: dict[str, Any]) -> dict[str, Any]:
+    """Stage a response against the *same* selected-record GET plan.
+
+    This prevents an accidental omission/change of the incremental watermark
+    between request construction and response projection. The plan is local
+    metadata, not a provider receipt, signed grant, or permission to append.
+    The caller must separately enforce transport identity and atomic revocation
+    fencing before any later persistent operation.
+    """
+    scope.require_authority()
+    if type(plan) is not dict:
+        raise StagingError("Missing or invalid selected-record page plan")
+    # Reconstruct from the current exact scope rather than trusting a copied
+    # URL, namespace, selected-count, limit, offset or watermark in isolation.
+    # Missing/extra fields and tampered query parameters fail closed.
+    expected = plan_page(scope, offset=plan.get("offset"),
+                         limit=plan.get("limit"), since=plan.get("since"))
+    if plan != expected:
+        raise StagingError("Selected-record page plan does not match current scope")
+    result = project_page(scope, raw, limit=expected["limit"],
+                          since=expected["since"])
+    return {**result, "plan_bound": True, "planned_offset": expected["offset"],
+            "planned_since": expected["since"]}
