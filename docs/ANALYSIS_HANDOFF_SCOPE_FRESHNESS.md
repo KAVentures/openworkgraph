@@ -266,3 +266,31 @@ before/after, malformed and numeric timestamp responses, while accepting
 UTC-equivalent offsets, legacy omissions and health-only selections.
 These checks detect contradictory preview envelopes, not complete source
 coverage, guaranteed redaction, real consenting-user acceptance or parity.
+
+
+## Empty-selection and health-only provenance
+
+The authenticated preview's first/last observed timestamps come from selected
+event rows. A selection with **zero** canonical rows must have **neither**
+timestamp, even if retained history exists outside the selected period. A
+zero-row preview with non-null first/last timestamps is inconsistent and cannot
+open the Copy/Download handoff. Legitimate zero-row, null-bound previews still
+allow the explanatory **Copy request** action without offering an export.
+
+The optional `work_evidence.last_work_observed_at` represents an observed
+ordinary work event, not a capture-health or gap event. When the selected
+canonical rows consist entirely of `capture_gap` and `capture_health`
+events, that timestamp must be absent. The guard derives the ordinary-event
+count from the selected event-type partition even if older `work_evidence`
+objects omit their explicit row counts. It **does not** require a work timestamp
+whenever ordinary events exist: excluded-app records can have ordinary event
+counts but no eligible last-work event.
+
+Synthetic modal tests reject false observed timestamps for zero selected rows
+with both empty and nonempty retained history, reject false last-work claims
+for health-only selections with explicit or legacy-omitted work counts, and
+accept health-only evidence with an unknown last-work timestamp as well as
+ordinary/excluded-app evidence without a last-work timestamp. These checks
+detect contradictory preview envelopes, not missing capture, completeness,
+live recorder state, customer consent, provider verification, or business
+outcomes. No source privileges, AI execution or business writes are added.
