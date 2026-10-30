@@ -240,7 +240,13 @@ def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
     # Missing/extra fields and tampered query parameters fail closed.
     expected = plan_page(scope, offset=plan.get("offset"),
                          limit=plan.get("limit"), since=plan.get("since"))
-    if plan != expected:
+    # Python considers True == 1 and 0 == False. A plan's source and
+    # provenance metadata is a typed contract, not just a value comparison:
+    # a caller must not substitute booleans/floats for selected counts or
+    # source-verification flags and still claim an exact plan match.
+    if (plan != expected or any(
+            type(plan[key]) is not type(expected[key]) for key in expected
+    )):
         raise StagingError("Selected-record page plan does not match current scope")
     result = project_page(scope, raw, limit=expected["limit"],
                           since=expected["since"], _require_planned_order=True)
