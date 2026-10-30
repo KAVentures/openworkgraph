@@ -14,6 +14,12 @@ to `GAP_SAMPLE` transitions from each cohort. The point estimate is
 the sampled second median minus the sampled first median. It need not
 equal the difference of the two full-cohort medians.
 
+The reservoir is applied **after** restricting to the specific
+directly-follows path in each cohort. Sampling all transitions first
+and then filtering by path can underfill a reservoir even when that
+path has at least `GAP_SAMPLE` transitions. The per-path selection
+uses a materialized filtered relation to prevent that behavior.
+
 The nested `median_gap_difference` object now also reports:
 
 - `sampled_gaps_first`, `sampled_gaps_second`: actual sampled
