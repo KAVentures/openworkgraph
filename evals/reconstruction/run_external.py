@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -19,6 +21,17 @@ from .scoring import acceptance, aggregate
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_KEY_ENV = "OPENAI_API_KEY"
+BLIND_EVIDENCE_DIGEST_FIELD = "_owg_blind_evidence_sha256"
+
+
+def _blind_evidence_digest(case_id: str, presented_evidence: list[dict[str, Any]]) -> str:
+    """Bind a prediction to exact *blind* evidence; never hash answer-key truth."""
+    payload = json.dumps(
+        {"case_id": case_id, "presented_evidence": presented_evidence},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(b"owg-reconstruction-blind-evidence-v1\0" + payload).hexdigest()
+
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -32,7 +45,13 @@ def _extract_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: set[str]) -> dict[str, Any]:
+def _validate_prediction(
+    prediction: dict[str, Any], case_id: str, event_ids: set[str],
+    *, allow_runner_digest: bool = False,
+) -> dict[str, Any]:
+    # This provenance field is added by the local runner, never by a model.
+    if BLIND_EVIDENCE_DIGEST_FIELD in prediction and not allow_runner_digest:
+        raise ValueError("model response must not supply runner blind-evidence digest")
     # A response that names another case must never be silently relabeled and
     # scored as this case. Older model outputs may omit case_id entirely.
     if "case_id" in prediction and prediction["case_id"] != case_id:
@@ -122,7 +141,11 @@ def _request(client: httpx.Client, *, base_url: str, api_key: str, model: str, c
     content = raw["choices"][0]["message"]["content"]
     prediction = _extract_json(content)
     event_ids = {str(e["event_id"]) for e in case["presented_evidence"]}
-    return _validate_prediction(prediction, case["case_id"], event_ids), {
+    validated = _validate_prediction(prediction, case["case_id"], event_ids)
+    validated[BLIND_EVIDENCE_DIGEST_FIELD] = _blind_evidence_digest(
+        case["case_id"], case["presented_evidence"]
+    )
+    return validated, {
         "response_id": raw.get("id"),
         "response_model": raw.get("model"),
         "usage": raw.get("usage"),
@@ -141,11 +164,14 @@ def _load_resume_predictions(
     selected_case_ids: set[str],
     *,
     evidence_ids_by_case: dict[str, set[str]] | None = None,
+    evidence_by_case: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Read an interrupted run without silently replacing or importing cases.
 
     When current blind evidence is supplied, validate every resumed prediction
     against its selected case before the runner makes another provider request.
+    New runner rows also bind exact blind evidence content, not only event IDs.
+    Legacy rows without the digest remain accepted but are not content-attested.
     This is not a model/revision attestation or an answer-key check.
     """
     existing: dict[str, dict[str, Any]] = {}
@@ -162,6 +188,15 @@ def _load_resume_predictions(
             raise ValueError(f"resume predictions contain case outside selected split: {cid}")
         if cid in existing:
             raise ValueError(f"resume predictions contain duplicate case_id: {cid}")
+        if BLIND_EVIDENCE_DIGEST_FIELD in row:
+            supplied = row[BLIND_EVIDENCE_DIGEST_FIELD]
+            if not isinstance(supplied, str) or re.fullmatch(r"[0-9a-f]{64}", supplied) is None:
+                raise ValueError(f"resume predictions line {line_number} has malformed blind-evidence digest")
+            if evidence_by_case is None or cid not in evidence_by_case:
+                raise ValueError(f"resume predictions lack blind evidence for digest verification: {cid}")
+            expected = _blind_evidence_digest(cid, evidence_by_case[cid])
+            if not hmac.compare_digest(supplied, expected):
+                raise ValueError(f"resume predictions line {line_number} blind evidence changed for case_id: {cid}")
         if evidence_ids_by_case is not None:
             current_ids = evidence_ids_by_case.get(cid)
             if current_ids is None:
@@ -169,7 +204,7 @@ def _load_resume_predictions(
             # The validator supplies optional defaults in place. Validate a
             # copy so the exact persisted JSONL row remains unmodified.
             try:
-                _validate_prediction(deepcopy(row), cid, current_ids)
+                _validate_prediction(deepcopy(row), cid, current_ids, allow_runner_digest=True)
             except ValueError as exc:
                 raise ValueError(f"resume predictions line {line_number} invalid for current evidence: {exc}") from exc
         existing[cid] = row
@@ -216,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
             evidence_ids_by_case={
                 str(case["case_id"]): {str(event["event_id"]) for event in case["presented_evidence"]}
                 for case in cases
+            },
+            evidence_by_case={
+                str(case["case_id"]): case["presented_evidence"] for case in cases
             },
         )
 
