@@ -53,6 +53,72 @@ const path=require('node:path');
    const negative=await page.evaluate(()=>[...document.querySelectorAll('#owgWorkflowExplorer button, #owgWorkflowExplorer [role=button]')]
      .filter(el=>el.getClientRects().length&&el.tabIndex<0).map(el=>el.outerHTML.slice(0,120)));
    assert.deepEqual(negative,[]);
+   // A period change must invalidate both a pending candidate read and the old
+   // displayed map; the user must explicitly load the newly selected scope.
+   const period=page.locator('#owgExplorerPeriod');
+   let releaseFamilies;
+   const familiesGate=new Promise(resolve=>{releaseFamilies=resolve;});
+   await page.route('**/v1/workflow-evidence/families?*',async route=>{
+     await familiesGate;
+     await route.continue();
+   });
+   const pendingFamilies=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/workflow-evidence/families');
+   await open.click();await pendingFamilies;
+   await period.selectOption('30');
+   assert.match(await page.locator('#owgExplorerStatus').textContent(),/Period changed/);
+   assert.equal(await page.locator('#owgExplorerCandidates button').count(),0);
+   assert.match(await page.locator('#owgExplorerDetail').textContent(),/new period/);
+   const lateFamilies=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/workflow-evidence/families');
+   releaseFamilies();await lateFamilies;
+   await page.unroute('**/v1/workflow-evidence/families?*');
+   assert.equal(await page.locator('#owgExplorerCandidates button').count(),0);
+   assert.match(await page.locator('#owgExplorerStatus').textContent(),/Period changed/);
+   await audit(page,'#owgWorkflowExplorer','Explorer after changing period');
+
+   await open.click();
+   await page.locator('#owgExplorerStatus').filter({hasText:'candidate groups shown'}).waitFor();
+   assert((await page.locator('#owgExplorerCandidates button').count())>0);
+   // An old evidence response must not be attached to a new period.
+   let releaseEvidence;
+   const evidenceGate=new Promise(resolve=>{releaseEvidence=resolve;});
+   await page.route('**/v1/workflow-evidence?*',async route=>{
+     await evidenceGate;
+     await route.continue();
+   });
+   const pendingEvidence=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/workflow-evidence');
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await pendingEvidence;
+   await period.selectOption('all');
+   assert.equal(await page.locator('#owgExplorerEvidence').count(),0);
+   const lateEvidence=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/workflow-evidence');
+   releaseEvidence();await lateEvidence;
+   await page.unroute('**/v1/workflow-evidence?*');
+   assert.equal(await page.locator('#owgExplorerEvidence').count(),0);
+   assert.match(await page.locator('#owgExplorerStatus').textContent(),/Period changed/);
+
+   // Switching to a different step in the same candidate also invalidates
+   // a pending inspection: selectedId alone cannot protect that race.
+   await open.click();
+   await page.locator('#owgExplorerStatus').filter({hasText:'candidate groups shown'}).waitFor();
+   const steps=page.locator('#owgExplorerDetail svg g[role=button]');
+   assert((await steps.count())>=2);
+   await steps.first().click();
+   let releaseVariant;
+   const variantGate=new Promise(resolve=>{releaseVariant=resolve;});
+   await page.route('**/v1/workflow-evidence?*',async route=>{
+     await variantGate;
+     await route.continue();
+   });
+   const pendingVariant=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/workflow-evidence');
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await pendingVariant;
+   await steps.nth(1).click();
+   assert.equal(await page.locator('#owgExplorerEvidence').textContent(),'');
+   const lateVariant=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/workflow-evidence');
+   releaseVariant();await lateVariant;
+   await page.unroute('**/v1/workflow-evidence?*');
+   assert.equal(await page.locator('#owgExplorerEvidence').textContent(),'');
+   assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/step 2/);
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    assert.equal(writes,0);assert.deepEqual(errors,[]);
