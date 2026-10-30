@@ -133,14 +133,29 @@
         statusNode.textContent=current()
           ? 'Request copied. Paste it into your AI; no model was invoked.'
           : 'The work period changed during copying. The copied request refers to the previous period; prepare again.';
-      }catch(_){statusNode.textContent='Clipboard unavailable. Open “Read the request” and copy the text.';}
+      }catch(_){statusNode.textContent=current()
+        ? 'Clipboard unavailable. Open “Read the request” and copy the text.'
+        : staleScope+' Clipboard write failed; prepare again.';}
     };
+    // A user may double-click while the local ticket is pending. Only one
+    // ticket/download may be started for this prepared handoff at a time.
+    let downloadInFlight=false;
     downloadNode.onclick=async()=>{
-      if(expired())return;
+      if(expired()||downloadInFlight||!d.canonical_rows)return;
+      downloadInFlight=true;
+      downloadNode.disabled=true;
+      statusNode.textContent='Preparing the redacted evidence package locally…';
       try{
         await download('csvzip',detailedNode.checked,true,chosen,current);
-        statusNode.textContent='Download started. Inspect the file, then attach it to your AI. No data was uploaded.';
-      }catch(e){statusNode.textContent=e.message;}
+        statusNode.textContent=current()
+          ? 'Download started. Inspect the file, then attach it to your AI. No data was uploaded.'
+          : staleScope;
+      }catch(e){statusNode.textContent=current()?e.message:staleScope;}
+      finally{
+        downloadInFlight=false;
+        // A superseded modal must never regain an enabled export control.
+        if(current())downloadNode.disabled=false;
+      }
     };
   }
   function install() {
