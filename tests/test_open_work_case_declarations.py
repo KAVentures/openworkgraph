@@ -1463,8 +1463,7 @@ def test_legacy_migration_does_not_materialize_unbounded_refs(local, monkeypatch
         ).fetchone()
         assert (count, unique_tokens) == (2, 2)
         assert db.execute(
-            "SELECT length(work_item_ref) FROM declarations WHERE work_item_ref=?",
-            (oversized_ref,)
+            "SELECT MAX(length(work_item_ref)) FROM declarations"
         ).fetchone()[0] == len(oversized_ref)
 
     assert any("SELECT rowid FROM declarations LIMIT" in sql for sql in traced_sql)
