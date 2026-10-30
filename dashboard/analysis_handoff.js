@@ -2,7 +2,8 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let period = 'week', start = '', end = '', preview = null, generation = 0, pending = null;
+  let period = 'week', start = '', end = '', generation = 0, pending = null;
+  const staleScope = 'Work period changed. Prepare a new AI handoff for the selected period.';
   const dateInput = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
@@ -19,16 +20,20 @@
     return {scope:'range',since:a.toISOString(),until:b.toISOString()};
   }
   window.owgEvidenceSelection = selection;
-  async function api(path, options) {
+  async function api(path, options, stillCurrent=()=>true) {
     await window.__owgAuthReady;
+    // An old auth wait must not start a read/export for a superseded scope.
+    if(!stillCurrent())throw new Error(staleScope);
     const r = await fetch(path,{cache:'no-store',...options});
     const d = await r.json().catch(()=>({}));
     if (!r.ok) throw new Error(d.detail || 'Could not prepare evidence.');
     return d;
   }
-  async function download(fmt, detailed, redacted=true, chosen=selection()) {
+  async function download(fmt, detailed, redacted=true, chosen=selection(), stillCurrent=()=>true) {
     const d = await api('/v1/export-ticket',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({format:fmt,...chosen,include_raw:!!detailed,redact_names:!!redacted})});
+      body:JSON.stringify({format:fmt,...chosen,include_raw:!!detailed,redact_names:!!redacted})},stillCurrent);
+    // A delayed ticket response cannot initiate a download after period change.
+    if(!stillCurrent())throw new Error(staleScope);
     const a = document.createElement('a');a.href=d.url;a.download='';a.hidden=true;
     document.body.appendChild(a);a.click();a.remove();
   }
@@ -40,28 +45,33 @@
     });
   }
   async function refresh() {
-    const seq=++generation; preview=null;
+    const seq=++generation;
     pending?.abort(); pending=new AbortController();
     document.querySelectorAll('[data-period-summary]').forEach(x=>{
       x.setAttribute('aria-busy','true');
       x.innerHTML='<progress aria-label="Checking selected evidence"></progress> Checking selected evidence…';
     });
     try {
-      const d=await api('/v1/analysis-preview?'+new URLSearchParams(selection()),{signal:pending.signal});
-      if(seq!==generation)return;preview=d;
+      const d=await api('/v1/analysis-preview?'+new URLSearchParams(selection()),{signal:pending.signal},()=>seq===generation);
+      if(seq!==generation)return null;
       const text=d.canonical_rows
         ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
         : d.retained_rows ? 'No activity in this selection. Saved work is available; choose another period.' : 'No saved evidence yet. Work normally after enabling recording.';
       document.querySelectorAll('[data-period-summary]').forEach(x=>{x.textContent=text;x.removeAttribute('aria-busy');});
+      return d;
     } catch(e) {
-      if(seq!==generation)return;
+      if(seq!==generation)return null;
       document.querySelectorAll('[data-period-summary]').forEach(x=>{x.textContent=e.message;x.removeAttribute('aria-busy');});
+      return null;
     }
   }
   async function prepare() {
-    await refresh();
-    if(!preview){window.toast?.('Could not prepare selected evidence. Check the period and dashboard connection.');return;}
-    const d=preview, request=d.request_text;
+    const seq=generation+1;
+    const d=await refresh();
+    // The response must belong to this click, not a newer period refresh.
+    if(seq!==generation)return;
+    if(!d){window.toast?.('Could not prepare selected evidence. Check the period and dashboard connection.');return;}
+    const request=d.request_text;
     const chosen={scope:d.window.scope,...(d.window.scope==='range'?{since:d.window.since,until:d.window.until}:{})};
     const access=d.local_ai_history_access || {};
     const localRead=!d.local_ai_enabled ? 'Local AI access is off.' : access.mode==='off' ? 'Local AI can read the current run only; saved-history access is off.' : `Local saved-history permission: ${access.mode}${access.expires_at?' until '+new Date(access.expires_at).toLocaleString():''}.`;
@@ -82,13 +92,27 @@
       <details style="margin-top:12px"><summary>Read the request</summary><pre style="white-space:pre-wrap" id="analysisRequest"></pre></details>
       <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. Downloads work with any capable AI, without an OWG cloud account.</div>`);
     $('#analysisRequest').textContent=request;
+    const current=()=>seq===generation;
+    const expired=()=>{
+      if(current())return false;
+      $('#analysisActionStatus').textContent=staleScope+' Nothing was copied or downloaded by this action.';
+      return true;
+    };
     $('#analysisCopy').onclick=async()=>{
-      try{await navigator.clipboard.writeText(request);$('#analysisActionStatus').textContent='Request copied. Paste it into your AI; no model was invoked.';}
-      catch(_){$('#analysisActionStatus').textContent='Clipboard unavailable. Open “Read the request” and copy the text.';}
+      if(expired())return;
+      try{
+        await navigator.clipboard.writeText(request);
+        $('#analysisActionStatus').textContent=current()
+          ? 'Request copied. Paste it into your AI; no model was invoked.'
+          : 'The work period changed during copying. The copied request refers to the previous period; prepare again.';
+      }catch(_){$('#analysisActionStatus').textContent='Clipboard unavailable. Open “Read the request” and copy the text.';}
     };
     $('#analysisDownload').onclick=async()=>{
-      try{await download('csvzip',$('#analysisDetailed').checked,true,chosen);$('#analysisActionStatus').textContent='Download started. Inspect the file, then attach it to your AI. No data was uploaded.';}
-      catch(e){$('#analysisActionStatus').textContent=e.message;}
+      if(expired())return;
+      try{
+        await download('csvzip',$('#analysisDetailed').checked,true,chosen,current);
+        $('#analysisActionStatus').textContent='Download started. Inspect the file, then attach it to your AI. No data was uploaded.';
+      }catch(e){$('#analysisActionStatus').textContent=e.message;}
     };
   }
   function install() {
