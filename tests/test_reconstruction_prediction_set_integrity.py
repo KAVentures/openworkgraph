@@ -829,3 +829,97 @@ def test_resume_duplicate_json_key_fails_before_provider_or_mutation(
     assert predictions_path.read_bytes() == before_predictions
     assert (metadata_path.read_bytes() if metadata_path.exists() else None) == before_metadata
     assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+@pytest.mark.parametrize("payload", [
+    '{"case_id":"case-a","workflows":[],"uncertainty":{"membership":NaN}}',
+    '{"case_id":"case-a","workflows":[],"extra":Infinity}',
+    '{"case_id":"case-a","workflows":[],"extra":-Infinity}',
+    '{"case_id":"case-a","workflows":[],"extra":1e999}',
+    '{"case_id":"case-a","workflows":[],"extra":-1e999}',
+])
+def test_model_json_rejects_nonfinite_numbers_at_any_depth(payload):
+    from evals.reconstruction.run_external import _extract_json
+
+    with pytest.raises(ValueError, match="non-finite JSON"):
+        _extract_json(payload)
+
+
+def test_model_json_preserves_finite_fractional_values_and_nested_objects():
+    from evals.reconstruction.run_external import _extract_json
+
+    parsed = _extract_json(
+        '{"case_id":"case-a","workflows":[],"confidence":0.125,'
+        '"extra":{"fraction":1.5e2}}'
+    )
+    assert parsed["confidence"] == 0.125
+    assert parsed["extra"]["fraction"] == 150.0
+
+
+@pytest.mark.parametrize("invalid", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_resume_refuses_nonfinite_prediction_before_mutation(tmp_path, invalid):
+    from evals.reconstruction.run_external import _load_resume_predictions
+
+    path = tmp_path / "predictions.jsonl"
+    path.write_text(
+        '{"case_id":"case-a","workflows":[],"extra":' + invalid + '}\\n',
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="non-finite JSON"):
+        _load_resume_predictions(path, {"case-a"})
+    assert path.read_bytes() == before
+
+
+def test_resume_manifest_rejects_nonfinite_metadata_without_rewriting(tmp_path):
+    from evals.reconstruction.run_external import _load_resume_metadata
+
+    path = tmp_path / "metadata.json"
+    path.write_text(
+        '{"model_requested":"synthetic","temperature":NaN,"responses":[]}',
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="non-finite JSON"):
+        _load_resume_metadata(
+            path, {"model_requested": "synthetic", "temperature": None}, set()
+        )
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("flag,value", [
+    ("--temperature", "nan"),
+    ("--temperature", "inf"),
+    ("--temperature", "-0.1"),
+    ("--timeout", "nan"),
+    ("--timeout", "inf"),
+    ("--timeout", "-inf"),
+    ("--timeout", "0"),
+    ("--timeout", "-1"),
+])
+def test_invalid_numeric_request_options_fail_before_artifacts_or_provider(
+    tmp_path, monkeypatch, flag, value,
+):
+    from evals.reconstruction import run_external
+
+    output_dir = tmp_path / "must-not-exist"
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(
+        run_external, "_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid request options must not contact provider")
+        ),
+    )
+    monkeypatch.setattr(
+        run_external, "load_cases",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("invalid request options must not load corpus")
+        ),
+    )
+    with pytest.raises(SystemExit) as exc:
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(output_dir),
+            flag, value,
+        ])
+    assert exc.value.code == 2
+    assert not output_dir.exists()

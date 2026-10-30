@@ -5,6 +5,7 @@ from copy import deepcopy
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import subprocess
@@ -49,7 +50,20 @@ def _strict_json_loads(text: str) -> Any:
             result[key] = value
         return result
 
-    return json.loads(text, object_pairs_hook=unique_object)
+    def finite_float(token: str) -> float:
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number is not allowed")
+        return value
+
+    def reject_nonfinite_constant(token: str) -> float:
+        # Python accepts NaN/Infinity by default, though JSON does not.
+        raise ValueError(f"non-finite JSON constant is not allowed: {token}")
+
+    return json.loads(
+        text, object_pairs_hook=unique_object,
+        parse_constant=reject_nonfinite_constant, parse_float=finite_float,
+    )
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -321,6 +335,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-cases", type=int, help="debug only; omitted means the full selected split")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
+    # Validate request options before reading cases, creating output artifacts
+    # or sending a potentially billable provider request.
+    if args.temperature is not None and (
+        not math.isfinite(args.temperature) or args.temperature < 0
+    ):
+        parser.error("--temperature must be finite and >= 0")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be finite and > 0")
 
     api_key = os.getenv(args.api_key_env)
     if not api_key:

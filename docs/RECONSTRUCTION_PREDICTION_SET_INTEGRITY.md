@@ -252,3 +252,17 @@ cases are still valid. It does not alter the scorer, evidence order, holdout
 answers or any assignment/contamination threshold. Synthetic tests cover
 root/nested duplicates, a fake model response, and fail-before-request
 resume/manifest rejection. No real model or customer pilot was run.
+
+## Finite JSON and request parameters
+
+Python's permissive JSON decoder accepts nonstandard `NaN` and `Infinity`
+tokens and can turn overflowing exponent literals (such as `1e999`) into
+infinity. The external reconstruction runner now refuses these values in
+model JSON, persisted JSONL predictions and prior metadata manifests,
+including nested fields, before treating them as evidence or continuing a
+resume. Finite JSON decimals remain supported. The runner also refuses
+non-finite or negative `--temperature` and non-finite or nonpositive
+`--timeout` before reading cases, creating artifacts or making a potentially
+billable request. Finite nonnegative temperature bounds remain
+provider-specific. These checks do not authenticate the provider, prove
+prediction quality or alter any preregistered scoring threshold.
