@@ -29,9 +29,16 @@ GAP_ROUNDS = 300
 
 
 def _gaps(conn, table: str, source: str, target: str) -> list[float]:
+    # Materialize the path predicate before sampling: DuckDB may otherwise
+    # apply the reservoir to all transitions, then filter to this path,
+    # yielding fewer than GAP_SAMPLE rows even when the path has enough.
     return [r[0] for r in conn.execute(
-        f"""SELECT gap FROM {table}_dfg WHERE src = ? AND dst = ?
-            USING SAMPLE reservoir({GAP_SAMPLE} ROWS) REPEATABLE (7)""", [source, target]).fetchall()]
+        f"""WITH matching AS MATERIALIZED (
+                SELECT gap FROM {table}_dfg WHERE src = ? AND dst = ?
+            )
+            SELECT gap FROM matching
+            USING SAMPLE reservoir({GAP_SAMPLE} ROWS) REPEATABLE (7)""",
+        [source, target]).fetchall()]
 
 
 def _median_difference(a: list[float], b: list[float]) -> tuple[float, float, float]:
