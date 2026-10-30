@@ -6,7 +6,7 @@ import pytest
 
 from server.servicenow_incident_staging import (
     MAX_BYTES, SelectedIncidents, StagingError, plan_page, project_page,
-    project_planned_page,
+    project_planned_page, project_planned_pages,
 )
 
 A = "a" * 32
@@ -288,3 +288,87 @@ def test_planned_projection_order_check_does_not_override_revocation():
     with pytest.raises(StagingError, match="not currently authorized"):
         project_planned_page(scope(grant_current=False),
                              page(item(B), item(A)), plan=plan)
+
+def test_planned_pages_accept_consecutive_ordered_bounded_responses():
+    selected = scope()
+    pages = [
+        (plan_page(selected, offset=0, limit=1, since="2026-10-30 03:00:00"),
+         page(item(A, updated="2026-10-30 03:10:00"))),
+        (plan_page(selected, offset=1, limit=1, since="2026-10-30 03:00:00"),
+         page(item(B, updated="2026-10-30 03:11:00"))),
+    ]
+    out = project_planned_pages(selected, pages)
+    assert out["pages_checked"] == 2 and out["plan_sequence_checked"]
+    assert out["returned_rows"] == out["distinct_selected_rows"] == 2
+    assert [r["source_case_id"] for r in out["records"]] == [A, B]
+    assert out["may_have_more"] and out["historical_completeness"] == "unknown"
+    assert not out["checkpoint_advanced"] and out["not_an_authorization_to_append"]
+    assert not out["provider_timestamp_timezone_verified"]
+
+
+@pytest.mark.parametrize("first,second", [
+    (item(B, updated="2026-10-30 03:11:00"), item(A, updated="2026-10-30 03:10:00")),
+    (item(B), item(A)),
+])
+def test_planned_pages_reject_cross_boundary_time_and_tie_order_regression(first, second):
+    selected = scope()
+    entries = [(plan_page(selected, offset=i, limit=1), page(row))
+               for i, row in enumerate((first, second))]
+    # Each single page is ordered; only the batch boundary reveals the defect.
+    assert all(project_planned_page(selected, raw, plan=plan)["page_order_matches_plan"]
+               for plan, raw in entries)
+    with pytest.raises(StagingError, match="regressed across offsets"):
+        project_planned_pages(selected, entries)
+
+
+@pytest.mark.parametrize("second", [item(A), item(A, state="6", mod="4")])
+def test_planned_pages_refuse_same_incident_repeated_across_offsets(second):
+    selected = scope()
+    entries = [(plan_page(selected, offset=0, limit=1), page(item(A))),
+               (plan_page(selected, offset=1, limit=1), page(second))]
+    with pytest.raises(StagingError, match="repeated across planned pages"):
+        project_planned_pages(selected, entries)
+
+
+@pytest.mark.parametrize("second_offset,second_limit,second_since", [
+    (0, 1, "2026-10-30 03:00:00"),
+    (2, 1, "2026-10-30 03:00:00"),
+    (1, 2, "2026-10-30 03:00:00"),
+    (1, 1, "2026-10-30 03:01:00"),
+])
+def test_planned_pages_reject_replay_skip_or_changed_page_contract(second_offset, second_limit, second_since):
+    selected = scope()
+    entries = [
+        (plan_page(selected, offset=0, limit=1, since="2026-10-30 03:00:00"), page(item(A))),
+        (plan_page(selected, offset=second_offset, limit=second_limit, since=second_since),
+         page(item(B, updated="2026-10-30 03:11:00"))),
+    ]
+    with pytest.raises(StagingError, match="Nonconsecutive or inconsistent"):
+        project_planned_pages(selected, entries)
+
+
+def test_planned_pages_reject_short_intermediate_page():
+    selected = scope()
+    entries = [(plan_page(selected, offset=0, limit=1), page()),
+               (plan_page(selected, offset=1, limit=1), page(item(B)))]
+    with pytest.raises(StagingError, match="Short page"):
+        project_planned_pages(selected, entries)
+
+
+def test_planned_pages_fail_closed_on_revocation_and_changed_tenant():
+    selected = scope()
+    entries = [(plan_page(selected, limit=1), page(item(A)))]
+    with pytest.raises(StagingError, match="not currently authorized"):
+        project_planned_pages(scope(grant_current=False), entries)
+    with pytest.raises(StagingError, match="does not match"):
+        project_planned_pages(scope(tenant_scope="another"), entries)
+
+
+def test_planned_pages_bound_entries_and_require_zero_start():
+    selected = scope()
+    entry = (plan_page(selected, limit=1), page(item(A)))
+    for bad in ([], [entry] * 9, ["not-a-pair"], [(dict(limit=None), page(item()))]):
+        with pytest.raises(StagingError):
+            project_planned_pages(selected, bad)
+    with pytest.raises(StagingError, match="Nonconsecutive"):
+        project_planned_pages(selected, [(plan_page(selected, offset=1, limit=1), page(item(A)))])

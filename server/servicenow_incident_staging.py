@@ -199,3 +199,55 @@ def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
                           since=expected["since"], _require_planned_order=True)
     return {**result, "plan_bound": True, "planned_offset": expected["offset"],
             "planned_since": expected["since"], "page_order_matches_plan": True}
+
+def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, Any], bytes]]) -> dict[str, Any]:
+    """Check a bounded consecutive run of planned pages without claiming completeness.
+
+    No network or append occurs. A cross-page duplicate is rejected even when
+    identical: an offset shift can hide a different incident. A future caller
+    must independently fence source revocation and validate transport identity.
+    """
+    scope.require_authority()
+    if type(pages) is not list or not 1 <= len(pages) <= 8:
+        raise StagingError("Select one to eight consecutive page responses")
+    first_limit: int | None = None
+    first_since: str | None = None
+    previous_last: tuple[str, str] | None = None
+    seen: dict[str, dict[str, Any]] = {}
+    returned_rows = 0
+    last_page: dict[str, Any] | None = None
+    for index, entry in enumerate(pages):
+        if type(entry) is not tuple or len(entry) != 2 or type(entry[0]) is not dict:
+            raise StagingError("Invalid planned page entry")
+        plan, raw = entry
+        if index == 0:
+            first_limit = plan.get("limit")
+            if type(first_limit) is not int or not 1 <= first_limit <= MAX_PAGE:
+                raise StagingError("Invalid planned page size")
+            first_since = plan.get("since")
+        if (plan.get("limit") != first_limit or plan.get("since") != first_since
+                or plan.get("offset") != index * first_limit):
+            raise StagingError("Nonconsecutive or inconsistent planned pages")
+        staged = project_planned_page(scope, raw, plan=plan)
+        if index < len(pages) - 1 and staged["returned_rows"] != first_limit:
+            raise StagingError("Short page before another planned offset")
+        keys = []
+        for record in staged["records"]:
+            incident_id = record["source_case_id"]
+            if incident_id in seen:
+                raise StagingError("Incident repeated across planned pages")
+            seen[incident_id] = record
+            keys.append((record["reported_updated_on"], incident_id))
+        if keys:
+            if previous_last is not None and min(keys) < previous_last:
+                raise StagingError("Provider page order regressed across offsets")
+            previous_last = max(keys)
+        returned_rows += staged["returned_rows"]
+        last_page = staged
+    return {"records": [seen[k] for k in sorted(seen)],
+            "returned_rows": returned_rows, "distinct_selected_rows": len(seen),
+            "pages_checked": len(pages), "plan_sequence_checked": True,
+            "may_have_more": last_page["may_have_more"],
+            "historical_completeness": "unknown", "checkpoint_advanced": False,
+            "provider_timestamp_timezone_verified": False,
+            "not_an_authorization_to_append": True}
