@@ -797,3 +797,78 @@ def test_dependent_approval_cannot_precede_prerequisite_or_revision(local):
             depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=30))
     assert {item["work_item_ref"] for item in
             facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))["items"]} == {A}
+
+
+@pytest.mark.parametrize("invalid_edges", [
+    "{}", '""', "null", "42", '["not-an-opaque-ref"]',
+    json.dumps([A, A]), "{",
+])
+def test_corrupt_persisted_dependency_shape_cannot_launder_approval(local, invalid_edges):
+    # Simulate a damaged private auxiliary ledger; the normal writer never
+    # emits these values. B -> A must not become an independent declaration.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    root = save()
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (invalid_edges, B))
+
+    # Reads do not repair storage, but must withhold B and its dependent C.
+    visible = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in visible} == {A, d}
+    assert root in visible and independent in visible
+
+    # A later valid explicit edit prunes the corrupt row and its dependents
+    # atomically; it does not silently strip B's previously declared edge.
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {A, d}
+    assert updated["revision"] == independent["revision"] + 1
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=dependent["revision"],
+             expected_edit_token=dependent["edit_token"])
+
+
+def test_corrupt_persisted_dependency_cycle_is_not_owner_approval(local):
+    # The writer refuses cycles; this represents a damaged local ledger.
+    # A <- B <- C, then a corrupted A -> B closes a forbidden A <-> B cycle.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (json.dumps([B]), A))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+
+    save(d, expected_revision=independent["revision"],
+         expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {d}
+
+
+def test_corrupt_auxiliary_dependencies_do_not_block_review_deletion(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   ("{}", B))
+    # The primary review must still be removable. A corrupt auxiliary graph
+    # triggers the existing fail-closed whole-ledger erasure path.
+    assert reviews.remove_review_intention(A, now=NOW) is True
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
