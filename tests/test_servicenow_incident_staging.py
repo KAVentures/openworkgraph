@@ -537,3 +537,87 @@ def test_replay_reconciliation_revalidates_both_pages_and_authority():
     assert (reconcile_replayed_pages(scope(tenant_scope="another"),
                                      page(item(A)), page(item(A)))["source_namespace"]
             != scope().namespace)
+
+
+
+def _planned_replay_batch(selected, first, second):
+    return [(plan_page(selected, offset=0, limit=1), page(first)),
+            (plan_page(selected, offset=1, limit=1), page(second))]
+
+
+def test_plan_bound_replay_same_plans_and_unknown_outcomes():
+    from server.servicenow_incident_staging import reconcile_planned_replays
+    selected = scope(sys_ids=(A, B, C))
+    before = _planned_replay_batch(selected, item(A),
+                                   item(B, mod="4", updated="2026-10-30 03:11:00"))
+    after = _planned_replay_batch(selected, item(A, caller_id="private"),
+                                  item(B, mod="5", updated="2026-10-30 03:12:00"))
+    result = reconcile_planned_replays(selected, before, after)
+    assert result["same_reported_revision_ids"] == [A]
+    assert result["higher_reported_revision_ids"] == [B]
+    assert result["same_plans_checked"] and result["plan_sequence_checked"]
+    assert result["pages_per_read"] == 2
+    assert result["source_namespace"] == selected.namespace
+    assert result["historical_completeness"] == "unknown"
+    assert not result["business_outcome_verified"]
+    assert not result["checkpoint_advanced"]
+    assert result["not_an_authorization_to_append"]
+    assert "private" not in json.dumps(result)
+
+
+def test_plan_bound_replay_missing_ids_remain_unknown():
+    from server.servicenow_incident_staging import reconcile_planned_replays
+    selected = scope(sys_ids=(A, B, C))
+    before = _planned_replay_batch(selected, item(A),
+                                   item(B, updated="2026-10-30 03:11:00"))
+    after = _planned_replay_batch(selected, item(A),
+                                  item(C, updated="2026-10-30 03:12:00"))
+    result = reconcile_planned_replays(selected, before, after)
+    assert result["newly_observed_ids"] == [C]
+    assert result["missing_unknown_ids"] == [B]
+    assert result["missing_means_deleted"] is False
+
+
+@pytest.mark.parametrize("change", ["since", "limit", "offset", "scope", "revoked"])
+def test_plan_bound_replay_rejects_changed_plans_or_revocation(change):
+    from server.servicenow_incident_staging import reconcile_planned_replays
+    selected = scope(sys_ids=(A, B))
+    before = _planned_replay_batch(selected, item(A),
+                                   item(B, updated="2026-10-30 03:11:00"))
+    after = _planned_replay_batch(selected, item(A),
+                                  item(B, updated="2026-10-30 03:11:00"))
+    if change == "since":
+        after[0] = (plan_page(selected, limit=1, since="2026-10-30 03:00:00"), after[0][1])
+    elif change == "limit":
+        after[0] = (plan_page(selected, limit=2), after[0][1])
+    elif change == "offset":
+        after[0] = (plan_page(selected, offset=1, limit=1), after[0][1])
+    elif change == "scope":
+        other = scope(tenant_scope="other", sys_ids=(A, B))
+        after[0] = (plan_page(other, limit=1), after[0][1])
+    else:
+        selected = scope(sys_ids=(A, B), grant_current=False)
+    with pytest.raises(StagingError):
+        reconcile_planned_replays(selected, before, after)
+
+
+def test_plan_bound_replay_rejects_revision_conflict_and_cross_page_order():
+    from server.servicenow_incident_staging import reconcile_planned_replays
+    selected = scope(sys_ids=(A, B))
+    before = _planned_replay_batch(selected, item(A),
+                                   item(B, updated="2026-10-30 03:11:00"))
+    conflicting = _planned_replay_batch(selected, item(A, state="6"),
+                                        item(B, updated="2026-10-30 03:11:00"))
+    with pytest.raises(StagingError, match="Conflicting"):
+        reconcile_planned_replays(selected, before, conflicting)
+    reversed_order = _planned_replay_batch(
+        selected, item(B, updated="2026-10-30 03:11:00"), item(A))
+    with pytest.raises(StagingError, match="order regressed"):
+        reconcile_planned_replays(selected, before, reversed_order)
+
+
+def test_plan_bound_replay_does_not_change_unplanned_api():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    result = reconcile_replayed_pages(scope(), page(item(A)), page(item(A)))
+    assert result["same_reported_revision_ids"] == [A]
+    assert "same_plans_checked" not in result

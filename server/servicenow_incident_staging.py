@@ -286,6 +286,12 @@ def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
     scope.require_authority()
     earlier = project_page(scope, earlier_raw, limit=limit, since=since)
     later = project_page(scope, later_raw, limit=limit, since=since)
+    return _reconcile_projected(scope, earlier, later)
+
+
+def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
+                         later: dict[str, Any]) -> dict[str, Any]:
+    """Compare strictly projected selected-source identities and revisions."""
     before = {r["source_case_id"]: r for r in earlier["records"]}
     after = {r["source_case_id"]: r for r in later["records"]}
     same: list[str] = []
@@ -320,3 +326,31 @@ def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
         "checkpoint_advanced": False,
         "not_an_authorization_to_append": True,
     }
+
+
+
+def reconcile_planned_replays(
+    scope: SelectedIncidents,
+    earlier_pages: list[tuple[dict[str, Any], bytes]],
+    later_pages: list[tuple[dict[str, Any], bytes]],
+) -> dict[str, Any]:
+    """Compare two bounded offset batches under the exact same GET plans.
+
+    Offline consistency only: not authenticated transport, stable snapshots,
+    a persistence-time revocation fence, or checkpoint authorization.
+    """
+    scope.require_authority()
+    if (type(earlier_pages) is not list or type(later_pages) is not list
+            or not 1 <= len(earlier_pages) == len(later_pages) <= 8):
+        raise StagingError("Replay requires matching bounded page sequences")
+    for entries in (earlier_pages, later_pages):
+        if any(type(entry) is not tuple or len(entry) != 2
+               or type(entry[0]) is not dict for entry in entries):
+            raise StagingError("Invalid planned replay entry")
+    if [entry[0] for entry in earlier_pages] != [entry[0] for entry in later_pages]:
+        raise StagingError("Replay reads used different selected-record plans")
+    earlier = project_planned_pages(scope, earlier_pages)
+    later = project_planned_pages(scope, later_pages)
+    return {**_reconcile_projected(scope, earlier, later),
+            "same_plans_checked": True, "plan_sequence_checked": True,
+            "pages_per_read": len(earlier_pages)}
