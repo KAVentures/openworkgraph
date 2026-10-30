@@ -79,12 +79,17 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
     log_id = _log("\n".join(rows))
     limited = analytics.conformance(log_id, model, max_variants=1)
     assert limited["cases"] == 4 and limited["aligned_cases"] == 2
+    assert (limited["max_variants_applied"], limited["variants_selected"],
+            limited["variants_aligned"], limited["variants_skipped_trace_too_long"]) == (1, 1, 1, 0)
+    assert analytics.conformance(log_id, model, max_variants=0)["max_variants_applied"] == 1
     assert limited["cases_not_aligned_trace_too_long"] == 0
     assert limited["cases_not_aligned_variant_limit"] == 2
     assert limited["variant_limit_truncated"] is True
     assert limited["fitting_cases"] == 2 and limited["fitness"] == 1
     complete = analytics.conformance(log_id, model, max_variants=3)
     assert complete["aligned_cases"] == 4
+    assert (complete["max_variants_applied"], complete["variants_selected"],
+            complete["variants_aligned"], complete["variants_skipped_trace_too_long"]) == (3, 3, 3, 0)
     assert complete["cases_not_aligned_variant_limit"] == 0
     assert complete["variant_limit_truncated"] is False
 
@@ -102,11 +107,17 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
             limited["cases_not_aligned_trace_too_long"],
             limited["cases_not_aligned_variant_limit"]) == (3, 0, 2, 1)
     assert limited["variant_limit_truncated"] is True
+    assert (limited["variants_selected"], limited["variants_aligned"],
+            limited["variants_skipped_trace_too_long"]) == (1, 0, 1)
     complete = analytics.conformance(long_log, short_model, max_variants=2)
     assert (complete["cases"], complete["aligned_cases"],
             complete["cases_not_aligned_trace_too_long"],
             complete["cases_not_aligned_variant_limit"]) == (3, 1, 2, 0)
     assert complete["variant_limit_truncated"] is False
+    assert (complete["variants_selected"], complete["variants_aligned"],
+            complete["variants_skipped_trace_too_long"]) == (2, 1, 1)
+    assert complete["variants_selected"] == (complete["variants_aligned"] +
+                                             complete["variants_skipped_trace_too_long"])
 
 
 @pytest.mark.parametrize("model", [
@@ -211,6 +222,8 @@ with TestClient(app) as client:
     ok = client.post(base + "/conformance", json=model, headers=headers)
     assert ok.status_code == 200 and ok.json()["fitting_cases"] == 6, ok.text
     assert ok.json()["cases_not_aligned_variant_limit"] == 0 and not ok.json()["variant_limit_truncated"]
+    assert (ok.json()["variants_selected"], ok.json()["variants_aligned"],
+            ok.json()["variants_skipped_trace_too_long"]) == (2, 2, 0)
     assert client.post(base + "/conformance", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/conformance", content=b"{", headers={**headers, "Content-Type": "application/json"}).status_code == 422
     assert client.post(base + "/conformance", content=b" " * 70000, headers={**headers, "Content-Type": "application/json"}).status_code == 413
