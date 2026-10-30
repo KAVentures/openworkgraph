@@ -41,6 +41,7 @@ def test_a_real_change_is_found_and_stable_months_are_not():
     result = drift.drift(_log())
     assert [w["window"] for w in result["windows"]] == ["2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", "2024-05-01"]
     assert result["boundaries_tested"] == 4
+    assert result["boundaries_not_tested"] == []
     points = result["change_points"]
     assert [(p["before"], p["after"]) for p in points] == [("2024-03-01", "2024-04-01")]
     moved = {m["path"]: m for m in points[0]["paths_that_moved"]}
@@ -131,11 +132,43 @@ def test_min_cases_requires_actual_sampled_support(monkeypatch):
     assert insufficient["boundaries_tested"] == 0
     assert insufficient["boundaries_skipped_small_windows"] == 1
     assert insufficient["boundaries"] == [] and insufficient["change_points"] == []
+    assert insufficient["boundaries_not_tested"] == [{
+        "before": "2024-01-01", "after": "2024-02-01",
+        "sampled_cases_before": 20, "sampled_cases_after": 20,
+        "insufficient_side": "both",
+    }]
 
     sufficient = drift.drift(log, window="month", min_cases=20)
     assert sufficient["boundaries_tested"] == 1
     assert sufficient["boundaries_skipped_small_windows"] == 0
+    assert sufficient["boundaries_not_tested"] == []
     assert sufficient["change_points"] == []
+
+
+def test_untested_boundaries_identify_the_insufficient_side_without_case_ids():
+    """Three windows: the small middle window blocks each adjacent comparison."""
+    rows = ["case,activity,time"]
+    for month, count in ((1, 25), (2, 10), (3, 25)):
+        for i in range(count):
+            day = datetime(2024, month, 1 + i, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Start,{day.isoformat()}")
+            rows.append(f"{case},End,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="missing-boundaries",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity", "timestamp_column": "time"})["log_id"]
+    result = drift.drift(log, window="month", min_cases=20)
+    assert result["boundaries_tested"] == 0
+    assert result["boundaries_skipped_small_windows"] == 2
+    assert len(result["boundaries_not_tested"]) + len(result["boundaries"]) == len(result["windows"]) - 1
+    assert result["boundaries_not_tested"] == [
+        {"before": "2024-01-01", "after": "2024-02-01",
+         "sampled_cases_before": 25, "sampled_cases_after": 10, "insufficient_side": "after"},
+        {"before": "2024-02-01", "after": "2024-03-01",
+         "sampled_cases_before": 10, "sampled_cases_after": 25, "insufficient_side": "before"},
+    ]
+    assert all("case_id" not in item for item in result["boundaries_not_tested"])
 
 
 def test_no_change_means_no_change_points():
