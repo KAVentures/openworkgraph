@@ -294,3 +294,24 @@ ordinary/excluded-app evidence without a last-work timestamp. These checks
 detect contradictory preview envelopes, not missing capture, completeness,
 live recorder state, customer consent, provider verification, or business
 outcomes. No source privileges, AI execution or business writes are added.
+
+
+## Bounded displayed date-plan cardinality
+
+The authenticated local preview selects at most the first **31** observed
+date chunks (`days[:31]`) and separately reports
+`more_dates_not_listed` when later dates exist. The handoff validator now
+refuses an otherwise count-consistent preview containing **32 or more**
+displayed chunks, rather than rendering an unbounded plan or silently
+truncating server-returned evidence. It checks this before opening the
+handoff modal, Copy or export-ticket Download.
+
+Exactly 31 displayed chunks remain valid, including a partial plan marked
+`more_dates_not_listed`; an absent plan, fewer chunks and legacy zero-count
+chunks retain the existing compatibility rules. Synthetic mock-DOM
+regressions distinguish the exact 31-entry boundary from a forged 32-entry
+response while preserving count conservation, chronological ordering,
+observed-span intersection and the selected period. This is a bounded
+client-side preview consistency check, **not** proof that every date was
+captured, that sources are verified, or that a real consenting pilot
+demonstrates competitor parity or commercial benefit.
