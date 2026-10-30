@@ -171,6 +171,62 @@ def test_untested_boundaries_identify_the_insufficient_side_without_case_ids():
     assert all("case_id" not in item for item in result["boundaries_not_tested"])
 
 
+
+def test_pathless_windows_are_disclosed_not_mistaken_for_stable_behavior():
+    """A window with only single-event cases has no JSD probability distribution."""
+    rows = ["case,activity,time"]
+    for month in (1, 2, 3):
+        for i in range(40):
+            day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Receive,{day.isoformat()}")
+            if month == 2:
+                rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()), name="pathless-windows",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = drift.drift(log, window="month", min_cases=30)
+    assert [(w["cases"], w["sampled_cases"], w["sampled_cases_with_paths"])
+            for w in result["windows"]] == [(40, 40, 0), (40, 40, 40), (40, 40, 0)]
+    assert result["boundaries_tested"] == 0
+    assert result["boundaries_skipped_small_windows"] == 0
+    assert result["boundaries_skipped_no_paths"] == 2
+    assert result["boundaries"] == result["change_points"] == []
+    omitted = result["boundaries_not_tested"]
+    assert [(b["missing_paths_side"], b["sampled_cases_with_paths_before"],
+             b["sampled_cases_with_paths_after"]) for b in omitted] == [
+                 ("before", 0, 40), ("after", 40, 0)]
+    assert all(b["reason"] == "no_directly_follows_paths"
+               and b["insufficient_side"] is None
+               and b["sampled_cases_before"] == b["sampled_cases_after"] == 40
+               for b in omitted)
+    assert all("case_id" not in b for b in omitted)
+
+
+def test_two_pathless_windows_are_not_counted_as_tested_no_change():
+    rows = ["case,activity,time"]
+    for month in (1, 2):
+        for i in range(35):
+            day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
+            rows.append(f"m{month}c{i},Receive,{day.isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()), name="both-pathless",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = drift.drift(log, window="month", min_cases=30)
+    assert result["boundaries_tested"] == 0
+    assert result["boundaries_skipped_no_paths"] == 1
+    assert result["boundaries_skipped_small_windows"] == 0
+    assert result["boundaries_not_tested"][0]["missing_paths_side"] == "both"
+    assert result["boundaries_not_tested"][0]["sampled_cases_with_paths_before"] == 0
+    assert result["boundaries_not_tested"][0]["sampled_cases_with_paths_after"] == 0
+    assert result["change_points"] == []
+
+
+
 def test_no_change_means_no_change_points():
     result = drift.drift(_log(changed_from_month=99))
     assert result["change_points"] == [] and result["boundaries_tested"] == 4
@@ -212,6 +268,23 @@ with TestClient(app) as client:
     result = client.get(path + "?window=month", headers=headers)
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert len(result.json()["change_points"]) == 1
+    assert all(w["sampled_cases_with_paths"] == w["sampled_cases"] for w in result.json()["windows"])
+    pathless_rows = ["case,activity,time"]
+    for m in (1, 2):
+        for c in range(40):
+            pathless_rows.append(f"p{m}{c},A,2024-0{m}-{1 + c % 27:02d}T00:00:00Z")
+            if m == 2:
+                pathless_rows.append(f"p{m}{c},B,2024-0{m}-{1 + c % 27:02d}T01:00:00Z")
+    made_pathless = client.post("/v1/event-logs/import?format=csv&name=pathless&case_column=case"
+                                "&activity_column=activity&timestamp_column=time",
+                                content=("\\n".join(pathless_rows) + "\\n").encode(),
+                                headers={**headers, "x-owg-local-storage-confirmed": "true"})
+    assert made_pathless.status_code == 200, made_pathless.text
+    pathless = client.get("/v1/event-logs/" + made_pathless.json()["log_id"] + "/drift?window=month", headers=headers)
+    assert pathless.status_code == 200, pathless.text
+    assert pathless.json()["boundaries_tested"] == 0
+    assert pathless.json()["boundaries_skipped_no_paths"] == 1
+    assert pathless.json()["boundaries_not_tested"][0]["missing_paths_side"] == "before"
     assert client.get(path + "?window=year", headers=headers).status_code == 422
 '''
     env = os.environ.copy()
