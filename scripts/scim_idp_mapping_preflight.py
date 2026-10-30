@@ -112,8 +112,8 @@ def assess(mapping: Any) -> dict:
             if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
-    if any((match := _CONTACT_SELECTOR.fullmatch(value)) is not None
-           and match.group(1).casefold() == "value" for value in patch):
+    if any((contact_selector := _CONTACT_SELECTOR.fullmatch(value)) is not None
+           and contact_selector.group(1).casefold() == "value" for value in patch):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
     if "emails" in create or any(value.startswith("emails") for value in patch):
