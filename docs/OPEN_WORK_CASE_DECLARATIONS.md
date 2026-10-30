@@ -173,3 +173,8 @@ oversized malformed payload. This caps **JSON decoding work**, not the memory
 required for SQLite to return a corrupted oversized cell or arbitrary local
 database tampering. No provider authorization, business status, customer
 outcome, source receipt or agent execution permission is inferred.
+
+
+## Mixed-precision UTC approval reads
+
+The auxiliary ledger is globally capped at 50 declarations. A scoped list first checks that global bound, then fetches at most 50 scope rows and validates all approval, revision, review, retention and expiry clocks as parsed canonical UTC instants. It intentionally **does not** prefilter by SQLite `TEXT` timestamp comparisons: within one second, `2026-10-30T09:00:00+00:00` sorts lexicographically *after* `2026-10-30T09:00:00.500000+00:00`, even though the former is chronologically earlier. A text comparison could hide a still-current approval and its valid declared dependents. Returned eligible rows are ordered by parsed `updated_at` descending, then opaque work-item reference ascending on ties. As-of reads still withhold future owner approvals and revised cases whose earlier versions are not retained; no historical reconstruction or source truth is invented. Synthetic regression covers whole-second roots, fractional-second dependents, future declarations, stable chronological order and cross-scope exclusion. This is a local read-integrity improvement, not a multi-process source-revocation fence or verified customer outcome.
