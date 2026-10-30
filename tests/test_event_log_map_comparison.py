@@ -258,6 +258,45 @@ def test_map_side_aggregates_are_bounded_before_fetchall(monkeypatch):
         assert side["start_activities"] == {"Activity-000": 1}
 
 
+def test_capped_gap_samples_are_stable_across_calls_and_csv_order(monkeypatch):
+    """A seeded reservoir alone cannot guarantee the same sampled transitions."""
+    monkeypatch.setattr(compare, "GAP_SAMPLE", 7)
+    monkeypatch.setattr(compare, "GAP_ROUNDS", 24)
+
+    def make_log(reverse):
+        cases = [(month, i) for month in range(2) for i in range(40)]
+        if reverse:
+            cases.reverse()
+        rows = ["case,activity,time"]
+        for month, i in cases:
+            start = START + timedelta(days=31 * month, minutes=3 * i)
+            gap = 5 + (i * 7 % 31) + 2 * month
+            case = f"c{month}-{i}"
+            rows.extend((
+                f"{case},A,{start.isoformat()}",
+                f"{case},B,{(start + timedelta(minutes=gap)).isoformat()}",
+            ))
+        return workspace.import_log(
+            BytesIO(("\\n".join(rows) + "\\n").encode()),
+            name="varied-gaps", source_format="csv",
+            mapping={"case_column": "case", "activity_column": "activity",
+                     "timestamp_column": "time"})["log_id"]
+
+    baseline = None
+    for reverse in (False, True):
+        log_id = make_log(reverse)
+        for _ in range(3):
+            result = compare.compare_maps(log_id, [JANUARY, FEBRUARY])
+            ab = _paths(result)[("A", "B")]
+            interval = ab["median_gap_difference"]
+            assert (interval["sampled_gaps_first"], interval["sampled_gaps_second"]) == (7, 7)
+            assert interval["sampling_truncated_first"] and interval["sampling_truncated_second"]
+            if baseline is None:
+                baseline = interval
+            else:
+                assert interval == baseline
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
