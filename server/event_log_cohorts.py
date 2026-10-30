@@ -143,6 +143,9 @@ def _median(values: list[float]) -> float:
 def median_difference(a: list[float], b: list[float], rounds: int = BOOTSTRAP_ROUNDS,
                       seed: int = 20261023) -> tuple[float, float, float]:
     """Difference of medians (b - a) with a percentile bootstrap 95% interval."""
+    # SQL has no guaranteed row order. Canonicalize equal sample multisets
+    # before seeded draws so bootstrap intervals do not depend on fetch order.
+    a, b = sorted(a), sorted(b)
     rng = random.Random(seed)
     draws = []
     for _ in range(rounds):
@@ -193,12 +196,29 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
         rate("rework_rate", a["rework_cases"], b["rework_cases"])
         if sla_seconds is not None:
             rate("sla_breach_rate", a["sla_breached_cases"], b["sla_breached_cases"])
+        # DuckDB reservoir(... ) REPEATABLE(seed) is not guaranteed to select
+        # the same rows across query plans/parallel scans. A fixed hash-priority
+        # sample is stable for the same case IDs, independent of scan order.
+        # Only the bounded durations reach Python; no case IDs are returned.
         samples = [[r[0] for r in conn.execute(
-            f"SELECT duration FROM {t}_cs USING SAMPLE reservoir({BOOTSTRAP_SAMPLE} ROWS) REPEATABLE (42)").fetchall()]
+            f"SELECT duration FROM {t}_cs ORDER BY md5(case_id), case_id LIMIT ?",
+            [BOOTSTRAP_SAMPLE]).fetchall()]
             for t in ("ca", "cb")]
         d, low, high = median_difference(*samples)
-        differences["median_throughput_seconds"] = {"difference": d, "ci95": [low, high],
-                                                    "method": f"percentile bootstrap, {BOOTSTRAP_ROUNDS} rounds"}
+        differences["median_throughput_seconds"] = {
+            "difference": d, "ci95": [low, high],
+            "method": f"percentile bootstrap, {BOOTSTRAP_ROUNDS} rounds",
+            # Full-cohort p50/p90 above and this sampled bootstrap can use
+            # different denominators. Expose actual support, not just the cap.
+            "sampled_cases_first": len(samples[0]),
+            "sampled_cases_second": len(samples[1]),
+            "sample_fraction_first": round(len(samples[0]) / a["cases"], 6),
+            "sample_fraction_second": round(len(samples[1]) / b["cases"], 6),
+            "sampled_median_throughput_seconds_first": _median(samples[0]),
+            "sampled_median_throughput_seconds_second": _median(samples[1]),
+            "sampling_truncated_first": len(samples[0]) < a["cases"],
+            "sampling_truncated_second": len(samples[1]) < b["cases"],
+        }
         presence = conn.execute("""WITH pa AS (SELECT activity, count(DISTINCT case_id) AS n FROM ca GROUP BY 1),
               pb AS (SELECT activity, count(DISTINCT case_id) AS n FROM cb GROUP BY 1)
             SELECT coalesce(pa.activity, pb.activity), coalesce(pa.n, 0), coalesce(pb.n, 0)
