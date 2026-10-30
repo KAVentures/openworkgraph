@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import json
 import os
+import sqlite3
 
 import pytest
 
@@ -70,12 +72,12 @@ def test_exact_revision_no_implicit_renewal_and_no_partial_stale_write(local):
     later = NOW + timedelta(hours=1)
     updated = facts.save_case_declaration(A, SCOPE,
         goal_code="verify_operation", expected_outcome_code="operation_receipt_reviewed",
-        expected_revision=1, now=later)
+        expected_revision=1, expected_edit_token=first["edit_token"], now=later)
     assert updated["revision"] == 2
     assert updated["created_at"] == first["created_at"]
     assert updated["expires_at"] == first["expires_at"]
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
-        save(expected_revision=1)
+        save(expected_revision=1, expected_edit_token=first["edit_token"])
     assert facts.list_case_declarations(SCOPE, now=later)["items"][0] == updated
 
 
@@ -88,13 +90,13 @@ def test_dependency_scope_review_and_cycle_guard(local):
     assert b["depends_on_work_item_refs"] == [A]
     assert c["depends_on_work_item_refs"] == [B]
     with pytest.raises(facts.CaseDeclarationError, match="cyclic"):
-        save(expected_revision=a["revision"], depends_on_work_item_refs=[C])
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[C])
     with pytest.raises(facts.CaseDeclarationError, match="source scope"):
-        save(expected_revision=a["revision"], scope=OTHER_SCOPE)
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], scope=OTHER_SCOPE)
     with pytest.raises(facts.CaseDeclarationError, match="duplicate"):
-        save(expected_revision=a["revision"], depends_on_work_item_refs=[B, B])
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[B, B])
     with pytest.raises(facts.CaseDeclarationError, match="self-referential"):
-        save(expected_revision=a["revision"], depends_on_work_item_refs=[A])
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[A])
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"]
 
 
@@ -130,7 +132,7 @@ def test_review_removal_erases_transitive_dependent_declarations(local):
     reviewed_refs = {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
     assert {B, C, d}.issubset(reviewed_refs)
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
-        save(B, expected_revision=b["revision"])
+        save(B, expected_revision=b["revision"], expected_edit_token=b["edit_token"])
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
 
     reviews.clear_review_intentions()
@@ -236,12 +238,12 @@ def test_storage_symlink_and_permissions_fail_closed(local):
 
 def test_two_concurrent_edits_with_same_revision_cannot_both_commit(local):
     reviewed(A)
-    save()
+    first = save()
     def edit(goal):
         try:
             return facts.save_case_declaration(A, SCOPE, goal_code=goal,
                 expected_outcome_code="source_state_rechecked",
-                expected_revision=1, now=NOW + timedelta(minutes=1))
+                expected_revision=1, expected_edit_token=first["edit_token"], now=NOW + timedelta(minutes=1))
         except facts.CaseDeclarationError as exc:
             return str(exc)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -263,7 +265,7 @@ def test_sqlite_rollback_preserves_existing_fact(local):
     reviewed(B)
     first = save()
     with pytest.raises(facts.CaseDeclarationError):
-        save(B, depends_on_work_item_refs=[A], expected_revision=1)
+        save(B, depends_on_work_item_refs=[A], expected_revision=1, expected_edit_token=first["edit_token"])
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [first]
 
 
@@ -323,7 +325,7 @@ def test_early_re_review_invalidates_prior_owner_approvals_and_dependents(local)
         facts.save_case_declaration(
             A, SCOPE, goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
-            expected_revision=old_a["revision"], now=at)
+            expected_revision=old_a["revision"], expected_edit_token=old_a["edit_token"], now=at)
 
     # Pruning is durable: recreating A cannot resurrect the old dependent
     # approvals, even though B and C remain in the human review queue.
@@ -338,7 +340,7 @@ def test_early_re_review_invalidates_prior_owner_approvals_and_dependents(local)
             B, SCOPE, goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
             depends_on_work_item_refs=[A],
-            expected_revision=old_b["revision"], now=at)
+            expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"], now=at)
     fresh_b = facts.save_case_declaration(
         B, SCOPE, goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
@@ -372,7 +374,7 @@ def test_review_replaced_between_admission_snapshots_refuses_stale_cas(local, mo
         facts.save_case_declaration(
             A, SCOPE, goal_code="verify_operation",
             expected_outcome_code="operation_receipt_reviewed",
-            expected_revision=original["revision"], now=at)
+            expected_revision=original["revision"], expected_edit_token=original["edit_token"], now=at)
     assert calls >= 2
     # The failed transaction must not rewrite the old owner declaration;
     # its now-obsolete review generation also hides it on reads.
@@ -399,7 +401,7 @@ def test_lapsed_review_cannot_resurrect_a_later_saved_declaration(local):
         facts.save_case_declaration(A, SCOPE,
             goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
-            expected_revision=item["revision"], now=after_lapse)
+            expected_revision=item["revision"], expected_edit_token=item["edit_token"], now=after_lapse)
     fresh = facts.save_case_declaration(A, SCOPE,
         goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked", now=after_lapse)
@@ -424,21 +426,21 @@ def test_dependency_expiry_cascades_and_cas_update_never_renews(local):
     linked = facts.save_case_declaration(B, SCOPE,
         goal_code="assess_declared_policy",
         expected_outcome_code="source_state_rechecked",
-        depends_on_work_item_refs=[A], expected_revision=1,
+        depends_on_work_item_refs=[A], expected_revision=1, expected_edit_token=b["edit_token"],
         now=later + timedelta(hours=1))
     assert linked["expires_at"] == a["expires_at"]
     # Removing the dependency by explicit CAS must not silently renew B.
     unlinked = facts.save_case_declaration(B, SCOPE,
         goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
-        expected_revision=2, now=later + timedelta(hours=2))
+        expected_revision=2, expected_edit_token=linked["edit_token"], now=later + timedelta(hours=2))
     assert unlinked["expires_at"] == a["expires_at"]
 
     # Reapprove B -> A before expiry; even this cannot extend the deadline.
     linked_again = facts.save_case_declaration(B, SCOPE,
         goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
-        depends_on_work_item_refs=[A], expected_revision=3,
+        depends_on_work_item_refs=[A], expected_revision=3, expected_edit_token=unlinked["edit_token"],
         now=later + timedelta(hours=3))
     assert linked_again["expires_at"] == a["expires_at"]
 
@@ -453,7 +455,7 @@ def test_dependency_expiry_cascades_and_cas_update_never_renews(local):
         facts.save_case_declaration(B, SCOPE,
             goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
-            expected_revision=linked_again["revision"], now=after_lapse)
+            expected_revision=linked_again["revision"], expected_edit_token=linked_again["edit_token"], now=after_lapse)
 
 
 def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
@@ -474,7 +476,7 @@ def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
     shortened_a = facts.save_case_declaration(A, SCOPE,
         goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
-        depends_on_work_item_refs=[d], expected_revision=1,
+        depends_on_work_item_refs=[d], expected_revision=1, expected_edit_token=first_a["edit_token"],
         now=NOW + timedelta(days=1))
     assert shortened_a["expires_at"] == dependency["expires_at"]
     at = NOW + timedelta(days=5, hours=1)
@@ -490,7 +492,7 @@ def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
         facts.save_case_declaration(B, SCOPE,
             goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
-            depends_on_work_item_refs=[A], expected_revision=old_b["revision"],
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"],
             now=at)
 
 
@@ -516,7 +518,7 @@ def test_missing_prerequisite_cannot_resurrect_dependent_on_redeclaration(local)
     assert {item["work_item_ref"] for item in remaining} == {A, d}
     assert independent in remaining
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
-        save(B, expected_revision=old_b["revision"], depends_on_work_item_refs=[A])
+        save(B, expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"], depends_on_work_item_refs=[A])
 
 
 def test_wrong_scope_prerequisite_prunes_dependents_not_unrelated_cases(local):
@@ -541,7 +543,7 @@ def test_wrong_scope_prerequisite_prunes_dependents_not_unrelated_cases(local):
     assert {item["work_item_ref"] for item in remaining} == {d, e}
     assert independent in remaining and new_case in remaining
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
-        save(B, expected_revision=old_b["revision"])
+        save(B, expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"])
 
 
 def test_prerequisite_revision_erases_transitive_owner_approvals_not_unrelated(local):
@@ -558,7 +560,7 @@ def test_prerequisite_revision_erases_transitive_owner_approvals_not_unrelated(l
     revised = facts.save_case_declaration(
         A, SCOPE, goal_code="verify_operation",
         expected_outcome_code="operation_receipt_reviewed",
-        expected_revision=a["revision"], now=NOW + timedelta(minutes=1))
+        expected_revision=a["revision"], expected_edit_token=a["edit_token"], now=NOW + timedelta(minutes=1))
     assert revised["revision"] == 2
     assert revised["goal_code"] == "verify_operation"
     assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [
@@ -573,7 +575,7 @@ def test_prerequisite_revision_erases_transitive_owner_approvals_not_unrelated(l
         facts.save_case_declaration(
             B, SCOPE, goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
-            depends_on_work_item_refs=[A], expected_revision=old_b["revision"],
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"],
             now=NOW + timedelta(minutes=2))
     fresh_b = facts.save_case_declaration(
         B, SCOPE, goal_code="review_source_state",
@@ -593,7 +595,7 @@ def test_failed_prerequisite_cas_rolls_back_and_same_value_revision_invalidates(
         facts.save_case_declaration(
             A, SCOPE, goal_code="verify_operation",
             expected_outcome_code="operation_receipt_reviewed",
-            depends_on_work_item_refs=[B], expected_revision=1,
+            depends_on_work_item_refs=[B], expected_revision=1, expected_edit_token=a["edit_token"],
             now=NOW + timedelta(minutes=1))
     assert {item["work_item_ref"] for item in
             facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
@@ -602,12 +604,112 @@ def test_failed_prerequisite_cas_rolls_back_and_same_value_revision_invalidates(
     same_value = facts.save_case_declaration(
         A, SCOPE, goal_code=a["goal_code"],
         expected_outcome_code=a["expected_outcome_code"],
-        expected_revision=1, now=NOW + timedelta(minutes=1))
+        expected_revision=1, expected_edit_token=a["edit_token"], now=NOW + timedelta(minutes=1))
     assert same_value["revision"] == 2
     assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [same_value]
     with pytest.raises(facts.CaseDeclarationError, match="stale"):
         facts.save_case_declaration(
             B, SCOPE, goal_code=b["goal_code"],
             expected_outcome_code=b["expected_outcome_code"],
-            depends_on_work_item_refs=[A], expected_revision=b["revision"],
+            depends_on_work_item_refs=[A], expected_revision=b["revision"], expected_edit_token=b["edit_token"],
             now=NOW + timedelta(minutes=2))
+
+
+def test_edit_requires_incarnation_token_and_preserves_it_on_cas(local):
+    reviewed(A)
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=first["revision"])
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=first["revision"], expected_edit_token="0" * 32)
+    updated = save(expected_revision=first["revision"],
+                   expected_edit_token=first["edit_token"])
+    assert updated["revision"] == first["revision"] + 1
+    assert updated["edit_token"] == first["edit_token"]
+
+
+def test_prerequisite_edit_redeclaration_blocks_old_dependent_aba(local):
+    # Independent repro #6518893543: B rev1 is erased after A changes,
+    # and a newly approved B rev1 must not accept an old B rev1 edit.
+    for ref in (A, B, C):
+        reviewed(ref)
+    a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=a["revision"], expected_edit_token=a["edit_token"],
+        now=NOW + timedelta(minutes=1))
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=2))
+    assert old_b["revision"] == fresh_b["revision"] == 1
+    assert old_b["edit_token"] != fresh_b["edit_token"]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            depends_on_work_item_refs=[A],
+            expected_revision=old_b["revision"],
+            expected_edit_token=old_b["edit_token"],
+            now=NOW + timedelta(minutes=3))
+    current = facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=3))
+    assert next(i for i in current["items"] if i["work_item_ref"] == B) == fresh_b
+    assert C not in {i["work_item_ref"] for i in current["items"]}
+
+
+def test_explicit_review_delete_redeclare_blocks_old_incarnation_cas(local):
+    reviewed(A)
+    old = save()
+    assert reviews.remove_review_intention(A, now=NOW)
+    at = NOW + timedelta(minutes=1)
+    reviewed(A, at=at)
+    fresh = facts.save_case_declaration(
+        A, SCOPE, goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh["revision"] == old["revision"] == 1
+    assert fresh["edit_token"] != old["edit_token"]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=old["revision"],
+            expected_edit_token=old["edit_token"],
+            now=at + timedelta(minutes=1))
+    assert facts.list_case_declarations(SCOPE, now=at + timedelta(minutes=1))["items"] == [fresh]
+
+
+def test_existing_v1_store_migrates_without_reauthorizing_declarations(local):
+    reviewed(A)
+    path = facts._path()
+    db = sqlite3.connect(path)
+    try:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.execute("PRAGMA user_version=1")
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+                   (A, SCOPE, "review_source_state", "source_state_rechecked",
+                    json.dumps([]), 1, NOW.isoformat(), NOW.isoformat(),
+                    (NOW + timedelta(days=7)).isoformat()))
+        db.commit()
+    finally:
+        db.close()
+    if os.name == "posix":
+        path.chmod(0o600)
+    migrated = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert len(migrated) == 1
+    assert migrated[0]["revision"] == 1
+    assert len(migrated[0]["edit_token"]) == 32
+    with facts._database(create=False) as upgraded:
+        assert upgraded.execute("PRAGMA user_version").fetchone()[0] == 2
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=1)
+    updated = save(expected_revision=1,
+                   expected_edit_token=migrated[0]["edit_token"])
+    assert updated["revision"] == 2

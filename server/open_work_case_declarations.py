@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import stat
 from typing import Any, Iterator
@@ -23,6 +24,7 @@ from shared.history_policy import read_policy
 
 _REF = re.compile(r"^owg:w:[0-9a-f]{32}$")
 _SCOPE = re.compile(r"^owg:scope:[0-9a-f]{32}$")
+_EDIT_TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _GOALS = frozenset({"review_source_state", "assess_declared_policy", "verify_operation"})
 _EXPECTED = frozenset({"human_review_recorded", "source_state_rechecked", "operation_receipt_reviewed"})
 _FILENAME = ".open_work_case_declarations.sqlite3"
@@ -112,15 +114,38 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                         revision INTEGER NOT NULL,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
-                        expires_at TEXT NOT NULL
+                        expires_at TEXT NOT NULL,
+                        edit_token TEXT NOT NULL
                     )""")
-                    db.execute("PRAGMA user_version=1")
+                    db.execute("PRAGMA user_version=2")
                 db.execute("COMMIT")
             except Exception:
                 db.execute("ROLLBACK")
                 raise
             version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version != 1:
+        if version == 1:
+            # The draft v1 ledger had revision-only CAS, which could be
+            # replayed after deletion and re-declaration (ABA). Assign each
+            # retained row a new opaque incarnation token transactionally.
+            # No deleted refs or tombstones are retained by this migration.
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if db.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    db.execute("ALTER TABLE declarations ADD COLUMN edit_token TEXT NOT NULL DEFAULT ''")
+                    for (ref,) in db.execute(
+                        "SELECT work_item_ref FROM declarations"
+                    ).fetchall():
+                        db.execute(
+                            "UPDATE declarations SET edit_token=? WHERE work_item_ref=?",
+                            (secrets.token_hex(16), ref),
+                        )
+                    db.execute("PRAGMA user_version=2")
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version != 2:
             raise CaseDeclarationError("unsupported or incomplete declaration store")
         yield db
     finally:
@@ -186,10 +211,11 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
 
 
 def _public(row: tuple[Any, ...]) -> dict[str, Any]:
-    ref, scope, goal, outcome, deps, revision, created, updated, expires = row
+    ref, scope, goal, outcome, deps, revision, created, updated, expires, edit_token = row
     return {
         "work_item_ref": ref, "scope_ref": scope,
         "revision": revision,
+        "edit_token": edit_token,
         "goal_code": goal, "expected_outcome_code": outcome,
         "depends_on_work_item_refs": json.loads(deps),
         "created_at": created, "updated_at": updated, "expires_at": expires,
@@ -204,7 +230,7 @@ def _public(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _get(db: sqlite3.Connection, ref: str) -> tuple[Any, ...] | None:
     return db.execute("SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
-                      "dependencies_json,revision,created_at,updated_at,expires_at "
+                      "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
                       "FROM declarations WHERE work_item_ref=?", (ref,)).fetchone()
 
 
@@ -235,12 +261,15 @@ def save_case_declaration(
     goal_code: str, expected_outcome_code: str,
     depends_on_work_item_refs: list[str] | tuple[str, ...] = (),
     expected_revision: int = 0,
+    expected_edit_token: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """CAS-save a declaration; caller must already hold local human review authority.
 
     The opaque scope must be supplied by a trusted, source-account-bound
     caller. This internal API is deliberately not exposed through REST/MCP.
+    Updates require both the exact revision and the edit_token from the same
+    returned incarnation. Tokens are concurrency guards, not permissions.
     """
     _check_ref(work_item_ref, _REF, "work item reference")
     _check_ref(scope_ref, _SCOPE, "source scope")
@@ -249,6 +278,14 @@ def save_case_declaration(
         raise CaseDeclarationError("unsupported declared goal or expected outcome")
     if type(expected_revision) is not int or not 0 <= expected_revision < _MAX_REVISION:
         raise CaseDeclarationError("invalid expected revision")
+    if expected_revision == 0:
+        if expected_edit_token is not None:
+            raise CaseDeclarationError("unexpected edit token on new declaration")
+    elif (not isinstance(expected_edit_token, str) or
+          not _EDIT_TOKEN.fullmatch(expected_edit_token)):
+        # A revision alone cannot distinguish a deleted/redeclared row from
+        # its predecessor. Missing tokens fail closed even for legacy callers.
+        raise CaseDeclarationError("stale declaration edit token")
     if (not isinstance(depends_on_work_item_refs, (list, tuple)) or
         len(depends_on_work_item_refs) > _MAX_DEPENDENCIES):
         raise CaseDeclarationError("too many or invalid dependencies")
@@ -302,8 +339,8 @@ def save_case_declaration(
             else:
                 if old[1] != scope_ref:
                     raise CaseDeclarationError("source scope mismatch")
-                if old[5] != expected_revision:
-                    raise CaseDeclarationError("stale declaration revision")
+                if old[5] != expected_revision or old[9] != expected_edit_token:
+                    raise CaseDeclarationError("stale declaration revision or edit token")
                 created, expires, revision = old[6], old[8], old[5] + 1
             # Dependencies must be declared within the same source scope.
             # Their expiry also caps this declaration's lifetime. Otherwise
@@ -338,9 +375,10 @@ def save_case_declaration(
                 *dependency_expiries,
             ).isoformat()
             if old is None:
-                db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+                db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
                            (work_item_ref, scope_ref, goal_code, expected_outcome_code,
-                            json.dumps(dependencies), revision, created, current.isoformat(), expires))
+                            json.dumps(dependencies), revision, created, current.isoformat(),
+                            expires, secrets.token_hex(16)))
             else:
                 db.execute("UPDATE declarations SET goal_code=?,expected_outcome_code=?,"
                            "dependencies_json=?,revision=?,updated_at=?,expires_at=? "
