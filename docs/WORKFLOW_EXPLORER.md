@@ -27,6 +27,28 @@ storage, network destination, AI grants or recording permissions are introduced
 by map inspection. Reviewed grouping saves are separate explicit writes to
 user-reviewed knowledge; they do not modify canonical source evidence.
 
+## Evidence scope freshness
+
+The **Period** selector changes the evidence scope, but does not itself read
+source events. Changing it clears the previous candidate list, variant map,
+selected execution, compact evidence inspection and any pending read result.
+Click **Explore workflows** again to explicitly load the new period. A response
+from a previous period cannot restore old candidates after that change.
+
+Choosing another candidate, variant step or combined-map supporting variant
+also invalidates any pending compact evidence inspection. Click **Review
+selected examples** again to inspect the newly selected evidence. The explorer
+does not silently reuse old support counts, and a stale failed read cannot
+replace the current selection with an error. An explicitly selected exact
+variant with no valid retained execution references displays **no selectable
+evidence**; it never substitutes candidate-wide references from another
+variant. The copied agent handoff likewise asks for independent exact evidence
+instead of misattributing unrelated executions. When no variant is selected,
+candidate-wide examples remain available but are not variant-specific proof.
+This is a local display/read freshness and reference-selection guarantee,
+**not** a claim that the underlying observed data is complete, current at the
+source, or sufficient to authorize an agent.
+
 ## Semantics and known limits
 
 - The visualization draws **separate variant lanes**, avoiding invented merges
@@ -62,7 +84,7 @@ user-reviewed knowledge; they do not modify canonical source evidence.
 The view must not change existing capture, repeated-workflow results, evidence
 exports, Discovery Mode, MCP contracts, or permissions. Tests cover route/script
 installation, read-only calls, step repetition, exact variant separation,
-ID filtering, and bounded rendering. End-to-end browser checks include an owned synthetic dashboard-to-API flow, keyboard node inspection,
+ID filtering, and bounded rendering. End-to-end browser checks include an owned synthetic dashboard-to-API flow, in-flight period/variant change invalidation, keyboard node inspection,
 explicit variant selection, mobile layout and byte-for-byte canonical-row
 preservation. Real customer datasets are still required for business validation.
 
