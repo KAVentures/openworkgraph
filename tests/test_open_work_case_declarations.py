@@ -1311,3 +1311,66 @@ def test_persisted_row_limit_allows_bounded_cleanup(local):
     assert [item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
     save(B)
     assert {item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+
+
+def test_persisted_dependency_size_cap_precedes_json_decoder(local, monkeypatch):
+    # Eight legitimate opaque dependencies fit comfortably below the cap.
+    refs = ["owg:w:" + f"{index:032x}" for index in range(8)]
+    assert len(json.dumps(refs)) < facts._MAX_STORED_DEPENDENCIES_CHARS
+    assert facts._stored_dependencies(json.dumps(refs), A) == refs
+
+    # A bounded legacy representation with whitespace remains decodable.
+    within = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS - 2) + "[]"
+    beyond = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS - 1) + "[]"
+    original_loads = facts.json.loads
+
+    def guarded_loads(value, *args, **kwargs):
+        assert value != beyond, "oversized stored JSON reached decoder"
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(facts.json, "loads", guarded_loads)
+    assert facts._stored_dependencies(within, A) == []
+    assert facts._stored_dependencies(beyond, A) is None
+    assert facts._stored_dependencies(None, A) is None
+
+
+def test_oversized_auxiliary_edge_withholds_chain_then_prunes_on_save(local):
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    oversized = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS + 1) + "[]"
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (oversized, B))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, d}
+
+    # A later authorized owner save removes damaged B and dependent C, not
+    # their edges; independent reviewed cases retain their original identity.
+    save(d, expected_revision=independent["revision"],
+         expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=dependent["revision"],
+             expected_edit_token=dependent["edit_token"])
+
+
+def test_oversized_auxiliary_edge_does_not_block_explicit_review_deletion(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   ("[" * (facts._MAX_STORED_DEPENDENCIES_CHARS + 1), B))
+    # The existing corrupt-ledger fallback must still permit explicit revoke.
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
