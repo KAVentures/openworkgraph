@@ -324,3 +324,31 @@ positive finite nested metadata and non-object rows. This protects the
 integrity of the submitted scoring artifact; it does **not** authenticate
 its origin, prove assignment correctness, alter private holdout truth,
 change the scorer or thresholds, or demonstrate F1/contamination progress.
+
+
+## Whole selected blind-corpus binding in completed manifests
+
+New external-runner metadata records "selected_blind_corpus_sha256": a
+domain-separated SHA-256 over the **ordered selected cases**, each case ID and
+its complete ordered blind "presented_evidence". JSON object-key order is
+normalized; case/event-array order is not. Hidden "ground_truth", answers,
+private holdout labels and model outputs are **not** included.
+
+When resuming an artifact with this manifest field, the runner compares the
+current selected blind corpus before opening the prediction file for append or
+making another model request. A same-ID changed record, altered observation,
+changed event ordering or changed case ordering fails closed even if legacy
+prediction rows lack their per-row blind-evidence digest. The old files remain
+untouched on mismatch. New manifests always carry this digest.
+
+Old manifests without the field remain readable for backward compatibility,
+but the resulting run is marked "resume_provenance_unverified: true" even when
+its prior response receipts are complete. A missing manifest was already
+unattested. A malformed or mismatching **present** digest is never silently
+treated as legacy. This is a deterministic local consistency fingerprint, not
+a cryptographic signature, model/provider identity attestation or proof of
+case correctness. A writer who can replace both evidence and metadata can
+forge it. Synthetic tests cover same-ID evidence changes, ordering, hidden
+truth exclusion, legacy manifests and no-provider-call refusal. No private
+truth, scoring formulas, F1/contamination thresholds or real customer data
+were modified.
