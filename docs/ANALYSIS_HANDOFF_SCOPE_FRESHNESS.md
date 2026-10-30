@@ -370,3 +370,34 @@ detailed local ticket and that copying still works when lease metadata is
 unverified. These are synthetic interface-contract tests, **not** real
 consenting-user research, an IdP/provider validation, accessibility
 certification, or evidence of competitor parity or business ROI.
+
+
+## UTC daily-plan provenance and optional pagination metadata
+
+The authenticated local preview builds each `analysis_plan.date_chunks` entry
+from exactly **one UTC calendar date** in the selected SQLite event rows, then
+clips its inclusive start/exclusive end to the selected window. A client that
+accepted a two-day entry (or a short interval crossing UTC midnight) could
+display a forged multi-day window as one daily analysis step even when its row
+counts, selection bounds and observed first/last timestamps were otherwise
+consistent. The handoff now requires every listed chunk to end no later than
+the UTC midnight immediately following its start date. A clipped sub-day
+interval, an offset representation of the same UTC instants, or a chunk ending
+**exactly** at the next UTC midnight remains valid. Existing chronological,
+31-entry, selected-window, observed-span and count checks still apply.
+
+The optional plan metadata also cannot contradict the backend's shape: a
+supplied `page_size` must be a positive safe integer, and a supplied
+`chunks_respect_selected_window` must be the literal boolean `true`.
+Older previews omitting either field remain accepted. This does not claim
+that a positive page size proves every page was read, that an asserted flag
+authenticates the source, or that a valid daily plan establishes complete
+capture. It only refuses inconsistent metadata before rendering or allowing
+Copy/Download.
+
+The synthetic mock-DOM regression covers a forged two-day window, a
+sub-hour midnight-crossing window, a clipped same-day offset window, an exact
+UTC-midnight end, six invalid page-size shapes, false/string window-respect
+flags, and positive current/legacy metadata. It does **not** replace native
+Node, browser, accessibility, scale or packaging CI, or consenting-user
+competitor-style acceptance.
