@@ -66,7 +66,7 @@ def _selected_prediction_set_digest(predictions: list[dict[str, Any]]) -> str:
         separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(
-        b"owg-reconstruction-selected-prediction-set-v1\\0".replace(b"\\0", b"\0") + payload
+        b"owg-reconstruction-selected-prediction-set-v1\0" + payload
     ).hexdigest()
 
 
