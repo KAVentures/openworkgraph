@@ -125,3 +125,66 @@ def test_cli_exit_codes_and_no_sensitive_echo(tmp_path):
     assert failed.returncode == 2 and json.loads(failed.stdout)["status"] == "blocked"
     invalid = subprocess.run([sys.executable, str(SCRIPT), "-"], input=b'{"token":"secret"}', capture_output=True)
     assert invalid.returncode == 1 and b"secret" not in invalid.stdout + invalid.stderr
+
+
+def test_shipped_contact_array_writes_are_descriptive_only():
+    users = mapping()["users"]
+    users["create_attributes"].append("emails")
+    users["patch_attributes"].extend([
+        "emails", "emails.primary", 'emails[type eq "work"].value',
+        'emails[value eq "alias@example.invalid"].display',
+    ])
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert {"unverified_contact_metadata", "contact_value_selector"} <= codes(report)
+    assert "alias@example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("bad_path", [
+    "emails.value", "emails[type co \"work\"].value",
+    'emails[type eq "work" and primary eq true].value',
+    'emails[type eq "work"].unknown',
+    'emails[type eq ""].value',
+    'emails[type eq "work"].value.extra',
+    'emails[value eq "bad\\u0000"].primary',
+    "emails[0].value",
+], ids=[
+    "create-child", "unsupported-operator", "compound-selector",
+    "unknown-child", "empty-selector", "nested-child",
+    "control-selector", "array-index",
+])
+def test_contact_create_does_not_accept_patch_only_or_malformed_paths(bad_path):
+    users = mapping()["users"]
+    users["create_attributes"].append(bad_path)
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+
+
+def test_contact_matching_remains_blocked_even_with_shipped_contact_schema():
+    users = mapping()["users"]
+    users["match_attributes"] = ['emails[type eq "work"].value']
+    users["create_attributes"].append("emails")
+    users["patch_attributes"].append('emails[type eq "work"].value')
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert "unverified_contact_metadata" in codes(report)
+
+
+def test_contact_patch_rejects_invalid_selector_syntax_and_does_not_echo_values():
+    users = mapping()["users"]
+    users["patch_attributes"].extend([
+        'emails[type eq "work"].value',
+        'emails[value eq "private@example.invalid"].primary',
+    ])
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "private@example.invalid" not in json.dumps(report)
+    for bad in ('emails[type co "work"].value',
+                'emails[type eq "work" and value eq "x"].primary',
+                'emails[type eq "work"].password',
+                'emails[type eq ""].primary'):
+        users["patch_attributes"] = [bad]
+        assert "unsupported_attribute" in codes(assess(mapping(users=users)))
