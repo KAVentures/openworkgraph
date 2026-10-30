@@ -126,6 +126,67 @@ def test_review_removal_and_disconnect_purge_declarations_and_dangling_edges(loc
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
 
 
+
+def test_review_disconnected_between_admission_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    original = facts._reviewed
+    calls = 0
+
+    def disconnect_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            reviews.clear_review_intentions()
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", disconnect_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review revoked"):
+        save()
+    assert calls >= 2
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_dependency_review_removed_between_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    reviewed(B)
+    save()
+    original = facts._reviewed
+    calls = 0
+
+    def remove_dependency_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            assert reviews.remove_review_intention(A, now=at)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", remove_dependency_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review revoked"):
+        save(B, depends_on_work_item_refs=[A])
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == set()
+
+
+def test_retention_revoked_between_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    original = facts._reviewed
+    calls = 0
+
+    def revoke_retention_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            monkeypatch.setattr(facts, "read_policy",
+                lambda: {"human_retention": {"mode": "ephemeral"}})
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", revoke_retention_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="retention revoked"):
+        save()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
 def test_retention_shrink_and_session_only_scrub(local, monkeypatch):
     reviewed(A)
     save()
