@@ -40,6 +40,27 @@ this cap still have full-cohort medians but no bootstrap interval;
 absence of an interval is not evidence of no change. This ordering
 makes no claim about path importance or business causation.
 
+The additive per-path `median_gap_interval_status` makes interval absence
+machine-readable for **every returned path**:
+
+- `estimated`: the path has more than one transition in **both**
+  cohorts and was selected for a bounded bootstrap interval;
+- `insufficient_support`: either cohort has zero or one observed
+  transition for the path, so no bootstrap interval is attempted;
+- `rank_limit`: both cohorts have at least two transitions, but the
+  path falls below the top-25 interval budget (with deterministic
+  literal-name tie-breaking).
+
+The top-level `timed_paths_eligible`, `timed_paths_evaluated`, and
+`timed_paths_omitted_rank_limit` are aggregate **distinct-path**
+counts across the entire comparison, not merely the paths returned
+under the caller's `limit`. Their relationship is
+`eligible = evaluated + omitted_rank_limit`. They do not count
+transitions, cases, or business-verified process variants. An
+`insufficient_support` status is descriptive, not a significance test
+or proof of no process change. No existing interval is recomputed
+or promoted.
+
 No new case identifiers, event rows, raw resource labels or source reads
 are returned. Existing path frequency, full-cohort medians, bootstrap
 method, sample cap, output fields, REST/MCP/dashboard contracts, local
