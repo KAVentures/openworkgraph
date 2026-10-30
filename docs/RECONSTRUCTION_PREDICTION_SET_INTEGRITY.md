@@ -381,3 +381,29 @@ contamination target, nor validate private holdout answers or real users.
 Synthetic tests cover changed-but-valid assignments, exact replay, canonical
 key ordering, legacy manifests, invalid digests and the no-provider-call
 failure boundary.
+
+## Exact system-instruction binding on resume
+
+New completed-run metadata also records `system_instruction_sha256`, a
+versioned, domain-separated SHA-256 over the **exact UTF-8 bytes of the
+`SYSTEM_INSTRUCTION` text sent to the external model**. This is independent
+of the selected blind-corpus and prediction-set fingerprints. On `--resume`,
+a present digest must match the current instruction before any new provider
+request or prediction/report/metadata write. A changed prompt cannot silently
+mix old and new prediction rows while preserving model ID, endpoint, evidence
+and selected cases. The check is local and does not invoke a model.
+
+For backward compatibility, historical manifests without this field can still
+be resumed, but `resume_provenance_unverified` is set to `true` and remains
+sticky. A present but malformed or mismatching digest is **not** treated as
+legacy. Interrupted runs without a completed manifest remain unattested as
+before. The manifest does not authenticate the prompt author, provider,
+model weights, API response or code revision; a writer with artifact access
+can replace both text and digest. No private answer key, scoring threshold,
+interruption policy or holdout assignment is changed.
+
+Synthetic tests cover exact-byte sensitivity, new-manifest recording, a
+changed-prompt resume refused before provider calls or artifact mutation,
+legacy compatibility and malformed/present digest rejection. This is
+measurement reproducibility, **not** an F1/contamination improvement,
+real-provider validation or real consenting-user acceptance.
