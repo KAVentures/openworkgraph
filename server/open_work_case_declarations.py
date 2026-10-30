@@ -127,13 +127,23 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         db.close()
 
 
-def _reviewed(now: datetime) -> set[str]:
-    # Existing explicitly confirmed local review is the only admission gate.
-    # No source scan, native ID lookup, or AI grant occurs here.
-    return {i["work_item_ref"] for i in list_review_intentions(now=now)["items"]}
+def _reviewed(now: datetime) -> dict[str, datetime]:
+    # Preserve each admitting review's exact expiry: a declaration must not
+    # outlive the human review that authorized its creation. Merely renewing
+    # a lapsed review cannot revive an older declaration.
+    result: dict[str, datetime] = {}
+    for item in list_review_intentions(now=now)["items"]:
+        try:
+            expiry = datetime.fromisoformat(item["expires_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if expiry.tzinfo is None or expiry <= now:
+            continue
+        result[item["work_item_ref"]] = expiry.astimezone(timezone.utc)
+    return result
 
 
-def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: set[str]) -> None:
+def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: dict[str, datetime]) -> None:
     cutoff = (now - timedelta(days=days)).isoformat()
     db.execute("DELETE FROM declarations WHERE expires_at <= ? OR created_at <= ?",
                (now.isoformat(), cutoff))
@@ -231,7 +241,8 @@ def save_case_declaration(
                 if count >= _MAX_ITEMS:
                     raise CaseDeclarationError("local declaration limit reached")
                 created = current.isoformat()
-                expires = (current + timedelta(days=days)).isoformat()
+                expires = min(current + timedelta(days=days),
+                              live_reviewed[work_item_ref]).isoformat()
                 revision = 1
             else:
                 if old[1] != scope_ref:
@@ -240,10 +251,15 @@ def save_case_declaration(
                     raise CaseDeclarationError("stale declaration revision")
                 created, expires, revision = old[6], old[8], old[5] + 1
             # Dependencies must be declared within the same source scope.
+            # Their expiry also caps this declaration's lifetime. Otherwise
+            # a later re-review/re-declaration of an expired prerequisite
+            # could silently resurrect a dependent owner's stale approval.
+            dependency_expiries: list[datetime] = []
             for dep in dependencies:
                 other = _get(db, dep)
                 if other is None or other[1] != scope_ref:
                     raise CaseDeclarationError("dependency missing in this source scope")
+                dependency_expiries.append(datetime.fromisoformat(other[8]))
             # The bounded graph is a DAG, not a time-based inferred join.
             pending, seen = list(dependencies), set()
             while pending:
@@ -257,15 +273,25 @@ def save_case_declaration(
                 if linked is None or linked[1] != scope_ref:
                     raise CaseDeclarationError("dependency scope changed")
                 pending.extend(json.loads(linked[4]))
+            # Exact CAS updates may shorten an expiry, never extend it.
+            # Retention reductions and the admitting review's deadline
+            # remain authoritative even when the owner changes dependencies.
+            expires = min(
+                datetime.fromisoformat(expires),
+                datetime.fromisoformat(created) + timedelta(days=days),
+                live_reviewed[work_item_ref],
+                *dependency_expiries,
+            ).isoformat()
             if old is None:
                 db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
                            (work_item_ref, scope_ref, goal_code, expected_outcome_code,
                             json.dumps(dependencies), revision, created, current.isoformat(), expires))
             else:
                 db.execute("UPDATE declarations SET goal_code=?,expected_outcome_code=?,"
-                           "dependencies_json=?,revision=?,updated_at=? WHERE work_item_ref=?",
+                           "dependencies_json=?,revision=?,updated_at=?,expires_at=? "
+                           "WHERE work_item_ref=?",
                            (goal_code, expected_outcome_code, json.dumps(dependencies),
-                            revision, current.isoformat(), work_item_ref))
+                            revision, current.isoformat(), expires, work_item_ref))
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
