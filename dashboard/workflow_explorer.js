@@ -9,6 +9,7 @@
   let candidates = [];
   let selectedId = '';
   let latestRequest = 0;
+  let latestEvidenceRequest = 0;
   let chosenPeriod = '7';
   let selectedExample = null;
   let activeBundle = null;
@@ -105,7 +106,22 @@
       period.appendChild(opt);
     });
     period.value = chosenPeriod;
-    period.addEventListener('change', () => { chosenPeriod = period.value; });
+    period.addEventListener('change', () => {
+      if (chosenPeriod === period.value) return;
+      chosenPeriod = period.value;
+      // The selector is a scope change, not a request to silently reuse old results.
+      ++latestRequest;
+      invalidateEvidence();
+      candidates = [];
+      selectedId = '';
+      selectedExample = null;
+      currentWindow = {};
+      const refresh = document.getElementById('owgExplorerRefresh');
+      if (refresh) refresh.disabled = false;
+      renderCandidates();
+      clearDetail('Select Explore workflows to load evidence for the new period.');
+      status('Period changed. Previous candidates and evidence cleared. Select Explore workflows to load this period.');
+    });
     selectLabel.appendChild(period);
     const refreshButton = button('Explore workflows', load);
     refreshButton.id = 'owgExplorerRefresh';
@@ -150,9 +166,17 @@
     else overview.appendChild(card);
   }
 
+  function invalidateEvidence() {
+    ++latestEvidenceRequest;
+    activeBundle = null;
+    const output = document.getElementById('owgExplorerEvidence');
+    if (output) output.replaceChildren();
+  }
+
   async function load() {
     const refreshButton = document.getElementById('owgExplorerRefresh');
     const requestId = ++latestRequest;
+    invalidateEvidence();
     if (refreshButton) refreshButton.disabled = true;
     candidates = [];
     activeBundle = null;
@@ -163,6 +187,7 @@
     clearDetail('Loading candidate workflows…');
     try {
       await window.__owgAuthReady;
+      if (requestId !== latestRequest) return;
       currentWindow = sinceWindow(chosenPeriod);
       const params = new URLSearchParams({
         min_runs: '2', limit: String(LIMIT), rank_by_quality: 'true',
@@ -220,9 +245,9 @@
   function choose(id) {
     const candidate = candidates.find(item => item.candidate_cluster_id === id);
     if (!candidate) return;
+    invalidateEvidence();
     selectedId = id;
     selectedExample = null;
-    activeBundle = null;
     renderCandidates();
     renderDetail(candidate);
   }
@@ -356,6 +381,7 @@
       const drawing=window.owgProcessGraph.draw({activities,transitions,entry_activity_id:map.layout_anchor_activity_id||activities[0]?.id},selected=>{
         const node=byId.get(selected.id);if(!node)return;
         // A combined selection does not silently choose a complete execution.
+        invalidateEvidence();
         selectedExample=null;
         const stepInfo=document.getElementById('owgExplorerStepInfo');
         if(stepInfo)stepInfo.textContent='Combined activity selected. Choose a supporting variant before drafting an exact route.';
@@ -366,6 +392,7 @@
           if(!safeArray(candidate.exact_variants?.[lane.index]?.structural_steps).includes(node.structural_step))continue;
           found++;
           info.appendChild(button('Select supporting variant '+(lane.index+1),()=>{
+            invalidateEvidence();
             selectedExample=lane;
             const detail=document.getElementById('owgExplorerStepInfo');
             if(detail)detail.textContent='Selected variant '+(lane.index+1)+' supporting '+node.label+'. '+lane.count+' candidate executions; inspect evidence before inferring intent.';
@@ -380,6 +407,7 @@
     }
   }
   function explainStep(lane, position) {
+    invalidateEvidence();
     selectedExample = lane;
     const host = document.getElementById('owgExplorerStepInfo');
     if (host) host.textContent =
@@ -395,6 +423,8 @@
   async function inspect(candidate, lane) {
     const output = document.getElementById('owgExplorerEvidence');
     if (!output) return;
+    const requestId = ++latestEvidenceRequest;
+    activeBundle = null;
     output.replaceChildren(element('p', 'Reading bounded supporting evidence…', 'muted'));
     const ids = selectedIds(candidate, lane);
     if (!ids.length) {
@@ -403,6 +433,7 @@
     }
     try {
       await window.__owgAuthReady;
+      if (requestId !== latestEvidenceRequest || selectedId !== candidate.candidate_cluster_id) return;
       const params = new URLSearchParams({
         execution_ids: ids.join(','), max_runs: String(ids.length),
         source_event_limit: '25000', max_events_per_run: '12',
@@ -411,7 +442,7 @@
       const response = await fetch('/v1/workflow-evidence?' + params, {cache: 'no-store'});
       if (!response.ok) throw new Error('Evidence unavailable (' + response.status + ').');
       const bundle = await response.json();
-      if (selectedId !== candidate.candidate_cluster_id) return;
+      if (requestId !== latestEvidenceRequest || selectedId !== candidate.candidate_cluster_id) return;
       activeBundle = bundle;
       output.replaceChildren();
       output.appendChild(element('h4', 'Evidence for ' +
@@ -430,6 +461,7 @@
           'Source limit reached; earlier evidence may be absent. ' : '') +
         'Observed completion does not verify the real business outcome. Use the existing Evidence and AI export views for canonical traces.', 'muted'));
     } catch (error) {
+      if (requestId !== latestEvidenceRequest || selectedId !== candidate.candidate_cluster_id) return;
       output.replaceChildren(element('p', String(error.message || error), 'muted'));
     }
   }
@@ -459,11 +491,13 @@
         execution_ids:safeArray(bundle.selector?.execution_ids),execution_count:count(bundle.selector?.selected_execution_count),
         exact_variants:variants,exact_variant_count:variants.length,surface_labels:bundle.structural_alignment?.surface_labels||{},
         core_steps:clusters[0]?.core_steps||[]};
+      invalidateEvidence();
       selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=bundle;currentWindow=filter;
       renderCandidates();renderDetail(candidate);
     },
     clearReviewed(label){
-      selectedId='';selectedExample=null;activeBundle=null;renderCandidates();
+      invalidateEvidence();
+      selectedId='';selectedExample=null;renderCandidates();
       clearDetail(label?'Reviewed group · '+label+'. Loadable source details are required to draw its observed variants.':'Choose an inferred candidate or load a reviewed classification to inspect observed variants.');
     }
   });
