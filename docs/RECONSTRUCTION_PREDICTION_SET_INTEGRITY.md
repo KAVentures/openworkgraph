@@ -286,3 +286,21 @@ an early refusal of malformed evidence, **not** improved held-out assignment
 F1, contamination, interruption rejection, provider validation or customer
 pilot proof. Synthetic tests exercise preflight, finite compatibility and
 fail-before-request/no-mutation behavior; no paid API was invoked.
+
+
+## Strict outer provider response envelopes
+
+The model's JSON content was already parsed strictly, but the surrounding
+OpenAI-compatible HTTP completion envelope previously used Python's permissive
+response.json(). That could silently choose the last of duplicate outer
+choices or usage keys, or persist non-finite numbers in usage receipts
+(including overflowed JSON exponents) even when the model prediction itself
+was valid. The runner now parses the **raw outer response text** with the same
+duplicate-key and finite-number checks before accessing choices or writing
+prediction/receipt artifacts. A non-object envelope is also refused.
+
+Synthetic fake-provider tests cover root and nested duplicate keys, non-finite
+usage and otherwise discarded envelope fields, finite nested receipts, and
+prove the permissive response.json() shortcut is not used. This check does
+not authenticate a provider, attest usage billing, establish a real API
+integration, change the answer key or demonstrate held-out F1 improvement.

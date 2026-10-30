@@ -169,7 +169,13 @@ def _request(client: httpx.Client, *, base_url: str, api_key: str, model: str, c
         timeout=timeout,
     )
     response.raise_for_status()
-    raw = response.json()
+    # Parse the provider envelope itself strictly, not only its nested model
+    # content. Response.json() accepts duplicate keys and non-finite numbers,
+    # which can corrupt persisted usage/model receipts even when the model
+    # content is otherwise valid.
+    raw = _strict_json_loads(response.text)
+    if not isinstance(raw, dict):
+        raise ValueError("provider completion envelope must be a JSON object")
     content = raw["choices"][0]["message"]["content"]
     prediction = _extract_json(content)
     event_ids = {str(e["event_id"]) for e in case["presented_evidence"]}

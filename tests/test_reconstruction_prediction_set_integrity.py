@@ -345,6 +345,10 @@ def test_fake_provider_response_receives_local_blind_evidence_digest():
         def raise_for_status(self):
             pass
 
+        @property
+        def text(self):
+            return json.dumps(self.json())
+
         def json(self):
             return {
                 "id": "synthetic-only",
@@ -773,6 +777,10 @@ def test_fake_provider_duplicate_json_key_is_rejected_before_persistence():
         def raise_for_status(self):
             pass
 
+        @property
+        def text(self):
+            return json.dumps(self.json())
+
         def json(self):
             return {"choices": [{"message": {
                 "content": '{"case_id":"case-a","case_id":"case-b","workflows":[]}'
@@ -992,3 +1000,92 @@ def test_noncanonical_blind_evidence_fails_before_artifacts_or_model_call(
         assert not (output_dir / "synthetic-model.metadata.json").exists()
     else:
         assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("extra, error", [
+    ('"choices":[]', "duplicate JSON object key"),
+    ('"usage":{"prompt_tokens":1,"prompt_tokens":2}', "duplicate JSON object key"),
+    ('"usage":{"prompt_tokens":NaN}', "non-finite JSON"),
+    ('"usage":{"completion_tokens":Infinity}', "non-finite JSON"),
+    ('"usage":{"completion_tokens":-Infinity}', "non-finite JSON"),
+    ('"usage":{"completion_tokens":1e999}', "non-finite JSON"),
+    ('"unused":{"nested":[{"ratio":-1e999}]}', "non-finite JSON"),
+])
+def test_fake_provider_envelope_rejects_ambiguous_or_nonfinite_receipts(extra, error):
+    """The outer HTTP envelope is evidence too, even when model JSON is valid."""
+    from evals.reconstruction.run_external import _request
+
+    content = json.dumps(json.dumps(_prediction("case-a")))
+    raw = '{"choices":[{"message":{"content":' + content + '}}],' + extra + '}'
+
+    class FakeResponse:
+        text = raw
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise AssertionError("permissive response.json() must not be used")
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            assert kwargs["json"]["model"] == "synthetic-model"
+            return FakeResponse()
+
+    with pytest.raises(ValueError, match=error):
+        _request(
+            FakeClient(), base_url="https://invalid.example", api_key="synthetic-only",
+            model="synthetic-model", case=_blind_case(), temperature=None, timeout=1.0,
+        )
+
+
+def test_fake_provider_envelope_accepts_finite_receipts_without_json_shortcut():
+    from evals.reconstruction.run_external import _request
+
+    raw = json.dumps({
+        "id": "synthetic-only",
+        "model": "synthetic-model",
+        "choices": [{"message": {"content": json.dumps(_prediction("case-a"))}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "details": {"ratio": 0.125}},
+    })
+
+    class FakeResponse:
+        text = raw
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise AssertionError("must parse raw envelope with strict JSON")
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    prediction, receipt = _request(
+        FakeClient(), base_url="https://invalid.example", api_key="synthetic-only",
+        model="synthetic-model", case=_blind_case(), temperature=None, timeout=1.0,
+    )
+    assert prediction["case_id"] == "case-a"
+    assert receipt["response_id"] == "synthetic-only"
+    assert receipt["usage"]["details"]["ratio"] == 0.125
+
+
+def test_fake_provider_rejects_nonobject_outer_completion_envelope():
+    from evals.reconstruction.run_external import _request
+
+    class FakeResponse:
+        text = "[]"
+
+        def raise_for_status(self):
+            pass
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    with pytest.raises(ValueError, match="provider completion envelope must be a JSON object"):
+        _request(
+            FakeClient(), base_url="https://invalid.example", api_key="synthetic-only",
+            model="synthetic-model", case=_blind_case(), temperature=None, timeout=1.0,
+        )
