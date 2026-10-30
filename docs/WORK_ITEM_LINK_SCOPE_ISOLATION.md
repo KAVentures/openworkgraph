@@ -99,3 +99,25 @@ validation rules, not proof of a genuine observed copy/paste, tenant
 authorization, business case identity, or verified outcome. The F1 and
 contamination acceptance targets remain unverified; no private truth or
 scoring rules were changed.
+
+
+## Literal observation and surface identity
+
+The deterministic linker now requires a literal string `event_id` before
+admitting a row. Python coercion previously made `True` or integer `7`
+look like plausible event IDs, despite neither being an observed identifier.
+A malformed ID is omitted rather than assigned to a reconstructed work item.
+Existing valid string IDs, including numeric-looking strings, remain supported.
+
+The weak `surface_continuity` candidate likewise requires an actual string
+`app` value. Booleans, numbers, lists and objects cannot be stringified into
+an app identity that happens to match another event. A missing or malformed app
+does not create a candidate; valid same-scope string app names still yield
+**unmerged ambiguous candidates**, never automatic work-item membership.
+
+These changes do not authenticate captured metadata, infer task identity,
+validate source outcomes, or authorize cross-tenant reads. The new synthetic
+regressions cover malformed event IDs, malformed app labels and positive
+literal-string compatibility. They are not held-out performance evidence:
+preregistered F1 >= 0.90 and contamination <= 0.05 remain unverified, and no
+private evaluation truth, split or scoring threshold was changed.
