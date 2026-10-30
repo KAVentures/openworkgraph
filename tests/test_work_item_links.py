@@ -213,3 +213,55 @@ def test_exact_record_evidence_can_still_link_across_actors_without_leaking_scop
     output = json.dumps(result)
     for private_scope in ("tenant-a", "human-a", "human-b", "device-a", "session-a"):
         assert private_scope not in output
+
+
+def test_conflicted_record_identity_cannot_rejoin_through_transfer_or_tab():
+    # A reused opaque reference with contradictory provider identity is
+    # suppressed even if its observations also share weaker linking tokens.
+    for signal in ("transfer", "tab"):
+        opts = {signal: "reused-ephemeral"}
+        first = _scoped(_event(1, A, action="copy", **opts))
+        conflicting = _scoped(_event(2, A, provider="github", action="paste", **opts))
+        independent = _scoped(_event(3, B, action="paste", **opts))
+        result = linked_work_items([first, conflicting, independent])
+        assert result["items"] == [], signal
+        assert result["candidate_links"] == [], signal
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_explicit_reference_is_not_treated_as_loose_tab_or_transfer():
+    for signal in ("transfer", "tab"):
+        opts = {signal: "reused-ephemeral"}
+        invalid = _scoped(_event(1, app="Excel", action="copy", **opts))
+        invalid["metadata"]["resource_reference"] = {
+            "resource_ref": A, "provider": "BAD PROVIDER",
+            "resource_kind": "issue", "host": "work.atlassian.net",
+        }
+        valid = _scoped(_event(2, B, action="paste", **opts))
+        result = linked_work_items([invalid, valid])
+        assert result["items"] == [], signal
+        assert result["candidate_links"] == [], signal
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_claim_cannot_create_surface_candidate_and_valid_loose_events_still_link():
+    invalid = _scoped(_event(1, app="Excel"))
+    invalid["metadata"]["resource_reference"] = {
+        "resource_ref": "not-an-opaque-record-ref", "provider": "jira",
+        "resource_kind": "issue",
+    }
+    ordinary = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([invalid, ordinary])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+
+    # Genuine absence of a reference is different from an invalid claim.
+    result = linked_work_items([
+        _scoped(_event(1, A, tab="legitimate-tab")),
+        _scoped(_event(2, tab="legitimate-tab")),
+        _scoped(_event(3, A, tab="legitimate-tab")),
+    ])
+    assert set(_items(result)) == {("e01", "e02", "e03")}
+    assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {
+        "same_record": 1, "same_tab_single_record": 1,
+    }
