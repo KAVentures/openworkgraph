@@ -394,3 +394,41 @@ def test_dependency_expiry_cascades_and_cas_update_never_renews(local):
             goal_code="review_source_state",
             expected_outcome_code="source_state_rechecked",
             expected_revision=linked_again["revision"], now=after_lapse)
+
+
+def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
+    # D is older than A. Adding A -> D shortens A's expiry after B -> A
+    # was approved. When A expires, a fresh A must not revive stale B -> A.
+    d = "owg:w:" + "d" * 32
+    early = NOW - timedelta(days=2)
+    reviewed(d, at=early)
+    dependency = facts.save_case_declaration(d, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=early)
+    reviewed(A)
+    reviewed(B)
+    first_a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    assert old_b["expires_at"] == first_a["expires_at"]
+
+    shortened_a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[d], expected_revision=1,
+        now=NOW + timedelta(days=1))
+    assert shortened_a["expires_at"] == dependency["expires_at"]
+    at = NOW + timedelta(days=5, hours=1)
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
+
+    fresh_a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh_a["revision"] == 1
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=at)["items"]} == {A}
+    # The old B revision was transitively erased by the write-time prune.
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(B, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"],
+            now=at)
