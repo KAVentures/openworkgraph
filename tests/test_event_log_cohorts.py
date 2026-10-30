@@ -100,6 +100,7 @@ def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monk
     assert (full_gap["sampled_cases_first"], full_gap["sampled_cases_second"]) == (40, 20)
     assert not full_gap["sampling_truncated_first"]
     assert not full_gap["sampling_truncated_second"]
+    assert (full_gap["sample_fraction_first"], full_gap["sample_fraction_second"]) == (1.0, 1.0)
     assert full_gap["sampled_median_throughput_seconds_first"] == full["cohorts"][0]["throughput_seconds"]["p50"]
     assert full_gap["sampled_median_throughput_seconds_second"] == full["cohorts"][1]["throughput_seconds"]["p50"]
 
@@ -108,6 +109,7 @@ def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monk
     partial = cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"]
     assert (partial["sampled_cases_first"], partial["sampled_cases_second"]) == (30, 20)
     assert partial["sampling_truncated_first"] and not partial["sampling_truncated_second"]
+    assert (partial["sample_fraction_first"], partial["sample_fraction_second"]) == (0.75, 1.0)
 
     monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
     capped = cohorts.benchmark(log_id, specs)
@@ -115,6 +117,9 @@ def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monk
     assert [side["cases"] for side in capped["cohorts"]] == [40, 20]
     assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (3, 3)
     assert gap["sampling_truncated_first"] and gap["sampling_truncated_second"]
+    assert (gap["sample_fraction_first"], gap["sample_fraction_second"]) == (0.075, 0.15)
+    assert gap["sample_fraction_first"] == round(gap["sampled_cases_first"] / capped["cohorts"][0]["cases"], 6)
+    assert gap["sample_fraction_second"] == round(gap["sampled_cases_second"] / capped["cohorts"][1]["cases"], 6)
     assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
                                  - gap["sampled_median_throughput_seconds_first"])
     assert cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"] == gap
@@ -178,6 +183,7 @@ with TestClient(app) as client:
     gap = result.json()["differences_second_minus_first"]["median_throughput_seconds"]
     assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (10, 10)
     assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
+    assert (gap["sample_fraction_first"], gap["sample_fraction_second"]) == (1.0, 1.0)
     assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
                                  - gap["sampled_median_throughput_seconds_first"])
     assert client.post(base + "/benchmark", json=[1], headers=headers).status_code == 422
