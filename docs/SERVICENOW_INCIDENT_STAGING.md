@@ -87,3 +87,31 @@ provider chronology, deletion, a verified business outcome or permission to
 append/advance a checkpoint. All existing unknown and non-execution flags
 remain unchanged. Synthetic fake-response tests cover both replay entrypoints,
 empty, partial and fully observed selections, revocation and tenant scoping.
+
+## Structural and Unicode bounds for discarded JSON
+
+The offline JSON decoder now checks the **entire** parsed provider response before
+selecting the four supported incident fields. In addition to the existing 256 KiB
+raw-response cap and strict duplicate-key/nonfinite-number handling, it rejects
+JSON trees deeper than 32 levels or containing more than 4,096 nodes (including
+object keys), and strings or keys containing unpaired UTF-16 surrogate code
+points. Python's JSON decoder can otherwise accept an isolated escaped
+`\\ud800` or `\\udc00` even though it is not a valid Unicode scalar. A
+valid escaped surrogate **pair** is accepted as one Unicode character.
+
+The same fail-closed validation applies to discarded/private extra fields,
+standalone staging, plan-bound staging, bounded page batches and both replay
+comparison entrypoints. It prevents a syntactically accepted but structurally
+excessive or ill-formed ignored payload from being treated as a clean selected
+record. Valid small nested extra fields continue to be discarded; they are not
+returned, persisted, or granted identity/authorization authority. Synthetic
+adversarial tests cover malformed nested values and keys, excessive depth/node
+counts, accepted valid supplementary-plane Unicode, and preserved unknown
+completeness/checkpoint flags.
+
+These limits deliberately constrain the **supported offline selected-incident
+response contract**, not all ServiceNow REST payload shapes. They do not
+authenticate a source, verify HTTP status/TLS/ACLs, prevent missing records,
+prove source chronology or completeness, authorize event-log append, or
+establish real tenant/provider acceptance. No provider requests or business
+writes occur in this module.
