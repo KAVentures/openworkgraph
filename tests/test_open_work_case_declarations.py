@@ -279,13 +279,12 @@ def test_corrupt_declaration_db_cannot_block_explicit_review_deletion(local):
 
 
 def test_expired_dependency_suppresses_transitive_dependents_but_not_independent_cases(local):
-    # A's review is renewed, but its declaration is not. B and C remain
-    # individually unexpired, yet neither may reference a hidden ancestor.
+    # A expires before independently reviewed D. B and C must not
+    # reference a missing prerequisite, even through multiple hops.
     d = "owg:w:" + "d" * 32
     reviewed(A)
     save()
     at_b = NOW + timedelta(days=1)
-    reviewed(A, at=at_b)
     reviewed(B, at=at_b)
     facts.save_case_declaration(B, SCOPE, goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
@@ -306,16 +305,77 @@ def test_expired_dependency_suppresses_transitive_dependents_but_not_independent
     assert after["items"][0]["depends_on_work_item_refs"] == []
 
 
-def test_expired_dependency_cannot_be_presented_as_live_declared_edge(local):
-    reviewed(A)
-    save()
-    reviewed(A, at=NOW + timedelta(days=1))  # Review renewed, declaration not.
-    reviewed(B, at=NOW + timedelta(days=1))
-    facts.save_case_declaration(B, SCOPE, goal_code="review_source_state",
+def test_early_re_review_invalidates_prior_owner_approvals_and_dependents(local):
+    # A's human review is replaced before its TTL expires. That is not
+    # renewed approval for A's old goal or B -> A / C -> B dependency facts.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    old_a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    at = NOW + timedelta(days=1)
+    reviewed(A, at=at)
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == [independent]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=old_a["revision"], now=at)
+
+    # Pruning is durable: recreating A cannot resurrect the old dependent
+    # approvals, even though B and C remain in the human review queue.
+    fresh_a = facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh_a["revision"] == 1
+    assert {i["work_item_ref"] for i in
+            facts.list_case_declarations(SCOPE, now=at)["items"]} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A],
+            expected_revision=old_b["revision"], now=at)
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked",
-        depends_on_work_item_refs=[A], now=NOW + timedelta(days=1))
-    at = NOW + timedelta(days=7, hours=1)
-    assert A in {i["work_item_ref"] for i in reviews.list_review_intentions(now=at)["items"]}
+        depends_on_work_item_refs=[A], now=at)
+    facts.save_case_declaration(
+        C, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[B], now=at)
+    assert fresh_b["depends_on_work_item_refs"] == [A]
+    assert {i["work_item_ref"] for i in
+            facts.list_case_declarations(SCOPE, now=at)["items"]} == {A, B, C, d}
+
+
+def test_review_replaced_between_admission_snapshots_refuses_stale_cas(local, monkeypatch):
+    reviewed(A)
+    original = save()
+    real_reviewed = facts._reviewed
+    calls = 0
+    at = NOW + timedelta(minutes=1)
+
+    def replace_after_first_snapshot(timestamp):
+        nonlocal calls
+        snapshot = real_reviewed(timestamp)
+        calls += 1
+        if calls == 1:
+            reviewed(A, at=at)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", replace_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review changed"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=original["revision"], now=at)
+    assert calls >= 2
+    # The failed transaction must not rewrite the old owner declaration;
+    # its now-obsolete review generation also hides it on reads.
     assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
 
 
