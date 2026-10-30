@@ -202,3 +202,9 @@ still owns authentication, export authorization and redaction. Synthetic
 modal tests cover over/undercount, mismatched health partitions, overflow,
 partial counts, invalid liveness and last-work bounds, plus valid mixed,
 health-only and legacy responses.
+
+## Selected-window containment of displayed date chunks
+
+A preview can pass row-count conservation and chronological ordering yet list dates **outside** the selected evidence period. The handoff now requires each listed chunk's inclusive start and exclusive end to fall inside the exact server-echoed range, comparing timezone-aware instants (so equivalent UTC offsets are valid). For a `current` selection the optional recorder-run start is a lower bound; `all` is unbounded and must not smuggle in extra bounds. Malformed bounds, reversed range bounds and out-of-window chunks fail closed before Copy or Download. Valid gaps, truncated 31-day plans, absent plans, legacy optional metadata and zero-event handoffs remain supported.
+
+The synthetic regression includes start/end overreach (also expressed using offset timestamps), UTC-equivalent exact boundaries and a forged bounded `all` scope. This prevents misleading **displayed plan coverage**, not proof of complete observation, verified source outcomes, customer consent or real-world competitor parity.

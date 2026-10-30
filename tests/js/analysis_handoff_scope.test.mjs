@@ -748,16 +748,72 @@ test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-on
     canonical_rows: 7, retained_rows: 7,
     event_types: {focus_span: 7}, sources: {desktop: 7},
     analysis_plan: {date_chunks: [
-      {since: '2026-10-27', until: '2026-10-28', event_rows: 1},
-      {since: '2026-10-28', until: '2026-10-29', event_rows: 2},
-      {since: '2026-10-29T00:00:00Z', until: '2026-10-30T00:00:00Z', event_rows: 3},
-      {since: '2026-10-30T02:00:00+02:00', until: '2026-10-31T02:00:00+02:00', event_rows: 1}
+      {since: '2026-10-26', until: '2026-10-27', event_rows: 1},
+      {since: '2026-10-27', until: '2026-10-28', event_rows: 2},
+      {since: '2026-10-28T00:00:00Z', until: '2026-10-29T00:00:00Z', event_rows: 3},
+      {since: '2026-10-29T02:00:00+02:00', until: '2026-10-30T02:00:00+02:00', event_rows: 1}
     ], more_dates_not_listed: false}});
   await open;
   assert.equal(h.modals, 1);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-ordered-plan']);
   assert.equal(h.tickets.length, 0);
+});
+
+test('date chunks outside the selected range are refused even with conserved counts', async t => {
+  const bad = [
+    ['before selected start', {since: '2026-10-22T23:59:00Z',
+      until: '2026-10-23T01:00:00Z', event_rows: 1}],
+    ['after selected end', {since: '2026-10-29T23:00:00Z',
+      until: '2026-10-30T00:01:00Z', event_rows: 1}],
+    ['offset before start', {since: '2026-10-23T01:59:59+02:00',
+      until: '2026-10-23T03:00:00+02:00', event_rows: 1}],
+    ['offset after end', {since: '2026-10-29T23:00:00Z',
+      until: '2026-10-30T02:00:00+01:00', event_rows: 1}]
+  ];
+  for (const [name, chunk] of bad) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range'),
+      analysis_plan: {date_chunks: [chunk]}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('UTC-equivalent date chunks at both selected boundaries remain valid', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'boundary-plan'),
+    analysis_plan: {date_chunks: [
+      {since: '2026-10-23T02:00:00+02:00', until: '2026-10-24T00:00:00Z', event_rows: 1},
+      {since: '2026-10-29T00:00:00Z', until: '2026-10-30T01:00:00+01:00', event_rows: 1}
+    ]}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-boundary-plan']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('unbounded all scope refuses injected date bounds', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('all')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[2], {...h.preview('all'),
+    window: {scope: 'all', since: '2026-10-29T00:00:00Z'}}, {preserveWindow: true});
+  await open;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /incomplete or malformed/i);
 });
 
 test('partition and planned-row inconsistencies refuse the handoff before any copy or ticket', async t => {

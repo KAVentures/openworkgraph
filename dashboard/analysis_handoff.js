@@ -47,6 +47,19 @@
     const dateLabel = value => typeof value === 'string' &&
       (/^\d{4}-\d{2}-\d{2}$/.test(value) || instant(value)) &&
       calendarDay(value) && Number.isFinite(Date.parse(value));
+    // Displayed date chunks must not claim observations outside this selection.
+    // 'all' is unbounded; 'current' may have a recorder-run start bound.
+    const bounds = d?.window;
+    const windowStart = bounds?.since == null ? null :
+      (instant(bounds.since) ? Date.parse(bounds.since) : NaN);
+    const windowEnd = bounds?.until == null ? null :
+      (instant(bounds.until) ? Date.parse(bounds.until) : NaN);
+    const validWindow = object(bounds) && (
+      (bounds.scope === 'all' && windowStart === null && windowEnd === null) ||
+      (bounds.scope === 'current' && windowEnd === null &&
+        (windowStart === null || Number.isFinite(windowStart))) ||
+      (bounds.scope === 'range' && Number.isFinite(windowStart) &&
+        Number.isFinite(windowEnd) && windowStart < windowEnd));
     const first = d?.first_observed_at, last = d?.last_observed_at;
     const observed = (d?.canonical_rows === 0 && first == null && last == null) ||
       (instant(first) && instant(last) && Date.parse(first) <= Date.parse(last));
@@ -63,6 +76,8 @@
               // reverse or reorder evidence windows. Date-only labels are UTC.
               const since = Date.parse(x.since), until = Date.parse(x.until);
               return since < until &&
+                (windowStart === null || since >= windowStart) &&
+                (windowEnd === null || until <= windowEnd) &&
                 (i === 0 || Date.parse(list[i - 1].until) <= since);
             }))));
     // Both maps partition the selected events; a date plan may list only
@@ -106,7 +121,7 @@
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
-        !observed || !chunks || !workValid) {
+        !observed || !validWindow || !chunks || !workValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
