@@ -18,6 +18,12 @@ The nested interval object now also includes:
   samples. Their second-minus-first difference equals `difference`.
 - `sampling_truncated_first` and `sampling_truncated_second`: true when
   the sampled observation count is less than that cohort's full case count.
+- `sample_fraction_first` and `sample_fraction_second`: the actual
+  sampled-case count divided by the corresponding full cohort's case
+  count, rounded to six decimal places. These are descriptive sampling
+  coverage ratios, **not** confidence levels or evidence of source
+  completeness. A full-support interval has fraction 1.0; one cohort
+  may be truncated while the other is not.
 
 The existing `cohorts[*].cases` and full-cohort throughput percentiles
 retain their meaning. No case IDs, event details, resource labels, raw
