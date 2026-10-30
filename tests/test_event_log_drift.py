@@ -155,7 +155,7 @@ def test_untested_boundaries_identify_the_insufficient_side_without_case_ids():
             rows.append(f"{case},Start,{day.isoformat()}")
             rows.append(f"{case},End,{(day + timedelta(hours=1)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="missing-boundaries",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="missing-boundaries",
         source_format="csv", mapping={"case_column": "case",
                                       "activity_column": "activity", "timestamp_column": "time"})["log_id"]
     result = drift.drift(log, window="month", min_cases=20)
