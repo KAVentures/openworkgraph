@@ -329,6 +329,7 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
     after = {r["source_case_id"]: r for r in later["records"]}
     same: list[str] = []
     higher: list[str] = []
+    timestamp_regression_unknown: list[str] = []
     for incident_id in sorted(before.keys() & after.keys()):
         old = before[incident_id]
         new = after[incident_id]
@@ -341,14 +342,21 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
                     or new["reported_updated_on"] != old["reported_updated_on"]):
                 raise StagingError("Conflicting evidence for same provider revision")
             same.append(incident_id)
+        elif new["reported_updated_on"] < old["reported_updated_on"]:
+            # An increasing source revision with an earlier provider-local time
+            # is contradictory source evidence, not a clean observed advance.
+            # Clock/timezone truth is unknown, so withhold rather than infer
+            # rollback, deletion, or a verified chronological update.
+            timestamp_regression_unknown.append(incident_id)
         else:
-            # The provider's counter is only source-reported, not independently
-            # verified chronology or a business-completion signal.
+            # Equal-second updates are possible. A higher counter is only
+            # source-reported, not verified chronology or completion.
             higher.append(incident_id)
     return {
         "source_namespace": scope.namespace,
         "same_reported_revision_ids": same,
         "higher_reported_revision_ids": higher,
+        "timestamp_regression_unknown_ids": timestamp_regression_unknown,
         "newly_observed_ids": sorted(after.keys() - before.keys()),
         "missing_unknown_ids": sorted(before.keys() - after.keys()),
         # Selected records absent from both pages are still unknown, not
