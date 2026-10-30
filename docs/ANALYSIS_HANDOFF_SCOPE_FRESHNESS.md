@@ -23,7 +23,10 @@ though the existing backend still applies its authorization checks.
   after a delayed authentication wait.
 - The modal shows the exact scope returned by the selected preview. Its copy
   and download controls are valid only while that generation remains current.
-  Changing the period requires explicitly preparing a new request.
+  Changing the period immediately disables both controls and announces the
+  stale scope in the modal status (without waiting for a click). The old request
+  remains visible for inspection but is explicitly stale. Preparing again
+  creates a new enabled dialog with the newly selected scope.
 - A stale copy click does not write to the clipboard. A stale download click
   does not request an export ticket. If the period changes while a ticket
   response is pending, no download is started; the user is told to prepare
@@ -39,7 +42,8 @@ though the existing backend still applies its authorization checks.
 
 `node --test tests/js/analysis_handoff_scope.test.mjs` uses controlled
 deferred API responses and a minimal DOM model to verify: a superseded modal
-never opens, stale copy/download controls refuse, current copy/download
+never opens, stale controls disable and announce their status immediately,
+current copy/download
 retains the exact selected scope, a late export ticket cannot trigger a
 download, and an old authentication wait cannot start a stale preview read.
 
