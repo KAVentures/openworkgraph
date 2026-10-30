@@ -46,7 +46,7 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
         shown = min(int(max_cases), total_cases)
         # Include both ends of the ordered cohort when at least two rows are
         # displayed. The former floor(i * total_cases / shown) missed the
-        # final case whenever downsampling, hiding the newest/longest tail.
+        # final case whenever downsampling, hiding the latest-starting or shortest-duration tail.
         # A one-row chart deliberately selects rank zero.
         conn.execute("""CREATE OR REPLACE TEMP TABLE pick AS SELECT DISTINCT
               CAST(floor(i * (? - 1) / greatest(? - 1, 1)) AS BIGINT) AS rank
