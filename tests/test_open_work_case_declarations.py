@@ -966,6 +966,50 @@ def test_corrupt_stored_approval_clock_withholds_dependent_chain_and_prunes(
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
 
 
+def test_oversized_persisted_clock_rejected_before_iso_parser(monkeypatch):
+    # The guard runs before datetime.fromisoformat even for a corrupt huge
+    # auxiliary timestamp. This does NOT bound SQLite cell materialization.
+    class NoParser:
+        @staticmethod
+        def fromisoformat(_value):
+            raise AssertionError("oversized stored timestamp reached ISO parser")
+
+    monkeypatch.setattr(facts, "datetime", NoParser)
+    oversized = "x" * (facts._MAX_STORED_TIMESTAMP_CHARS + 1)
+    valid = NOW.isoformat()
+    assert not facts._stored_temporal_valid(
+        oversized, valid, valid, now=NOW, days=7,
+        review=(NOW, NOW + timedelta(days=7)))
+    assert not facts._stored_temporal_valid(
+        valid, None, valid, now=NOW, days=7,
+        review=(NOW, NOW + timedelta(days=7)))
+
+
+@pytest.mark.parametrize("column", ["created_at", "updated_at", "expires_at"])
+def test_oversized_persisted_clock_never_approves_dependent_chain(local, column):
+    # A corrupt auxiliary clock must not authorize A or its B -> A, C -> B
+    # owner-declared chain; a separate reviewed D remains usable.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    oversized = NOW.isoformat() + ("0" * (256 * 1024))
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute(f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+                   (oversized, A))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
+    with facts._database(create=False) as db:
+        assert db is not None
+        assert db.execute("SELECT work_item_ref FROM declarations").fetchall() == [(d,)]
+
+
 @pytest.mark.parametrize(("column", "bad_value"), [
     ("goal_code", "claim_customer_paid"),
     ("expected_outcome_code", "customer_outcome_verified"),
