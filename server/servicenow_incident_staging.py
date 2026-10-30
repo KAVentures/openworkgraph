@@ -17,6 +17,8 @@ from urllib.parse import urlencode
 
 MAX_BYTES = 262_144
 MAX_PAGE = 100
+MAX_JSON_DEPTH = 32
+MAX_JSON_NODES = 4096
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.service-now\.com\Z")
 _UPDATED = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\Z")
@@ -114,6 +116,36 @@ def _finite_json_float(value: str) -> float:
     return number
 
 
+def _validate_json_tree(body: Any) -> None:
+    """Bound discarded fields too; JSON escapes must decode to Unicode scalars.
+
+    The byte cap alone does not bound the number of tiny nested values, and
+    Python's JSON decoder permits isolated escaped UTF-16 surrogates. Neither
+    should be silently accepted just because the field is later discarded.
+    """
+    pending: list[tuple[Any, int]] = [(body, 0)]
+    visited = 0
+    while pending:
+        value, depth = pending.pop()
+        visited += 1
+        if visited > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            raise StagingError("Provider JSON exceeds structural bounds")
+        if type(value) is str:
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                raise StagingError("Invalid provider JSON Unicode scalar")
+        elif type(value) is dict:
+            # Count keys as well as values, including discarded private fields.
+            if visited + len(pending) + 2 * len(value) > MAX_JSON_NODES:
+                raise StagingError("Provider JSON exceeds structural bounds")
+            for key, child in value.items():
+                pending.append((key, depth + 1))
+                pending.append((child, depth + 1))
+        elif type(value) is list:
+            if visited + len(pending) + len(value) > MAX_JSON_NODES:
+                raise StagingError("Provider JSON exceeds structural bounds")
+            pending.extend((child, depth + 1) for child in value)
+
+
 def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
                  since: str | None = None,
                  _require_planned_order: bool = False) -> dict[str, Any]:
@@ -137,6 +169,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
                           parse_constant=lambda _: (_ for _ in ()).throw(StagingError("Nonfinite JSON")))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise StagingError("Invalid bounded provider JSON") from exc
+    _validate_json_tree(body)
     # A ServiceNow Table API read has one result array. Never silently stage
     # a mixed success/error envelope or provider-supplied pagination metadata:
     # an HTTP status/ACL failure must not masquerade as an empty successful page.
