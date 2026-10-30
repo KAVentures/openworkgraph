@@ -154,6 +154,8 @@ class Groups:
             values = _values(_fields(body))
             if "displayname" not in values:
                 raise scim.Error(400, "displayName is required", "invalidValue")
+            from .scim_group_name_policy import require_available_name
+            require_available_name(self.db, conn, provider_id, values['displayname'])
             n = roster._one(self.db, conn, """SELECT count(*) AS n FROM gateway_scim_groups
                 WHERE provider_id=?""", (provider_id,))["n"]
             if n >= MAX_GROUPS:
@@ -271,6 +273,8 @@ class Groups:
                 patch and "members" in values and not force_members_rewrite and
                 sorted(values["members"]) == [x["value"] for x in current["members"]]
             )
+            from .scim_group_name_policy import require_available_name
+            require_available_name(self.db, conn, provider_id, name, exclude_id=gid)
             members = (self._members(conn, provider, values["members"])
                        if "members" in values and not unchanged_effective_members
                        else row["members_json"])

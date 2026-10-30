@@ -25,7 +25,7 @@ jobs:
       - name: Validate SCIM Groups and existing Users contracts
         run: |
           python -m pytest -q \
-            tests/test_scim_groups.py \
+            tests/test_scim_groups.py tests/test_scim_group_name_policy.py \
             tests/test_scim_provisioning.py \
             tests/test_scim_routes.py \
             tests/test_scim_bulk.py \
