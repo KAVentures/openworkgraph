@@ -185,7 +185,8 @@ def save_case_declaration(
     """
     _check_ref(work_item_ref, _REF, "work item reference")
     _check_ref(scope_ref, _SCOPE, "source scope")
-    if goal_code not in _GOALS or expected_outcome_code not in _EXPECTED:
+    if (not isinstance(goal_code, str) or not isinstance(expected_outcome_code, str) or
+        goal_code not in _GOALS or expected_outcome_code not in _EXPECTED):
         raise CaseDeclarationError("unsupported declared goal or expected outcome")
     if type(expected_revision) is not int or not 0 <= expected_revision < _MAX_REVISION:
         raise CaseDeclarationError("invalid expected revision")
