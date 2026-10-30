@@ -284,12 +284,22 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                     "ORDER BY updated_at DESC,work_item_ref LIMIT ?",
                     (scope_ref, current.isoformat(), cutoff, _MAX_ITEMS),
                 ).fetchall()
-                available = {r[0] for r in candidates if r[0] in reviewed}
                 # A dependency whose own declaration expired or changed scope
                 # is not an available owner-declared edge, even if the local
                 # review queue still contains that opaque case reference.
-                rows = [r for r in candidates if r[0] in available and
-                        all(dep in available for dep in json.loads(r[4]))]
+                # Close this condition transitively: A expired, B -> A, C -> B
+                # must suppress BOTH B and C, never expose C -> hidden B.
+                available = {r[0] for r in candidates if r[0] in reviewed}
+                while True:
+                    supported = {
+                        r[0] for r in candidates
+                        if r[0] in available and
+                        all(dep in available for dep in json.loads(r[4]))
+                    }
+                    if supported == available:
+                        break
+                    available = supported
+                rows = [r for r in candidates if r[0] in available]
     return {
         "format": "openworkgraph.local-case-declarations.v1",
         "items": [_public(row) for row in rows],
