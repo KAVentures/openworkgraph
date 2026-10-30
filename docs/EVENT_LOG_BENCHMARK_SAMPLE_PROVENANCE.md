@@ -35,3 +35,13 @@ Synthetic tests cover complete-support and cap-truncated cohorts,
 actual denominators, point-estimate consistency and deterministic
 repeatability. They do **not** establish provider-sandbox validation,
 representative sampling, a consenting customer pilot or competitor parity.
+
+## Seeded bootstrap and SQL row ordering
+
+SQL result rows have no guaranteed order. The bootstrap now sorts the
+sampled durations in each cohort before its seeded resampling draws, so
+**the same sampled multiset** produces the same point estimate and interval
+regardless of row-fetch order. This does not guarantee that a reservoir
+sample itself is identical if the underlying case set, execution plan or
+sampling conditions change. The interval remains a descriptive estimate,
+not a promise of reproducibility across different datasets or engines.
