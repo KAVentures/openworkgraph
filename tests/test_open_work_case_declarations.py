@@ -1,6 +1,7 @@
 """Local owner-declared case facts: exact versions, provenance and lifecycle."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
@@ -1041,3 +1042,75 @@ def test_list_scrubs_when_retention_revoked_after_sql_fetch(local, monkeypatch):
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
     assert calls == 2
     assert not facts._path().exists()
+
+
+@pytest.mark.parametrize("competing_change", ["delete", "revise"])
+def test_save_returns_exact_transaction_snapshot_under_post_commit_race(
+    local, monkeypatch, competing_change,
+):
+    """A second writer after COMMIT cannot rewrite the first writer's response.
+
+    Intercept only the successful COMMIT boundary; the contender uses a
+    separate real SQLite connection, not a mocked _get or fabricated row.
+    The returned revision/token must belong to the first transaction even
+    when the stored row has already been deleted or revised.
+    """
+    reviewed(A)
+    first = save() if competing_change == "revise" else None
+    real_database = facts._database
+    commits = []
+
+    class PostCommitContender:
+        def __init__(self, db):
+            self.db = db
+
+        def execute(self, statement, *args):
+            result = self.db.execute(statement, *args)
+            if statement == "COMMIT":
+                commits.append(True)
+                with sqlite3.connect(facts._path()) as rival:
+                    if competing_change == "delete":
+                        rival.execute(
+                            "DELETE FROM declarations WHERE work_item_ref=?", (A,))
+                    else:
+                        rival.execute(
+                            "UPDATE declarations SET revision=revision+1,"
+                            "goal_code=? WHERE work_item_ref=?",
+                            ("verify_operation", A))
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+    @contextmanager
+    def racing_database(*, create):
+        with real_database(create=create) as db:
+            yield PostCommitContender(db) if db is not None else None
+
+    monkeypatch.setattr(facts, "_database", racing_database)
+    if first is None:
+        saved = save()
+        assert saved["revision"] == 1
+        assert saved["goal_code"] == "review_source_state"
+    else:
+        saved = facts.save_case_declaration(
+            A, SCOPE, goal_code="assess_declared_policy",
+            expected_outcome_code="human_review_recorded",
+            expected_revision=first["revision"],
+            expected_edit_token=first["edit_token"],
+            now=NOW + timedelta(minutes=1))
+        assert saved["revision"] == 2
+        assert saved["goal_code"] == "assess_declared_policy"
+        assert saved["edit_token"] == first["edit_token"]
+    assert len(commits) == 1
+
+    monkeypatch.setattr(facts, "_database", real_database)
+    stored = facts.list_case_declarations(
+        SCOPE, now=NOW + timedelta(minutes=1))["items"]
+    if competing_change == "delete":
+        assert stored == []
+    else:
+        assert len(stored) == 1
+        assert stored[0]["revision"] == 3
+        assert stored[0]["goal_code"] == "verify_operation"
+        assert stored[0]["revision"] != saved["revision"]
