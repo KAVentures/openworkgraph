@@ -33,6 +33,8 @@ a value literal. Structural names are case-insensitive; quoted JSON strings are
 parsed unchanged before comparison. For example, the invalid JSON escape
 `\U0041` must not become the valid `\u0041` through case folding. A decoded NUL
 is refused, while an escaped literal backslash followed by `u0000` remains
+ordinary literal text. C1 controls and U+FFFE/U+FFFF are refused in raw paths
+and decoded literals, matching the shipped identity validation; U+FFFD remains
 ordinary literal text. Differential tests compare these cases, Unicode lengths,
 and separators with the actual shipped PATCH parser. The matching-attribute
 counts remain separate from selector match objects, including on CLI requests

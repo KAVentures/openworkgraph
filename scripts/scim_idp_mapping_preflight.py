@@ -48,8 +48,9 @@ def _supported_contact_patch_path(path: str) -> bool:
         type(literal) is str
         and bool(literal.strip())
         and len(literal) <= (64 if match.group(1).casefold() == "type" else 320)
-        and not any(ord(char) < 32 or ord(char) == 127
-                    or 0xD800 <= ord(char) <= 0xDFFF for char in literal)
+        and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                    or 0xD800 <= ord(char) <= 0xDFFF
+                    or ord(char) in (65534, 65535) for char in literal)
     )
 
 
@@ -70,7 +71,7 @@ def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> 
         raise InvalidMapping(f"{path} must have {minimum}–{MAX_ATTRIBUTES} paths")
     folded = []
     for item in value:
-        if type(item) is not str or not 1 <= len(item) <= max_path or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in item):
+        if type(item) is not str or not 1 <= len(item) <= max_path or any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF or ord(c) in (65534, 65535) for c in item):
             raise InvalidMapping(f"{path} contains an invalid path")
         # Structural names are case-insensitive. Quoted selector literals must
         # reach the JSON parser unchanged: casefolding can turn an invalid

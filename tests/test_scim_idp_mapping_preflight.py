@@ -204,6 +204,12 @@ def test_contact_patch_rejects_invalid_selector_syntax_and_does_not_echo_values(
     ('emails[type\u2003eq\u2003"work"].value', False),
     (r'emails[value eq "bad\u0000"].primary', False),
     (r'emails[value eq "bad\\u0000"].primary', True),
+    (r'emails[type eq "wo\u0080rk"].value', False),
+    (r'emails[type eq "wo\u0085rk"].value', False),
+    (r'emails[type eq "wo\u009frk"].value', False),
+    (r'emails[value eq "wo\uffferk"].primary', False),
+    (r'emails[value eq "wo\uffffrk"].primary', False),
+    (r'emails[value eq "wo\ufffdrk"].primary', True),
 ])
 def test_selector_declarations_agree_with_shipped_patch_parser(path, accepted):
     # Differential check against the real shipped grammar, not a mirrored
@@ -223,3 +229,11 @@ def test_selector_declarations_agree_with_shipped_patch_parser(path, accepted):
     assert ("unsupported_attribute" not in codes(result)) is accepted
     assert result["checked"]["user_matching"] == 2
     assert path not in json.dumps(result)
+
+
+@pytest.mark.parametrize("character", ['\u0080', '\u0085', '\u009f', '\ufffe', '\uffff'])
+def test_raw_control_or_noncharacter_in_declared_path_is_invalid(character):
+    users = mapping()["users"]
+    users["patch_attributes"] = ['emails[type eq "wo' + character + 'rk"].value']
+    with pytest.raises(InvalidMapping, match="invalid path"):
+        assess(mapping(users=users))
