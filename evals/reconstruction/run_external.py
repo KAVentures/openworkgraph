@@ -105,6 +105,29 @@ def _revision() -> str:
         return "unknown"
 
 
+def _load_resume_predictions(path: Path, selected_case_ids: set[str]) -> dict[str, dict[str, Any]]:
+    """Read an interrupted run without silently replacing or importing cases.
+
+    This checks case identity only; it is not a model/revision attestation.
+    """
+    existing: dict[str, dict[str, Any]] = {}
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError(f"resume predictions line {line_number} must be an object")
+        cid = row.get("case_id")
+        if not isinstance(cid, str) or not cid:
+            raise ValueError(f"resume predictions line {line_number} has invalid case_id")
+        if cid not in selected_case_ids:
+            raise ValueError(f"resume predictions contain case outside selected split: {cid}")
+        if cid in existing:
+            raise ValueError(f"resume predictions contain duplicate case_id: {cid}")
+        existing[cid] = row
+    return existing
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the blind OWG reconstruction eval through an OpenAI-compatible endpoint")
     parser.add_argument("--model", required=True, help="exact model ID accepted by the endpoint")
@@ -139,10 +162,9 @@ def main(argv: list[str] | None = None) -> int:
 
     existing: dict[str, dict[str, Any]] = {}
     if args.resume and predictions_path.exists():
-        for line in predictions_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                existing[str(row["case_id"])] = row
+        existing = _load_resume_predictions(
+            predictions_path, {str(case["case_id"]) for case in cases}
+        )
 
     predictions: list[dict[str, Any]] = []
     response_meta: list[dict[str, Any]] = []
