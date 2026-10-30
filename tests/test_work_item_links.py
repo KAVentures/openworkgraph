@@ -265,3 +265,13 @@ def test_invalid_claim_cannot_create_surface_candidate_and_valid_loose_events_st
     assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {
         "same_record": 1, "same_tab_single_record": 1,
     }
+
+
+def test_non_object_reference_claims_cannot_impersonate_unreferenced_tab_events():
+    for invalid_claim in ("bad-ref", ["bad-ref"], 7, {}):
+        invalid = _scoped(_event(1, tab="shared-tab"))
+        invalid["metadata"]["resource_reference"] = invalid_claim
+        valid = _scoped(_event(2, B, tab="shared-tab"))
+        result = linked_work_items([invalid, valid])
+        assert result["items"] == [], invalid_claim
+        assert result["candidate_links"] == [], invalid_claim
