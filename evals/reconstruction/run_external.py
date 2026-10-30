@@ -41,29 +41,36 @@ def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: se
     workflows = prediction.get("workflows")
     if not isinstance(workflows, list):
         raise ValueError("workflows must be a list")
+    def checked_ids(values: Any, key: str) -> set[str]:
+        if not isinstance(values, list):
+            raise ValueError(f"{key} must be a list")
+        if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError(f"{key} requires nonempty string event ids")
+        members = set(values)
+        if len(members) != len(values):
+            raise ValueError(f"{key} contains duplicate event ids")
+        bad = members - event_ids
+        if bad:
+            raise ValueError(f"{key} contains unknown event ids: {sorted(bad)}")
+        return members
+
     seen: set[str] = set()
     for idx, workflow in enumerate(workflows, start=1):
         if not isinstance(workflow, dict):
             raise ValueError(f"workflow {idx} must be an object")
         workflow.setdefault("prediction_id", f"workflow_{idx}")
-        for key in ("event_ids", "ordered_event_ids", "automation_relevant_event_ids", "ui_mechanic_event_ids"):
-            values = workflow.get(key, [])
-            if not isinstance(values, list):
-                raise ValueError(f"{key} must be a list")
-            bad = {str(x) for x in values} - event_ids
-            if bad:
-                raise ValueError(f"{key} contains unknown event ids: {sorted(bad)}")
-        members = {str(x) for x in workflow.get("event_ids", [])}
+        members = checked_ids(workflow.get("event_ids", []), "event_ids")
+        for key in ("ordered_event_ids", "automation_relevant_event_ids", "ui_mechanic_event_ids"):
+            submembers = checked_ids(workflow.get(key, []), key)
+            if not submembers <= members:
+                raise ValueError(f"{key} contains events outside its workflow event_ids")
         overlap = seen & members
         if overlap:
             raise ValueError(f"events assigned to multiple workflows: {sorted(overlap)}")
         seen |= members
-    unassigned = prediction.get("unassigned_event_ids", [])
-    if not isinstance(unassigned, list):
-        raise ValueError("unassigned_event_ids must be a list")
-    bad = {str(x) for x in unassigned} - event_ids
-    if bad:
-        raise ValueError(f"unassigned_event_ids contains unknown ids: {sorted(bad)}")
+    unassigned = checked_ids(prediction.get("unassigned_event_ids", []), "unassigned_event_ids")
+    if seen & unassigned:
+        raise ValueError("events cannot be both assigned and unassigned")
     prediction["insufficient_evidence"] = bool(prediction.get("insufficient_evidence", False))
     return prediction
 
