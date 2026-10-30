@@ -73,7 +73,9 @@ retention **after** fetching its bounded SQLite rows and closing the connection.
 A removed review or a replacement review with a different creation/expiry
 window suppresses that declaration and every transitively dependent approval;
 an unchanged independent declaration remains available. If retention shortens,
-the stricter of the two snapshots governs the response. If durable retention is
+the stricter of the two snapshots governs the response, including refusing
+previously saved deadlines that exceed the new retention window rather than
+silently extending or reapproving them. If durable retention is
 disabled during the read, no owner facts are returned and the local auxiliary
 ledger is erased. This does not grant new source reads or authorize actions.
 

@@ -1008,7 +1008,7 @@ def test_list_rechecks_shortened_retention_after_sql_fetch(local, monkeypatch):
         A, SCOPE, goal_code="review_source_state",
         expected_outcome_code="source_state_rechecked", now=early)
     reviewed(B)
-    recent = save(B)
+    save(B)
     calls = 0
 
     def shortened_retention():
@@ -1017,8 +1017,13 @@ def test_list_rechecks_shortened_retention_after_sql_fetch(local, monkeypatch):
         return 7 if calls == 1 else 1
 
     monkeypatch.setattr(facts, "_retention_days", shortened_retention)
-    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [recent]
+    # Both rows were approved with seven-day deadlines. Under the stricter
+    # one-day policy even the recent row's stored deadline is over-retained,
+    # so neither approval may be presented or silently renewed.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
     assert calls == 2
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
 
 
 def test_list_scrubs_when_retention_revoked_after_sql_fetch(local, monkeypatch):
