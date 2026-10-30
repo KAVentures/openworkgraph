@@ -74,8 +74,15 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         # actual analysis denominator rather than only the configured cap.
         sampled_by_window = dict(conn.execute(
             "SELECT w, count(*) FROM dcase GROUP BY w").fetchall())
+        # A window of single-event cases has no directly-follows distribution.
+        # Its case count can satisfy min_cases, but JSD against an empty
+        # distribution is not a valid two-population drift test.
+        path_cases_by_window = dict(conn.execute(
+            "SELECT c.w, count(DISTINCT c.case_id) FROM dcase c "
+            "JOIN ce_edges e USING (case_id) GROUP BY c.w").fetchall())
         windows = [{"window": str(b) if window == "cases" else b.isoformat()[:10], "cases": n,
                     "sampled_cases": sampled_by_window.get(i, 0),
+                    "sampled_cases_with_paths": path_cases_by_window.get(i, 0),
                     "sampling_truncated": sampled_by_window.get(i, 0) < n,
                     "median_case_duration_seconds": med}
                    for i, (b, n, med) in enumerate(buckets)]
@@ -87,7 +94,9 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         # with fewer than min_cases actual sampled cases on either side.
         tested = [i for i in range(len(buckets) - 1)
                   if sampled_by_window.get(i, 0) >= min_cases
-                  and sampled_by_window.get(i + 1, 0) >= min_cases]
+                  and sampled_by_window.get(i + 1, 0) >= min_cases
+                  and path_cases_by_window.get(i, 0) > 0
+                  and path_cases_by_window.get(i + 1, 0) > 0]
         # Disclose omitted adjacent comparisons as well as the aggregate count.
         # These are sampled support counts, never case IDs or raw evidence.
         tested_set = set(tested)
@@ -98,11 +107,27 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             before_n = sampled_by_window.get(i, 0)
             after_n = sampled_by_window.get(i + 1, 0)
             before_low, after_low = before_n < min_cases, after_n < min_cases
-            boundaries_not_tested.append({
+            omitted = {
                 "before": windows[i]["window"], "after": windows[i + 1]["window"],
                 "sampled_cases_before": before_n, "sampled_cases_after": after_n,
-                "insufficient_side": "both" if before_low and after_low else ("before" if before_low else "after"),
-            })
+            }
+            if before_low or after_low:
+                # Keep the established small-window response shape unchanged.
+                omitted["insufficient_side"] = (
+                    "both" if before_low and after_low else ("before" if before_low else "after"))
+            else:
+                before_paths = path_cases_by_window.get(i, 0)
+                after_paths = path_cases_by_window.get(i + 1, 0)
+                omitted.update({
+                    "insufficient_side": None,
+                    "reason": "no_directly_follows_paths",
+                    "missing_paths_side": (
+                        "both" if not before_paths and not after_paths
+                        else ("before" if not before_paths else "after")),
+                    "sampled_cases_with_paths_before": before_paths,
+                    "sampled_cases_with_paths_after": after_paths,
+                })
+            boundaries_not_tested.append(omitted)
         boundaries = []
         if tested:
             conn.execute("CREATE OR REPLACE TEMP TABLE pairs (pair INTEGER)")
@@ -168,7 +193,10 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             "windows": windows,
             "boundaries": boundaries,
             "boundaries_tested": len(tested),
-            "boundaries_skipped_small_windows": len(boundaries_not_tested),
+            "boundaries_skipped_small_windows": sum(
+                b.get("reason") != "no_directly_follows_paths" for b in boundaries_not_tested),
+            "boundaries_skipped_no_paths": sum(
+                b.get("reason") == "no_directly_follows_paths" for b in boundaries_not_tested),
             "boundaries_not_tested": boundaries_not_tested,
             "change_points": [b for b in boundaries if b["change_point"]],
             "interpretation": ("A change point means the recorded paths differ between two adjacent windows more "
