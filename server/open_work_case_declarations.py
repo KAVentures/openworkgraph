@@ -201,6 +201,28 @@ def _get(db: sqlite3.Connection, ref: str) -> tuple[Any, ...] | None:
                       "FROM declarations WHERE work_item_ref=?", (ref,)).fetchone()
 
 
+def _dependent_closure(db: sqlite3.Connection, work_item_ref: str) -> set[str]:
+    """All transitively dependent declarations, including the root.
+
+    Owner approval of B -> A is tied to the current revision of A. If A
+    changes, retaining B would silently carry approval to a different
+    declared goal/outcome/dependency graph. The store has at most 50 rows.
+    """
+    rows = db.execute(
+        "SELECT work_item_ref,dependencies_json FROM declarations"
+    ).fetchall()
+    affected = {work_item_ref}
+    while True:
+        newly_affected = {
+            ref for ref, raw in rows
+            if ref not in affected and
+            any(dep in affected for dep in json.loads(raw))
+        }
+        if not newly_affected:
+            return affected
+        affected.update(newly_affected)
+
+
 def save_case_declaration(
     work_item_ref: str, scope_ref: str, *,
     goal_code: str, expected_outcome_code: str,
@@ -312,6 +334,12 @@ def save_case_declaration(
                            "WHERE work_item_ref=?",
                            (goal_code, expected_outcome_code, json.dumps(dependencies),
                             revision, current.isoformat(), expires, work_item_ref))
+                # A dependent owner's approval was for the prerequisite's
+                # previous exact revision. Invalidate the dependent closure
+                # atomically with this successful CAS update; never silently
+                # rebind owner-declared edges to a revised prerequisite.
+                for dependent in sorted(_dependent_closure(db, work_item_ref) - {work_item_ref}):
+                    db.execute("DELETE FROM declarations WHERE work_item_ref=?", (dependent,))
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
@@ -381,20 +409,7 @@ def purge_case_declaration(work_item_ref: str) -> None:
             # dependent declaration into an independent one. Erase all
             # transitively affected declarations; their owners must review
             # and declare any replacement graph explicitly.
-            rows = db.execute(
-                "SELECT work_item_ref,dependencies_json FROM declarations"
-            ).fetchall()
-            revoked = {work_item_ref}
-            while True:
-                newly_revoked = {
-                    ref for ref, raw in rows
-                    if ref not in revoked and
-                    any(dep in revoked for dep in json.loads(raw))
-                }
-                if not newly_revoked:
-                    break
-                revoked.update(newly_revoked)
-            for ref in sorted(revoked):
+            for ref in sorted(_dependent_closure(db, work_item_ref)):
                 db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
             db.execute("COMMIT")
         except Exception:
