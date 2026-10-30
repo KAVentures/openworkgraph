@@ -95,3 +95,31 @@ assignment F1, lower contamination, real-provider compatibility, or real
 customer outcomes. A prediction with internally consistent event IDs can
 still be semantically wrong or grounded in outdated evidence whose IDs did
 not change.
+
+
+## Typed uncertainty and workflow identity
+
+The external prediction validator refuses non-boolean values for
+`insufficient_evidence` and the supplied
+`uncertainty.membership`, `uncertainty.business_rule`, and
+`uncertainty.outcome` dimensions. In particular, JSON `"false"` is
+**not** interpreted as `true` by Python truthiness, and numeric zero
+is not treated as a valid `false`. When supplied, `uncertainty` must
+be a JSON object. This prevents malformed model output from silently
+altering the preregistered uncertainty metrics. Legacy predictions
+omitting the optional uncertainty object or boolean still work; the
+omitted `insufficient_evidence` defaults to `false` as before.
+
+Each workflow must have a unique, nonempty string `prediction_id`.
+Omitted IDs continue to receive the existing `workflow_N` defaults,
+but duplicate, empty, null and numeric IDs fail rather than
+creating ambiguous provenance. This validates identifiers, not the
+semantic correctness of the inferred workflow.
+
+The same checks apply to newly received predictions and `--resume`
+artifacts. An invalid resume fails before requesting additional model
+responses and leaves the JSONL artifact unchanged. The synthetic
+regressions exercise malformed values, valid legacy omissions and a
+no-request resume refusal. They do not constitute a real-model run or
+a measured assignment-F1/contamination improvement. The held-out
+truth and release thresholds remain unchanged.
