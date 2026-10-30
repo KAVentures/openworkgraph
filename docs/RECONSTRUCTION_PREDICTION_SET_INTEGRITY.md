@@ -352,3 +352,32 @@ forge it. Synthetic tests cover same-ID evidence changes, ordering, hidden
 truth exclusion, legacy manifests and no-provider-call refusal. No private
 truth, scoring formulas, F1/contamination thresholds or real customer data
 were modified.
+
+## Complete prediction-set binding in runner manifests
+
+New completed-run metadata also records `selected_prediction_set_sha256`:
+a domain-separated SHA-256 over the **complete persisted prediction rows** in
+the selected case order, including assigned/unassigned IDs, workflow ordering,
+uncertainty, and local blind-evidence digest fields. JSON object-key order is
+normalized, so reformatting objects or changing JSONL row order alone does
+not change the canonical selected-case prediction set. The fingerprint
+does **not** include hidden answer keys or scoring ground truth.
+
+On `--resume`, the runner verifies this field against the current selected
+prediction rows **before** opening output artifacts or requesting a provider.
+An edited assignment that still references only valid event IDs is rejected
+when the completed manifest attests to different assignments. A present
+malformed or mismatching digest fails closed; missing fields in older
+manifests remain readable but set `resume_provenance_unverified: true`.
+This uncertainty flag remains sticky on later resumes. The manifest
+fingerprints the rows that existed when it was written; it does not attest
+to interrupted runs with no completed manifest.
+
+This is a local consistency check, not an authenticated signature or a
+guarantee that the provider, source, or model is genuine: someone with write
+access to both files can replace the prediction rows and recompute the
+digest. It does not establish the 0.90 held-out assignment F1 or 0.05
+contamination target, nor validate private holdout answers or real users.
+Synthetic tests cover changed-but-valid assignments, exact replay, canonical
+key ordering, legacy manifests, invalid digests and the no-provider-call
+failure boundary.
