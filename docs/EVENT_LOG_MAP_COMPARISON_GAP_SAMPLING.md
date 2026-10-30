@@ -9,16 +9,31 @@ in each cohort, `median_gap_difference` includes a bootstrap interval.
 **These are different denominators when a path has more than 1,000
 transitions in a cohort.** The two full-cohort median fields use every
 observed transition, whereas `median_gap_difference.seconds` and
-`median_gap_difference.ci95` use deterministic reservoir samples of up
-to `GAP_SAMPLE` transitions from each cohort. The point estimate is
-the sampled second median minus the sampled first median. It need not
-equal the difference of the two full-cohort medians.
+`median_gap_difference.ci95` use bounded, deterministic hash-priority
+samples of up to `GAP_SAMPLE` transitions from each cohort. The point
+estimate is the sampled second median minus the sampled first median.
+It need not equal the difference of the two full-cohort medians.
 
-The reservoir is applied **after** restricting to the specific
-directly-follows path in each cohort. Sampling all transitions first
-and then filtering by path can underfill a reservoir even when that
-path has at least `GAP_SAMPLE` transitions. The per-path selection
-uses a materialized filtered relation to prevent that behavior.
+The sample is selected **from matching transitions only**, not from
+all paths before filtering. The query ranks each matching transition
+by the MD5 digest of a JSON array containing its literal case ID,
+event timestamp and observed gap, with deterministic secondary keys,
+then returns at most `GAP_SAMPLE` gaps. The imported event ID is
+deliberately excluded because CSV row order can change it. This
+avoids DuckDB reservoir sampling's plan/scan-order sensitivity even
+with a fixed `REPEATABLE` seed; repeated reads and reversed CSV case
+order yield the same sample and seeded bootstrap interval for the
+same case identities, timestamps and gaps. The ordering is a fixed
+pseudo-random priority, **not** a claim of representative random
+sampling, independence of repeated transitions within cases, or
+causal significance. Changes to case IDs, timestamps, durations,
+selection parameters or database representation can change samples.
+
+The query hashes and sorts all matching transitions before returning
+a bounded result; it bounds Python materialization but not scan/sort
+work or peak DuckDB memory. The 1,000-gap cap, 300 bootstrap rounds
+and full-cohort medians are unchanged. Synthetic repeatability tests
+do not replace the million-event scale gate or customer acceptance.
 
 The nested `median_gap_difference` object now also reports:
 
