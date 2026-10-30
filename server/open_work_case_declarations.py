@@ -330,13 +330,26 @@ def purge_case_declaration(work_item_ref: str) -> None:
             return
         db.execute("BEGIN IMMEDIATE")
         try:
-            db.execute("DELETE FROM declarations WHERE work_item_ref=?", (work_item_ref,))
-            for ref, raw in db.execute("SELECT work_item_ref,dependencies_json FROM declarations"):
-                deps = json.loads(raw)
-                if work_item_ref in deps:
-                    db.execute("UPDATE declarations SET dependencies_json=?,revision=revision+1 "
-                               "WHERE work_item_ref=?",
-                               (json.dumps([d for d in deps if d != work_item_ref]), ref))
+            # A dependency was explicitly owner-declared, not inferred.
+            # Removing its reviewed prerequisite must never silently turn a
+            # dependent declaration into an independent one. Erase all
+            # transitively affected declarations; their owners must review
+            # and declare any replacement graph explicitly.
+            rows = db.execute(
+                "SELECT work_item_ref,dependencies_json FROM declarations"
+            ).fetchall()
+            revoked = {work_item_ref}
+            while True:
+                newly_revoked = {
+                    ref for ref, raw in rows
+                    if ref not in revoked and
+                    any(dep in revoked for dep in json.loads(raw))
+                }
+                if not newly_revoked:
+                    break
+                revoked.update(newly_revoked)
+            for ref in sorted(revoked):
+                db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
