@@ -462,13 +462,18 @@ def save_case_declaration(
                 # rebind owner-declared edges to a revised prerequisite.
                 for dependent in sorted(_dependent_closure(db, work_item_ref) - {work_item_ref}):
                     db.execute("DELETE FROM declarations WHERE work_item_ref=?", (dependent,))
+            # Read the exact row written by this transaction *before*
+            # releasing SQLite's write lock. A concurrent writer may revise
+            # or delete it immediately after COMMIT; the response must not
+            # claim that other writer's revision/token as our own, or crash.
+            saved = _get(db, work_item_ref)
+            if saved is None:
+                raise CaseDeclarationError("saved declaration unavailable")
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
             raise
-        result = _get(db, work_item_ref)
-        assert result is not None
-        return _public(result)
+        return _public(saved)
 
 
 def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> dict[str, Any]:
