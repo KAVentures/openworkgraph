@@ -106,7 +106,8 @@ def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
-                 since: str | None = None) -> dict[str, Any]:
+                 since: str | None = None,
+                 _require_planned_order: bool = False) -> dict[str, Any]:
     """Validate one fake/provider page; return minimized staged source snapshots.
 
     When plan_page used a since bound, the caller must supply that same bound
@@ -130,6 +131,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
         raise StagingError("Invalid provider result envelope or page size")
     selected = set(scope.sys_ids)
     seen: dict[str, dict[str, Any]] = {}
+    last_sort_key: tuple[str, str] | None = None
     for item in body["result"]:
         if type(item) is not dict:
             raise StagingError("Invalid incident record")
@@ -153,6 +155,14 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
                   "source_event_id": f"{sys_id}:{mod}", "reported_state": state,
                   "reported_updated_on": updated, "timestamp_timezone_verified": False,
                   "source_status_only": True, "business_outcome_verified": False}
+        # A planned offset read requires ascending ORDERBY updated_on, sys_id.
+        # Do not normalize away evidence that the provider ignored that order.
+        # Equal keys (including exact duplicate rows) remain valid.
+        if _require_planned_order:
+            sort_key = (updated, sys_id)
+            if last_sort_key is not None and sort_key < last_sort_key:
+                raise StagingError("Provider page out of planned order")
+            last_sort_key = sort_key
         prior = seen.get(sys_id)
         if prior is not None and prior != record:
             raise StagingError("Conflicting incident revision within page")
@@ -186,6 +196,6 @@ def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
     if plan != expected:
         raise StagingError("Selected-record page plan does not match current scope")
     result = project_page(scope, raw, limit=expected["limit"],
-                          since=expected["since"])
+                          since=expected["since"], _require_planned_order=True)
     return {**result, "plan_bound": True, "planned_offset": expected["offset"],
-            "planned_since": expected["since"]}
+            "planned_since": expected["since"], "page_order_matches_plan": True}

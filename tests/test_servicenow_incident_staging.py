@@ -246,3 +246,45 @@ def test_planned_projection_supports_explicit_unfiltered_selected_read():
     result = project_planned_page(selected, page(item()), plan=plan)
     assert result["plan_bound"] and result["planned_since"] is None
     assert not result["checkpoint_advanced"]
+
+
+def test_planned_projection_rejects_reversed_update_order_without_normalizing():
+    selected = scope()
+    plan = plan_page(selected, limit=2, since="2026-10-30 03:10:00")
+    raw = page(item(B, updated="2026-10-30 03:11:00"),
+               item(A, updated="2026-10-30 03:10:00"))
+    with pytest.raises(StagingError, match="out of planned order"):
+        project_planned_page(selected, raw, plan=plan)
+    # Standalone validation makes no assertion about a planned ORDERBY.
+    standalone = project_page(selected, raw, limit=2, since=plan["since"])
+    assert [r["source_case_id"] for r in standalone["records"]] == [A, B]
+    assert "page_order_matches_plan" not in standalone
+
+
+def test_planned_projection_rejects_reversed_sys_id_on_equal_timestamps():
+    selected = scope()
+    plan = plan_page(selected, limit=2)
+    with pytest.raises(StagingError, match="out of planned order"):
+        project_planned_page(selected, page(item(B), item(A)), plan=plan)
+
+
+def test_planned_projection_accepts_ties_and_exact_duplicate_rows():
+    selected = scope()
+    plan = plan_page(selected, limit=3)
+    projected = project_planned_page(
+        selected, page(item(A), item(A), item(B)), plan=plan,
+    )
+    assert projected["page_order_matches_plan"] is True
+    assert projected["returned_rows"] == 3
+    assert projected["distinct_selected_rows"] == 2
+    assert [r["source_case_id"] for r in projected["records"]] == [A, B]
+    assert projected["historical_completeness"] == "unknown"
+    assert projected["checkpoint_advanced"] is False
+
+
+def test_planned_projection_order_check_does_not_override_revocation():
+    selected = scope()
+    plan = plan_page(selected, limit=2)
+    with pytest.raises(StagingError, match="not currently authorized"):
+        project_planned_page(scope(grant_current=False),
+                             page(item(B), item(A)), plan=plan)
