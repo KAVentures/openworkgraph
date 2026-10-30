@@ -79,3 +79,23 @@ The synthetic regressions include contradictory provider claims, malformed
 provider/ref claims, transfer and tab reuse, a weak surface candidate, and
 unaffected same-record/tab positive behavior. No held-out ground truth,
 preregistered split, thresholds, scoring code or provider credentials change.
+
+
+## Literal opaque-ID admission
+
+Ephemeral `tab_context_id` and `clipboard_transfer_id` must be **literal
+strings** matching the existing bounded token grammars. The linker no longer
+stringifies booleans or integers into plausible IDs (for example, `True`
+or `7`), which could otherwise fabricate cross-record links inside a
+session. A present top-level field is authoritative for selecting that
+observation's claim: an invalid, null or empty top-level value is rejected
+rather than silently replaced with a metadata fallback. Metadata-only legacy
+string IDs and valid explicit top-level string IDs continue to work.
+
+Synthetic tests cover non-string metadata, invalid explicit top-level values
+with plausible metadata fallback, valid metadata-only strings, and valid
+top-level strings overriding malformed metadata. These are local evidence
+validation rules, not proof of a genuine observed copy/paste, tenant
+authorization, business case identity, or verified outcome. The F1 and
+contamination acceptance targets remain unverified; no private truth or
+scoring rules were changed.
