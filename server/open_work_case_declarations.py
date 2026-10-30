@@ -31,6 +31,7 @@ _FILENAME = ".open_work_case_declarations.sqlite3"
 _MAX_ITEMS = 50
 _MAX_DEPENDENCIES = 8
 _MAX_STORED_DEPENDENCIES_CHARS = 1024  # canonical eight-edge JSON is <=336 chars
+_MAX_STORED_TIMESTAMP_CHARS = 40  # canonical UTC writer timestamps are <=32 chars
 _TTL_DAYS = 7
 _MAX_REVISION = 2_147_483_647
 
@@ -232,6 +233,13 @@ def _stored_temporal_valid(
     review, or crash a bounded list/save while hiding dependent invalidation.
     """
     stamps = (created, updated, expires)
+    # Reject damaged auxiliary TEXT before invoking the ISO parser. The
+    # trusted writer emits at most 32 characters for a UTC timestamp; this
+    # small margin accommodates bounded legacy formatting, not arbitrary
+    # attacker-sized SQLite cells. SQLite has already materialized the row.
+    if any(not isinstance(value, str) or len(value) > _MAX_STORED_TIMESTAMP_CHARS
+           for value in stamps):
+        return False
     try:
         parsed = tuple(datetime.fromisoformat(value) for value in stamps)
     except (TypeError, ValueError):
