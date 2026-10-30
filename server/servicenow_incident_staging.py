@@ -318,6 +318,10 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
         "higher_reported_revision_ids": higher,
         "newly_observed_ids": sorted(after.keys() - before.keys()),
         "missing_unknown_ids": sorted(before.keys() - after.keys()),
+        # Selected records absent from both pages are still unknown, not
+        # evidence of a successful empty or complete provider read.
+        "unobserved_in_either_read_ids": sorted(
+            set(scope.sys_ids) - (before.keys() | after.keys())),
         "replay_consistency_checked": True,
         "historical_completeness": "unknown",
         "missing_means_deleted": False,
