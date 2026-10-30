@@ -222,6 +222,48 @@ def test_planned_projection_rejects_tampered_plan_without_partial_staging(mutati
         project_planned_page(selected, page(item()), plan=plan)
 
 
+@pytest.mark.parametrize("field,substitute", [
+    ("selected_count", True),
+    ("selected_count", 1.0),
+    ("provider_timestamp_timezone_verified", 0),
+    ("provider_timestamp_timezone_verified", 0.0),
+], ids=[
+    "boolean-count", "float-count", "integer-false-flag", "float-false-flag",
+])
+def test_planned_page_metadata_requires_exact_types_across_all_entrypoints(
+    field, substitute,
+):
+    """Python equality must not let forged plan metadata claim exact provenance."""
+    from server.servicenow_incident_staging import reconcile_planned_replays
+
+    selected = scope(sys_ids=(A,))
+    original = plan_page(selected, limit=1)
+    assert original["selected_count"] == 1
+    assert original["provider_timestamp_timezone_verified"] is False
+    raw = page(item(A))
+    # Preserve the original contract for an unmodified plan.
+    assert project_planned_page(selected, raw, plan=original)["plan_bound"]
+    assert project_planned_pages(selected, [(original, raw)])["plan_sequence_checked"]
+    assert reconcile_planned_replays(
+        selected, [(original, raw)], [(original, raw)]
+    )["same_plans_checked"]
+
+    altered = dict(original, **{field: substitute})
+    # The vulnerability is a Python value-equality collision, not a change
+    # to a planned URL, selection, limit, offset, or source record.
+    assert altered == original
+    assert type(altered[field]) is not type(original[field])
+    for invoke in (
+        lambda: project_planned_page(selected, raw, plan=altered),
+        lambda: project_planned_pages(selected, [(altered, raw)]),
+        lambda: reconcile_planned_replays(
+            selected, [(altered, raw)], [(altered, raw)]
+        ),
+    ):
+        with pytest.raises(StagingError, match="does not match"):
+            invoke()
+
+
 def test_planned_projection_rejects_missing_plan_keys_and_wrong_scope():
     selected = scope()
     plan = plan_page(selected, since="2026-10-30 03:10:00")
