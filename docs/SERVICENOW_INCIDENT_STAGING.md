@@ -115,3 +115,10 @@ authenticate a source, verify HTTP status/TLS/ACLs, prevent missing records,
 prove source chronology or completeness, authorize event-log append, or
 establish real tenant/provider acceptance. No provider requests or business
 writes occur in this module.
+
+
+## Replay disagreement between revision and reported update time
+
+Both offline replay entrypoints now distinguish a **higher source-reported modification counter** from a **cleanly classifiable source-reported advance**. If an exact selected incident has a higher `sys_mod_count` in the later supplied read but an **earlier** calendar-valid, fixed-width provider-local `sys_updated_on`, it is listed under `timestamp_regression_unknown_ids` and **excluded** from `higher_reported_revision_ids`. A higher counter with an equal reported second is still classified as higher: ServiceNow's supplied timestamp has second-level precision, and equal timestamps are not proof of a duplicate. Existing same-counter contradictory evidence and counter regressions continue to fail closed.
+
+This is a **source-evidence disagreement**, not evidence that the incident was rolled back, deleted, resolved, closed, or that the provider actually traveled backwards in time. Instance clock, timezone, ACLs, transport authenticity, snapshot consistency and history are still unverified. The lists contain only the already explicitly selected, tenant-scoped incident IDs. The result retains `historical_completeness: unknown`, `business_outcome_verified: false`, `provider_timestamp_timezone_verified: false`, `checkpoint_advanced: false` and `not_an_authorization_to_append: true`. The caller must review the discrepancy and obtain independently trusted provider semantics before any real append or checkpoint. Fake-response regressions exercise standalone and exact-plan two-read comparisons, both the contradiction and valid equal-second case; they are not real-provider acceptance.
