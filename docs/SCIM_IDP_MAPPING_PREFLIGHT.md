@@ -37,13 +37,13 @@ Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_US
 ### Contact selector syntax parity (offline, not provider validation)
 
 The preflight checks declared contact PATCH selector syntax against the shipped
-\`gateway/scim_user_emails.py\` parser without rewriting quoted JSON literals.
+`gateway/scim_user_emails.py` parser without rewriting quoted JSON literals.
 Attribute/field names are case-insensitive, but literal spelling is preserved
-for JSON decoding: an invalid \`\\U\` escape must not be transformed into a valid
-\`\\u\` escape by case normalization. The shipped grammar requires ordinary
-ASCII spaces around \`eq\` (not tabs, newlines or non-breaking spaces), and
-selector literals are limited to **64 characters for \`type\`** and **320 for
-\`value\`**, with control characters and invalid Unicode refused. Valid
-\`\\u\` JSON escapes remain supported. The tool checks declared *paths* only;
+for JSON decoding: an invalid `\\U` escape must not be transformed into a valid
+`\\u` escape by case normalization. The shipped grammar requires ordinary
+ASCII spaces around `eq` (not tabs, newlines or non-breaking spaces), and
+selector literals are limited to **64 characters for `type`** and **320 for
+`value`**, with control characters and invalid Unicode refused. Valid
+`\\u` JSON escapes remain supported. The tool checks declared *paths* only;
 it cannot prove a target contact exists, a PATCH operation succeeds, an
 identity matches or an Entra/Okta mapping is compatible without live tests.
