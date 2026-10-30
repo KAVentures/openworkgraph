@@ -110,17 +110,29 @@ def test_dependency_requires_same_scope_and_review(local):
     assert len(facts.list_case_declarations(SCOPE, now=NOW)["items"]) == 1
 
 
-def test_review_removal_and_disconnect_purge_declarations_and_dangling_edges(local):
-    reviewed(A)
-    reviewed(B)
+def test_review_removal_erases_transitive_dependent_declarations(local):
+    # B -> A and C -> B were explicitly owner-declared. Removing A's
+    # review must not silently turn B (and therefore C) into unblocked work.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
     save()
     b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B, C, d}
+
     assert reviews.remove_review_intention(A, now=NOW) is True
     remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
-    assert len(remaining) == 1
-    assert remaining[0]["work_item_ref"] == B
-    assert remaining[0]["depends_on_work_item_refs"] == []
-    assert remaining[0]["revision"] == b["revision"] + 1
+    assert remaining == [independent]
+    # B and C retain their human review requests, but not the now-invalid
+    # owner declarations or their previously approved dependency graph.
+    reviewed_refs = {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
+    assert {B, C, d}.issubset(reviewed_refs)
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=b["revision"])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+
     reviews.clear_review_intentions()
     assert not facts._path().exists()
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
