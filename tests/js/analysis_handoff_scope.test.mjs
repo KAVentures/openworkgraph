@@ -184,6 +184,8 @@ test('open handoff is proactively disabled and announced stale before any click'
   assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
   assert.equal(h.modal['#analysisRequest'].textContent, 'request-reviewed-week');
   assert.equal(h.tickets.length, 0);
+  await settle(); // the current preview begins after the async local-auth gate
+  assert.equal(h.reads.length, 3);
   h.reply(h.reads[2], h.preview('all', 'all-period')); await settle();
   const again = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[3], h.preview('all', 'new-request')); await again;
