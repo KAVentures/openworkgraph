@@ -277,7 +277,7 @@ def test_capped_gap_samples_are_stable_across_calls_and_csv_order(monkeypatch):
                 f"{case},B,{(start + timedelta(minutes=gap)).isoformat()}",
             ))
         return workspace.import_log(
-            BytesIO(("\\n".join(rows) + "\\n").encode()),
+            BytesIO(("\n".join(rows) + "\n").encode()),
             name="varied-gaps", source_format="csv",
             mapping={"case_column": "case", "activity_column": "activity",
                      "timestamp_column": "time"})["log_id"]
