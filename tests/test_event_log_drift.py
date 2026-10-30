@@ -205,6 +205,44 @@ def test_pathless_windows_are_disclosed_not_mistaken_for_stable_behavior():
     assert all("case_id" not in b for b in omitted)
 
 
+def test_sparse_path_support_requires_min_cases_observed_paths_per_side():
+    """Full case counts cannot certify a drift test supported by just 1–29 path-bearing cases."""
+    rows = ["case,activity,time"]
+    for month, with_paths in ((1, 29), (2, 30), (3, 40), (4, 1), (5, 29)):
+        for i in range(40):
+            day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Receive,{day.isoformat()}")
+            if i < with_paths:
+                rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="sparse-paths",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = drift.drift(log, window="month", min_cases=30)
+    assert [(w["sampled_cases"], w["sampled_cases_with_paths"])
+            for w in result["windows"]] == [(40, 29), (40, 30), (40, 40), (40, 1), (40, 29)]
+    assert result["boundaries_tested"] == 1
+    assert result["boundaries_skipped_small_windows"] == 0
+    assert result["boundaries_skipped_no_paths"] == 0
+    assert result["boundaries_skipped_sparse_paths"] == 3
+    assert len(result["boundaries"]) == 1
+    assert result["boundaries"][0]["before"] == "2024-02-01"
+    assert result["boundaries"][0]["after"] == "2024-03-01"
+    assert [(b["insufficient_path_support_side"],
+             b["sampled_cases_with_paths_before"],
+             b["sampled_cases_with_paths_after"]) for b in result["boundaries_not_tested"]] == [
+                 ("before", 29, 30), ("after", 40, 1), ("both", 1, 29)]
+    assert all(b["reason"] == "insufficient_path_support"
+               and b["insufficient_side"] is None
+               and b["sampled_cases_before"] == b["sampled_cases_after"] == 40
+               and "case_id" not in b for b in result["boundaries_not_tested"])
+    assert (result["boundaries_tested"] + result["boundaries_skipped_small_windows"]
+            + result["boundaries_skipped_no_paths"] + result["boundaries_skipped_sparse_paths"]
+            == len(result["windows"]) - 1)
+
+
 def test_two_pathless_windows_are_not_counted_as_tested_no_change():
     rows = ["case,activity,time"]
     for month in (1, 2):
@@ -285,6 +323,25 @@ with TestClient(app) as client:
     assert pathless.json()["boundaries_tested"] == 0
     assert pathless.json()["boundaries_skipped_no_paths"] == 1
     assert pathless.json()["boundaries_not_tested"][0]["missing_paths_side"] == "before"
+    sparse_rows = ["case,activity,time"]
+    for m, with_paths in ((1, 29), (2, 30)):
+        for c in range(40):
+            stamp = f"2024-0{m}-{1 + c % 27:02d}"
+            sparse_rows.append(f"s{m}{c},A,{stamp}T00:00:00Z")
+            if c < with_paths:
+                sparse_rows.append(f"s{m}{c},B,{stamp}T01:00:00Z")
+    made_sparse = client.post("/v1/event-logs/import?format=csv&name=sparse&case_column=case"
+                              "&activity_column=activity&timestamp_column=time",
+                              content=("\n".join(sparse_rows) + "\n").encode(),
+                              headers={**headers, "x-owg-local-storage-confirmed": "true"})
+    assert made_sparse.status_code == 200, made_sparse.text
+    sparse = client.get("/v1/event-logs/" + made_sparse.json()["log_id"] + "/drift?window=month",
+                        headers=headers)
+    assert sparse.status_code == 200, sparse.text
+    assert sparse.json()["boundaries_tested"] == 0
+    assert sparse.json()["boundaries_skipped_sparse_paths"] == 1
+    assert sparse.json()["boundaries_not_tested"][0]["reason"] == "insufficient_path_support"
+    assert sparse.json()["boundaries_not_tested"][0]["insufficient_path_support_side"] == "before"
     assert client.get(path + "?window=year", headers=headers).status_code == 422
 '''
     env = os.environ.copy()

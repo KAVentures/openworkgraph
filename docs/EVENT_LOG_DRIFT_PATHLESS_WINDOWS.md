@@ -26,8 +26,9 @@ transition. It is at most `sampled_cases`. Counts are aggregate only;
 no case IDs or additional raw event text are returned.
 
 A boundary is tested only when **both** windows meet `min_cases` on
-actual sampled cases **and** each contains at least one sampled case
-with a directly-follows path.
+actual sampled cases **and** at least `min_cases` of those sampled cases
+have a directly-follows path. A 40-case window with just one path-bearing
+case cannot support a 30-case minimum for a distribution-based test.
 
 If a boundary has enough sampled cases but either side has zero paths,
 it is included in `boundaries_not_tested[]` with:
@@ -37,8 +38,17 @@ it is included in `boundaries_not_tested[]` with:
 - `sampled_cases_with_paths_before/after` (aggregate counts)
 - `insufficient_side: null` (case-count support is sufficient)
 
+If both sampled-case counts meet the floor and neither path-bearing count
+is zero, but one or both path-bearing counts fall below `min_cases`,
+the boundary is also omitted, with `reason: "insufficient_path_support"`,
+`insufficient_path_support_side: "before" | "after" | "both"`, the same
+aggregate path-bearing counts and `insufficient_side: null`.
+`boundaries_skipped_sparse_paths` counts these boundaries. This is a
+conservative support requirement, not a proof of statistical power or
+representativeness.
+
 These are **not** change points or tested non-change boundaries.
-`boundaries_skipped_no_paths` counts this category. The existing
+`boundaries_skipped_no_paths` counts the zero-path category. The existing
 `boundaries_skipped_small_windows` remains restricted to boundaries
 with insufficient sampled-case support, preserving its original meaning
 and the original small-window omission record shape. A boundary with
@@ -47,20 +57,22 @@ insufficient sampled cases.
 
 The invariant is:
 `boundaries_tested + boundaries_skipped_small_windows +
-boundaries_skipped_no_paths == max(0, len(windows) - 1)`.
+boundaries_skipped_no_paths + boundaries_skipped_sparse_paths
+== max(0, len(windows) - 1)`.
 
-The statistical procedure, JSD, permutation count, Bonferroni correction,
-thresholds, and tested-boundary outputs are unchanged. The new guard
-prevents applying those statistics when a required distribution does
-not exist. It does **not** establish that the input source captured
+The JSD, permutation count, Bonferroni correction and tested-boundary
+statistics are unchanged. The support guard is stricter: it withholds
+inferential labels for windows where too few sampled cases contribute
+any path observations. It does **not** establish that the input source captured
 every step; partial observation and changes in instrumentation remain
 alternative explanations for apparent drift.
 
 ## Validation
 
 Synthetic CSV tests cover a pathless window before a normal window,
-a pathless window after a normal window, two pathless windows, and
-authenticated local HTTP disclosure. Existing tests cover actual sampled
+a pathless window after a normal window, two pathless windows,
+the 29/30 path-bearing-case threshold with one-sided and two-sided
+sparse support, and authenticated local HTTP disclosure. Existing tests cover actual sampled
 case thresholds and stable versus changed paths. These tests are not
 real-provider or consenting customer acceptance, and do not establish
 causality or authorize any action.
