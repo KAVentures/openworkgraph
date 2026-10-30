@@ -137,3 +137,27 @@ business obligation, verified outcome or agent execution authorization.
 ### Persisted row-count integrity
 
 The local auxiliary ledger is capped at **50 total declarations across all source scopes**. If damaged/legacy SQLite content exceeds this bound, scoped reads withhold the entire owner-approval projection instead of presenting a seemingly complete truncated subset. Transactional pruning and dependent-deletion traversal fetch at most 51 rows and refuse an over-capacity graph. A failed save rolls back; explicit review deletion can scrub the corrupt auxiliary ledger through the existing fail-closed cleanup path. Exactly 50 rows remain supported, with unreviewed entries removed by the next authorized save. This is a local resource/availability bound, not tamper-proof storage, tenant authorization or independently verified outcomes.
+
+
+### Persisted dependency JSON parsing bound
+
+The trusted owner-declaration writer emits a JSON array of at most eight
+opaque case references (at most 336 characters with its current serializer).
+The auxiliary SQLite reader now refuses a stored `dependencies_json` value
+longer than **1,024 characters before calling the JSON decoder**. This
+conservatively permits modest legacy whitespace/serialization differences
+without allowing an oversized or deeply nested damaged payload to consume
+unbounded JSON parsing work. Non-text, malformed and oversized values are
+invalid dependency graphs, **not** empty dependency lists. Affected cases and
+all their declared dependent cases are withheld on non-mutating reads and
+pruned by the next authorized save. Explicit review deletion retains the
+existing whole-ledger scrub fallback if targeted deletion cannot safely
+interpret the damaged auxiliary graph.
+
+Three synthetic regressions cover valid eight-edge writer output and the
+1,024/1,025-character boundary with a decoder tripwire; transitive withholding
+and authorized transactional pruning; and explicit review deletion with an
+oversized malformed payload. This caps **JSON decoding work**, not the memory
+required for SQLite to return a corrupted oversized cell or arbitrary local
+database tampering. No provider authorization, business status, customer
+outcome, source receipt or agent execution permission is inferred.
