@@ -112,6 +112,7 @@ def test_reject_untrusted_host_query_injection_and_unbounded_requests():
         with pytest.raises(StagingError):
             scope(sys_ids=ids)
     for kw in ({"offset": -1}, {"limit": 101}, {"limit": True},
-               {"since": "2026-10-30 03:10:00^ORactive=true"}):
+               {"since": "2026-10-30 03:10:00^ORactive=true"},
+               {"since": "2026-99-99 03:10:00"}):
         with pytest.raises(StagingError):
             plan_page(scope(), **kw)
