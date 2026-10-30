@@ -621,3 +621,50 @@ def test_plan_bound_replay_does_not_change_unplanned_api():
     result = reconcile_replayed_pages(scope(), page(item(A)), page(item(A)))
     assert result["same_reported_revision_ids"] == [A]
     assert "same_plans_checked" not in result
+
+
+@pytest.mark.parametrize("earlier,later,unobserved", [
+    ((), (), (A, B, C)),
+    ((A,), (A,), (B, C)),
+    ((A,), (B,), (C,)),
+    ((A, B), (A, B, C), ()),
+], ids=["both-empty", "same-partial", "disjoint-partial", "all-observed"])
+def test_replay_discloses_selected_ids_absent_from_both_reads(
+    earlier, later, unobserved,
+):
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope(sys_ids=(C, A, B))  # Deliberately not sorted.
+    before_raw = page(*(item(incident_id) for incident_id in earlier))
+    after_raw = page(*(item(incident_id) for incident_id in later))
+    standalone = reconcile_replayed_pages(
+        selected, before_raw, after_raw, limit=3,
+    )
+    planned = plan_page(selected, limit=3)
+    plan_bound = reconcile_planned_replays(
+        selected, [(planned, before_raw)], [(planned, after_raw)],
+    )
+    for result in (standalone, plan_bound):
+        assert result["unobserved_in_either_read_ids"] == list(unobserved)
+        assert result["historical_completeness"] == "unknown"
+        assert result["business_outcome_verified"] is False
+        assert result["checkpoint_advanced"] is False
+        assert result["not_an_authorization_to_append"] is True
+        assert result["missing_means_deleted"] is False
+    assert plan_bound["same_plans_checked"] is True
+
+
+def test_replay_unobserved_scope_is_tenant_and_grant_scoped():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    first = scope(sys_ids=(A, B, C))
+    other = scope(sys_ids=(A, B, C), tenant_scope="other")
+    for selected in (first, other):
+        result = reconcile_replayed_pages(selected, page(item(A)), page(item(A)))
+        assert result["unobserved_in_either_read_ids"] == [B, C]
+        assert result["source_namespace"] == selected.namespace
+    assert first.namespace != other.namespace
+    for selected in (scope(sys_ids=(A, B, C), consented=False),
+                     scope(sys_ids=(A, B, C), grant_current=False)):
+        with pytest.raises(StagingError, match="not currently authorized"):
+            reconcile_replayed_pages(selected, page(), page())
