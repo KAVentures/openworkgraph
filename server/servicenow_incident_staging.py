@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -64,8 +65,13 @@ def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
         raise StagingError("Page offset outside bounded range")
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
         raise StagingError("Page size outside bounded range")
-    if since is not None and (type(since) is not str or not _UPDATED.fullmatch(since)):
-        raise StagingError("Invalid provider-local update watermark")
+    if since is not None:
+        if type(since) is not str or not _UPDATED.fullmatch(since):
+            raise StagingError("Invalid provider-local update watermark")
+        try:
+            datetime.strptime(since, "%Y-%m-%d %H:%M:%S")
+        except ValueError as exc:
+            raise StagingError("Invalid provider-local update watermark") from exc
     query = "sys_idIN" + ",".join(sorted(scope.sys_ids))
     if since is not None:
         query += "^sys_updated_on>=" + since
