@@ -111,11 +111,13 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
                 conflicts.add(ref)
         else:
             metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-            claimed = metadata.get("resource_reference") if isinstance(metadata.get("resource_reference"), dict) else {}
+            raw_claim = metadata.get("resource_reference")
+            claimed = raw_claim if isinstance(raw_claim, dict) else {}
             claimed_ref = str(claimed.get("resource_ref") or "").lower()
-            # A malformed explicit reference is not an unreferenced observation.
-            # It must not regain linking authority through a tab or transfer.
-            if claimed:
+            # A malformed explicit reference (including non-object values) is
+            # not an unreferenced observation. It cannot regain authority via
+            # a tab, transfer, or adjacent surface candidate.
+            if "resource_reference" in metadata and raw_claim is not None:
                 invalid_claim_events.add(event_id)
             if _RESOURCE.fullmatch(claimed_ref):
                 conflicts.add(claimed_ref)
