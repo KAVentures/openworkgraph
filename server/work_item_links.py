@@ -19,6 +19,10 @@ Never merged, only reported as ``ambiguous`` candidate links:
 - ``surface_continuity``: an unreferenced, tab-less observation directly next to
   an observation in the same app.
 
+Tab, clipboard-transfer and app-continuity signals are scoped to the exact
+organization, actor, device and session. Missing scope values are not wildcards;
+invalid scope values cannot support these joins. Exact-record references retain
+their separate source-identity conflict checks and may span actors/sessions.
 Time alone never links anything. Linked items are not tasks, business cases or
 outcomes. No titles, UI labels, URLs or clipboard contents are read or returned.
 """
@@ -62,6 +66,28 @@ def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
     return value if pattern.fullmatch(value) else ""
 
 
+_SCOPE_FIELDS = ("organization_id", "actor_id", "device_id", "session_id")
+
+
+def _link_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Exact local identity for ephemeral tab/transfer/app signals.
+
+    Legacy absent fields have their own empty identity; they never match a
+    known organization/actor/device/session. Malformed fields cannot anchor
+    ephemeral joins. This does not authorize cross-actor record linking.
+    """
+    values: list[str] = []
+    for name in _SCOPE_FIELDS:
+        value = event.get(name)
+        if value is None:
+            values.append("")
+        elif isinstance(value, str) and len(value) <= 160:
+            values.append(value)
+        else:
+            return None
+    return tuple(values)  # type: ignore[return-value]
+
+
 def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Validated, de-duplicated, chronologically ordered observations."""
     identities: dict[str, tuple[str, str, str, str]] = {}
@@ -93,6 +119,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             "provider": match[1] if match else "", "kind": match[2] if match else "",
             "tab": _field(event, "tab_context_id", _TAB),
             "transfer": _field(event, "clipboard_transfer_id", _TRANSFER),
+            "scope": _link_scope(event),
             "app": str(event.get("app") or "").strip().casefold()[:120],
             "action": _token(event.get("event_type")),
             "source": _token(event.get("source")),
@@ -120,15 +147,19 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             union.union(group[0], other)
 
     by_ref: dict[str, list[str]] = defaultdict(list)
-    by_transfer: dict[str, list[str]] = defaultdict(list)
-    by_tab: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_transfer: dict[tuple[tuple[str, str, str, str], str], list[str]] = defaultdict(list)
+    by_tab: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         if row["ref"]:
             by_ref[row["ref"]].append(row["event_id"])
-        if row["transfer"]:
-            by_transfer[row["transfer"]].append(row["event_id"])
-        if row["tab"]:
-            by_tab[row["tab"]].append(row)
+        # Opaque IDs are not globally unique: two tenants, people, devices or
+        # capture sessions can legitimately reuse the same tab/transfer token.
+        # Do not use missing/invalid identity as a wildcard.
+        if row["scope"] is not None:
+            if row["transfer"]:
+                by_transfer[(row["scope"], row["transfer"])].append(row["event_id"])
+            if row["tab"]:
+                by_tab[(row["scope"], row["tab"])].append(row)
     for group in by_ref.values():
         join(group, "same_record")
     for group in by_transfer.values():
@@ -157,7 +188,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if row["ref"] or row["tab"] or row["transfer"] or not row["app"]:
             continue
         for neighbour in (rows[index - 1] if index else None, rows[index + 1] if index + 1 < len(rows) else None):
-            if neighbour is not None and neighbour["app"] == row["app"]:
+            if (row["scope"] is not None and neighbour is not None
+                    and neighbour["scope"] == row["scope"] and neighbour["app"] == row["app"]):
                 candidates.append({"event_id": row["event_id"], "toward_event_id": neighbour["event_id"],
                                    "relation": "surface_continuity"})
     members: dict[str, list[str]] = defaultdict(list)
@@ -234,6 +266,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
             "time_alone_never_links": True,
+            "ephemeral_signals_scope": "exact_organization_actor_device_session",
+            "missing_scope_is_wildcard": False,
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
