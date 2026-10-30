@@ -208,3 +208,21 @@ health-only and legacy responses.
 A preview can pass row-count conservation and chronological ordering yet list dates **outside** the selected evidence period. The handoff now requires each listed chunk's inclusive start and exclusive end to fall inside the exact server-echoed range, comparing timezone-aware instants (so equivalent UTC offsets are valid). For a `current` selection the optional recorder-run start is a lower bound; `all` is unbounded and must not smuggle in extra bounds. Malformed bounds, reversed range bounds and out-of-window chunks fail closed before Copy or Download. Valid gaps, truncated 31-day plans, absent plans, legacy optional metadata and zero-event handoffs remain supported.
 
 The synthetic regression includes start/end overreach (also expressed using offset timestamps), UTC-equivalent exact boundaries and a forged bounded `all` scope. This prevents misleading **displayed plan coverage**, not proof of complete observation, verified source outcomes, customer consent or real-world competitor parity.
+
+## Selected observed-range provenance
+
+The first/last observed timestamps must describe events **inside** the selected
+server-echoed evidence period, not another saved history. For `range`, the
+first timestamp is at or after inclusive `since` and the last strictly
+before exclusive `until`. For `current`, an optional recorder-run start
+is an inclusive lower bound; `all` remains unbounded. Comparisons use
+UTC-equivalent instants, not string equality. Zero-event previews with no
+observed timestamps remain copy-only; legacy unbounded previews remain valid.
+
+Malformed or mixed-up observed coverage refuses the modal, Copy and Download.
+This is client-side evidence consistency, **not** proof of complete capture,
+live consent, business outcomes or competitor parity. Synthetic tests cover
+early/late range observations, exclusive-end rejection, timezone offsets,
+valid inclusive-start/end-minus-one-second boundaries, current-run lower
+bounds and all-history compatibility. Shared fixture observations now follow
+the local calendar day rather than hardcoding October 2026.
