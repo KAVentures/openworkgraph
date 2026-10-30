@@ -88,6 +88,21 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         tested = [i for i in range(len(buckets) - 1)
                   if sampled_by_window.get(i, 0) >= min_cases
                   and sampled_by_window.get(i + 1, 0) >= min_cases]
+        # Disclose omitted adjacent comparisons as well as the aggregate count.
+        # These are sampled support counts, never case IDs or raw evidence.
+        tested_set = set(tested)
+        boundaries_not_tested = []
+        for i in range(len(windows) - 1):
+            if i in tested_set:
+                continue
+            before_n = sampled_by_window.get(i, 0)
+            after_n = sampled_by_window.get(i + 1, 0)
+            before_low, after_low = before_n < min_cases, after_n < min_cases
+            boundaries_not_tested.append({
+                "before": windows[i]["window"], "after": windows[i + 1]["window"],
+                "sampled_cases_before": before_n, "sampled_cases_after": after_n,
+                "insufficient_side": "both" if before_low and after_low else ("before" if before_low else "after"),
+            })
         boundaries = []
         if tested:
             conn.execute("CREATE OR REPLACE TEMP TABLE pairs (pair INTEGER)")
@@ -153,7 +168,8 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
             "windows": windows,
             "boundaries": boundaries,
             "boundaries_tested": len(tested),
-            "boundaries_skipped_small_windows": max(0, len(buckets) - 1 - len(tested)),
+            "boundaries_skipped_small_windows": len(boundaries_not_tested),
+            "boundaries_not_tested": boundaries_not_tested,
             "change_points": [b for b in boundaries if b["change_point"]],
             "interpretation": ("A change point means the recorded paths differ between two adjacent windows more "
                                "than random splits of the same cases do (permutation test, Bonferroni-corrected). "
