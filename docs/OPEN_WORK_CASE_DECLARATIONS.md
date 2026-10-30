@@ -85,3 +85,28 @@ the review store and declaration store do not share a transaction. An equal-
 timestamp review replacement still cannot be distinguished by the current
 review-window representation. Trusted callers must not treat a prior list
 response as a durable provider grant, business obligation, or verified outcome.
+
+
+## Explicit dependency-edge approval windows
+
+The local ledger now requires **each already declared dependency edge** to be
+temporally consistent in addition to validating each row independently. A
+dependent's latest owner approval must not predate its prerequisite's latest
+owner approval, and the dependent's deadline must not extend past the
+prerequisite's deadline. Both conditions compare parsed canonical UTC instants,
+not lexical timestamp strings. This is **not** a time-only join or inferred
+business obligation: only existing exact, same-scope owner-declared references
+are evaluated. An invalid prerequisite edge withholds its dependent and the
+entire transitive dependent closure in non-mutating reads. The next authorized
+write prunes that closure transactionally, without deleting unrelated reviewed
+cases or extending approvals.
+
+Two synthetic SQLite corruption regressions start with A <- B <- C and an
+independent D, then make either A's latest approval newer than B's approval
+or B's deadline later than A's. Every individual row still passes its own
+temporal and human-review window checks. The list must expose only A and D;
+a subsequent explicit edit of D prunes B and C, and stale B CAS cannot revive
+them. These tests do not prove arbitrary database-tamper resistance, atomic
+source-grant revocation, real provider/customer outcome verification, or
+business uplift. The ledger remains internal-only, local, opt-in, and
+non-executing.
