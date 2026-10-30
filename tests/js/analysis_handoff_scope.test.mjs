@@ -13,7 +13,7 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
-function harness(auth = Promise.resolve(true)) {
+function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
   let downloads = 0, modals = 0;
   const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
@@ -64,7 +64,10 @@ function harness(auth = Promise.resolve(true)) {
     else throw new Error('Unexpected request: ' + url);
     return item.promise;
   };
-  const navigator = {clipboard: {async writeText(value) {copied.push(value);}}};
+  const navigator = {clipboard: {async writeText(value) {
+    if (clipboardWrite) return clipboardWrite(value);
+    copied.push(value);
+  }}};
   vm.runInNewContext(source, {window, document, fetch, navigator, Date, Intl,
     URLSearchParams, AbortController, Event: class Event {}, setTimeout});
   document.ready();
@@ -256,5 +259,60 @@ test('impossible custom dates cannot silently roll into another evidence period'
   assert.equal(h.reads.length, previousReads);
   assert.match(h.summary.textContent, /valid dates/i);
   assert.throws(() => h.window.owgEvidenceSelection(), /valid dates/i);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('double-clicking Download issues one ticket and announces local pending work', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisDownload'].onclick();
+  const second = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*locally/i);
+  h.reply(h.tickets[0], {url: '/v1/download-ticket/single'});
+  await Promise.all([first, second]);
+  assert.equal(h.downloads, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('failed export ticket restores retry without duplicate downloads', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 1);
+  h.tickets[0].reject(new Error('Ticket unavailable'));
+  await first;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket unavailable/i);
+  const retry = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 2);
+  h.reply(h.tickets[1], {url: '/v1/download-ticket/retry'});
+  await retry;
+  assert.equal(h.downloads, 1);
+});
+
+test('late clipboard rejection cannot replace a period-change warning', async () => {
+  const pendingClipboard = deferred();
+  const h = harness(Promise.resolve(true), () => pendingClipboard.promise);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  pendingClipboard.reject(new Error('Clipboard permission denied'));
+  await copy;
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /clipboard write failed/i);
+  assert.deepEqual(h.copied, []);
   assert.equal(h.tickets.length, 0);
 });
