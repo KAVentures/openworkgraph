@@ -250,8 +250,11 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
     rows = db.execute(
         "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
         "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
-        "FROM declarations"
+        "FROM declarations LIMIT ?", (_MAX_ITEMS + 1,)
     ).fetchall()
+    if len(rows) > _MAX_ITEMS:
+        # Reject damaged over-capacity ledgers before materializing a graph.
+        raise CaseDeclarationError("local declaration ledger exceeds item limit")
     scopes = {row[0]: row[1] for row in rows}
     row_by_ref = {row[0]: row for row in rows}
     dependencies = {
@@ -311,8 +314,12 @@ def _dependent_closure(db: sqlite3.Connection, work_item_ref: str) -> set[str]:
     declared goal/outcome/dependency graph. The store has at most 50 rows.
     """
     rows = db.execute(
-        "SELECT work_item_ref,dependencies_json FROM declarations"
+        "SELECT work_item_ref,dependencies_json FROM declarations LIMIT ?",
+        (_MAX_ITEMS + 1,),
     ).fetchall()
+    if len(rows) > _MAX_ITEMS:
+        # Review deletion falls back to scrubbing the corrupt auxiliary DB.
+        raise CaseDeclarationError("local declaration ledger exceeds item limit")
     edges = []
     for ref, raw in rows:
         dependencies = _stored_dependencies(raw, ref)
@@ -517,7 +524,9 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
         rows = []
         candidates: list[tuple[Any, ...]] = []
         with _database(create=False) as db:
-            if db is not None and reviewed:
+            if (db is not None and reviewed and
+                db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] <= _MAX_ITEMS):
+                # A scoped subset cannot certify a damaged global ledger.
                 cutoff = (current - timedelta(days=days)).isoformat()
                 candidates = db.execute(
                     "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
