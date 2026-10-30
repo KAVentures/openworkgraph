@@ -14,6 +14,7 @@ describe the two cohorts; they are not explained by the cohort definition.
 """
 from __future__ import annotations
 
+from statistics import median
 from typing import Any
 
 from . import event_log_cohorts as cohorts
@@ -28,9 +29,17 @@ GAP_ROUNDS = 300
 
 
 def _gaps(conn, table: str, source: str, target: str) -> list[float]:
+    # DuckDB reservoir(... REPEATABLE(seed)) is sensitive to scan order and
+    # query plans. Rank matching transitions by a stable content-derived key
+    # instead; do not use imported event_id (which can depend on CSV order).
+    # JSON array encoding avoids ambiguous concatenation of literal case IDs.
+    # Only the bounded gaps, never the case IDs, reach Python or the response.
     return [r[0] for r in conn.execute(
         f"""SELECT gap FROM {table}_dfg WHERE src = ? AND dst = ?
-            USING SAMPLE reservoir({GAP_SAMPLE} ROWS) REPEATABLE (7)""", [source, target]).fetchall()]
+            ORDER BY md5(to_json([case_id, CAST(ts AS VARCHAR), CAST(gap AS VARCHAR)])),
+                     case_id, ts, gap
+            LIMIT ?""",
+        [source, target, GAP_SAMPLE]).fetchall()]
 
 
 def _median_difference(a: list[float], b: list[float]) -> tuple[float, float, float]:
@@ -49,7 +58,7 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
         sizes = {}
         for t in ("ca", "cb"):
             sizes[t] = conn.execute(f"SELECT count(DISTINCT case_id) FROM {t}").fetchone()[0]
-            conn.execute(f"""CREATE OR REPLACE TEMP TABLE {t}_dfg AS SELECT case_id, src, activity AS dst,
+            conn.execute(f"""CREATE OR REPLACE TEMP TABLE {t}_dfg AS SELECT case_id, ts, src, activity AS dst,
                   epoch(ts - prev_ts) AS gap FROM (
                     SELECT case_id, activity, ts, lag(activity) OVER w AS src, lag(ts) OVER w AS prev_ts
                     FROM {t} WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)) WHERE src IS NOT NULL""")
@@ -75,14 +84,36 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
                           "only_in": "first" if not cb else ("second" if not ca else None),
                           "median_gap_seconds_first": ma, "median_gap_seconds_second": mb})
         # Time intervals for the paths both cohorts use most.
-        timed = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
-                       key=lambda p: -(p["transitions_in_first"] + p["transitions_in_second"]))[:TIMED_PATHS]
+        eligible = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
+                          key=lambda p: (-(p["transitions_in_first"] + p["transitions_in_second"]),
+                                         p["from"], p["to"]))
+        timed = eligible[:TIMED_PATHS]
         for p in timed:
-            d, low, high = _median_difference(_gaps(conn, "ca", p["from"], p["to"]),
-                                              _gaps(conn, "cb", p["from"], p["to"]))
+            # The full-cohort medians above and the reservoir-sampled bootstrap
+            # below can have different point estimates. Expose the actual
+            # sampled denominators and medians so the distinction is explicit.
+            first_gaps = _gaps(conn, "ca", p["from"], p["to"])
+            second_gaps = _gaps(conn, "cb", p["from"], p["to"])
+            d, low, high = _median_difference(first_gaps, second_gaps)
+            p["median_gap_interval_status"] = "estimated"
             p["median_gap_difference"] = {"seconds": d, "ci95": [low, high], "ci_excludes_zero": low > 0 or high < 0,
+                                          "sampled_gaps_first": len(first_gaps),
+                                          "sampled_gaps_second": len(second_gaps),
+                                          "sampled_median_gap_seconds_first": median(first_gaps),
+                                          "sampled_median_gap_seconds_second": median(second_gaps),
+                                          "sampling_truncated_first": len(first_gaps) < p["transitions_in_first"],
+                                          "sampling_truncated_second": len(second_gaps) < p["transitions_in_second"],
                                           "method": f"percentile bootstrap, {GAP_ROUNDS} rounds, up to "
                                                     f"{GAP_SAMPLE} sampled gaps per cohort"}
+        # Missing intervals are not all equivalent: some paths have too
+        # little support, while others exceeded the bounded bootstrap budget.
+        for p in paths:
+            if "median_gap_interval_status" not in p:
+                p["median_gap_interval_status"] = (
+                    "insufficient_support"
+                    if p["transitions_in_first"] <= 1 or p["transitions_in_second"] <= 1
+                    else "rank_limit"
+                )
         paths.sort(key=lambda p: (not p["ci_excludes_zero"], -abs(p["case_share_difference"]), p["from"], p["to"]))
 
         def side(t, n):
@@ -93,11 +124,19 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
             activities_truncated = len(ranked) > MAX_MAP_ACTIVITIES
             acts = ranked[:MAX_MAP_ACTIVITIES]
             kept = {a for a, _, _ in acts}
+            # The displayed map contains at most 64 activity names. Push
+            # membership filtering and row limits into DuckDB instead of
+            # materializing every distinct edge/start activity in Python.
+            names = [a for a, _, _ in acts]
+            slots = ", ".join("?" for _ in names)
             edges = conn.execute(f"""SELECT src, dst, count(*), count(DISTINCT case_id), quantile_cont(gap, 0.5)
-                FROM {t}_dfg GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2""").fetchall()
+                FROM {t}_dfg WHERE src IN ({slots}) AND dst IN ({slots})
+                GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2 LIMIT {MAX_MAP_ACTIVITIES ** 2}""",
+                [*names, *names]).fetchall()
             starts = conn.execute(f"""SELECT activity, count(*) FROM (SELECT activity, row_number() OVER (
-                PARTITION BY case_id ORDER BY ts, event_id) AS k FROM {t}) WHERE k = 1 GROUP BY 1
-                ORDER BY 2 DESC, 1""").fetchall()
+                PARTITION BY case_id ORDER BY ts, event_id) AS k FROM {t})
+                WHERE k = 1 AND activity IN ({slots}) GROUP BY 1
+                ORDER BY 2 DESC, 1 LIMIT {MAX_MAP_ACTIVITIES}""", names).fetchall()
             return {"cases": n,
                     "activities": [{"activity": a, "event_count": e, "case_count": c} for a, e, c in acts],
                     "transitions": [{"from": s, "to": d, "transition_count": x, "case_count": c,
@@ -109,6 +148,9 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
             "cohorts": [cohorts.describe(first), cohorts.describe(second)],
             "cases": [na, nb], "overlapping_cases": overlap,
             "paths": paths[:limit], "paths_total": len(paths),
+            "timed_paths_eligible": len(eligible),
+            "timed_paths_evaluated": len(timed),
+            "timed_paths_omitted_rank_limit": len(eligible) - len(timed),
             "paths_only_in_first": sum(p["only_in"] == "first" for p in paths),
             "paths_only_in_second": sum(p["only_in"] == "second" for p in paths),
             "maps": [side("ca", na), side("cb", nb)],
