@@ -89,6 +89,8 @@ def test_malformed_and_oversized_provider_responses_fail_closed(raw):
 
 @pytest.mark.parametrize("bad", [
     item(sys_id=C), item(updated="2026-10-30T03:10:00Z"),
+    item(updated="2026-99-99 03:10:00"), item(updated="2026-02-29 03:10:00"),
+    item(updated="2024-02-30 03:10:00"), item(updated="2024-02-29 24:00:00"),
     item(mod="-1"), item(mod=3), item(state="\nprivate"), item(state=""),
 ])
 def test_invalid_or_unselected_records_fail_closed(bad):
@@ -116,3 +118,13 @@ def test_reject_untrusted_host_query_injection_and_unbounded_requests():
                {"since": "2026-99-99 03:10:00"}):
         with pytest.raises(StagingError):
             plan_page(scope(), **kw)
+
+
+def test_provider_local_leap_day_is_valid_but_never_promoted_to_utc():
+    local = "2024-02-29 23:59:59"
+    planned = plan_page(scope(), since=local)
+    assert local in parse_qs(urlsplit(planned["url"]).query)["sysparm_query"][0]
+    staged = project_page(scope(), page(item(updated=local)))
+    assert staged["records"][0]["reported_updated_on"] == local
+    assert not staged["records"][0]["timestamp_timezone_verified"]
+    assert not staged["provider_timestamp_timezone_verified"]
