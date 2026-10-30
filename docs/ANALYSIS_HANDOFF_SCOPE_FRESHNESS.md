@@ -249,3 +249,20 @@ exactly at the first observation, a later same-day chunk, and offset-equivalent
 valid intervals (including a chunk beginning at the last observed instant).
 This is a **client-side contradiction check**, not a proof of source
 completeness, business-case linkage, consent, provider truth, or a real pilot.
+
+## Selected focus-example provenance
+
+The local preview samples `redacted_examples` only from selected
+`focus_span` rows, capped at six. Before displaying examples or allowing
+Copy/Download, the dashboard requires no more examples than either six or
+the selected focus-span count. When an example supplies `observed_at`,
+it must be a valid offset-aware ISO instant within the first-to-last
+selected observation span, inclusive. Missing optional timestamps remain
+supported for legacy previews; zero-focus/health-only selections cannot
+display stale focus context.
+
+Synthetic modal tests reject zero-focus, count-overrun, over-cap, stale
+before/after, malformed and numeric timestamp responses, while accepting
+UTC-equivalent offsets, legacy omissions and health-only selections.
+These checks detect contradictory preview envelopes, not complete source
+coverage, guaranteed redaction, real consenting-user acceptance or parity.
