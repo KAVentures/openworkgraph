@@ -270,3 +270,53 @@ def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, 
             "historical_completeness": "unknown", "checkpoint_advanced": False,
             "provider_timestamp_timezone_verified": False,
             "not_an_authorization_to_append": True}
+
+
+def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
+                             later_raw: bytes, *, limit: int = 50,
+                             since: str | None = None) -> dict[str, Any]:
+    """Compare two independently staged selected-incident reads, without writes.
+
+    Only identical source IDs within the exact selected scope are compared.
+    Equal reported revision counters must carry identical minimized status and
+    timestamp evidence; a lower counter is a conflict, not a deletion/replay.
+    Missing records are *unknown* (ACL, pagination, deletion, concurrent edits).
+    This cannot establish provider identity, completeness or checkpoint safety.
+    """
+    scope.require_authority()
+    earlier = project_page(scope, earlier_raw, limit=limit, since=since)
+    later = project_page(scope, later_raw, limit=limit, since=since)
+    before = {r["source_case_id"]: r for r in earlier["records"]}
+    after = {r["source_case_id"]: r for r in later["records"]}
+    same: list[str] = []
+    higher: list[str] = []
+    for incident_id in sorted(before.keys() & after.keys()):
+        old = before[incident_id]
+        new = after[incident_id]
+        old_revision = int(old["source_event_id"].rsplit(":", 1)[1])
+        new_revision = int(new["source_event_id"].rsplit(":", 1)[1])
+        if new_revision < old_revision:
+            raise StagingError("Provider revision counter regressed across selected replay")
+        if new_revision == old_revision:
+            if (new["reported_state"] != old["reported_state"]
+                    or new["reported_updated_on"] != old["reported_updated_on"]):
+                raise StagingError("Conflicting evidence for same provider revision")
+            same.append(incident_id)
+        else:
+            # The provider's counter is only source-reported, not independently
+            # verified chronology or a business-completion signal.
+            higher.append(incident_id)
+    return {
+        "source_namespace": scope.namespace,
+        "same_reported_revision_ids": same,
+        "higher_reported_revision_ids": higher,
+        "newly_observed_ids": sorted(after.keys() - before.keys()),
+        "missing_unknown_ids": sorted(before.keys() - after.keys()),
+        "replay_consistency_checked": True,
+        "historical_completeness": "unknown",
+        "missing_means_deleted": False,
+        "provider_timestamp_timezone_verified": False,
+        "business_outcome_verified": False,
+        "checkpoint_advanced": False,
+        "not_an_authorization_to_append": True,
+    }

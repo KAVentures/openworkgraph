@@ -471,3 +471,69 @@ def test_finite_private_json_numbers_are_discarded_without_changing_source_proje
     assert "nested_metric" not in json.dumps(staged)
     assert not staged["checkpoint_advanced"]
     assert staged["historical_completeness"] == "unknown"
+
+
+def test_replay_reconciliation_distinguishes_equal_higher_and_missing_unknown():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    selected = scope(sys_ids=(A, B, C))
+    before = page(item(A), item(B, mod="4", updated="2026-10-30 03:11:00"))
+    after = page(item(A, short_description="discard me"),
+                 item(B, mod="5", updated="2026-10-30 03:12:00"),
+                 item(C, updated="2026-10-30 03:13:00"))
+    out = reconcile_replayed_pages(selected, before, after, limit=3)
+    assert out["same_reported_revision_ids"] == [A]
+    assert out["higher_reported_revision_ids"] == [B]
+    assert out["newly_observed_ids"] == [C]
+    assert out["missing_unknown_ids"] == []
+    assert out["source_namespace"] == selected.namespace
+    assert out["replay_consistency_checked"]
+    assert out["historical_completeness"] == "unknown"
+    assert not out["business_outcome_verified"]
+    assert not out["checkpoint_advanced"]
+    assert not out["missing_means_deleted"]
+    assert out["not_an_authorization_to_append"]
+    assert "discard me" not in json.dumps(out)
+
+
+@pytest.mark.parametrize("later", [
+    item(A, mod="2"),
+    item(A, state="6"),
+    item(A, updated="2026-10-30 03:10:01"),
+])
+def test_replay_reconciliation_refuses_backward_or_conflicting_revision(later):
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    with pytest.raises(StagingError, match="revision|Conflicting"):
+        reconcile_replayed_pages(scope(), page(item(A)), page(later))
+
+
+def test_replay_reconciliation_never_equates_omission_with_deletion():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    result = reconcile_replayed_pages(scope(), page(item(A), item(B)), page(item(B)))
+    assert result["missing_unknown_ids"] == [A]
+    assert result["same_reported_revision_ids"] == [B]
+    assert result["newly_observed_ids"] == []
+    assert result["missing_means_deleted"] is False
+    assert result["historical_completeness"] == "unknown"
+
+
+def test_replay_reconciliation_never_joins_distinct_ids_by_equal_time():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    result = reconcile_replayed_pages(scope(), page(item(A)), page(item(B)))
+    assert result["same_reported_revision_ids"] == []
+    assert result["newly_observed_ids"] == [B]
+    assert result["missing_unknown_ids"] == [A]
+
+
+def test_replay_reconciliation_revalidates_both_pages_and_authority():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    for revoked in (scope(consented=False), scope(grant_current=False)):
+        with pytest.raises(StagingError, match="not currently authorized"):
+            reconcile_replayed_pages(revoked, page(item(A)), page(item(A)))
+    for malformed in (page(item(C)), b'{"result":[],"result":[]}',
+                      page(item(A, updated="2026-10-29 00:00:00"))):
+        with pytest.raises(StagingError):
+            reconcile_replayed_pages(scope(), page(item(A)), malformed,
+                                     since="2026-10-30 00:00:00")
+    assert (reconcile_replayed_pages(scope(tenant_scope="another"),
+                                     page(item(A)), page(item(A)))["source_namespace"]
+            != scope().namespace)
