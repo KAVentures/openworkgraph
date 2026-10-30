@@ -44,6 +44,14 @@ though the existing backend still applies its authorization checks.
 - A current, explicitly prepared request still supports the existing
   redacted CSV ZIP and optional detailed chronological evidence. Export
   tickets remain subject to the existing local backend permission checks.
+- While an export ticket is pending, Download is disabled and the modal
+  announces local preparation. Repeated clicks for the same handoff cannot
+  create concurrent tickets. A ticket failure restores the button for an
+  explicit retry only if that period is still current; a period change never
+  re-enables the stale handoff. No background export or automatic retry occurs.
+- A delayed clipboard failure after the selected period changes retains the
+  stale-period warning rather than replacing it with a generic clipboard
+  message. A successful in-flight clipboard write cannot be revoked.
 - No AI, business-system write, automatic upload, source authorization,
   recorder setting, retention rule, or REST/MCP contract changes.
 
@@ -52,9 +60,10 @@ though the existing backend still applies its authorization checks.
 `node --test tests/js/analysis_handoff_scope.test.mjs` uses controlled
 deferred API responses and a minimal DOM model to verify: a superseded modal
 never opens, stale controls disable and announce their status immediately,
-current copy/download
-retains the exact selected scope, a late export ticket cannot trigger a
-download, an old authentication wait cannot start a stale preview read, a forged preview\nwindow cannot open a handoff, UTC-equivalent server bounds remain accepted,\nand impossible custom dates are rejected.
+current copy/download retains the exact selected scope, a late export ticket cannot trigger a
+download, an old authentication wait cannot start a stale preview read, a forged preview window cannot open a handoff, UTC-equivalent server bounds remain accepted,\nimpossible custom dates are rejected, repeated Download clicks issue one
+export ticket, ticket failures allow a deliberate retry, and delayed clipboard
+errors preserve the stale-period warning.
 
 These are deterministic JavaScript contract checks, **not** an actual
 consenting-user UX study, browser accessibility certification, provider
