@@ -81,6 +81,13 @@
               // A displayed stepwise plan must not silently repeat, overlap,
               // reverse or reorder evidence windows. Date-only labels are UTC.
               const since = Date.parse(x.since), until = Date.parse(x.until);
+              // A positive-count chunk must overlap the actual observed span.
+              // The chunk end is exclusive; do not present events before the
+              // first or after the last observed event as supported evidence.
+              if (x.event_rows > 0 &&
+                  (!instant(first) || !instant(last) ||
+                   until <= Date.parse(first) || since > Date.parse(last)))
+                return false;
               return since < until &&
                 (windowStart === null || since >= windowStart) &&
                 (windowEnd === null || until <= windowEnd) &&
