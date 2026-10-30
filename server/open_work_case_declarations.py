@@ -189,6 +189,19 @@ def _stored_dependencies(raw: str, owner_ref: str) -> list[str] | None:
     return dependencies
 
 
+def _stored_fields_valid(row: tuple[Any, ...]) -> bool:
+    """Validate stored fixed-code declarations before exposing owner approval."""
+    ref, scope, goal, outcome, _deps, revision, _created, _updated, _expires, token = row
+    return (
+        isinstance(ref, str) and _REF.fullmatch(ref) is not None and
+        isinstance(scope, str) and _SCOPE.fullmatch(scope) is not None and
+        isinstance(goal, str) and goal in _GOALS and
+        isinstance(outcome, str) and outcome in _EXPECTED and
+        type(revision) is int and 1 <= revision <= _MAX_REVISION and
+        isinstance(token, str) and _EDIT_TOKEN.fullmatch(token) is not None
+    )
+
+
 def _stored_temporal_valid(
     created: str, updated: str, expires: str, *,
     now: datetime, days: int, review: tuple[datetime, datetime],
@@ -220,27 +233,28 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
     # declarations. A malformed row, orphan, or corrupt cycle cannot become
     # an independent approved case or revive its dependent closure on writes.
     rows = db.execute(
-        "SELECT work_item_ref,scope_ref,dependencies_json,created_at,updated_at,expires_at "
+        "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
+        "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
         "FROM declarations"
     ).fetchall()
-    scopes = {ref: scope for ref, scope, _deps, _created, _updated, _expires in rows}
+    scopes = {row[0]: row[1] for row in rows}
     dependencies = {
-        ref: _stored_dependencies(raw, ref)
-        for ref, _scope, raw, _created, _updated, _expires in rows
+        row[0]: _stored_dependencies(row[4], row[0]) for row in rows
     }
     eligible = {
-        ref for ref, _scope, _raw, created, updated, expires in rows
-        if (ref in reviewed and dependencies[ref] is not None and
-            _stored_temporal_valid(created, updated, expires,
-                                   now=now, days=days, review=reviewed[ref]))
+        row[0] for row in rows
+        if (_stored_fields_valid(row) and row[0] in reviewed and
+            dependencies[row[0]] is not None and
+            _stored_temporal_valid(row[6], row[7], row[8],
+                                   now=now, days=days, review=reviewed[row[0]]))
     }
     available: set[str] = set()
     while True:
         newly_available = {
-            ref for ref, scope, _raw, _created, _updated, _expires in rows
-            if ref in eligible and ref not in available and
-            all(dep in available and scopes.get(dep) == scope
-                for dep in dependencies[ref])
+            row[0] for row in rows
+            if row[0] in eligible and row[0] not in available and
+            all(dep in available and scopes.get(dep) == row[1]
+                for dep in dependencies[row[0]])
         }
         if not newly_available:
             break
@@ -490,7 +504,7 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 }
                 eligible = {
                     r[0] for r in candidates
-                    if r[0] in reviewed and
+                    if _stored_fields_valid(r) and r[0] in reviewed and
                     dependencies[r[0]] is not None and
                     _stored_temporal_valid(r[6], r[7], r[8], now=current,
                                            days=days, review=reviewed[r[0]])

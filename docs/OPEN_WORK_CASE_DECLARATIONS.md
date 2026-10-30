@@ -45,3 +45,23 @@ The normal trusted writer already rejects invalid dependency shapes and cycles. 
 Only canonical timezone-aware UTC ISO-8601 timestamps emitted by the trusted writer are valid stored approval clocks. Read-time visibility and transactional write-time pruning independently validate the stored creation, latest revision and expiry timestamps against the current as-of time, admitting human review, and retained-history TTL. A malformed/noncanonical clock, an approval revision before creation or after the as-of time, or a deadline extending beyond the review or retention window cannot become an owner-approved declaration. Its explicitly dependent closure is withheld from reads and erased on the next authorized declaration write; unrelated reviewed cases remain. This prevents a damaged auxiliary row from crashing normal list/prune operations or laundering future/over-retained approval into current authority. It is conservative: malformed rows are not repaired or treated as independent obligations.
 
 Eleven parameterized synthetic corruption regressions cover invalid, future, stale, noncanonical-offset and contradictory timestamps, multi-hop dependency suppression, non-mutating reads and subsequent transactional cleanup. This does **not** establish protection against arbitrary SQLite tampering, trustworthy host clocks, atomic cross-process grant revocation, real provider acceptance or verified customer outcomes. No source reads, routes, new privileges or autonomous actions are added.
+
+
+## Damaged owner-declaration metadata (synthetic fail-closed behavior)
+
+The v2 auxiliary SQLite ledger also validates **stored** opaque work/scope refs,
+fixed owner-declared goal and expected-outcome codes, positive bounded integer
+revisions, and lowercase 128-bit incarnation edit tokens. SQLite's dynamic
+column typing and damaged local rows must not make unsupported codes or
+unusable versions appear to be approved owner declarations. Read-time
+availability withholds invalid rows and their entire dependent closure;
+the next explicitly authorized save transactionally prunes that closure while
+preserving unrelated valid approvals. This does not infer obligations or
+source/customer outcomes, grant authority, or add a new API.
+
+Ten parameterized synthetic corrupt-row regressions cover both codes, invalid
+integer/text revisions, tokens and opaque identities, with A <- B <- C
+transitive suppression, unrelated D survival, and post-prune stale CAS
+refusal. They do not prove resistance to malicious database tampering,
+cross-process source revocation, real provider acceptance, or verified
+business outcomes.

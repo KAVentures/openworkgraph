@@ -916,3 +916,49 @@ def test_corrupt_stored_approval_clock_withholds_dependent_chain_and_prunes(
     with facts._database(create=False) as db:
         assert db.execute("SELECT work_item_ref FROM declarations").fetchall() == [(d,)]
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
+
+
+@pytest.mark.parametrize(("column", "bad_value"), [
+    ("goal_code", "claim_customer_paid"),
+    ("expected_outcome_code", "customer_outcome_verified"),
+    ("revision", 0),
+    ("revision", -1),
+    ("revision", 2_147_483_648),
+    ("revision", "1.5"),
+    ("edit_token", ""),
+    ("edit_token", "A" * 32),
+    ("scope_ref", "owg:scope:invalid"),
+    ("work_item_ref", "owg:w:invalid"),
+])
+def test_corrupt_stored_owner_metadata_suppresses_and_prunes_dependents(
+    local, column, bad_value,
+):
+    # Synthetic auxiliary-ledger corruption must never launder unsupported
+    # owner codes, versions, edit tokens or opaque identities into approval.
+    d = "owg:w:" + "d" * 32
+    e = "owg:w:" + "e" * 32
+    for ref in (A, B, C, d, e):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute(
+            f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+            (bad_value, A),
+        )
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    fresh = save(e)  # Prunes A and its transitive dependent closure.
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {row["work_item_ref"] for row in remaining} == {d, e}
+    assert independent in remaining and fresh in remaining
+    with facts._database(create=False) as db:
+        assert db is not None
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"],
+             expected_edit_token=old_b["edit_token"],
+             depends_on_work_item_refs=[A])
