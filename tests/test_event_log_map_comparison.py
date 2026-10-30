@@ -58,6 +58,10 @@ def test_frequency_and_time_differences_per_path():
     assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
     assert (gap["sampled_median_gap_seconds_first"], gap["sampled_median_gap_seconds_second"]) == (3600, 10800)
     assert gap["seconds"] == gap["sampled_median_gap_seconds_second"] - gap["sampled_median_gap_seconds_first"]
+    assert ab["median_gap_interval_status"] == "estimated"
+    assert new["median_gap_interval_status"] == "insufficient_support"
+    assert result["timed_paths_eligible"] == result["timed_paths_evaluated"]
+    assert result["timed_paths_omitted_rank_limit"] == 0
     assert result["paths_only_in_second"] == 2 and result["paths_only_in_first"] == 0
 
 
@@ -116,6 +120,44 @@ def test_timed_gap_cap_uses_literal_path_tiebreak_for_equal_support():
         timed = {(p["from"], p["to"]) for p in result["paths"] if "median_gap_difference" in p}
         assert timed == expected
         assert ("A", "B25") not in timed
+        assert result["timed_paths_eligible"] == 26
+        assert result["timed_paths_evaluated"] == compare.TIMED_PATHS
+        assert result["timed_paths_omitted_rank_limit"] == 1
+        assert all(p["median_gap_interval_status"] == "estimated"
+                   for p in result["paths"] if (p["from"], p["to"]) in timed)
+        assert _paths(result)[("A", "B25")]["median_gap_interval_status"] == "rank_limit"
+        assert "median_gap_difference" not in _paths(result)[("A", "B25")]
+
+        # The aggregate denominators describe the full map, even if the
+        # caller asks to display only one ranked path.
+        limited = compare.compare_maps(make_log(reverse), [JANUARY, FEBRUARY], limit=1)
+        assert len(limited["paths"]) == 1 and limited["paths_total"] == 26
+        assert (limited["timed_paths_eligible"], limited["timed_paths_evaluated"],
+                limited["timed_paths_omitted_rank_limit"]) == (26, 25, 1)
+
+
+def test_one_transition_does_not_claim_a_bootstrap_interval():
+    """A path observed once on one side is not a rank-limit omission."""
+    rows = ["case,activity,time"]
+    for case_id, day, target in (
+        ("jan-1", 0, "B"), ("jan-2", 1, "C"),
+        ("feb-1", 31, "B"), ("feb-2", 32, "B"),
+    ):
+        start = START + timedelta(days=day)
+        rows.append(f"{case_id},A,{start.isoformat()}")
+        rows.append(f"{case_id},{target},{(start + timedelta(minutes=2)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()), name="one-transition",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = compare.compare_maps(log, [JANUARY, FEBRUARY])
+    ab = _paths(result)[("A", "B")]
+    assert (ab["transitions_in_first"], ab["transitions_in_second"]) == (1, 2)
+    assert ab["median_gap_interval_status"] == "insufficient_support"
+    assert "median_gap_difference" not in ab
+    assert (result["timed_paths_eligible"], result["timed_paths_evaluated"],
+            result["timed_paths_omitted_rank_limit"]) == (0, 0, 0)
 
 
 def test_side_by_side_maps_and_overlap_warning():
