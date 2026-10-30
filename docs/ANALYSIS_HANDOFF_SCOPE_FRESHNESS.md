@@ -21,6 +21,15 @@ though the existing backend still applies its authorization checks.
   An earlier preparation superseded by a period change or another preparation
   cannot open a modal, overwrite the current summary, or start a stale read
   after a delayed authentication wait.
+- The authenticated preview must echo the requested scope and, for a date
+  range, the same UTC start/end instants. The server serializes UTC bounds as
+  `+00:00` while the browser sends `Z`; these are compared as instants, not
+  byte strings. A mismatched/missing window fails closed before a modal or
+  export. This guards response mix-ups; it does **not** authenticate an
+  untrusted server or prove that the returned event counts are complete.
+- Custom date inputs must be real calendar days. JavaScript's automatic
+  normalization of impossible dates (for example February 30) must not
+  silently change the evidence period.
 - The modal shows the exact scope returned by the selected preview. Its copy
   and download controls are valid only while that generation remains current.
   Changing the period immediately disables both controls and announces the
@@ -45,7 +54,7 @@ deferred API responses and a minimal DOM model to verify: a superseded modal
 never opens, stale controls disable and announce their status immediately,
 current copy/download
 retains the exact selected scope, a late export ticket cannot trigger a
-download, and an old authentication wait cannot start a stale preview read.
+download, an old authentication wait cannot start a stale preview read, a forged preview\nwindow cannot open a handoff, UTC-equivalent server bounds remain accepted,\nand impossible custom dates are rejected.
 
 These are deterministic JavaScript contract checks, **not** an actual
 consenting-user UX study, browser accessibility certification, provider
