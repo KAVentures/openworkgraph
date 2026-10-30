@@ -102,7 +102,7 @@ def test_timed_gap_cap_uses_literal_path_tiebreak_for_equal_support():
             rows.append(f"{case},A,{start.isoformat()}")
             rows.append(f"{case},B{index:02d},{(start + timedelta(hours=1)).isoformat()}")
         return workspace.import_log(
-            BytesIO(("\\n".join(rows) + "\\n").encode()),
+            BytesIO(("\n".join(rows) + "\n").encode()),
             name="tied-paths", source_format="csv",
             mapping={"case_column": "case", "activity_column": "activity",
                      "timestamp_column": "time"})["log_id"]
