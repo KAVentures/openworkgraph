@@ -27,7 +27,7 @@ const dayLabel = delta => {
 };
 function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
-  let downloads = 0, modals = 0;
+  let downloads = 0, modals = 0, modalHtml = '';
   const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
     '#analysisDetailed', '#analysisActionStatus'].map(key => [key, {textContent: '', checked: false}]));
   function element(tag) {
@@ -68,7 +68,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
     location: {origin: 'http://localhost:8765'},
     __owgAuthReady: auth,
     toast(message) {toasts.push(message);},
-    openModal() {modals++;}
+    openModal(_title, _subtitle, html) {modals++; modalHtml = html;}
   };
   const fetch = (url, options = {}) => {
     const item = {...deferred(), url: String(url), options};
@@ -120,6 +120,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   });
   return {reads, tickets, copied, toasts, modal, bars, summary, window,
     get modals() {return modals;}, get downloads() {return downloads;},
+    get modalHtml() {return modalHtml;},
     reply, preview};
 }
 
@@ -1264,5 +1265,79 @@ test('handoff refuses unsupported completeness and contradictory omission claims
       assert.match(h.summary.textContent, /incomplete or malformed/i);
       assert.equal(h.toasts.length, 1);
     }
+  });
+});
+
+
+test('selected-range AI history grant shows exact bounds, expiry and export distinction', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'selected-grant'),
+    local_ai_enabled: true,
+    local_ai_history_access: {mode: 'selected_range',
+      since: '2026-10-20T00:00:00Z', until: '2026-10-25T00:00:00+00:00',
+      expires_at: '2026-10-31T00:00:00Z'}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Local saved-history grant: 2026-10-20T00:00:00\.000Z to 2026-10-25T00:00:00\.000Z/);
+  assert.match(h.modalHtml, /end exclusive; snapshot only, may not cover this selected work period/);
+  assert.match(h.modalHtml, /Grant expiry: 2026-10-31T00:00:00\.000Z/);
+  assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+  assert.match(h.modalHtml, /Name redaction is best effort, not anonymization/);
+  assert.match(h.modalHtml, /detailed chronology adds raw local evidence/);
+  h.modal['#analysisDetailed'].checked = true;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  h.reply(h.tickets[0], {});
+  await downloading;
+  assert.equal(h.downloads, 1);
+});
+
+test('AI grant disclosure fails conservatively for malformed or unrecognized lease metadata', async t => {
+  const cases = [
+    ['invalid selected start', true, {mode:'selected_range',
+      since:'2026-02-30T00:00:00Z', until:'2026-03-10T00:00:00Z'}],
+    ['reversed selected bounds', true, {mode:'selected_range',
+      since:'2026-10-25T00:00:00Z', until:'2026-10-20T00:00:00Z'}],
+    ['invalid expiry', true, {mode:'all_saved', expires_at:'not-a-date'}],
+    ['unrecognized grant', true, {mode:'<img src=x onerror=alert(1)>'}],
+    ['non-boolean enabled flag', 'false', {mode:'all_saved'}],
+    ['missing grant', true, undefined]
+  ];
+  for(const [name, enabled, access] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'unknown'),
+      local_ai_enabled: enabled, local_ai_history_access: access});
+    await open;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /permission could not be verified from this preview/);
+    assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    assert.doesNotMatch(h.modalHtml, /<img src=x onerror/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-unknown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('off and all-saved AI modes remain distinguishable from local file exports', async t => {
+  for(const [name, enabled, access, expected] of [
+    ['disabled AI', false, {mode:'all_saved'}, /Local AI access is off/],
+    ['saved access off', true, {mode:'off'}, /saved-history access is off/],
+    ['all saved', true, {mode:'all_saved'}, /all saved work \(snapshot only/]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'mode'),
+      local_ai_enabled: enabled, local_ai_history_access: access}); await open;
+    assert.match(h.modalHtml, expected);
+    assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+    assert.equal(h.modals, 1);
   });
 });
