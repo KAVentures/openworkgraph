@@ -121,3 +121,20 @@ its explanatory request but does not offer a package download.
 
 Synthetic regression cases cover malformed counts/maps, missing
 request/examples, invalid chunk shapes and empty-evidence compatibility.
+
+## Observed time and date-chunk integrity
+
+A nonzero recorded-event preview requires valid ISO-8601 first/last observed
+instants in chronological order. Zero-event previews may omit both; supplied
+pairs must still be valid and ordered. Impossible calendar dates and locale
+strings fail closed instead of displaying `Invalid Date` or reversed ranges.
+UTC-equivalent offsets remain supported.
+
+Optional date-chunk planning may be absent. Supplied chunks must have valid
+ISO date or timestamp labels (`since`, `until`) and safe nonnegative integer
+`event_rows`; the optional `more_dates_not_listed` indicator must be a
+boolean. Invalid chunk coverage cannot render as `undefined` or enable
+Copy/Download. These are presentation-shape checks, not completeness,
+source-verification, live customer acceptance or business outcome claims.
+Synthetic regressions cover malformed/absent/reversed times, impossible
+dates, malformed chunk counts and valid offset/zero-evidence compatibility.

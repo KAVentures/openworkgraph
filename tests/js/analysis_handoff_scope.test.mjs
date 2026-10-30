@@ -648,3 +648,66 @@ test('valid empty evidence and absent optional plan retain safe copy-only handof
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-empty']);
 });
+
+test('nonzero observed evidence requires real chronological ISO timestamps', async t => {
+  const mutations = [
+    ['missing first', d => ({...d, first_observed_at: null})],
+    ['missing pair', d => ({...d, first_observed_at: null, last_observed_at: null})],
+    ['invalid timestamp', d => ({...d, first_observed_at: 'not-a-date'})],
+    ['impossible day', d => ({...d, first_observed_at: '2026-02-30T10:00:00Z'})],
+    ['reversed', d => ({...d, last_observed_at: '2026-10-29T09:00:00Z'})],
+    ['locale timestamp', d => ({...d, last_observed_at: '10/29/2026'})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('date chunks require valid labels and safe integer event counts', async t => {
+  const chunk = {since: '2026-10-29', until: '2026-10-30', event_rows: 2};
+  const mutations = [
+    ['missing since', x => ({...x, since: undefined})],
+    ['impossible day', x => ({...x, since: '2026-02-30'})],
+    ['invalid until', x => ({...x, until: 'nonsense'})],
+    ['missing count', x => ({...x, event_rows: undefined})],
+    ['string count', x => ({...x, event_rows: '2'})],
+    ['negative count', x => ({...x, event_rows: -1})],
+    ['unsafe count', x => ({...x, event_rows: Number.MAX_SAFE_INTEGER + 1})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'bad'),
+      analysis_plan: {date_chunks: [mutate(chunk)]}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid offset observations and date-only chunks preserve safe copy', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'valid'),
+    first_observed_at: '2026-10-29T12:00:00+02:00',
+    last_observed_at: '2026-10-29T10:01:00Z',
+    analysis_plan: {date_chunks: [
+      {since: '2026-10-29', until: '2026-10-30', event_rows: 2}],
+      more_dates_not_listed: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-valid']);
+  assert.equal(h.tickets.length, 0);
+});

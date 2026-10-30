@@ -29,15 +29,40 @@
     const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
     const count = v => Number.isSafeInteger(v) && v >= 0;
     const counts = v => object(v) && Object.values(v).every(count);
+    // Reject invalid/reversed observed times rather than display "Invalid Date".
+    // Date.parse may normalize impossible calendar days, so verify the day.
+    const calendarDay = value => {
+      if (typeof value !== 'string') return false;
+      const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+      if (!parts) return false;
+      const year = +parts[1], month = +parts[2], day = +parts[3];
+      const check = new Date(0);
+      check.setUTCFullYear(year, month - 1, day);
+      return check.getUTCFullYear() === year &&
+        check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
+    };
+    const instant = value => typeof value === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+      calendarDay(value) && Number.isFinite(Date.parse(value));
+    const dateLabel = value => typeof value === 'string' &&
+      (/^\d{4}-\d{2}-\d{2}$/.test(value) || instant(value)) &&
+      calendarDay(value) && Number.isFinite(Date.parse(value));
+    const first = d?.first_observed_at, last = d?.last_observed_at;
+    const observed = (d?.canonical_rows === 0 && first == null && last == null) ||
+      (instant(first) && instant(last) && Date.parse(first) <= Date.parse(last));
     const chunks = d?.analysis_plan == null ||
-      (object(d.analysis_plan) && (d.analysis_plan.date_chunks == null ||
-        (Array.isArray(d.analysis_plan.date_chunks) &&
-          d.analysis_plan.date_chunks.every(object))));
+      (object(d.analysis_plan) &&
+        (d.analysis_plan.more_dates_not_listed == null ||
+          typeof d.analysis_plan.more_dates_not_listed === 'boolean') &&
+        (d.analysis_plan.date_chunks == null ||
+          (Array.isArray(d.analysis_plan.date_chunks) &&
+            d.analysis_plan.date_chunks.every(x => object(x) &&
+              dateLabel(x.since) && dateLabel(x.until) && count(x.event_rows)))));
     if (!object(d) || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
-        !chunks) {
+        !observed || !chunks) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
