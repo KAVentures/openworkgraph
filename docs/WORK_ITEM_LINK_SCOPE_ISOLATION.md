@@ -58,3 +58,24 @@ Synthetic tests are not real-user, real-provider, or customer-pilot validation.
 Any change in linked-item recall should be measured on the existing
 preregistered family split, without changing answer-key truth or tuning to
 holdout failures.
+
+## Invalid or contradictory record claims
+
+A valid-shaped opaque record reference can still be contradictory: one observed
+row may claim Jira while another claims GitHub, or may disagree on record kind,
+host or organization. Existing exact-record grouping correctly suppresses the
+entire conflicting reference. The linker must **not** then interpret those
+suppressed rows as ordinary unreferenced observations and attach them by a
+shared clipboard-transfer ID, tab ID, or same-app adjacency.
+
+Rows carrying a conflicting reference, or an explicitly malformed reference
+object, are now ineligible for **all** ephemeral joins and weak candidates.
+Their raw reference and scope values remain private. Other independent valid
+references still link, and genuinely unreferenced rows can still attach to a
+single valid record in the same scoped tab. This is a fail-closed observation
+integrity rule, not proof that the underlying source identity is authentic.
+
+The synthetic regressions include contradictory provider claims, malformed
+provider/ref claims, transfer and tab reuse, a weak surface candidate, and
+unaffected same-record/tab positive behavior. No held-out ground truth,
+preregistered split, thresholds, scoring code or provider credentials change.
