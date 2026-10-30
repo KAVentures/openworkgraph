@@ -173,6 +173,31 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   assert.equal(namedReads.selectedStatus,200);assert.equal(namedReads.postStatus,200);assert.equal(namedReads.etag,namedReads.fullEtag);
   assert.deepEqual(namedReads.selected,{schemas:[userSchema],id:uid,name:{givenName:'Jane',familyName:'雪'}});
   assert.deepEqual(namedReads.post.Resources,[namedReads.selected]);
+  const contactReads=await page.evaluate(async ({source,token,uid})=>{
+   const headers={Authorization:'Bearer '+token,'Content-Type':'application/scim+json'},url=source+'/Users/'+encodeURIComponent(uid);
+   const original=await fetch(url,{headers}),before=await original.json();
+   const patch=(etag,Operations)=>fetch(url,{method:'PATCH',headers:{...headers,'If-Match':etag},body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations})});
+   const first=await patch(original.headers.get('etag'),[{op:'replace',path:'emails',value:[{value:'Home@Example.test',type:'home'},{value:'Work@Example.test',type:'work',primary:true}]}]);
+   const firstValue=await first.json(),literal='CuStOm "quoted" \\ Label';
+   const added=await patch(first.headers.get('etag'),[{op:'add',path:'EMAILS[type eq '+JSON.stringify(literal)+'].VALUE',value:'Z@Example.test'},
+    {op:'replace',path:'emails[value eq "z@example.test"].primary',value:true}]);
+   const value=await added.json();
+   const stale=await patch(first.headers.get('etag'),[{op:'remove',path:'emails'}]);
+   const invalid=await patch(added.headers.get('etag'),[{op:'replace',path:'active',value:true},{op:'replace',path:'emails[type co "work"].value',value:'no@example.test'}]);
+   const after=await fetch(url,{headers});
+   const selected=await fetch(url+'?attributes=emails.value,emails.primary',{headers});
+   const post=await fetch(source+'/Users/.search',{method:'POST',headers,body:JSON.stringify({schemas:['urn:ietf:params:scim:api:messages:2.0:SearchRequest'],filter:'userName eq "operator@acme.test"',attributes:['emails.value','emails.primary']})});
+   return {before,firstStatus:first.status,first:firstValue,addedStatus:added.status,value,literal,staleStatus:stale.status,invalidStatus:invalid.status,after:await after.json(),
+    selectedStatus:selected.status,selected:await selected.json(),postStatus:post.status,post:await post.json(),etag:selected.headers.get('etag'),fullEtag:added.headers.get('etag')};
+  },{source,token,uid});
+  assert.equal(contactReads.firstStatus,200);assert.equal(contactReads.addedStatus,200);assert.equal(contactReads.staleStatus,412);assert.equal(contactReads.invalidStatus,400);
+  assert.deepEqual(contactReads.after,contactReads.value,'invalid later selector rolls back rehire');
+  for(const key of ['id','userName','displayName','active','name'])assert.deepEqual(contactReads.value[key],contactReads.before[key],'contact metadata preserves '+key);
+  assert.equal(contactReads.value.emails.find(x=>x.value==='Z@Example.test').type,contactReads.literal);
+  assert.deepEqual(contactReads.value.emails.filter(x=>x.primary).map(x=>x.value),['Z@Example.test']);
+  assert.equal(contactReads.selectedStatus,200);assert.equal(contactReads.postStatus,200);assert.equal(contactReads.etag,contactReads.fullEtag);
+  assert.deepEqual(contactReads.selected,{schemas:[userSchema],id:uid,emails:[{value:'Home@Example.test',primary:false},{value:'Work@Example.test',primary:false},{value:'Z@Example.test',primary:true}]});
+  assert.deepEqual(contactReads.post.Resources,[contactReads.selected]);
   const unknownRef=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'POST',path:'/Groups',bulkId:'refused',data:{schemas:['urn:ietf:params:scim:schemas:core:2.0:Group'],displayName:'Not created',members:[{value:'bulkId:created'}]}}]},token);
   assert.equal((await unknownRef.json()).Operations[0].status,'400');
   assert.equal((await(await request('GET',source+'/Groups',undefined,token)).json()).totalResults,1);
@@ -181,7 +206,7 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const blind=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,data:patch}]},token);
   assert.equal((await blind.json()).Operations[0].status,'428');
   const staleRehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:bulk[2].version,data:patch}]},token);
-  assert.equal((await staleRehire.json()).Operations[0].status,'412','name changes invalidate earlier Bulk versions');
+  assert.equal((await staleRehire.json()).Operations[0].status,'412','profile metadata changes invalidate earlier Bulk versions');
   const rehire=await request('POST',source+'/Bulk',{schemas:[schema],Operations:[{method:'PATCH',path:'/Users/'+uid,version:offboarded.meta.version,data:patch}]},token);
   assert.equal((await rehire.json()).Operations[0].status,'200');
   await identity();
@@ -228,7 +253,7 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   const roster=await request('GET','/v1/admin/people/acme');const people=(await roster.json()).employees;assert.deepEqual(people.map(p=>p.actor_id).sort(),['manual@acme.test','operator@acme.test','policy@acme.test','zbulk@acme.test']);
   assert.equal((await request('POST',source+'/Bulk',{schemas:[schema],Operations:[newUser('revoked','refused@acme.test')]},token)).status,401);
   assert.deepEqual(errors,[]);
-  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, explicit employee assignment with held-preview/stale-roster refusal and preserved identity/manual teams, reviewed provider client policy with cancelled/stale preview refusal and current delta/no-op/strict-supplied-version/Bulk checks, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
+  console.log('SCIM browser passed: disabled creation, one-view credential without persistence, explicit enablement, explicit employee assignment with held-preview/stale-roster refusal and preserved identity/manual teams, reviewed provider client policy with cancelled/stale preview refusal and current delta/no-op/strict-supplied-version/Bulk checks, real Users create/deactivate/rehire, mixed Users/Groups bulk with typed request-local member references, Chromium GET/POST selected search equivalence and minimized complex member fields, partial core names, contact arrays with literal selectors and primary demotion, stale versions and invalid-later-op rollback, partial commits/failOnErrors/version refusal, roster, escaped labels, WCAG/mobile, stale401/held-credential/new-session guards and permanent credential revocation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

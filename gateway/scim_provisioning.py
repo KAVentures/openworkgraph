@@ -62,6 +62,8 @@ def init_schema(db):
                 conn.execute(statement)
         from .scim_user_names import SCHEMA as USER_NAMES_SCHEMA
         conn.execute(USER_NAMES_SCHEMA)
+        from .scim_user_emails import SCHEMA as USER_EMAILS_SCHEMA
+        conn.execute(USER_EMAILS_SCHEMA)
 
 
 def _text(value, maximum, *, blank=False):
@@ -98,18 +100,21 @@ def _keys(body, allowed):
 
 
 def _attributes(body):
-    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta', 'groups', 'name'})
+    values = _keys(body, {'username', 'displayname', 'externalid', 'active', 'schemas', 'id', 'meta', 'groups', 'name', 'emails'})
     if values.get('schemas') != [CORE]:
         raise Error(400, 'Only the core User schema is supported', 'invalidSyntax')
     # SCIM readOnly fields echoed by a client are ignored; endpoint identity is
     # authoritative. The readOnly groups projection is ignored as well;
-    # password, email aliases and extensions are refused.
+    # password and extensions are refused. Contact emails carry no identity authority.
     return _validate_values({k: v for k, v in values.items() if k not in {'schemas', 'id', 'meta', 'groups'}})
 
 
 def _validate_values(values):
     for key, value in values.items():
-        if key == 'name':
+        if key == 'emails':
+            from .scim_user_emails import normalize
+            values[key] = normalize(value)
+        elif key == 'name':
             from .scim_user_names import normalize
             values[key] = normalize(value)
         elif key == 'active':
@@ -130,9 +135,10 @@ def _validate_values(values):
 _SELECT = '''SELECT e.*, l.external_id AS provider_external_id,
  l.revision AS resource_revision, l.created_at AS provisioned_at,
  l.updated_at AS provision_updated_at, l.deleted_at AS provision_deleted_at,
- n.name_json AS provider_name_json
+ n.name_json AS provider_name_json, c.emails_json AS provider_emails_json
  FROM gateway_scim_users l JOIN gateway_employees e ON e.employee_id=l.employee_id
- LEFT JOIN gateway_scim_user_names n ON n.provider_id=l.provider_id AND n.employee_id=l.employee_id'''
+ LEFT JOIN gateway_scim_user_names n ON n.provider_id=l.provider_id AND n.employee_id=l.employee_id
+ LEFT JOIN gateway_scim_user_emails c ON c.provider_id=l.provider_id AND c.employee_id=l.employee_id'''
 
 
 def _project(row):
@@ -144,6 +150,10 @@ def _project(row):
     name = stored(row.get('provider_name_json'))
     if name:
         resource['name'] = name
+    from .scim_user_emails import stored as stored_emails
+    emails = stored_emails(row.get('provider_emails_json'))
+    if emails:
+        resource['emails'] = emails
     basis = [resource, row['updated_at'], row['resource_revision'], row['provision_deleted_at']]
     digest = hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     dates = [row['updated_at'], row['provision_updated_at']]
@@ -307,6 +317,9 @@ class Provisioning:
             from .scim_user_names import save as save_name
             if values.get('name'):
                 save_name(self.db, conn, provider_id, uid, values['name'])
+            from .scim_user_emails import save as save_emails
+            if values.get('emails'):
+                save_emails(self.db, conn, provider_id, uid, values['emails'])
             if values.get('active') is False:
                 roster.offboard_employee_in_transaction(self.db, conn, org, uid)
             self.audit(conn, org, provider_id, 'scim.user.created', {'employee_id': uid, 'active': values.get('active', True)})
@@ -320,8 +333,9 @@ class Provisioning:
         active = values.get('active', current['active'])
         external = values.get('externalid', current.get('externalId'))
         structured_name = values.get('name', current.get('name', {}))
+        emails = values.get('emails', current.get('emails', []))
         roster_changed = (name, active, external) != (current['displayName'], current['active'], current.get('externalId'))
-        if not roster_changed and structured_name == current.get('name', {}):
+        if not roster_changed and structured_name == current.get('name', {}) and emails == current.get('emails', []):
             return current
         uid, now = row['employee_id'], roster._now()
         if current['active'] and not active:
@@ -335,6 +349,9 @@ class Provisioning:
         from .scim_user_names import save as save_name
         if structured_name != current.get('name', {}):
             save_name(self.db, conn, provider['provider_id'], uid, structured_name)
+        from .scim_user_emails import save as save_emails
+        if emails != current.get('emails', []):
+            save_emails(self.db, conn, provider['provider_id'], uid, emails)
         self.db._execute(conn, '''UPDATE gateway_scim_users SET external_id=?,revision=revision+1,
             updated_at=? WHERE provider_id=? AND employee_id=?''', (external, now, provider['provider_id'], uid))
         self.audit(conn, provider['organization_id'], provider['provider_id'], 'scim.user.updated',
@@ -348,6 +365,7 @@ class Provisioning:
         values.setdefault('displayname', '')
         values.setdefault('externalid', None)
         values.setdefault('name', {})
+        values.setdefault('emails', [])
         # Omitted active preserves status: replacement is never implicit rehire.
         with self.transaction() as conn:
             provider = self.provider(conn, provider_id, token=token)
@@ -371,7 +389,7 @@ class Provisioning:
             current = self.user_projection(conn, provider, row)
             values = {'username': current['userName'], 'displayname': current['displayName'],
                       'active': current['active'], 'externalid': current.get('externalId'),
-                      'name': current.get('name', {})}
+                      'name': current.get('name', {}), 'emails': current.get('emails', [])}
             for operation in operations:
                 op = _keys(operation, {'op', 'path', 'value'})
                 verb = op.get('op', '')
@@ -380,7 +398,14 @@ class Provisioning:
                     raise Error(400, 'Unsupported patch operation', 'invalidSyntax')
                 if not isinstance(path, str):
                     raise Error(400, 'Invalid patch path', 'invalidPath')
-                path, verb = path.lower(), verb.lower()
+                verb = verb.lower()
+                from .scim_user_emails import owns as email_path, patch as patch_emails
+                if email_path(path):
+                    if verb != 'remove' and 'value' not in op:
+                        raise Error(400, 'A patch value is required', 'invalidSyntax')
+                    values['emails'] = patch_emails(values['emails'], path, verb, op.get('value'))
+                    continue
+                path = path.lower()
                 from .scim_user_names import patch as patch_name
                 if path == 'name' or path.startswith('name.'):
                     if verb != 'remove' and 'value' not in op:
@@ -404,6 +429,8 @@ class Provisioning:
                         changed = _keys(op['value'], set(values))
                     if 'name' in changed:
                         changed['name'] = patch_name(values['name'], 'name', verb, changed['name'])
+                    if 'emails' in changed:
+                        changed['emails'] = patch_emails(values['emails'], 'emails', verb, changed['emails'])
                     values.update(_validate_values(changed))
             result = self.mutate(conn, provider, row, values)
             if unversioned:

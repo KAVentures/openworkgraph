@@ -280,4 +280,4 @@ def test_unversioned_policy_remains_route_specific_and_names_do_not_broaden_attr
         'Operations': [{'method': 'PATCH', 'path': '/Users/' + response.json()['id'], 'data': body}]})
     assert result.json()['Operations'][0]['status'] == '428'
     current = client.get(response.headers['location'], headers=h)
-    assert update(http, current, {'op': 'replace', 'value': {'emails': []}}).status_code == 400
+    assert update(http, current, {'op': 'replace', 'value': {'phoneNumbers': []}}).status_code == 400

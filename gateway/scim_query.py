@@ -18,7 +18,8 @@ _COMMON = {'schemas': None, 'id': None, 'externalid': None,
            'meta': {'resourcetype', 'created', 'lastmodified', 'version', 'location'}}
 _FIELDS = {
     scim.CORE: {**_COMMON, 'username': None, 'displayname': None, 'active': None,
-                'groups': {'value', 'display', 'type'}, 'name': {key.lower() for key in NAME_FIELDS}},
+                'groups': {'value', 'display', 'type'}, 'name': {key.lower() for key in NAME_FIELDS},
+                'emails': {'value', 'type', 'display', 'primary'}},
     GROUP: {**_COMMON, 'displayname': None, 'members': {'value', 'type'}},
 }
 

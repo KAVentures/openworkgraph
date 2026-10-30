@@ -21,7 +21,7 @@ nothing. A quoted value containing `and`, escaped quotes, or SQL-looking text
 stays one literal value. Every clause must parse before any query runs; a bad
 later clause is never silently discarded. Count and page queries use exactly
 the same conjunction and provider/tenant/deletion scope. This does not add
-new matching fields, email attributes or name matching, group-name uniqueness or a complete
+new matching fields, email matching or name matching, group-name uniqueness or a complete
 IdP mapping contract. The Microsoft [matching-query guide](https://learn.microsoft.com/en-us/entra/identity/app-provisioning/use-scim-to-provision-users-and-groups#retrieving-resources)
 is a public request-shape reference; real customer IdP acceptance remains open.
 
@@ -32,7 +32,7 @@ Supported paths:
 | Resource | Top-level attributes | Supported subattributes |
 | --- | --- | --- |
 | Both | schemas, id, externalId, displayName, meta | meta.resourceType, meta.created, meta.lastModified, meta.version, meta.location |
-| User | userName, active, groups, name | groups.value, groups.display, groups.type; name.formatted, name.familyName, name.givenName, name.middleName, name.honorificPrefix, name.honorificSuffix |
+| User | userName, active, groups, name, emails | groups.value, groups.display, groups.type; name.formatted, name.familyName, name.givenName, name.middleName, name.honorificPrefix, name.honorificSuffix; emails.value, emails.type, emails.display, emails.primary |
 | Group | members | members.value, members.type |
 
 `schemas` and `id` are always returned even when excluded or not selected. Selecting a complex parent returns all its supported children. Otherwise subattribute selection/exclusion applies independently to each existing member/group without merging or reordering entries. An absent optional field is not invented. Excluding all children may leave empty array objects; that is field minimization, not proof the membership is absent. Excluding an entire complex parent removes it. List envelope fields are unaffected.

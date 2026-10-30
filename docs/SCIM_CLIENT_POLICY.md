@@ -5,7 +5,7 @@ administrator can explicitly allow a missing `If-Match` **only on standalone
 `PATCH /scim/v2/{provider_id}/Users/{id}`**. The public Okta SCIM2.0 guide shows
 an unversioned pathless deactivation request; this option supports that bounded
 request shape. It does not certify a complete Okta/Entra integration or accept
-unsupported email/extension attributes. Optional [core names](SCIM_USER_NAMES.md) have their own bounded contract.
+unsupported attributes/extensions. Optional [core names](SCIM_USER_NAMES.md) and [contact emails](SCIM_USER_EMAILS.md) have their own bounded contracts.
 
 In **Identity → Identity provisioning → Client update policy**, review the current
 policy and approve the overwrite behavior before enabling compatibility. Use

@@ -85,10 +85,14 @@ def _schema():
     name = attribute('name', 'complex')
     name['description'] = 'Optional provider-owned name; never changes roster email, actor, displayName or SSO identity.'
     name['subAttributes'] = [attribute(key) for key in NAME_FIELDS]
+    emails = attribute('emails', 'complex', multi=True)
+    emails['description'] = 'Up to sixteen unverified provider contacts; never login, roster email, SSO or invitation authority.'
+    emails['subAttributes'] = [attribute('value', required=True), attribute('type'),
+                               attribute('display'), attribute('primary', 'boolean')]
     return {'schemas': [SCHEMA_URI], 'id': scim.CORE, 'name': 'User',
             'description': 'OWG bounded User projection; userName is a stable work-email actor. Groups are read-only provider metadata, not access grants.',
             'attributes': [attribute('userName', required=True, mutable='immutable', unique='server'),
-                           attribute('displayName'), attribute('active', 'boolean'), name, groups]}
+                           attribute('displayName'), attribute('active', 'boolean'), name, emails, groups]}
 
 
 class ProvisioningRoute(APIRoute):
