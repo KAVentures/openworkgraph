@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import pytest
 
 import pytest
 
@@ -22,6 +21,19 @@ def _reset_local_store(monkeypatch, tmp_path: Path):
     server_db.init_db()
     store.init_agent_session_store()
     return server_db, store, sensor
+
+
+def _recent_session_times() -> tuple[str, str, str]:
+    """Fresh, stable timestamps for multi-scan tests; never depend on wall-date fixtures.
+
+    Capture one clock reading per test and keep all messages comfortably within
+    the production 30-day retention window, even on slow CI runners.
+    """
+    base = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0)
+    return tuple(
+        (base + timedelta(seconds=offset)).isoformat().replace("+00:00", "Z")
+        for offset in (0, 1, 2)
+    )
 
 
 def test_policy_is_explicit_default_off_and_capture_implies_native_sensor(monkeypatch, tmp_path):
@@ -485,6 +497,50 @@ def test_gateway_agent_session_messages_obey_organization_retention(tmp_path):
 
 
 
+def test_local_visible_message_retention_exact_cutoff_is_idempotent(monkeypatch, tmp_path):
+    """Retention deletes strictly older messages, not at-cutoff or newer ones."""
+    _db, store, _sensor = _reset_local_store(monkeypatch, tmp_path)
+    real_datetime = datetime
+
+    class FixedUtcClock:
+        @classmethod
+        def now(cls, tz):
+            assert tz == timezone.utc
+            return real_datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Only freeze the store's clock; never patch global datetime or production
+    # retention duration. This tests the real cleanup SQL deterministically.
+    monkeypatch.setattr(store, "datetime", FixedUtcClock)
+    store.write_agent_session_policy({
+        "capture_visible_messages": True,
+        "message_retention_days": 30,
+    })
+    session = "as:" + "9" * 20
+    store.upsert_session(
+        session_ref_value=session, source="claude_code", client_id="claude_code",
+        started_at="2026-09-30T11:59:59Z", updated_at="2026-09-30T12:00:01Z",
+        message_capture_enabled=True,
+    )
+    rows = [
+        {"role": "user", "content": "before cutoff", "observed_at": "2026-09-30T11:59:59Z",
+         "ordinal": 1, "native_fingerprint": "retention-1"},
+        {"role": "assistant", "content": "at cutoff", "observed_at": "2026-09-30T12:00:00Z",
+         "ordinal": 2, "native_fingerprint": "retention-2"},
+        {"role": "assistant", "content": "after cutoff", "observed_at": "2026-09-30T12:00:01Z",
+         "ordinal": 3, "native_fingerprint": "retention-3"},
+    ]
+    assert store.insert_visible_messages(session, rows) == 3
+    assert store.cleanup_agent_session_messages() == 1
+    assert [m["content"] for m in store.session_messages(session)] == [
+        "at cutoff", "after cutoff",
+    ]
+    assert store.cleanup_agent_session_messages() == 0
+    assert [m["content"] for m in store.session_messages(session)] == [
+        "at cutoff", "after cutoff",
+    ]
+    assert store.list_sessions()[0]["visible_message_count"] == 2
+
+
 def test_oversized_native_record_is_skipped_without_pinning_file_cursor(monkeypatch, tmp_path):
     db, store, sensor = _reset_local_store(monkeypatch, tmp_path)
     claude_dir = tmp_path / "claude-oversize"
@@ -503,11 +559,12 @@ def test_oversized_native_record_is_skipped_without_pinning_file_cursor(monkeypa
     # First opt-in scan establishes the new-only bootstrap boundary while the
     # directory is empty. The file created afterwards must be read from byte 0.
     sensor.scan_once()
+    first_at, second_at, _ = _recent_session_times()
     session_file = claude_dir / "oversize.jsonl"
     giant = b'{"oversized":"' + (b"x" * 2000) + b'"}\n'
     valid_1 = (json.dumps({
         "type": "user", "sessionId": "oversize-native", "cwd": "/repo",
-        "timestamp": "2026-09-30T04:00:00Z",
+        "timestamp": first_at,
         "message": {"content": [{"type": "text", "text": "Observed after oversized record"}]},
     }) + "\n").encode()
     assert len(valid_1) < sensor._MAX_LINE_BYTES
@@ -526,7 +583,7 @@ def test_oversized_native_record_is_skipped_without_pinning_file_cursor(monkeypa
     assert state[file_key]["offset"] == session_file.stat().st_size
     valid_2 = (json.dumps({
         "type": "assistant", "sessionId": "oversize-native", "cwd": "/repo",
-        "timestamp": "2026-09-30T04:00:01Z",
+        "timestamp": second_at,
         "message": {"content": [{"type": "text", "text": "Second visible message"}]},
     }) + "\n").encode()
     assert len(valid_2) < sensor._MAX_LINE_BYTES
@@ -556,10 +613,11 @@ def test_native_observation_reenable_never_backfills_disabled_interval(monkeypat
         "sources": {"claude_code": True, "codex": False},
     }
     sensor.update_policy_with_boundaries(enabled)
+    before_at, disabled_at, after_at = _recent_session_times()
     f = root / "toggle.jsonl"
     f.write_text(json.dumps({
         "type": "user", "sessionId": "toggle-session", "cwd": "/repo",
-        "timestamp": "2026-09-30T05:00:00Z",
+        "timestamp": before_at,
         "message": {"content": [{"type": "text", "text": "before disable"}]},
     }) + "\n", encoding="utf-8")
     sensor.scan_once()
@@ -573,7 +631,7 @@ def test_native_observation_reenable_never_backfills_disabled_interval(monkeypat
     with f.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
             "type": "assistant", "sessionId": "toggle-session", "cwd": "/repo",
-            "timestamp": "2026-09-30T05:00:01Z",
+            "timestamp": disabled_at,
             "message": {"content": [{"type": "text", "text": "must never backfill"}]},
         }) + "\n")
 
@@ -582,7 +640,7 @@ def test_native_observation_reenable_never_backfills_disabled_interval(monkeypat
     with f.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
             "type": "assistant", "sessionId": "toggle-session", "cwd": "/repo",
-            "timestamp": "2026-09-30T05:00:02Z",
+            "timestamp": after_at,
             "message": {"content": [{"type": "text", "text": "after re-enable"}]},
         }) + "\n")
     sensor.scan_once()
@@ -625,10 +683,11 @@ def test_same_path_native_file_replacement_resets_cursor_and_session(monkeypatch
         "sources": {"claude_code": True, "codex": False},
     }
     sensor.update_policy_with_boundaries(policy)
+    first_at, replacement_at, _ = _recent_session_times()
     f = root / "same-path.jsonl"
     first = json.dumps({
         "type": "user", "sessionId": "session-one", "cwd": "/repo-one",
-        "timestamp": "2026-09-30T05:10:00Z",
+        "timestamp": first_at,
         "message": {"content": [{"type": "text", "text": "first physical file"}]},
     }) + "\n"
     f.write_text(first, encoding="utf-8")
@@ -638,7 +697,7 @@ def test_same_path_native_file_replacement_resets_cursor_and_session(monkeypatch
     replacement = root / "replacement.tmp"
     replacement.write_text(json.dumps({
         "type": "user", "sessionId": "session-two", "cwd": "/repo-two",
-        "timestamp": "2026-09-30T05:11:00Z",
+        "timestamp": replacement_at,
         "message": {"content": [{"type": "text", "text": "replacement physical file with a deliberately longer payload"}]},
     }) + "\n", encoding="utf-8")
     os.replace(replacement, f)
