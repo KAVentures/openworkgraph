@@ -491,11 +491,13 @@
         execution_ids:safeArray(bundle.selector?.execution_ids),execution_count:count(bundle.selector?.selected_execution_count),
         exact_variants:variants,exact_variant_count:variants.length,surface_labels:bundle.structural_alignment?.surface_labels||{},
         core_steps:clusters[0]?.core_steps||[]};
+      ++latestRequest;
       invalidateEvidence();
       selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=bundle;currentWindow=filter;
       renderCandidates();renderDetail(candidate);
     },
     clearReviewed(label){
+      ++latestRequest;
       invalidateEvidence();
       selectedId='';selectedExample=null;renderCandidates();
       clearDetail(label?'Reviewed group · '+label+'. Loadable source details are required to draw its observed variants.':'Choose an inferred candidate or load a reviewed classification to inspect observed variants.');
