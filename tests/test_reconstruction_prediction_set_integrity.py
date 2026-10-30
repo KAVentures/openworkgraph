@@ -130,3 +130,66 @@ def test_model_response_may_omit_case_id_or_match_requested_case():
         validated = _validate_prediction(prediction, "case-a", {"task"})
         assert validated["case_id"] == "case-a"
         assert validated["workflows"][0]["event_ids"] == ["task"]
+
+
+@pytest.mark.parametrize("bad_prediction,pattern", [
+    ({"case_id": "case-a", "workflows": [{"event_ids": ["stale-event"]}]}, "unknown event ids"),
+    ({"case_id": "case-a", "workflows": [
+        {"event_ids": ["task"]}, {"event_ids": ["task"]},
+    ]}, "multiple workflows"),
+    ({"case_id": "case-a", "workflows": "not-a-list"}, "workflows must be a list"),
+    ({"case_id": "case-a", "workflows": [{"event_ids": "task"}]}, "event_ids must be a list"),
+    ({"case_id": "case-a", "workflows": [], "unassigned_event_ids": ["stale-event"]}, "unknown ids"),
+])
+def test_resume_refuses_stale_or_malformed_evidence_membership(tmp_path, bad_prediction, pattern):
+    path = _write_jsonl(tmp_path, [bad_prediction])
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=pattern):
+        _load_resume_predictions(
+            path, {"case-a"}, evidence_ids_by_case={"case-a": {"task", "noise"}}
+        )
+    assert path.read_bytes() == before
+
+
+def test_resume_valid_current_evidence_keeps_persisted_prediction_unchanged(tmp_path):
+    prediction = _prediction("case-a")
+    path = _write_jsonl(tmp_path, [prediction])
+    before = path.read_bytes()
+    result = _load_resume_predictions(
+        path, {"case-a"}, evidence_ids_by_case={"case-a": {"task", "noise"}}
+    )
+    assert result["case-a"] == prediction
+    assert "prediction_id" not in result["case-a"]["workflows"][0]
+    assert path.read_bytes() == before
+
+
+def test_resume_rejects_missing_current_evidence_mapping(tmp_path):
+    path = _write_jsonl(tmp_path, [_prediction("case-a")])
+    with pytest.raises(ValueError, match="lack current evidence"):
+        _load_resume_predictions(path, {"case-a"}, evidence_ids_by_case={})
+
+
+def test_runner_refuses_stale_resume_before_model_request(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    stale = _prediction("case-a")
+    stale["workflows"][0]["event_ids"] = ["event-from-an-older-corpus"]
+    path.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("a stale resume must never trigger a model request")
+
+    monkeypatch.setattr(run_external, "_request", unexpected_request)
+    with pytest.raises(ValueError, match="invalid for current evidence"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert path.read_bytes() == before
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+    assert not (tmp_path / "synthetic-model.metadata.json").exists()
